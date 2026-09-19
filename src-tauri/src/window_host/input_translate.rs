@@ -469,12 +469,66 @@ pub(super) const MAX_WHEEL_REPORT_NOTCHES: u32 = 100;
 /// `i32` would itself saturate at `i32::MAX`, which would make this
 /// function's cap postcondition false for the window between that cast and
 /// any later clamp.
+///
+/// task0001 (wheel-report-fraction-accum): superseded at its one former
+/// call site (`pointer_routing::handle_mouse_wheel`) by
+/// [`accumulate_wheel_report_lines`], which folds in the carried
+/// remainder instead of discarding a sub-notch delta outright. Left
+/// defined and unedited (AC-9: "the existing notch-conversion
+/// expectations... still hold without editing them") so its existing
+/// tests keep proving the stateless conversion behaves identically to
+/// before this feature.
+#[allow(dead_code)] // AC-9 regression coverage; no production caller after this task.
 pub(super) fn wheel_report_notches(lines: f32) -> i32 {
     if !lines.is_finite() {
         return 0;
     }
     let magnitude = lines.abs().floor().min(MAX_WHEEL_REPORT_NOTCHES as f32) as i32;
     if lines >= 0.0 { magnitude } else { -magnitude }
+}
+
+/// task0001 (wheel-report-fraction-accum) IMPLEMENTATION.md Shared
+/// Components, "Report-path accumulate-and-consume unit": fold one wheel
+/// event's line delta into the carried report-path fraction and return
+/// `(consumed_notches, new_accum)` — the signed whole-notch count to report
+/// and the fraction the caller stores back. Sits beside
+/// [`accumulate_alt_scroll_lines`] but is an entirely independent unit with
+/// its own cap constant ([`MAX_WHEEL_REPORT_NOTCHES`]), never aliased to,
+/// nor derived from, [`MAX_ALT_SCROLL_NOTCHES`] (D3, FR7).
+///
+/// **Precondition**: `acc` is finite and `acc.abs() < 1.0`; `lines` may be
+/// any `f32`, including non-finite.
+///
+/// **Postconditions** (D4, D6):
+/// - (a) a non-finite `lines` returns `(0, acc)` — `acc` bit-identical,
+///   nothing folded in, nothing else touched.
+/// - (b) otherwise the whole-notch count is the sign-preserving truncation
+///   toward zero of `acc + lines` (round down when the total is
+///   non-negative, round up when it is negative — the same rule
+///   [`accumulate_alt_scroll_lines`] already uses).
+/// - (c) the notch magnitude is saturated at [`MAX_WHEEL_REPORT_NOTCHES`]
+///   while still an `f32`, ahead of any conversion to `i32` — mirrors
+///   [`wheel_report_notches`]'s float-domain-first clamp, for the same
+///   reason (a raw cast of an unclamped magnitude would itself saturate at
+///   `i32::MAX`, making the cap postcondition momentarily false).
+/// - (d) magnitude clipped away by the saturation is discarded: the
+///   returned fraction is exactly `0.0` whenever saturation fires, never a
+///   leftover sliver of the clipped delta (D4) — the excess is neither
+///   reported as notches nor banked for a later event.
+/// - (e) the returned fraction is always finite and its magnitude is
+///   strictly below `1.0`.
+pub(super) fn accumulate_wheel_report_lines(acc: f32, lines: f32) -> (i32, f32) {
+    if !lines.is_finite() {
+        return (0, acc);
+    }
+    let total = acc + lines;
+    let whole = if total >= 0.0 { total.floor() } else { total.ceil() };
+    let whole_abs = whole.abs();
+    let saturated = whole_abs > MAX_WHEEL_REPORT_NOTCHES as f32;
+    let magnitude = whole_abs.min(MAX_WHEEL_REPORT_NOTCHES as f32) as i32;
+    let notches = if whole >= 0.0 { magnitude } else { -magnitude };
+    let frac = if saturated { 0.0 } else { total - whole };
+    (notches, frac)
 }
 
 /// Convert the PTY-side [`Modifiers`] (`input::Modifiers`) into the

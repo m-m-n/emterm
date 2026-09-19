@@ -153,7 +153,7 @@ pub(super) fn encode_report(
 /// job, not this filter's.
 ///
 /// [`reset`]: CellChangeFilter::reset
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CellChangeFilter {
     last: Option<(u32, u32)>,
 }
@@ -325,7 +325,7 @@ pub(super) enum GestureOwner {
 /// rejects records no owner at all — its release then finds nothing and
 /// routes nowhere new. Three independent slots (left/middle/right): a
 /// second button pressed mid-gesture is owned independently of the first.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct GestureOwnership {
     left: Option<GestureOwner>,
     middle: Option<GestureOwner>,
@@ -418,11 +418,26 @@ pub(super) type TabId = usize;
 /// `WindowHost`'s existing two fields into this shape when it reduces the
 /// pointer handlers onto this seam (see `WindowHost::mouse_report_records`
 /// / `set_mouse_report_records` in `mod.rs`).
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub(super) struct MouseReportRecords {
     pub(super) cell_cache: CellChangeFilter,
     pub(super) gesture_owner: GestureOwnership,
     pub(super) built_for_tab: Option<TabId>,
+    /// task0001 (wheel-report-fraction-accum, D1): the report-path wheel
+    /// fraction accumulator — the sub-notch remainder carried between
+    /// wheel events on this tab/tracking session, independent of
+    /// `WindowHost::alt_scroll_accum` (FR7, never aliased to it). Zeroed
+    /// only by [`apply_outcome`]'s existing reset branch; never written
+    /// anywhere else.
+    pub(super) report_accum: f32,
+    /// task0001: the last tracking-active state observed by an accepted
+    /// decision, kept beside `built_for_tab` (task plan Design "Observing
+    /// a tracking-session boundary") so an inactive-to-active transition
+    /// is visible even when the observing event was not a wheel event.
+    /// `None` until the first observation. Written only by
+    /// [`apply_outcome`], never by a decision unit and never directly by
+    /// the host (IMPLEMENTATION.md D2).
+    pub(super) last_tracking_active: Option<bool>,
 }
 
 /// task0005 (SC-11, D12): the "held-button record" alongside the
@@ -526,6 +541,16 @@ pub(super) struct RecordUpdates {
     /// A gesture-ownership change. `None` when this outcome implies no
     /// change to [`MouseReportRecords::gesture_owner`].
     pub(super) gesture: Option<GestureUpdate>,
+    /// task0001: the tracking-active state this event observed, to be
+    /// recorded as [`MouseReportRecords::last_tracking_active`]. Set by
+    /// every accepted decision branch across all four pointer paths —
+    /// including a gesture-owned release and a mid-drag motion event that
+    /// deliberately do NOT reset gesture state (D10) — so an
+    /// inactive-to-active transition stays visible to the wheel path
+    /// however it was observed. `None` means no observation to report,
+    /// which is what every grid-rejected branch's `Default::default()`
+    /// already produces (AC-8's byte-invariance).
+    pub(super) tracking_active: Option<bool>,
 }
 
 /// SC-10: one raw pointer event's full decision — the disposition plus
@@ -773,6 +798,7 @@ fn decide_press(inputs: &ButtonEventInputs) -> SequenceOutcome {
                 reset,
                 built_for_tab: Some(inputs.active_tab),
                 gesture: Some(GestureUpdate::Record(inputs.button, GestureOwner::Report)),
+                tracking_active: Some(tracking_active),
                 ..Default::default()
             },
         };
@@ -790,6 +816,7 @@ fn decide_press(inputs: &ButtonEventInputs) -> SequenceOutcome {
             reset,
             built_for_tab: Some(inputs.active_tab),
             gesture: Some(GestureUpdate::Record(inputs.button, GestureOwner::Local)),
+            tracking_active: Some(tracking_active),
             ..Default::default()
         },
     }
@@ -805,9 +832,14 @@ fn decide_press(inputs: &ButtonEventInputs) -> SequenceOutcome {
 /// its press recorded), never `inputs.active_tab`.
 fn decide_release(inputs: &ButtonEventInputs) -> SequenceOutcome {
     if let Some(owner) = inputs.records.gesture_owner.peek(inputs.button) {
+        // task0001: computed once, ahead of the match, so BOTH arms can
+        // surface it through `updates.tracking_active` below — a
+        // gesture-owned release observes tracking exactly as much as any
+        // other accepted event, even though (D10, unchanged) neither arm
+        // resets the gesture-ownership/cell-cache records themselves.
+        let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
         let disposition = match owner {
             GestureOwner::Report => {
-                let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
                 if tracking_active {
                     let target_tab = inputs.records.built_for_tab.unwrap_or(inputs.active_tab);
                     let code = compose_button_code(
@@ -841,6 +873,7 @@ fn decide_release(inputs: &ButtonEventInputs) -> SequenceOutcome {
             disposition,
             updates: RecordUpdates {
                 gesture: Some(GestureUpdate::Clear(inputs.button)),
+                tracking_active: Some(tracking_active),
                 ..Default::default()
             },
         };
@@ -856,6 +889,7 @@ fn decide_release(inputs: &ButtonEventInputs) -> SequenceOutcome {
         disposition: Disposition::Nothing,
         updates: RecordUpdates {
             reset,
+            tracking_active: Some(tracking_active),
             ..Default::default()
         },
     }
@@ -931,12 +965,27 @@ pub(super) fn decide_motion_event(inputs: MotionEventInputs) -> SequenceOutcome 
 
     let held_button = lowest_held_button(inputs.held_left, inputs.held_middle, inputs.held_right);
     let owner = held_button.and_then(|b| inputs.records.gesture_owner.peek(b));
+    // task0001: computed once, shared by every branch below — a mid-drag
+    // motion event (either owner branch) observes tracking exactly as
+    // much as an unowned one, even though (D10, unchanged) an
+    // owner-established branch deliberately skips the reset/cache-commit
+    // work the unowned branch does.
+    let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
 
     match owner {
-        Some(GestureOwner::Local) => SequenceOutcome::nothing(),
-        Some(GestureOwner::Report) => report_motion(&inputs, inputs.records.cell_cache),
+        Some(GestureOwner::Local) => SequenceOutcome {
+            disposition: Disposition::Nothing,
+            updates: RecordUpdates {
+                tracking_active: Some(tracking_active),
+                ..Default::default()
+            },
+        },
+        Some(GestureOwner::Report) => {
+            let mut outcome = report_motion(&inputs, inputs.records.cell_cache);
+            outcome.updates.tracking_active = Some(tracking_active);
+            outcome
+        }
         None => {
-            let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
             let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
             let reset = !tracking_active || tab_changed;
             if !tracking_active || inputs.mods.shift {
@@ -945,6 +994,7 @@ pub(super) fn decide_motion_event(inputs: MotionEventInputs) -> SequenceOutcome 
                     updates: RecordUpdates {
                         reset,
                         built_for_tab: Some(inputs.active_tab),
+                        tracking_active: Some(tracking_active),
                         ..Default::default()
                     },
                 };
@@ -957,6 +1007,7 @@ pub(super) fn decide_motion_event(inputs: MotionEventInputs) -> SequenceOutcome 
             let mut outcome = report_motion(&inputs, effective_cache);
             outcome.updates.reset = reset;
             outcome.updates.built_for_tab = Some(inputs.active_tab);
+            outcome.updates.tracking_active = Some(tracking_active);
             outcome
         }
     }
@@ -980,7 +1031,15 @@ pub(super) fn decide_wheel_event(inputs: &WheelEventInputs) -> SequenceOutcome {
     }
     let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
     let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
-    let reset = !tracking_active || tab_changed;
+    // task0001 (Design "Observing a tracking-session boundary"): besides
+    // the two existing observations, a transition from a last-observed
+    // inactive state to active-now also resets — this is what lets a
+    // release-and-re-enable observed by some OTHER pointer event (not
+    // this wheel event) still discard the report accumulator, via
+    // `records.last_tracking_active` rather than re-deriving anything
+    // host-side (D2).
+    let became_active = tracking_active && inputs.records.last_tracking_active == Some(false);
+    let reset = !tracking_active || tab_changed || became_active;
 
     let consumer = wheel_consumer(
         tracking_active,
@@ -1009,6 +1068,7 @@ pub(super) fn decide_wheel_event(inputs: &WheelEventInputs) -> SequenceOutcome {
         updates: RecordUpdates {
             reset,
             built_for_tab: Some(inputs.active_tab),
+            tracking_active: Some(tracking_active),
             ..Default::default()
         },
     }
@@ -1027,9 +1087,16 @@ pub(super) fn apply_outcome(
     if outcome.updates.reset {
         records.cell_cache.reset();
         records.gesture_owner.clear_all();
+        // task0001 (D1): the report-path accumulator rides the same reset
+        // seam as the cell-change cache and gesture ownership — one
+        // mechanism, no second reset path to keep in sync.
+        records.report_accum = 0.0;
     }
     if let Some(tab) = outcome.updates.built_for_tab {
         records.built_for_tab = Some(tab);
+    }
+    if let Some(active) = outcome.updates.tracking_active {
+        records.last_tracking_active = Some(active);
     }
     if let Some((column, row)) = outcome.updates.cache_cell {
         records.cell_cache.commit(column, row);
@@ -1797,6 +1864,7 @@ mod tests {
                     MouseButtonId::Left,
                     GestureOwner::Report,
                 )),
+                tracking_active: None,
             },
         };
         let mut dest = Vec::new();

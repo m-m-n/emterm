@@ -9,9 +9,10 @@ use super::frame_pacing::{
 };
 use super::input_translate::{
     MAX_ALT_SCROLL_NOTCHES, MAX_WHEEL_REPORT_NOTCHES, ShiftEnterRewrite, WheelConsumer,
-    accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes, is_skk_swallowed_chord,
-    shift_enter_rewrite, should_clear_selection_on_forward, should_drop_synthetic_key_event,
-    wheel_consumer, wheel_report_notches, winit_button_to_report_identity, winit_key_to_egui,
+    accumulate_alt_scroll_lines, accumulate_wheel_report_lines, alternate_scroll_wheel_bytes,
+    is_skk_swallowed_chord, shift_enter_rewrite, should_clear_selection_on_forward,
+    should_drop_synthetic_key_event, wheel_consumer, wheel_report_notches,
+    winit_button_to_report_identity, winit_key_to_egui,
 };
 use super::link_hover::{detect_osc8_link_at, hover_link_cells_changed};
 use super::mouse_report::MouseButtonId;
@@ -2869,4 +2870,521 @@ fn accumulate_alt_scroll_lines_collects_sub_notch_deltas() {
     let (w, a) = accumulate_alt_scroll_lines(a, 0.3);
     assert_eq!(w, 1.0, "4th event should yield one notch");
     assert!((a - 0.2).abs() < 1e-6, "4th event remainder={a}");
+}
+
+// ── task0001 (wheel-report-fraction-accum): report-path accumulator ──
+
+/// AC-1: a run of same-direction sub-notch deltas whose running sum
+/// reaches one notch produces exactly one notch at the crossing event,
+/// and zero notches (no report) at every earlier event in the run.
+#[test]
+fn accumulate_wheel_report_lines_collects_sub_notch_deltas_same_direction() {
+    let (n, a) = accumulate_wheel_report_lines(0.0, 0.3);
+    assert_eq!(n, 0, "1st event must not cross a notch");
+    assert!((a - 0.3).abs() < 1e-6, "after 1st event: accum={a}");
+
+    let (n, a) = accumulate_wheel_report_lines(a, 0.3);
+    assert_eq!(n, 0, "2nd event must not cross a notch");
+    assert!((a - 0.6).abs() < 1e-6, "after 2nd event: accum={a}");
+
+    let (n, a) = accumulate_wheel_report_lines(a, 0.3);
+    assert_eq!(n, 0, "3rd event must not cross a notch");
+    assert!((a - 0.9).abs() < 1e-6, "after 3rd event: accum={a}");
+
+    let (n, a) = accumulate_wheel_report_lines(a, 0.3);
+    assert_eq!(n, 1, "4th event must cross exactly one notch");
+    assert!((a - 0.2).abs() < 1e-6, "4th event remainder={a}");
+}
+
+/// AC-2: the leftover fraction is sign-preserving and an opposite-direction
+/// delta nets against it instead of restarting from zero — demonstrated by
+/// comparing the netted result against what a FRESH accumulator (starting
+/// at zero) would have produced from the same opposite delta alone, which
+/// differs. The emitted direction (the sign of the consumed notch count)
+/// matches the delta that actually crossed the boundary.
+#[test]
+fn accumulate_wheel_report_lines_nets_opposite_direction_delta_against_the_remainder() {
+    // Build up a positive remainder.
+    let (n, a) = accumulate_wheel_report_lines(0.0, 1.9);
+    assert_eq!(n, 1, "one notch up consumed");
+    assert!((a - 0.9).abs() < 1e-6, "remainder after 1st event: {a}");
+
+    // A same-magnitude-ish opposite delta nets against the 0.9 remainder
+    // rather than starting a fresh -0.95 accumulation.
+    let (n, netted) = accumulate_wheel_report_lines(a, -0.95);
+    assert_eq!(n, 0, "netting must not itself cross a notch here");
+    let (fresh_n, fresh) = accumulate_wheel_report_lines(0.0, -0.95);
+    assert_eq!(fresh_n, 0);
+    assert_ne!(
+        netted, fresh,
+        "the remainder from the first event must change the second event's \
+         outcome — a restart-from-zero implementation would make these equal"
+    );
+    assert!(
+        (netted - (-0.05)).abs() < 1e-6,
+        "netted remainder should be close to -0.05, got {netted}"
+    );
+
+    // A larger opposite delta both nets AND flips the consumed direction —
+    // the emitted direction must match the sign of the notch actually
+    // consumed (down), not the sign of the very first delta that built up
+    // the remainder (up).
+    let (n2, a2) = accumulate_wheel_report_lines(0.9, -1.95);
+    assert_eq!(n2, -1, "the notch consumed here must be signed down");
+    assert!((a2 - (-0.05)).abs() < 1e-6, "remainder after flip: {a2}");
+}
+
+/// AC-3: a non-finite delta (NaN, +inf, -inf) produces no report and
+/// leaves the accumulator bit-identical; a positive infinity followed by a
+/// negative infinity does not silence the report path — a following finite
+/// delta behaves exactly as if the two infinities had never arrived.
+#[test]
+fn accumulate_wheel_report_lines_non_finite_deltas_are_rejected_without_mutation() {
+    for lines in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let (n, a) = accumulate_wheel_report_lines(0.4, lines);
+        assert_eq!(n, 0, "non-finite delta {lines} must yield zero notches");
+        assert_eq!(a, 0.4, "non-finite delta {lines} must leave acc unchanged");
+    }
+
+    // +inf then -inf then a finite delta, all starting from the same acc,
+    // must behave exactly as if only the finite delta had ever arrived.
+    let start = 0.2_f32;
+    let (n1, a1) = accumulate_wheel_report_lines(start, f32::INFINITY);
+    assert_eq!((n1, a1), (0, start));
+    let (n2, a2) = accumulate_wheel_report_lines(a1, f32::NEG_INFINITY);
+    assert_eq!((n2, a2), (0, start));
+    let after_infinities = accumulate_wheel_report_lines(a2, 1.5);
+    let never_arrived = accumulate_wheel_report_lines(start, 1.5);
+    assert_eq!(
+        after_infinities, never_arrived,
+        "a +inf then -inf pair must not silence or alter the report path"
+    );
+}
+
+/// Edge case (Test Notes): a delta that lands exactly on a notch boundary
+/// leaves an exact zero remainder, not a denormal leftover.
+#[test]
+fn accumulate_wheel_report_lines_exact_notch_boundary_leaves_zero_remainder() {
+    let (n, a) = accumulate_wheel_report_lines(0.5, 0.5);
+    assert_eq!(n, 1);
+    assert_eq!(a, 0.0, "boundary-exact crossing must leave exactly 0.0, not a denormal leftover");
+
+    let (n, a) = accumulate_wheel_report_lines(-0.5, -0.5);
+    assert_eq!(n, -1);
+    assert_eq!(a, 0.0);
+}
+
+/// Edge case (Test Notes): an accumulator holding a near-one magnitude when
+/// a same-direction delta arrives crosses cleanly, with no overflow/NaN.
+#[test]
+fn accumulate_wheel_report_lines_near_one_accumulator_plus_same_direction_delta() {
+    let (n, a) = accumulate_wheel_report_lines(0.999_999, 0.5);
+    assert_eq!(n, 1);
+    assert!(a.is_finite() && a.abs() < 1.0, "remainder must be finite and sub-notch, got {a}");
+}
+
+/// Edge case (Test Notes): a long run of alternating-sign sub-notch deltas
+/// must never emit a notch.
+#[test]
+fn accumulate_wheel_report_lines_alternating_sign_sub_notch_run_never_emits() {
+    let mut acc = 0.0_f32;
+    for i in 0..50 {
+        let delta = if i % 2 == 0 { 0.4 } else { -0.4 };
+        let (n, new_acc) = accumulate_wheel_report_lines(acc, delta);
+        assert_eq!(n, 0, "iteration {i} (delta={delta}) must not emit a notch");
+        acc = new_acc;
+    }
+}
+
+/// AC-4: for every delta tested — including floating-point extremes and an
+/// accumulator pre-loaded near the cap — the notch count handed to the
+/// duplication step has magnitude at most the report cap, and the returned
+/// fraction stays finite and sub-notch (postcondition e). A fixed sweep
+/// (NFR6: no property-testing crate), not one hand-picked value.
+#[test]
+fn accumulate_wheel_report_lines_never_exceeds_the_cap_across_a_sweep_of_extremes() {
+    let cases: &[(f32, f32)] = &[
+        (0.0, 0.0),
+        (0.0, 50.0),
+        (0.0, 99.999),
+        (0.0, 100.0),
+        (0.0, 100.999),
+        (0.0, 101.0),
+        (0.0, 1_000.0),
+        (0.0, 1.0e6),
+        (0.0, 1.0e30),
+        (0.0, f32::MAX),
+        (0.0, -50.0),
+        (0.0, -100.999),
+        (0.0, -1.0e30),
+        (0.0, f32::MIN),
+        (0.999, 99.5),
+        (-0.999, -99.5),
+        (0.5, f32::MAX),
+        (-0.5, f32::MIN),
+    ];
+    for &(acc, lines) in cases {
+        let (n, frac) = accumulate_wheel_report_lines(acc, lines);
+        assert!(
+            n.unsigned_abs() <= MAX_WHEEL_REPORT_NOTCHES,
+            "accumulate_wheel_report_lines({acc}, {lines}) = ({n}, {frac}), notch magnitude \
+             exceeds the cap of {MAX_WHEEL_REPORT_NOTCHES}"
+        );
+        assert!(
+            frac.is_finite() && frac.abs() < 1.0,
+            "accumulate_wheel_report_lines({acc}, {lines}) returned a non-finite or \
+             out-of-range fraction {frac}"
+        );
+    }
+}
+
+/// D4: when saturation clips the notch magnitude, the clipped excess is
+/// discarded, not banked — the returned fraction is exactly `0.0`, never a
+/// leftover sliver of the huge delta that got clipped away.
+#[test]
+fn accumulate_wheel_report_lines_saturation_discards_excess_instead_of_banking_it() {
+    let (n, frac) = accumulate_wheel_report_lines(0.0, 1.0e6);
+    assert_eq!(n, MAX_WHEEL_REPORT_NOTCHES as i32);
+    assert_eq!(frac, 0.0, "saturated-away magnitude must not survive as a leftover remainder");
+
+    let (n, frac) = accumulate_wheel_report_lines(0.0, -1.0e6);
+    assert_eq!(n, -(MAX_WHEEL_REPORT_NOTCHES as i32));
+    assert_eq!(frac, 0.0);
+}
+
+/// AC-10 (D3): the report-path cap and the alternate-scroll cap are
+/// separate constants, never aliased to nor derived from one another.
+/// Value equality cannot distinguish "the same constant" from "two
+/// independently-defined constants that happen to share a value" — this
+/// scans the two accumulators' own source text (the same technique
+/// `cell_metrics_px_origin_x_has_no_sidebar_term` above uses) so a future
+/// edit that makes one path reference the other's constant fails this
+/// test, not just a value comparison.
+#[test]
+fn wheel_report_and_alt_scroll_accumulators_reference_only_their_own_cap_constant() {
+    let src = include_str!("input_translate.rs");
+
+    let alt_start = src
+        .find("pub(super) fn accumulate_alt_scroll_lines")
+        .expect("marker `accumulate_alt_scroll_lines` not found");
+    let alt_end = src[alt_start..]
+        .find("pub(super) fn alternate_scroll_wheel_bytes")
+        .map(|i| alt_start + i)
+        .expect("marker `alternate_scroll_wheel_bytes` not found");
+    let alt_scroll_region = &src[alt_start..alt_end];
+    assert!(
+        !alt_scroll_region.contains("MAX_WHEEL_REPORT_NOTCHES"),
+        "accumulate_alt_scroll_lines must never reference the report-path cap"
+    );
+
+    let report_start = src
+        .find("pub(super) fn accumulate_wheel_report_lines")
+        .expect("marker `accumulate_wheel_report_lines` not found");
+    let report_region = &src[report_start..];
+    assert!(
+        !report_region.contains("MAX_ALT_SCROLL_NOTCHES"),
+        "accumulate_wheel_report_lines must never reference the alt-scroll cap"
+    );
+}
+
+/// AC-6 (seam level): a remainder accumulated on one tab contributes
+/// nothing after the active tab changes. Asserts both halves the Test
+/// Notes call for: the outcome carries the reset and the new tab marker,
+/// and applying it zeroes the accumulator — after which the first wheel
+/// event on the new tab reports exactly what a zero accumulator would.
+#[test]
+fn decide_wheel_event_active_tab_change_discards_the_carried_remainder() {
+    use mouse_report::{
+        GridOwnershipInputs, MouseEventKind, MouseReportEncoding, MouseReportRecords,
+        WheelEventInputs, apply_outcome, decide_wheel_event,
+    };
+
+    let mut records = MouseReportRecords {
+        report_accum: 0.9,
+        built_for_tab: Some(0),
+        last_tracking_active: Some(true),
+        ..MouseReportRecords::default()
+    };
+    let inputs = WheelEventInputs {
+        kind: MouseEventKind::WheelUp,
+        grid: GridOwnershipInputs::default(),
+        mods: Modifiers::NONE,
+        mode_1000: false,
+        mode_1002: true,
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 1, // changed from the records' tab 0
+        column: 5,
+        row: 5,
+        on_alt_screen: false,
+        alt_scroll_mode_bit: false,
+        alt_scroll_setting: false,
+        records,
+    };
+
+    let outcome = decide_wheel_event(&inputs);
+    assert!(outcome.updates.reset, "AC-6: a tab change must reset");
+    assert_eq!(outcome.updates.built_for_tab, Some(1));
+
+    let mut dest = Vec::new();
+    apply_outcome(outcome, &mut records, &mut dest);
+    assert_eq!(
+        records.report_accum, 0.0,
+        "AC-6: the 0.9 remainder carried on tab 0 must not survive onto tab 1"
+    );
+    assert_eq!(records.built_for_tab, Some(1));
+
+    let from_reset = accumulate_wheel_report_lines(records.report_accum, 1.5);
+    let from_fresh = accumulate_wheel_report_lines(0.0, 1.5);
+    assert_eq!(
+        from_reset, from_fresh,
+        "AC-6: the first wheel event on the new tab must report exactly what a zero \
+         accumulator would"
+    );
+}
+
+/// AC-7 (seam level, first half): a remainder accumulated while tracking is
+/// active is discarded once a wheel event itself observes tracking
+/// released — the simple case the existing `!tracking_active` reset
+/// already covers.
+#[test]
+fn decide_wheel_event_observing_tracking_inactive_discards_the_carried_remainder() {
+    use mouse_report::{
+        GridOwnershipInputs, MouseEventKind, MouseReportEncoding, MouseReportRecords,
+        WheelEventInputs, apply_outcome, decide_wheel_event,
+    };
+
+    let mut records = MouseReportRecords {
+        report_accum: 0.75,
+        built_for_tab: Some(0),
+        last_tracking_active: Some(true),
+        ..MouseReportRecords::default()
+    };
+    let inputs = WheelEventInputs {
+        kind: MouseEventKind::WheelUp,
+        grid: GridOwnershipInputs::default(),
+        mods: Modifiers::NONE,
+        mode_1000: false,
+        mode_1002: false, // tracking released
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 0,
+        column: 5,
+        row: 5,
+        on_alt_screen: false,
+        alt_scroll_mode_bit: false,
+        alt_scroll_setting: false,
+        records,
+    };
+
+    let outcome = decide_wheel_event(&inputs);
+    assert!(outcome.updates.reset);
+    let mut dest = Vec::new();
+    apply_outcome(outcome, &mut records, &mut dest);
+    assert_eq!(records.report_accum, 0.0);
+
+    // Re-enabling tracking starts accumulation from zero: the next wheel
+    // event on the same tab (no further observation needed — the
+    // accumulator is already zero) reports as a fresh session would.
+    let from_reset = accumulate_wheel_report_lines(records.report_accum, 2.5);
+    let from_fresh = accumulate_wheel_report_lines(0.0, 2.5);
+    assert_eq!(from_reset, from_fresh);
+}
+
+/// AC-7 (seam level, second half — the gap a plain `!tracking_active ||
+/// tab_changed` reset cannot see): tracking's inactive phase is observed
+/// only by an owner-recorded button RELEASE, which — by design (D10) —
+/// does not itself reset the cell-change cache or gesture ownership. That
+/// release must still surface the tracking-inactive observation through
+/// the outcome so that a LATER wheel event, arriving after tracking
+/// re-enables with the tab unchanged, can detect the inactive→active
+/// transition via `last_tracking_active` and discard the stale remainder.
+/// Without this, `decide_wheel_event`'s own `!tracking_active ||
+/// tab_changed` check sees tracking already active and no tab change, and
+/// would miss the reset entirely.
+#[test]
+fn decide_wheel_event_detects_reactivation_observed_only_by_an_owner_recorded_release() {
+    use mouse_report::{
+        ButtonEventInputs, GestureOwner, GestureOwnership, GridOwnershipInputs, MouseButtonId,
+        MouseEventKind, MouseReportEncoding, MouseReportRecords, WheelEventInputs, apply_outcome,
+        decide_button_event, decide_wheel_event,
+    };
+
+    // A left-button drag is mid-flight, reported ownership, from a tracking
+    // session that already accumulated a 0.9 wheel remainder on tab 0.
+    let mut gesture_owner = GestureOwnership::new();
+    gesture_owner.record_press(MouseButtonId::Left, GestureOwner::Report);
+    let mut records = MouseReportRecords {
+        report_accum: 0.9,
+        built_for_tab: Some(0),
+        last_tracking_active: Some(true),
+        gesture_owner,
+        ..MouseReportRecords::default()
+    };
+
+    // The application releases tracking mid-drag; the matching release
+    // arrives while tracking is already inactive.
+    let release_outcome = decide_button_event(ButtonEventInputs {
+        kind: MouseEventKind::Release,
+        button: MouseButtonId::Left,
+        grid: GridOwnershipInputs::default(),
+        mods: Modifiers::NONE,
+        mode_1000: false,
+        mode_1002: false, // tracking released
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 0,
+        column: 5,
+        row: 5,
+        hovered_link: false,
+        middle_click_paste_enabled: false,
+        records,
+    });
+    assert!(
+        !release_outcome.updates.reset,
+        "D10: an owner-recorded release must not itself reset gesture/cache state"
+    );
+    assert_eq!(
+        release_outcome.updates.tracking_active,
+        Some(false),
+        "the release must still surface the tracking-inactive observation it made"
+    );
+
+    let mut dest = Vec::new();
+    apply_outcome(release_outcome, &mut records, &mut dest);
+    assert_eq!(
+        records.report_accum, 0.9,
+        "the release's own apply must not have zeroed the accumulator (D10)"
+    );
+    assert_eq!(records.last_tracking_active, Some(false));
+
+    // Tracking re-enables; the next wheel event on the SAME tab arrives.
+    // A plain `!tracking_active || tab_changed` check would see neither
+    // condition and miss the reset.
+    let wheel_inputs = WheelEventInputs {
+        kind: MouseEventKind::WheelUp,
+        grid: GridOwnershipInputs::default(),
+        mods: Modifiers::NONE,
+        mode_1000: false,
+        mode_1002: true, // tracking re-enabled
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 0,
+        column: 5,
+        row: 5,
+        on_alt_screen: false,
+        alt_scroll_mode_bit: false,
+        alt_scroll_setting: false,
+        records,
+    };
+    let wheel_outcome = decide_wheel_event(&wheel_inputs);
+    assert!(
+        wheel_outcome.updates.reset,
+        "AC-7: the inactive->active transition observed via the release must still reset \
+         the wheel event that follows it"
+    );
+
+    apply_outcome(wheel_outcome, &mut records, &mut dest);
+    assert_eq!(
+        records.report_accum, 0.0,
+        "the stale 0.9 remainder must not survive into the new tracking session"
+    );
+}
+
+/// AC-8: a wheel event rejected by the grid-ownership gate advances
+/// nothing and resets nothing — the outcome's record updates equal the
+/// default value, and applying it leaves the WHOLE record value
+/// byte-identical, not just the accumulator field.
+#[test]
+fn decide_wheel_event_rejected_by_grid_leaves_the_whole_record_value_unchanged() {
+    use mouse_report::{
+        GridOwnershipInputs, MouseEventKind, MouseReportEncoding, MouseReportRecords,
+        RecordUpdates, WheelEventInputs, apply_outcome, decide_wheel_event,
+    };
+
+    let before = MouseReportRecords {
+        report_accum: 0.42,
+        built_for_tab: Some(2),
+        last_tracking_active: Some(true),
+        ..MouseReportRecords::default()
+    };
+    let inputs = WheelEventInputs {
+        kind: MouseEventKind::WheelUp,
+        grid: GridOwnershipInputs {
+            in_title_bar_band: true,
+            ..GridOwnershipInputs::default()
+        },
+        mods: Modifiers::NONE,
+        mode_1000: false,
+        mode_1002: true,
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 5, // even a tab change must not matter once rejected
+        column: 5,
+        row: 5,
+        on_alt_screen: false,
+        alt_scroll_mode_bit: false,
+        alt_scroll_setting: false,
+        records: before,
+    };
+
+    let outcome = decide_wheel_event(&inputs);
+    assert_eq!(outcome.updates, RecordUpdates::default());
+
+    let mut records = before;
+    let mut dest = Vec::new();
+    apply_outcome(outcome, &mut records, &mut dest);
+    assert_eq!(
+        records, before,
+        "AC-8: the whole record value must be unchanged, not just the accumulator field"
+    );
+    assert!(dest.is_empty());
+}
+
+/// Supporting unit check for the release test above: `decide_motion_event`
+/// has the identical D10 gap for a mid-drag motion event whose gesture is
+/// LOCALLY owned (never previously read tracking-mode bits at all). A
+/// mid-drag motion must now surface the tracking-active observation
+/// without touching the gesture/cache records it deliberately leaves
+/// alone.
+#[test]
+fn decide_motion_event_owner_established_local_branch_surfaces_tracking_observation_only() {
+    use mouse_report::{
+        GestureOwner, GestureOwnership, GridOwnershipInputs, MotionEventInputs,
+        MouseReportEncoding, MouseReportRecords, RecordUpdates, decide_motion_event,
+    };
+
+    let mut gesture_owner = GestureOwnership::new();
+    gesture_owner.record_press(mouse_report::MouseButtonId::Left, GestureOwner::Local);
+    let records = MouseReportRecords {
+        built_for_tab: Some(0),
+        gesture_owner,
+        ..MouseReportRecords::default()
+    };
+    let inputs = MotionEventInputs {
+        grid: GridOwnershipInputs::default(),
+        mods: Modifiers::NONE,
+        mode_1000: false,
+        mode_1002: false, // tracking inactive during this mid-drag motion
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 0,
+        held_left: true,
+        held_middle: false,
+        held_right: false,
+        column: 9,
+        row: 9,
+        records,
+    };
+
+    let outcome = decide_motion_event(inputs);
+    assert_eq!(
+        outcome.updates,
+        RecordUpdates {
+            tracking_active: Some(false),
+            ..RecordUpdates::default()
+        },
+        "a Local-owned mid-drag motion must surface only the tracking observation — no reset, \
+         no cache commit, no gesture change (D10 unchanged)"
+    );
 }
