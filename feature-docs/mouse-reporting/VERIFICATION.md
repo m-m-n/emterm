@@ -15,6 +15,12 @@ TS-14 through TS-18 are integrated success-criteria checks derived from SPEC.md'
 success criteria AC13 through AC16, which SPEC.md states as criteria rather than
 as numbered test scenarios.
 
+TS-19 through TS-21 were added after review round 1. They have no SPEC.md
+counterpart by construction: they verify requirements SPEC.md already states
+(FR2, FR3, FR4, FR7, FR10, NFR1) at a granularity the original scenario set left
+to manual confirmation, which is why the round-1 defects reached review. The
+requirement set itself is unchanged.
+
 The design step is `skipped` for this feature, so no mockup visual comparison is
 part of this plan.
 
@@ -70,6 +76,18 @@ test inventory, verified as TS-18 below rather than as a percentage.
 | TS-17 | Both library test suites pass (AC15) | The main and term_core test commands above exit 0, including the narrowed fallback test | Build |
 | TS-18 | The byte-exact test inventory exists (AC16, NFR6, NFR7) | The merged change contains a test asserting the exact bytes for each of: an X10 press, an X10 release, an SGR press, an SGR release, a motion report, a wheel-up report, a wheel-down report, a Ctrl-modified report, an Alt-modified report, and an X10 event beyond column/row 223 asserting no bytes — each running with no winit window and no live PTY | Inspection |
 
+### Rework Scenarios (added after review round 1)
+
+These three scenarios are the automated coverage for task0004. Each runs with no
+winit window, no GPU surface and no live PTY, under the same inline test
+convention as TS-1 through TS-9.
+
+| ID | Scenario | Expected Result | Test Type |
+|----|----------|-----------------|-----------|
+| TS-19 | One grid-ownership decision covers every chrome region, every button identity and every event kind | Table-driven over (region, event kind, button identity): the decision rejects the top strip, the status-bar bottom strip, the right-edge scrollbar overlay, the mux sidebar in both persistent and overlay placement, and the CSD edge-resize hot zone, and rejects everything while the profile selector is visible — identically for a left / middle / right press, a left / middle / right release, a motion and a wheel notch — and accepts a position over the grid with no region claiming it. A middle or right press or release over each rejected region, and a wheel notch over the bottom strip or the scrollbar overlay, produce no bytes | Unit |
+| TS-20 | A button gesture is owned by whichever side took its press, in both shift orderings | Driven as a sequence (press → shift-state change → release). Press with Shift held then release after Shift is lifted: no bytes are emitted, the drag flag is cleared, the pending selection anchor is consumed and the selection reaches PRIMARY. Press without Shift then release after Shift is pressed: the matching release report is emitted and its button code does not carry the shift bit. A press the TS-19 decision rejects records no owner; the record is cleared when its release is delivered and on the observations that reset the cell cache; a second button pressed mid-gesture is owned independently | Unit |
+| TS-21 | A suppressed motion advances no cached cell | With a tracking mode active, a motion over each region TS-19 rejects, and any motion while the profile selector is visible, emits nothing AND leaves the cached last-reported cell unchanged — asserted on the cache state, not only on the absence of bytes — so a following motion over the grid at a different cell still reports. This is the ordering assertion: the guard runs before the motion gate and the cell-change filter | Unit |
+
 ## Code Quality Verification
 
 - **Format**: no format command is configured for any component in
@@ -92,10 +110,10 @@ test inventory, verified as TS-18 below rather than as a percentage.
 | AC6 | Wheel emits 64 / 65 on both screens and leaves the scrollback offset unchanged | TS-8, TS-3, TS-10 |
 | AC7 | With no tracking mode active, wheel behaviour is byte-for-byte today's, Shift included | TS-8 (tracking-inactive branch), TS-10 |
 | AC8 | Ctrl+left press reports with bit 16 and does not open the link; middle press reports base 1 and does not paste | TS-5, TS-11 |
-| AC9 | Shift suppresses the report and the local behaviour happens instead — for the wheel this is the scrollback scroll on both screens, never arrow bytes | TS-8 (tracking-active branch), TS-11 |
+| AC9 | Shift suppresses the report and the local behaviour happens instead — for the wheel this is the scrollback scroll on both screens, never arrow bytes; for a drag this includes the release that completes the selection, whatever the shift state has become by then (IMPLEMENTATION.md D10) | TS-8 (tracking-active branch), TS-20, TS-11 |
 | AC10 | No emitted report ever carries the shift bit | TS-5 |
 | AC11 | Column/row 224 emits nothing under X10 and the true coordinate under SGR | TS-6 |
-| AC12 | An event over any chrome guard emits nothing and keeps its local behaviour | TS-12 |
+| AC12 | An event over any chrome guard emits nothing and keeps its local behaviour — for every button identity, and for motion and wheel alike | TS-19, TS-21, TS-12 |
 | AC13 | The settings surface is untouched | TS-15 |
 | AC14 | The CLI-only check succeeds | TS-14 |
 | AC15 | Both library test suites pass, including the narrowed fallback test | TS-17, TS-2 |
@@ -106,22 +124,22 @@ test inventory, verified as TS-18 below rather than as a percentage.
 | Requirement | Tasks | Verification |
 |-------------|-------|--------------|
 | FR1 | task0001 | TS-1, TS-2 |
-| FR2 | task0002, task0003 | TS-3, TS-4, TS-10 |
-| FR3 | task0002, task0003 | TS-3, TS-9, TS-10 |
-| FR4 | task0002, task0003 | TS-3, TS-8, TS-10 |
+| FR2 | task0002, task0003, task0004 | TS-3, TS-4, TS-10, TS-20 |
+| FR3 | task0002, task0003, task0004 | TS-3, TS-9, TS-10, TS-21 |
+| FR4 | task0002, task0003, task0004 | TS-3, TS-8, TS-10, TS-19 |
 | FR5 | task0002 | TS-3, TS-4, TS-6 |
 | FR6 | task0002 | TS-5 |
-| FR7 | task0002, task0003 | TS-5, TS-8, TS-11 |
+| FR7 | task0002, task0003, task0004 | TS-5, TS-8, TS-11, TS-20 |
 | FR8 | task0003 | TS-10, TS-11 |
 | FR9 | task0002 | TS-6 |
-| FR10 | task0003 | TS-12 |
+| FR10 | task0003, task0004 | TS-12, TS-19 |
 | FR11 | task0003 | TS-10, TS-13 |
-| NFR1 | task0002, task0003 | TS-7, TS-10 |
+| NFR1 | task0002, task0003, task0004 | TS-7, TS-10, TS-21 |
 | NFR2 | task0003 | TS-15 |
 | NFR3 | task0001, task0002, task0003 | TS-14 |
 | NFR4 | task0002, task0003 | TS-16 |
-| NFR5 | task0001, task0002, task0003 | TS-17 |
-| NFR6 | task0002 | TS-3, TS-4, TS-5, TS-6, TS-7, TS-18 |
+| NFR5 | task0001, task0002, task0003, task0004 | TS-17 |
+| NFR6 | task0002, task0004 | TS-3, TS-4, TS-5, TS-6, TS-7, TS-18 |
 | NFR7 | task0002 | TS-3, TS-4, TS-5, TS-6, TS-18 |
 
 ## E2E Testing
@@ -177,8 +195,9 @@ persists nothing (NFR2), so no security check is defined here.
 | Test scenarios (TS-1 – TS-9) | 9 | 9 | 0 | 0 |
 | Test scenarios (TS-10 – TS-13) | 4 | 0 | 0 | 4 |
 | Success-criteria checks (TS-14 – TS-18) | 5 | 2 | 0 | 3 |
+| Rework scenarios (TS-19 – TS-21) | 3 | 3 | 0 | 0 |
 | Build verification | 4 | 4 | 0 | 0 |
-| **Total** | **22** | **15** | **0** | **7** |
+| **Total** | **25** | **18** | **0** | **7** |
 
 The three manual success-criteria checks are the inspection items TS-15, TS-16
 and TS-18, performed against the integrated diff rather than against a running
