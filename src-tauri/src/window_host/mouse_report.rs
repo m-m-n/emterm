@@ -247,19 +247,32 @@ pub(super) fn motion_gate(
 // ── task0004: SC-8 grid-ownership decision (D11) ──────────────────────
 
 /// SC-8 (D11): the plain-value inputs to the grid-ownership decision — one
-/// bool per chrome region the host already hit-tests (the top strip, the
-/// bottom strip, the right-edge scrollbar overlay, the mux sidebar in
-/// whichever placement is active, the CSD edge-resize hot zone), plus
-/// whether the profile selector is visible. Each bool is the SAME hit-test
-/// result the existing chrome guards already compute — this decision does
-/// not re-derive any geometry itself, it only combines the results into one
-/// identity-independent answer. Deliberately carries no button identity, no
-/// press/release flag and no event kind: that omission is what makes
-/// [`point_belongs_to_grid`] return the same answer for a left press, a
-/// right release, a motion and a wheel notch at the same position (AC-1).
+/// bool per chrome region the host already hit-tests (the CSD title-bar
+/// band, the tab-bar band, the bottom strip, the right-edge scrollbar
+/// overlay, the mux sidebar in whichever placement is active, the CSD
+/// edge-resize hot zone), plus whether the profile selector is visible.
+/// Each bool is the SAME hit-test result the existing chrome guards already
+/// compute — this decision does not re-derive any geometry itself, it only
+/// combines the results into one identity-independent answer. Deliberately
+/// carries no button identity, no press/release flag and no event kind:
+/// that omission is what makes [`point_belongs_to_grid`] return the same
+/// answer for a left press, a right release, a motion and a wheel notch at
+/// the same position (AC-1).
+///
+/// task0001 (FR9): the single combined top-area flag this record used to
+/// carry is split into `in_title_bar_band` and `in_tab_bar_band` — two
+/// independent flags — because the rejected-position dispatch (below) gives
+/// those two bands different dispositions on the wheel path. The boundary
+/// is fixed by IMPLEMENTATION.md's region-boundary contract: the title-bar
+/// band is above the CSD title-bar height, the tab-bar band is at or below
+/// that height and above title-bar height plus the effective tab-bar
+/// height (the same height the routing layer's existing tab-bar wheel
+/// guard uses, zero when the tab bar is hidden), so the two flags can never
+/// both be true for the same position.
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct GridOwnershipInputs {
-    pub(super) in_top_strip: bool,
+    pub(super) in_title_bar_band: bool,
+    pub(super) in_tab_bar_band: bool,
     pub(super) in_bottom_strip: bool,
     pub(super) in_scrollbar_overlay: bool,
     pub(super) in_mux_sidebar: bool,
@@ -272,15 +285,19 @@ pub(super) struct GridOwnershipInputs {
 /// profile selector is not visible. **Pre**: the caller evaluates this
 /// before any reporting work on every emitting path (before the motion gate
 /// and the cell-change filter on the motion path; before the tracking-
-/// active read on the wheel path). **Post**: `false` rejects the top strip,
-/// the bottom strip, the scrollbar overlay, the mux sidebar and the CSD
-/// edge-resize hot zone, and rejects every position while the profile
-/// selector is visible; `true` only when none of those apply.
+/// active read on the wheel path). **Post**: `false` rejects the CSD
+/// title-bar band, the tab-bar band, the bottom strip, the scrollbar
+/// overlay, the mux sidebar and the CSD edge-resize hot zone, and rejects
+/// every position while the profile selector is visible; `true` only when
+/// none of those apply. Meaning and truth table unchanged by the FR9 flag
+/// split (task0001, AC-8) — only what callers do with a `false` answer
+/// changes.
 pub(super) fn point_belongs_to_grid(inputs: GridOwnershipInputs) -> bool {
     if inputs.profile_selector_visible {
         return false;
     }
-    !(inputs.in_top_strip
+    !(inputs.in_title_bar_band
+        || inputs.in_tab_bar_band
         || inputs.in_bottom_strip
         || inputs.in_scrollbar_overlay
         || inputs.in_mux_sidebar
@@ -614,6 +631,87 @@ fn press_local_disposition(
     }
 }
 
+/// task0001 (FR3, FR4, FR5, FR10, D3, D6): the rejected-position press
+/// disposition — consulted only when [`point_belongs_to_grid`] has already
+/// answered `false`. Only a middle press with middle-click paste enabled
+/// can take a local arm from a guard-rejected position; a left or a right
+/// press always decides "nothing" here (FR4/FR5) — never the
+/// selection-drag arm, never the link-open arm — so the caller records no
+/// gesture owner for them (D6) and their matching release finds nothing.
+///
+/// Overlap precedence (IMPLEMENTATION.md D3, suppressing regions first):
+/// the CSD title-bar band and the tab-bar band never reached a middle-press
+/// paste before the regression this feature repairs (Out of Scope: giving
+/// them the arm now would be new behaviour, not a repair), so they suppress
+/// even where the position also lands in an arm-bearing region — which is
+/// how the CSD resize hot zone ends up with the paste arm only where it
+/// does NOT overlap those two bands.
+fn rejected_press_disposition(
+    button: MouseButtonId,
+    grid: GridOwnershipInputs,
+    middle_click_paste_enabled: bool,
+) -> Disposition {
+    if button != MouseButtonId::Middle || !middle_click_paste_enabled {
+        return Disposition::Nothing;
+    }
+    if grid.profile_selector_visible || grid.in_title_bar_band || grid.in_tab_bar_band {
+        return Disposition::Nothing;
+    }
+    if grid.in_bottom_strip
+        || grid.in_scrollbar_overlay
+        || grid.in_mux_sidebar
+        || grid.in_resize_hot_zone
+    {
+        return Disposition::Local(LocalArm::PastePrimary);
+    }
+    Disposition::Nothing
+}
+
+/// task0001 (FR1, FR2, FR10, D3, D4): the rejected-position wheel
+/// disposition — consulted only when [`point_belongs_to_grid`] has already
+/// answered `false`.
+///
+/// Overlap precedence (IMPLEMENTATION.md D3, suppressing regions first):
+/// the profile selector, the tab-bar band and the mux sidebar suppress
+/// (decide "nothing"); the CSD title-bar band, the bottom strip, the
+/// scrollbar overlay and the CSD resize hot zone name the arm the
+/// wheel-consumer helper (SC-6, reused unmodified) picks with
+/// tracking-active fixed false (D4) — a guard-rejected position is not
+/// grid-owned, so a tracking application has no claim on the notch. This
+/// reproduces the pre-regression wheel behaviour table exactly, for both
+/// wheel directions and regardless of Shift (`wheel_consumer` does not
+/// consult `shift_held` at all with tracking-active false).
+fn rejected_wheel_disposition(inputs: &WheelEventInputs) -> Disposition {
+    let grid = inputs.grid;
+    if grid.profile_selector_visible || grid.in_tab_bar_band || grid.in_mux_sidebar {
+        return Disposition::Nothing;
+    }
+    if !(grid.in_title_bar_band
+        || grid.in_bottom_strip
+        || grid.in_scrollbar_overlay
+        || grid.in_resize_hot_zone)
+    {
+        return Disposition::Nothing;
+    }
+    match wheel_consumer(
+        false,
+        inputs.mods.shift,
+        inputs.on_alt_screen,
+        inputs.alt_scroll_mode_bit,
+        inputs.alt_scroll_setting,
+    ) {
+        WheelConsumer::TranslateToArrows => Disposition::Local(LocalArm::TranslateToArrowBytes),
+        // `wheel_consumer`'s own contract: with tracking-active fixed
+        // false, `ReportToApplication` is unreachable. Folding it onto
+        // `ScrollScrollback` (rather than `unreachable!()`) keeps this
+        // dispatch a total function of its plain inputs without adding a
+        // disposition or local-arm variant (NFR2).
+        WheelConsumer::ScrollScrollback | WheelConsumer::ReportToApplication => {
+            Disposition::Local(LocalArm::ScrollScrollback)
+        }
+    }
+}
+
 /// SC-10: the button pointer path — one sequence unit covering both a
 /// press and its matching release (AC-1).
 pub(super) fn decide_button_event(inputs: ButtonEventInputs) -> SequenceOutcome {
@@ -638,7 +736,17 @@ pub(super) fn decide_button_event(inputs: ButtonEventInputs) -> SequenceOutcome 
 /// decides.
 fn decide_press(inputs: &ButtonEventInputs) -> SequenceOutcome {
     if !point_belongs_to_grid(inputs.grid) {
-        return SequenceOutcome::nothing();
+        // task0001 (D6): still no gesture owner recorded and no other
+        // record update implied — only the disposition can now differ
+        // from bare "nothing" (the per-region dispatch above).
+        return SequenceOutcome {
+            disposition: rejected_press_disposition(
+                inputs.button,
+                inputs.grid,
+                inputs.middle_click_paste_enabled,
+            ),
+            updates: RecordUpdates::default(),
+        };
     }
     let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
     let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
@@ -861,7 +969,14 @@ pub(super) fn decide_motion_event(inputs: MotionEventInputs) -> SequenceOutcome 
 /// exactly one wheel consumer via SC-6 (`wheel_consumer`), unchanged.
 pub(super) fn decide_wheel_event(inputs: &WheelEventInputs) -> SequenceOutcome {
     if !point_belongs_to_grid(inputs.grid) {
-        return SequenceOutcome::nothing();
+        // task0001 (D3/D4): the record updates stay at their default
+        // bundle — a rejected notch neither resets nor advances any
+        // record (IMPLEMENTATION.md's record-update invariance); only the
+        // disposition can now differ from bare "nothing".
+        return SequenceOutcome {
+            disposition: rejected_wheel_disposition(inputs),
+            updates: RecordUpdates::default(),
+        };
     }
     let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
     let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
@@ -1354,13 +1469,23 @@ mod tests {
     /// AC-1: each guarded region named in the criterion, tested in
     /// isolation with every other input at its default (`false`), rejects
     /// the position.
+    ///
+    /// task0001 (AC-8): the CSD title-bar band and the tab-bar band are now
+    /// two independent flags (FR9) — each alone still rejects.
     #[test]
     fn point_belongs_to_grid_rejects_each_guarded_region_independently() {
-        let cases: [(&str, GridOwnershipInputs); 6] = [
+        let cases: [(&str, GridOwnershipInputs); 7] = [
             (
-                "top strip",
+                "CSD title-bar band",
                 GridOwnershipInputs {
-                    in_top_strip: true,
+                    in_title_bar_band: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+            (
+                "tab-bar band",
+                GridOwnershipInputs {
+                    in_tab_bar_band: true,
                     ..GridOwnershipInputs::default()
                 },
             ),
@@ -1628,10 +1753,12 @@ mod tests {
         );
         assert_ne!(outcome.disposition, Disposition::Nothing);
 
-        // A rejected position is bare "nothing" — no local arm.
+        // A rejected position is bare "nothing" — no local arm. A left
+        // press decides "nothing" in every guarded region (FR4), the CSD
+        // title-bar band included.
         let mut inputs = base_button_inputs(MouseEventKind::Press, MouseButtonId::Left);
         inputs.grid = GridOwnershipInputs {
-            in_top_strip: true,
+            in_title_bar_band: true,
             ..GridOwnershipInputs::default()
         };
         let outcome = decide_button_event(inputs);
@@ -1715,17 +1842,45 @@ mod tests {
         assert_eq!(held, HeldButtons::default());
     }
 
-    // ── AC-3 (TS-19): chrome-guarded regions × event kind × button ──────
+    // ── AC-3 (TS-19), AC-10 (TS-9): chrome-guarded regions × event kind ×
+    // button ───────────────────────────────────────────────────────────
+    //
+    // task0001 (AC-10, NFR6): strengthened beyond the original
+    // byte-absence-only sweep to additionally assert the full decided
+    // disposition per region, event kind and button identity, from
+    // IMPLEMENTATION.md's rejected-position disposition table — so
+    // reverting any restored arm back to "nothing" fails this test, not
+    // just a byte count. The byte-absence assertion (FR7, AC-7) is kept
+    // exactly as it was.
 
     #[test]
     fn ac3_ts19_guarded_regions_reject_every_event_kind_and_button() {
-        let regions: [(&str, GridOwnershipInputs); 6] = [
+        let scroll = Disposition::Local(LocalArm::ScrollScrollback);
+        let paste = Disposition::Local(LocalArm::PastePrimary);
+
+        // (region name, grid inputs, expected wheel disposition, expected
+        // middle-press disposition). Every other button/kind combination —
+        // left press, right press, every release, motion — decides
+        // "nothing" in every guarded region (FR4, FR5, FR6), so only these
+        // two vary per region.
+        let regions: [(&str, GridOwnershipInputs, Disposition, Disposition); 7] = [
             (
-                "top strip",
+                "CSD title-bar band",
                 GridOwnershipInputs {
-                    in_top_strip: true,
+                    in_title_bar_band: true,
                     ..GridOwnershipInputs::default()
                 },
+                scroll.clone(),
+                Disposition::Nothing,
+            ),
+            (
+                "tab-bar band",
+                GridOwnershipInputs {
+                    in_tab_bar_band: true,
+                    ..GridOwnershipInputs::default()
+                },
+                Disposition::Nothing,
+                Disposition::Nothing,
             ),
             (
                 "status-bar bottom strip",
@@ -1733,6 +1888,8 @@ mod tests {
                     in_bottom_strip: true,
                     ..GridOwnershipInputs::default()
                 },
+                scroll.clone(),
+                paste.clone(),
             ),
             (
                 "right-edge scrollbar overlay",
@@ -1740,6 +1897,8 @@ mod tests {
                     in_scrollbar_overlay: true,
                     ..GridOwnershipInputs::default()
                 },
+                scroll.clone(),
+                paste.clone(),
             ),
             (
                 "mux sidebar (persistent or overlay collapse to one bool)",
@@ -1747,6 +1906,8 @@ mod tests {
                     in_mux_sidebar: true,
                     ..GridOwnershipInputs::default()
                 },
+                Disposition::Nothing,
+                paste.clone(),
             ),
             (
                 "CSD edge-resize hot zone",
@@ -1754,6 +1915,8 @@ mod tests {
                     in_resize_hot_zone: true,
                     ..GridOwnershipInputs::default()
                 },
+                scroll.clone(),
+                paste.clone(),
             ),
             (
                 "profile selector visible",
@@ -1761,15 +1924,22 @@ mod tests {
                     profile_selector_visible: true,
                     ..GridOwnershipInputs::default()
                 },
+                Disposition::Nothing,
+                Disposition::Nothing,
             ),
         ];
 
-        for (name, grid) in regions {
+        for (name, grid, expected_wheel, expected_middle_press) in regions {
             for button in [
                 MouseButtonId::Left,
                 MouseButtonId::Middle,
                 MouseButtonId::Right,
             ] {
+                let expected_press = if button == MouseButtonId::Middle {
+                    expected_middle_press.clone()
+                } else {
+                    Disposition::Nothing
+                };
                 for kind in [MouseEventKind::Press, MouseEventKind::Release] {
                     let mut records = MouseReportRecords::default();
                     let inputs = ButtonEventInputs {
@@ -1777,6 +1947,19 @@ mod tests {
                         ..base_button_inputs(kind, button)
                     };
                     let outcome = decide_button_event(inputs);
+                    let expected = if kind == MouseEventKind::Press {
+                        expected_press.clone()
+                    } else {
+                        // No press-side ownership was ever recorded for a
+                        // guard-rejected position (D6), so its release
+                        // always finds no owner and decides "nothing" —
+                        // never the selection-completion arm (AC-5).
+                        Disposition::Nothing
+                    };
+                    assert_eq!(
+                        outcome.disposition, expected,
+                        "{name}: {kind:?} {button:?} disposition"
+                    );
                     let mut dest = Vec::new();
                     apply_outcome(outcome, &mut records, &mut dest);
                     assert!(
@@ -1792,6 +1975,11 @@ mod tests {
                 ..base_motion_inputs()
             };
             let outcome = decide_motion_event(motion_inputs);
+            assert_eq!(
+                outcome.disposition,
+                Disposition::Nothing,
+                "{name}: motion disposition"
+            );
             let mut dest = Vec::new();
             apply_outcome(outcome, &mut records, &mut dest);
             assert!(dest.is_empty(), "{name}: motion must not report");
@@ -1803,6 +1991,10 @@ mod tests {
                     ..base_wheel_inputs(kind)
                 };
                 let outcome = decide_wheel_event(&wheel_inputs);
+                assert_eq!(
+                    outcome.disposition, expected_wheel,
+                    "{name}: {kind:?} disposition"
+                );
                 let mut dest = Vec::new();
                 apply_outcome(outcome, &mut records, &mut dest);
                 assert!(dest.is_empty(), "{name}: {kind:?} must not report");
@@ -1848,6 +2040,272 @@ mod tests {
         let outcome = decide_wheel_event(&base_wheel_inputs(MouseEventKind::WheelUp));
         apply_outcome(outcome, &mut records, &mut dest);
         assert!(!dest.is_empty(), "wheel notch over the open grid must report");
+    }
+
+    // ── AC-1, AC-12 (TS-1): rejected wheel on arm-bearing regions ───────
+
+    /// AC-1: each of the four arm-bearing regions decides the
+    /// scroll-scrollback local arm on the main screen, for both wheel
+    /// directions. AC-12: the answer is identical whatever the actual
+    /// tracking-mode bits are — the rejected branch fixes tracking-active
+    /// to false (D4) regardless of the caller's input.
+    #[test]
+    fn ac1_ac12_rejected_wheel_over_arm_bearing_regions_scrolls_scrollback_on_main_screen() {
+        let regions: [GridOwnershipInputs; 4] = [
+            GridOwnershipInputs {
+                in_title_bar_band: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                in_bottom_strip: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                in_scrollbar_overlay: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                in_resize_hot_zone: true,
+                ..GridOwnershipInputs::default()
+            },
+        ];
+        for grid in regions {
+            for kind in [MouseEventKind::WheelUp, MouseEventKind::WheelDown] {
+                for (mode_1000, mode_1002, mode_1003) in [
+                    (false, false, false),
+                    (false, true, false),
+                    (true, false, false),
+                ] {
+                    let inputs = WheelEventInputs {
+                        grid,
+                        mode_1000,
+                        mode_1002,
+                        mode_1003,
+                        ..base_wheel_inputs(kind)
+                    };
+                    let outcome = decide_wheel_event(&inputs);
+                    assert_eq!(
+                        outcome.disposition,
+                        Disposition::Local(LocalArm::ScrollScrollback)
+                    );
+                }
+            }
+        }
+    }
+
+    // ── AC-2 (TS-3): rejected wheel on the alternate screen ─────────────
+
+    /// AC-2: with all three conditions on, each arm-bearing region decides
+    /// translate-to-arrow-bytes instead; holding Shift changes nothing;
+    /// turning any one condition off returns the answer to
+    /// scroll-scrollback.
+    #[test]
+    fn ac2_rejected_wheel_alternate_screen_translates_to_arrows_when_all_three_conditions_hold() {
+        let regions: [GridOwnershipInputs; 4] = [
+            GridOwnershipInputs {
+                in_title_bar_band: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                in_bottom_strip: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                in_scrollbar_overlay: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                in_resize_hot_zone: true,
+                ..GridOwnershipInputs::default()
+            },
+        ];
+        for grid in regions {
+            for shift in [false, true] {
+                let inputs = WheelEventInputs {
+                    grid,
+                    on_alt_screen: true,
+                    alt_scroll_mode_bit: true,
+                    alt_scroll_setting: true,
+                    mods: Modifiers {
+                        shift,
+                        ..Modifiers::NONE
+                    },
+                    ..base_wheel_inputs(MouseEventKind::WheelUp)
+                };
+                let outcome = decide_wheel_event(&inputs);
+                assert_eq!(
+                    outcome.disposition,
+                    Disposition::Local(LocalArm::TranslateToArrowBytes),
+                    "shift={shift} must not change the answer"
+                );
+            }
+
+            for (on_alt_screen, alt_scroll_mode_bit, alt_scroll_setting) in [
+                (false, true, true),
+                (true, false, true),
+                (true, true, false),
+            ] {
+                let inputs = WheelEventInputs {
+                    grid,
+                    on_alt_screen,
+                    alt_scroll_mode_bit,
+                    alt_scroll_setting,
+                    ..base_wheel_inputs(MouseEventKind::WheelUp)
+                };
+                let outcome = decide_wheel_event(&inputs);
+                assert_eq!(
+                    outcome.disposition,
+                    Disposition::Local(LocalArm::ScrollScrollback),
+                    "on_alt_screen={on_alt_screen} mode_bit={alt_scroll_mode_bit} \
+                     setting={alt_scroll_setting} must fall back to scroll-scrollback"
+                );
+            }
+        }
+    }
+
+    // ── AC-4: middle-click paste disabled ───────────────────────────────
+
+    /// AC-4: with middle-click paste disabled, every region — including
+    /// the ones that take the paste arm when it is enabled — decides
+    /// "nothing".
+    #[test]
+    fn ac4_middle_press_rejected_position_decides_nothing_when_paste_disabled() {
+        let regions: [GridOwnershipInputs; 4] = [
+            GridOwnershipInputs {
+                in_bottom_strip: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                in_scrollbar_overlay: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                in_mux_sidebar: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                in_resize_hot_zone: true,
+                ..GridOwnershipInputs::default()
+            },
+        ];
+        for grid in regions {
+            let press = ButtonEventInputs {
+                grid,
+                middle_click_paste_enabled: false,
+                ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Middle)
+            };
+            let outcome = decide_button_event(press);
+            assert_eq!(outcome.disposition, Disposition::Nothing);
+        }
+    }
+
+    // ── AC-9 (TS-10): overlap precedence, suppressing regions first ─────
+
+    /// AC-9: the resize hot zone combined with the bottom strip — both
+    /// arm-bearing — takes the local arm on both the wheel and the
+    /// middle-press path.
+    #[test]
+    fn ac9_resize_hot_zone_overlapping_bottom_strip_takes_the_local_arm() {
+        let grid = GridOwnershipInputs {
+            in_resize_hot_zone: true,
+            in_bottom_strip: true,
+            ..GridOwnershipInputs::default()
+        };
+        let wheel = decide_wheel_event(&WheelEventInputs {
+            grid,
+            ..base_wheel_inputs(MouseEventKind::WheelUp)
+        });
+        assert_eq!(
+            wheel.disposition,
+            Disposition::Local(LocalArm::ScrollScrollback)
+        );
+        let press = decide_button_event(ButtonEventInputs {
+            grid,
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Middle)
+        });
+        assert_eq!(
+            press.disposition,
+            Disposition::Local(LocalArm::PastePrimary)
+        );
+    }
+
+    /// AC-9: the mux sidebar (wheel-suppressing) combined with the bottom
+    /// strip (wheel-arm-bearing) decides "nothing" on the wheel path — the
+    /// suppressing region's precedence wins.
+    #[test]
+    fn ac9_mux_sidebar_overlapping_bottom_strip_wheel_decides_nothing() {
+        let grid = GridOwnershipInputs {
+            in_mux_sidebar: true,
+            in_bottom_strip: true,
+            ..GridOwnershipInputs::default()
+        };
+        let wheel = decide_wheel_event(&WheelEventInputs {
+            grid,
+            ..base_wheel_inputs(MouseEventKind::WheelUp)
+        });
+        assert_eq!(wheel.disposition, Disposition::Nothing);
+    }
+
+    /// AC-9: the profile selector combined with any arm-bearing region
+    /// decides "nothing" on both the wheel and the middle-press path.
+    #[test]
+    fn ac9_profile_selector_overlapping_any_arm_bearing_region_decides_nothing() {
+        let regions: [GridOwnershipInputs; 4] = [
+            GridOwnershipInputs {
+                profile_selector_visible: true,
+                in_title_bar_band: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                profile_selector_visible: true,
+                in_bottom_strip: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                profile_selector_visible: true,
+                in_scrollbar_overlay: true,
+                ..GridOwnershipInputs::default()
+            },
+            GridOwnershipInputs {
+                profile_selector_visible: true,
+                in_resize_hot_zone: true,
+                ..GridOwnershipInputs::default()
+            },
+        ];
+        for grid in regions {
+            let wheel = decide_wheel_event(&WheelEventInputs {
+                grid,
+                ..base_wheel_inputs(MouseEventKind::WheelUp)
+            });
+            assert_eq!(wheel.disposition, Disposition::Nothing);
+            let press = decide_button_event(ButtonEventInputs {
+                grid,
+                ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Middle)
+            });
+            assert_eq!(press.disposition, Disposition::Nothing);
+        }
+    }
+
+    /// AC-9: the tab-bar band combined with the resize hot zone decides
+    /// "nothing" — the tab-bar band's suppression wins over the resize
+    /// hot zone's arm on both paths.
+    #[test]
+    fn ac9_tab_bar_band_overlapping_resize_hot_zone_decides_nothing() {
+        let grid = GridOwnershipInputs {
+            in_tab_bar_band: true,
+            in_resize_hot_zone: true,
+            ..GridOwnershipInputs::default()
+        };
+        let wheel = decide_wheel_event(&WheelEventInputs {
+            grid,
+            ..base_wheel_inputs(MouseEventKind::WheelUp)
+        });
+        assert_eq!(wheel.disposition, Disposition::Nothing);
+        let press = decide_button_event(ButtonEventInputs {
+            grid,
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Middle)
+        });
+        assert_eq!(press.disposition, Disposition::Nothing);
     }
 
     // ── AC-4 (TS-20, TS-24): sequence-driven, one persistent record pair ─
@@ -1968,7 +2426,7 @@ mod tests {
         let mut records = MouseReportRecords::default();
         let press = ButtonEventInputs {
             grid: GridOwnershipInputs {
-                in_top_strip: true,
+                in_title_bar_band: true,
                 ..GridOwnershipInputs::default()
             },
             ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Left)
@@ -1977,6 +2435,68 @@ mod tests {
         let mut dest = Vec::new();
         apply_outcome(outcome, &mut records, &mut dest);
         assert_eq!(records.gesture_owner.peek(MouseButtonId::Left), None);
+    }
+
+    /// task0001 (AC-5, D6): even a middle press that now names the paste
+    /// arm in an arm-bearing region records no gesture owner — recording
+    /// one would route the matching release into the selection-completion
+    /// arm.
+    #[test]
+    fn ac5_rejected_middle_press_names_paste_but_records_no_owner() {
+        let mut records = MouseReportRecords::default();
+        let press = ButtonEventInputs {
+            grid: GridOwnershipInputs {
+                in_bottom_strip: true,
+                ..GridOwnershipInputs::default()
+            },
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Middle)
+        };
+        let outcome = decide_button_event(press);
+        assert_eq!(
+            outcome.disposition,
+            Disposition::Local(LocalArm::PastePrimary)
+        );
+        let mut dest = Vec::new();
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert_eq!(records.gesture_owner.peek(MouseButtonId::Middle), None);
+    }
+
+    /// task0001 (AC-5): a left press rejected by grid ownership, fed
+    /// through its full press/release sequence via the persistent record
+    /// pair, never reaches the selection-completion arm and never reports.
+    #[test]
+    fn ac5_rejected_left_press_then_release_never_completes_a_selection() {
+        let mut records = MouseReportRecords::default();
+        let mut dest = Vec::new();
+
+        let press = ButtonEventInputs {
+            grid: GridOwnershipInputs {
+                in_scrollbar_overlay: true,
+                ..GridOwnershipInputs::default()
+            },
+            records,
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Left)
+        };
+        let outcome = decide_button_event(press);
+        assert_eq!(outcome.disposition, Disposition::Nothing);
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(dest.is_empty());
+
+        // The release arrives at a position that no longer overlaps any
+        // guarded region — SC-8 is not consulted for a release at all, so
+        // only the (absent) recorded owner can decide it.
+        let release = ButtonEventInputs {
+            records,
+            ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
+        };
+        let outcome = decide_button_event(release);
+        assert_eq!(
+            outcome.disposition,
+            Disposition::Nothing,
+            "must never reach the selection-completion arm"
+        );
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(dest.is_empty());
     }
 
     #[test]

@@ -1,0 +1,184 @@
+task_id: task0001
+baseline_failures: []          # 3415 passed, 0 failed, 3 ignored (pre-existing ignores, unrelated)
+final_failures: []             # 3424 passed, 0 failed, 3 ignored — same 3 ignores, 9 new tests, all pass
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::mouse_report::tests::ac1_ac12_rejected_wheel_over_arm_bearing_regions_scrolls_scrollback_on_main_screen
+      - window_host::mouse_report::tests::ac3_ts19_guarded_regions_reject_every_event_kind_and_button
+    red_confirmed: true
+    red_reason: >-
+      Temporarily reverted decide_wheel_event's rejected branch back to bare
+      `SequenceOutcome::nothing()` (pre-task0001 behavior) and reran: both
+      tests failed. Observed panic: "assertion `left == right` failed: CSD
+      title-bar band: WheelUp disposition, left: Nothing, right:
+      Local(ScrollScrollback)" (from ac3_ts19) and an equivalent failure in
+      ac1_ac12 at the first iterated region. Both tests iterate all four
+      arm-bearing regions through the same shared `rejected_wheel_disposition`
+      function and panic at the first mismatch, so only the first region
+      (CSD title-bar band) was directly observed failing in this run; the
+      other three (bottom strip, scrollbar overlay, resize hot zone) share
+      the identical code path and were confirmed green in the final full run.
+  AC-2:
+    tests:
+      - window_host::mouse_report::tests::ac2_rejected_wheel_alternate_screen_translates_to_arrows_when_all_three_conditions_hold
+    red_confirmed: true
+    red_reason: >-
+      Same revert as AC-1. Observed panic: "assertion `left == right`
+      failed: shift=false must not change the answer, left: Nothing, right:
+      Local(TranslateToArrowBytes)".
+  AC-3:
+    tests:
+      - window_host::mouse_report::tests::ac3_ts19_guarded_regions_reject_every_event_kind_and_button
+    red_confirmed: false
+    red_reason: >-
+      The tab-bar band, mux sidebar and profile-selector "decide nothing"
+      wheel dispositions are unchanged by this task — the pre-task rejected
+      branch already returned bare Nothing for every guarded region, so
+      these specific cells evaluate to Nothing both before and after the
+      dispatch was added. Reverting decide_wheel_event to
+      `SequenceOutcome::nothing()` does not flip these assertions (they were
+      already correct), so no red state exists for this criterion in
+      isolation. Regression protection for these cells is instead
+      exercised together with the overlap-precedence tests (AC-9), which
+      WERE confirmed red against a precedence-order mutant (see AC-9).
+  AC-4:
+    tests:
+      - window_host::mouse_report::tests::ac5_rejected_middle_press_names_paste_but_records_no_owner
+      - window_host::mouse_report::tests::ac9_resize_hot_zone_overlapping_bottom_strip_takes_the_local_arm
+      - window_host::mouse_report::tests::ac4_middle_press_rejected_position_decides_nothing_when_paste_disabled
+      - window_host::mouse_report::tests::ac3_ts19_guarded_regions_reject_every_event_kind_and_button
+    red_confirmed: true
+    red_reason: >-
+      Reverted decide_press's rejected branch to bare
+      `SequenceOutcome::nothing()` and reran: ac5_rejected_middle_press_
+      names_paste_but_records_no_owner failed with "assertion `left ==
+      right` failed, left: Nothing, right: Local(PastePrimary)", confirming
+      the core "middle press with paste enabled takes the paste arm" claim.
+      The paste-disabled half and the title-bar/tab-bar/profile-selector
+      "nothing" half of this criterion are unchanged from pre-task behavior
+      (a rejected middle press always decided nothing there before this
+      task too) and were not independently driven red by this revert.
+  AC-5:
+    tests:
+      - window_host::mouse_report::tests::ac5_rejected_left_press_then_release_never_completes_a_selection
+      - window_host::mouse_report::tests::ac5_rejected_middle_press_names_paste_but_records_no_owner
+      - window_host::mouse_report::tests::ac4_press_rejected_by_grid_ownership_records_no_owner
+    red_confirmed: false
+    red_reason: >-
+      A left/right rejected press deciding "nothing", recording no gesture
+      owner, and its matching release never reaching the
+      selection-completion arm are all unchanged by this task — under the
+      same decide_press revert used for AC-4,
+      ac5_rejected_left_press_then_release_never_completes_a_selection
+      still passed unmodified (this exact behavior pre-existed). The one
+      part of D6 this task newly exercises — a middle press that NOW names
+      an arm still records no gesture owner — is asserted by
+      ac5_rejected_middle_press_names_paste_but_records_no_owner's second
+      assertion, but that line was never reached in the revert run because
+      the test's first assertion (the disposition) panicked first. No
+      additional mutant was constructed to isolate the owner-recording
+      assertion specifically.
+  AC-6:
+    tests:
+      - window_host::mouse_report::tests::ac5_ts21_rejected_motion_leaves_cached_cell_unchanged_then_next_motion_still_reports
+    red_confirmed: false
+    red_reason: >-
+      The task plan states the motion rejection branch is left exactly as
+      it is ("Motion rejection branch | Unchanged"); decide_motion_event
+      was not touched by this task at all. This pre-existing test already
+      passed before any task0001 change and continues to pass — there is
+      no red state to observe for a branch this task deliberately does not
+      modify.
+  AC-7:
+    tests:
+      - window_host::mouse_report::tests::ac3_ts19_guarded_regions_reject_every_event_kind_and_button
+    red_confirmed: false
+    red_reason: >-
+      The byte-absence invariant was already guaranteed before this task
+      (Disposition::Nothing never reports) and remains guaranteed after
+      (apply_outcome only pushes bytes for Disposition::Report; a Local
+      disposition never does, by construction of apply_outcome, which this
+      task does not modify). There is no revert of this task's change that
+      could make a Local arm produce report bytes, so this specific
+      byte-absence claim was not independently driven red; it is asserted
+      in the same table test that pins the (newly red-confirmed)
+      disposition values.
+  AC-8:
+    tests:
+      - window_host::mouse_report::tests::point_belongs_to_grid_rejects_each_guarded_region_independently
+    red_confirmed: true
+    red_reason: >-
+      Temporarily dropped the `inputs.in_tab_bar_band` term from
+      point_belongs_to_grid's OR chain and reran: the test failed with
+      "tab-bar band must reject the position". The "tab bar hidden"
+      geometry sub-claim (a position just below the title-bar height is
+      grid-owned) is a routing-layer (pointer_routing.rs) geometry concern
+      that needs a constructed WindowHost to exercise and is out of reach
+      of a bare unit test per the task plan's own Test Notes ("Wiring
+      confirmation... cannot be unit-tested"); it is covered by the manual
+      scenarios in VERIFICATION.md instead.
+  AC-9:
+    tests:
+      - window_host::mouse_report::tests::ac9_resize_hot_zone_overlapping_bottom_strip_takes_the_local_arm
+      - window_host::mouse_report::tests::ac9_mux_sidebar_overlapping_bottom_strip_wheel_decides_nothing
+      - window_host::mouse_report::tests::ac9_profile_selector_overlapping_any_arm_bearing_region_decides_nothing
+      - window_host::mouse_report::tests::ac9_tab_bar_band_overlapping_resize_hot_zone_decides_nothing
+    red_confirmed: true
+    red_reason: >-
+      Two independent reds. (1) Full revert (as in AC-1/AC-4):
+      ac9_resize_hot_zone_overlapping_bottom_strip_takes_the_local_arm
+      failed with left: Nothing, right: Local(ScrollScrollback). (2) Built
+      a precedence-order mutant in rejected_press_disposition and
+      rejected_wheel_disposition that checks arm-bearing regions BEFORE
+      suppressing regions (the opposite of D3's stated order) and reran:
+      ac9_mux_sidebar_overlapping_bottom_strip_wheel_decides_nothing,
+      ac9_profile_selector_overlapping_any_arm_bearing_region_decides_nothing
+      and ac9_tab_bar_band_overlapping_resize_hot_zone_decides_nothing all
+      failed with left: Local(ScrollScrollback), right: Nothing, proving
+      these three tests genuinely pin the "suppressing wins" ordering and
+      are not vacuously satisfied by an "always nothing" implementation.
+      Both mutants were reverted afterward; the final full suite is green.
+  AC-10:
+    tests:
+      - window_host::mouse_report::tests::ac3_ts19_guarded_regions_reject_every_event_kind_and_button
+    red_confirmed: true
+    red_reason: >-
+      Same observation as AC-1: this is the strengthened sweep test itself.
+      It failed under the decide_wheel_event revert with "assertion `left
+      == right` failed: CSD title-bar band: WheelUp disposition, left:
+      Nothing, right: Local(ScrollScrollback)", directly demonstrating that
+      reverting a restored arm to "nothing" fails this test (the criterion
+      this AC states). The pre-existing byte-absence assertion in the same
+      test continued to pass unmodified throughout, per NFR6.
+  AC-11:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Structural criterion verified by code inspection, not by a test. No
+      Disposition or LocalArm variant was added (both enums' variant lists
+      are unchanged by this task's diff). No windowing, term_core, window
+      handle, GPU surface or PTY type appears in the new functions'
+      signatures (rejected_press_disposition takes MouseButtonId,
+      GridOwnershipInputs, bool; rejected_wheel_disposition takes
+      &WheelEventInputs, an existing plain-value type) — every input is
+      already a plain value used elsewhere in this window-free module. The
+      early-return order in decide_press/decide_wheel_event and in the
+      pointer-button/wheel handlers in pointer_routing.rs is unchanged: the
+      only edit was replacing the body of the pre-existing "if
+      !point_belongs_to_grid" branch, with no early return added, removed
+      or reordered. No allocation, lock acquisition or log line was added:
+      the new dispatch functions only branch on booleans already present in
+      GridOwnershipInputs and delegate to the existing wheel_consumer.
+  AC-12:
+    tests:
+      - window_host::mouse_report::tests::ac1_ac12_rejected_wheel_over_arm_bearing_regions_scrolls_scrollback_on_main_screen
+    red_confirmed: true
+    red_reason: >-
+      Same revert as AC-1; the test iterates three tracking-mode bit
+      combinations per region/direction asserting an identical answer, and
+      failed under the revert (see AC-1's red_reason for the exact panic).
+      The "cargo test --lib exits zero" half of this criterion is
+      confirmed by the final full-suite run: 3424 passed, 0 failed, 3
+      ignored (same 3 ignores as the pre-task0001 baseline of 3415
+      passed/0 failed/3 ignored).
