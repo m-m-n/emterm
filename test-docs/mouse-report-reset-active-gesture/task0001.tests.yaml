@@ -1,0 +1,167 @@
+task_id: task0001
+baseline_failures: []          # 3433 passed, 0 failed, 3 ignored (pre-existing ignores, unrelated), measured on the stashed pre-edit tree
+final_failures: []             # 3446 passed, 0 failed, 3 ignored — same 3 ignores, 13 new tests, all pass
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::mouse_report::tests::apply_outcome_with_held_tracking_inactive_reset_preserves_the_held_left_slot
+      - window_host::mouse_report::tests::apply_outcome_with_held_tracking_inactive_reset_clears_an_unheld_middle_slot
+    red_confirmed: true
+    red_reason: >-
+      Mutated apply_outcome_with_held to unconditionally call clear_all()
+      on any reset (dropping the held-aware exclusion) and reran:
+      apply_outcome_with_held_tracking_inactive_reset_preserves_the_held_left_slot
+      failed with "assertion `left == right` failed: the held left button's
+      slot must survive a tracking-inactive reset, left: None, right:
+      Some(Local)". apply_outcome_with_held_tracking_inactive_reset_clears_an_unheld_middle_slot
+      does not independently flip under this mutant (clear_all also clears
+      an unheld slot), so its regression coverage is carried together with
+      the first test and with AC-3's threaded test, which does flip for the
+      identical exclusion logic.
+  AC-2:
+    tests:
+      - window_host::mouse_report::tests::apply_outcome_with_held_tab_change_reset_clears_every_slot_including_a_held_one
+      - window_host::mouse_report::tests::apply_outcome_pre_existing_entry_point_still_clears_every_slot_with_no_held_buttons
+    red_confirmed: true
+    red_reason: >-
+      Mutated apply_outcome_with_held to swap which trigger gets which
+      action (reset_tracking_inactive -> clear_all, reset_tab_changed ->
+      clear_unheld) and reran both AC-1 and AC-2 tests together:
+      apply_outcome_with_held_tab_change_reset_clears_every_slot_including_a_held_one
+      failed with "assertion `left == right` failed: a tab-change reset
+      clears every slot, held or not, left: Some(Local), right: None".
+      apply_outcome_pre_existing_entry_point_still_clears_every_slot_with_no_held_buttons
+      does not independently flip under either mutant tried (apply_outcome
+      always delegates with an all-released HeldButtons, which reduces both
+      the correct and both incorrect exclusion orderings to "clear every
+      slot" for this test's all-unheld fixture) — it guards the delegation
+      wrapper's own contract (D2) rather than the D1 ordering, and is kept
+      as a direct assertion of the pre-existing entry point's unchanged
+      call sites rather than a second red-confirmed mutant.
+  AC-3:
+    tests:
+      - window_host::mouse_report::tests::left_drag_survives_a_tracking_inactive_reset_raised_by_an_interleaved_event
+    red_confirmed: true
+    red_reason: >-
+      Same clear_all-always mutant as AC-1. Observed panic: "assertion
+      `left == right` failed: the left slot must survive the interleaved
+      event's tracking-inactive reset (this is the bug this task repairs),
+      left: None, right: Some(Local)" — reproducing the ghost-drag
+      regression this task repairs, for all three interleaving-event
+      variants the test loops over (wheel notch, middle press, right
+      press), since they all share the same apply_outcome_with_held call.
+  AC-4:
+    tests:
+      - window_host::mouse_report::tests::no_owner_left_release_completes_selection_only_when_drag_in_flight
+      - window_host::mouse_report::tests::no_owner_middle_and_right_release_stay_nothing_regardless_of_drag_in_flight
+      - window_host::mouse_report::tests::chrome_press_then_release_causes_no_publish_and_no_fold_toggle
+    red_confirmed: true
+    red_reason: >-
+      Reverted decide_release's no-owner disposition to the pre-task0001
+      bare `Disposition::Nothing` (dropping the drag-in-flight gate) and
+      reran all three tests together:
+      no_owner_left_release_completes_selection_only_when_drag_in_flight
+      failed on its drag_in_flight=true case with "assertion `left ==
+      right` failed: drag_in_flight=true, left: Nothing, right:
+      Local(CompleteSelectionAndPublishToPrimary)".
+      no_owner_middle_and_right_release_stay_nothing_regardless_of_drag_in_flight
+      and chrome_press_then_release_causes_no_publish_and_no_fold_toggle
+      both stayed green under this mutant — they assert the drag_in_flight
+      =false / non-left side of the table, which is bare Nothing both
+      before and after this task, so they are non-regression companions to
+      the red-confirmed case rather than independently red.
+  AC-5:
+    tests:
+      - window_host::tests::drag_in_flight_is_true_whenever_either_input_is_true
+      - window_host::tests::focus_loss_arm_never_calls_the_fold_click_toggle
+    red_confirmed: true
+    red_reason: >-
+      drag_in_flight_is_true_whenever_either_input_is_true: temporarily
+      renamed pointer_routing::drag_in_flight away (it did not exist before
+      this task) and reran — compile failure: "error[E0432]: unresolved
+      import `super::pointer_routing::drag_in_flight`" plus a cascading
+      "cannot find function `drag_in_flight` in this scope" from
+      local_drag_in_flight's own call site, confirming the guard's plain-
+      boolean core is genuinely new behaviour, not a pre-existing helper.
+      focus_loss_arm_never_calls_the_fold_click_toggle: temporarily removed
+      the `if local_drag_in_flight(host, &self.app) { publish_local_drag(...)
+      }` block from event_loop.rs's Focused(false) arm (its pre-task0001
+      state) and reran — failed with "the focus-loss arm must consult the
+      drag-in-flight signal before terminating a live drag (AC-5)". The
+      "never calls handle_fold_click" half of this test does not have a
+      red state to observe (event_loop.rs never called it before this task
+      either, and this task does not add such a call) — it is a permanent
+      regression guard against a future change accidentally pulling the
+      fold branch into the focus-loss path, not itself a repaired behavior.
+      A live drag's actual PRIMARY/CLIPBOARD write and record-clear
+      behaviour on focus loss cannot be driven end-to-end without a winit
+      window (Test Notes); this pins the arm's composition by name instead,
+      per the task plan's guidance for this criterion.
+  AC-6:
+    tests:
+      - window_host::tests::pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam
+      - window_host::tests::focus_loss_clear_all_empties_gesture_and_held_records_so_the_next_decision_starts_fresh
+    red_confirmed: true
+    red_reason: >-
+      pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam:
+      temporarily reverted all three production call sites back to
+      `mouse_report::apply_outcome(` (the pre-task0001 name) and reran —
+      failed with "expected the handlers to delegate to
+      `mouse_report::apply_outcome_with_held(` (AC-1)", confirming the
+      delegate-list rename is load-bearing, not vacuous.
+      focus_loss_clear_all_empties_gesture_and_held_records_so_the_next_decision_starts_fresh's
+      full ButtonEventInputs literal compiling with the new drag_in_flight
+      field has no separate runtime-red state to observe — the field has
+      no Default (IMPLEMENTATION.md Risk Assessment, task plan Compile-
+      order trap), so omitting it is a compile error, not a test failure;
+      this was encountered directly while implementing (E0063 "missing
+      field `drag_in_flight`") and resolved by adding the field, which is
+      the mechanical satisfaction of this half of the criterion.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a single new assertion but the whole pre-existing suite ending
+      unchanged in meaning (Test Notes: "satisfied by running the whole
+      suite, not by new assertions"). Verified by running
+      `cargo test --manifest-path src-tauri/Cargo.toml --lib --
+      --test-threads=1` on this task's final tree: 3446 passed, 0 failed, 3
+      ignored (the same 3 pre-existing ignores) — every pre-existing test
+      in mouse_report::tests and window_host::tests passes unchanged,
+      including the byte-exact encoding tests, the release tab-targeting
+      test, the guard-rejected-position sweep, the wheel-consumer matrix
+      tests, and the bounded wheel-report duplication tests. No byte
+      sequence, disposition table entry, or constant in those files was
+      touched by this task's diff.
+  AC-8:
+    tests:
+      - window_host::mouse_report::tests::decide_release_leaves_its_records_input_unmodified
+    red_confirmed: false
+    red_reason: >-
+      This is a structural/purity property, not a behavior with a
+      reachable red state: MouseReportRecords is `Copy` and
+      decide_button_event takes `&ButtonEventInputs`, so the caller's
+      `records` binding is a value the function has no path to mutate
+      through safe Rust regardless of what the function body does —
+      mirroring the pre-existing (task0005)
+      ac1_units_mutate_nothing_themselves_updates_travel_in_the_outcome
+      test's same structural guarantee. The rest of AC-8 (no winit/egui/
+      GPU/PTY/term_core type in any decision-layer signature, no new
+      dependency, CLI-only build) is a build/lint-level check rather than a
+      test: verified by `cargo check --manifest-path src-tauri/Cargo.toml`
+      (clean) and `cargo check --manifest-path src-tauri/Cargo.toml
+      --no-default-features` (clean, exit 0) on this task's final tree, and
+      by inspection that `Cargo.toml` gained no new dependency line.
+notes: >-
+  Font assets under src-tauri/assets/fonts/ are gitignored build inputs
+  build.rs requires; this worktree did not have them fetched (no network
+  fetch was run), so they were copied in from the main project checkout's
+  already-fetched copies before any build/test command could run at all —
+  a pre-existing environment gap unrelated to this task's diff, not a code
+  change. Step 4a's baseline run was performed retroactively (after
+  implementation, via `git stash` of exactly the four touched files, a
+  test run, then `git stash pop`) because the font-asset blocker was
+  resolved partway through the first implementation pass rather than
+  before touching any file; the stashed-tree run (3433 passed, 0 failed, 3
+  ignored) matches 3446 minus this task's 13 new tests exactly, so the
+  reconstructed baseline is exact, not approximate.
