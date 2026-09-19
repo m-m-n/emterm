@@ -1,17 +1,71 @@
 schema_version: 1
 feature: wheel-report-fraction-accum
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: 08c7e7d538c535a32967c0d2dac0759578df1ec7
-last_input_digest: null
+base_revision: 1ed49a80319d7a3d26834a933c0adf31c86a3795
+last_input_digest: sha256:512a781ebd0b74194c64e6c0c18d7d9d55110bdfd9d3a8f5c188d21ffb982e80
 active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-20T02:41:59+09:00"
+    questions:
+      - question_id: report-accum.clamp-non-finite
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  report-accum.clamp-non-finite:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T02:41:59+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [guard_before_accumulate]
+    freeform: null
+    normalized_answer: >-
+      Reject non-finite `lines` before mutating wheel_report_accum (early return, no store),
+      and keep the accumulated notch magnitude saturated at MAX_WHEEL_REPORT_NOTCHES while it
+      is still a float, ahead of the float-to-int cast. bounded_wheel_report_duplicate stays
+      as the independent second clamp layer.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (category security -> batch relaxed route).
+      Codex CLI consulted (run_codex_exec.sh hit the ChatGPT usage limit, so the same codex
+      exec binary was routed through the local LiteLLM proxy profile, model muse-spark,
+      read-only sandbox). Codex chose guard_before_accumulate; the orchestrator judged the
+      suggestion to map onto that declared option_id. Options not chosen:
+      mirror_alt_scroll_literally. Key points: feeding the accumulator unguarded admits
+      permanent NaN poisoning (inf + -inf = NaN, after which every later comparison is false
+      and the report path goes permanently silent), which is a worse failure than the bug being
+      fixed; bounded_wheel_report_duplicate caps the repeat count but cannot clean a poisoned
+      accumulator, so it is not a substitute for clamp layer #1. Opus escalation did not run.
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T02:41:59+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "Accept requirements-analyst's design_step_recommendation: skip."
+    resolution_note: >-
+      gate: create-spec.design-step resolved from references/batch-policies.yaml
+      (action: select, option_id: decide_autonomously).
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: sha256:512a781ebd0b74194c64e6c0c18d7d9d55110bdfd9d3a8f5c188d21ffb982e80
+    output_digest: null
 artifacts: []
 patches: []
-progress_fingerprint: null
+progress_fingerprint: sha256:c2d8eef0348b0796b4fc879a786ce72868ee1923182ebb7c503d661dfac556c8
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+    digests: {}
+    truncated: false
 last_error: null
