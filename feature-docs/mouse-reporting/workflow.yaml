@@ -128,7 +128,8 @@ workflow:
     persistent-vs-overlay distinction is covered behaviourally only by the
     pre-existing ui::mux_sidebar::tests::ac1_* rect tests plus manual TS-12.
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: f6febe206e2f0fbfec45436b6d3111e257ea7351
 tasks:
   task0001:
     title: Core-side mouse-tracking mode state
