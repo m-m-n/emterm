@@ -8,13 +8,14 @@ use super::frame_pacing::{
     toast_redraw_due,
 };
 use super::input_translate::{
-    MAX_ALT_SCROLL_NOTCHES, ShiftEnterRewrite, WheelConsumer, accumulate_alt_scroll_lines,
-    alternate_scroll_wheel_bytes, is_skk_swallowed_chord, shift_enter_rewrite,
-    should_clear_selection_on_forward, should_drop_synthetic_key_event,
+    MAX_ALT_SCROLL_NOTCHES, MAX_WHEEL_REPORT_NOTCHES, ShiftEnterRewrite, WheelConsumer,
+    accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes, is_skk_swallowed_chord,
+    shift_enter_rewrite, should_clear_selection_on_forward, should_drop_synthetic_key_event,
     wheel_consumer, wheel_report_notches, winit_button_to_report_identity, winit_key_to_egui,
 };
 use super::link_hover::{detect_osc8_link_at, hover_link_cells_changed};
 use super::mouse_report::MouseButtonId;
+use super::pointer_routing::bounded_wheel_report_duplicate;
 use super::resize_layout::resolve_grid_bot_inset;
 use super::*;
 use crate::selection::SelectionMode;
@@ -1511,6 +1512,156 @@ fn wheel_report_notches_sub_notch_delta_is_zero() {
 fn wheel_report_notches_non_finite_is_zero() {
     assert_eq!(wheel_report_notches(f32::NAN), 0);
     assert_eq!(wheel_report_notches(f32::INFINITY), 0);
+}
+
+// ── task0001 (wheel-report-notch-clamp) AC-1..AC-8: report-path notch cap ──
+
+/// TS1: values just below, at, and just above the cap saturate correctly,
+/// and the negated input yields the negated result in every case.
+#[test]
+fn wheel_report_notches_boundary_values_saturate_at_the_cap() {
+    assert_eq!(wheel_report_notches(99.999), 99);
+    assert_eq!(wheel_report_notches(100.0), 100);
+    assert_eq!(wheel_report_notches(100.999), 100);
+    assert_eq!(wheel_report_notches(101.0), 100);
+    assert_eq!(wheel_report_notches(-99.999), -99);
+    assert_eq!(wheel_report_notches(-100.0), -100);
+    assert_eq!(wheel_report_notches(-100.999), -100);
+    assert_eq!(wheel_report_notches(-101.0), -100);
+}
+
+/// TS2: NaN and both infinities yield 0, and the largest/smallest (most
+/// negative) finite `f32` values saturate to the cap / negated cap rather
+/// than to `i32::MAX`/`i32::MIN` (D4: the clamp happens before the
+/// float-to-integer conversion).
+#[test]
+fn wheel_report_notches_pathological_inputs_stay_within_the_cap() {
+    assert_eq!(wheel_report_notches(f32::NAN), 0);
+    assert_eq!(wheel_report_notches(f32::INFINITY), 0);
+    assert_eq!(wheel_report_notches(f32::NEG_INFINITY), 0);
+    assert_eq!(
+        wheel_report_notches(f32::MAX),
+        MAX_WHEEL_REPORT_NOTCHES as i32
+    );
+    assert_eq!(
+        wheel_report_notches(f32::MIN),
+        -(MAX_WHEEL_REPORT_NOTCHES as i32)
+    );
+}
+
+/// TS3: both signed zeros and sub-one-line magnitudes yield 0; the first
+/// whole line above 1.0 yields the signed single notch.
+#[test]
+fn wheel_report_notches_near_zero_and_sub_notch_deltas_are_zero() {
+    assert_eq!(wheel_report_notches(0.0), 0);
+    assert_eq!(wheel_report_notches(-0.0), 0);
+    assert_eq!(wheel_report_notches(0.999), 0);
+    assert_eq!(wheel_report_notches(-0.999), 0);
+    assert_eq!(wheel_report_notches(1.999), 1);
+    assert_eq!(wheel_report_notches(-1.999), -1);
+}
+
+/// TS4: a hand-written sweep of finite inputs (small, boundary, large,
+/// extreme, both signs) — every one must have magnitude at most the cap.
+/// Not a property-testing crate (NFR6): a fixed input list.
+#[test]
+fn wheel_report_notches_invariant_sweep_never_exceeds_the_cap() {
+    let inputs: &[f32] = &[
+        0.0, 0.5, 1.0, 3.7, 50.0, 99.999, 100.0, 100.999, 101.0, 1_000.0, 1.0e6, 1.0e30,
+        f32::MAX, -0.5, -1.0, -3.7, -50.0, -99.999, -100.0, -100.999, -101.0, -1_000.0, -1.0e6,
+        -1.0e30, f32::MIN,
+    ];
+    for &lines in inputs {
+        let result = wheel_report_notches(lines);
+        assert!(
+            result.unsigned_abs() <= MAX_WHEEL_REPORT_NOTCHES,
+            "wheel_report_notches({lines}) = {result}, exceeds the cap of \
+             {MAX_WHEEL_REPORT_NOTCHES}"
+        );
+    }
+}
+
+/// Realistic single-notch mouse-report payload shape for the duplication
+/// helper tests below (task plan Test Notes: about ten bytes; need not be
+/// produced by the encoder under test — the invariant is about length
+/// arithmetic).
+const SAMPLE_WHEEL_REPORT_PAYLOAD: &[u8] = b"\x1b[<64;12;7M";
+
+/// TS5: requested count 0 yields an empty buffer.
+#[test]
+fn bounded_wheel_report_duplicate_zero_count_yields_empty_buffer() {
+    assert_eq!(
+        bounded_wheel_report_duplicate(SAMPLE_WHEEL_REPORT_PAYLOAD, 0),
+        Vec::<u8>::new()
+    );
+}
+
+/// TS5: requested count 1 yields the payload byte-for-byte, unduplicated.
+#[test]
+fn bounded_wheel_report_duplicate_one_count_yields_payload_verbatim() {
+    assert_eq!(
+        bounded_wheel_report_duplicate(SAMPLE_WHEEL_REPORT_PAYLOAD, 1),
+        SAMPLE_WHEEL_REPORT_PAYLOAD.to_vec()
+    );
+}
+
+/// TS6: requested count exactly at the cap yields exactly
+/// `MAX_WHEEL_REPORT_NOTCHES` concatenations.
+#[test]
+fn bounded_wheel_report_duplicate_at_cap_yields_exactly_cap_concatenations() {
+    let got = bounded_wheel_report_duplicate(SAMPLE_WHEEL_REPORT_PAYLOAD, MAX_WHEEL_REPORT_NOTCHES);
+    assert_eq!(
+        got,
+        SAMPLE_WHEEL_REPORT_PAYLOAD.repeat(MAX_WHEEL_REPORT_NOTCHES as usize)
+    );
+}
+
+/// TS6: requested counts above the cap — including the largest possible
+/// `u32` — still cap at exactly `MAX_WHEEL_REPORT_NOTCHES` concatenations,
+/// never more.
+#[test]
+fn bounded_wheel_report_duplicate_above_cap_still_caps_at_exactly_cap() {
+    let expected = SAMPLE_WHEEL_REPORT_PAYLOAD.repeat(MAX_WHEEL_REPORT_NOTCHES as usize);
+    assert_eq!(
+        bounded_wheel_report_duplicate(
+            SAMPLE_WHEEL_REPORT_PAYLOAD,
+            MAX_WHEEL_REPORT_NOTCHES + 1
+        ),
+        expected
+    );
+    assert_eq!(
+        bounded_wheel_report_duplicate(SAMPLE_WHEEL_REPORT_PAYLOAD, u32::MAX),
+        expected
+    );
+}
+
+/// TS7: across representative payloads (an empty payload and a realistic
+/// single-notch report payload) and requested counts spanning 0 through
+/// `u32::MAX`, the returned buffer's length never exceeds payload length ×
+/// the cap (D5: capacity and repetition bound derive from the same capped
+/// value, so they cannot diverge).
+#[test]
+fn bounded_wheel_report_duplicate_length_never_exceeds_payload_len_times_cap() {
+    let payloads: &[&[u8]] = &[b"", SAMPLE_WHEEL_REPORT_PAYLOAD];
+    let counts: &[u32] = &[
+        0,
+        1,
+        MAX_WHEEL_REPORT_NOTCHES - 1,
+        MAX_WHEEL_REPORT_NOTCHES,
+        MAX_WHEEL_REPORT_NOTCHES + 1,
+        u32::MAX,
+    ];
+    for payload in payloads {
+        for &count in counts {
+            let got = bounded_wheel_report_duplicate(payload, count);
+            assert!(
+                got.len() <= payload.len() * MAX_WHEEL_REPORT_NOTCHES as usize,
+                "payload.len()={} count={count} got.len()={}",
+                payload.len(),
+                got.len()
+            );
+        }
+    }
 }
 
 // ── task0003 (SC-6, owned by task0002 — see D3): wheel-consumer decision ──
