@@ -51,3 +51,68 @@ records:
       therefore non-rejected *pointer* events. The verified half of Codex's claim was kept: the
       grid-rejection branch returns RecordUpdates::default() (lines 977-979), so a rejected event
       carries no reset observation.
+  - question_id: implement.ac7-owner-recorded-release-gap
+    packet_id: null
+    answered_at: "2026-09-20T03:12:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [carry_tracking_observation_on_every_branch]
+    freeform: null
+    normalized_answer: "Carry the last-observed tracking-active value on every decision branch (including the owner-recorded release and mid-drag motion branches), not only on the branches that compute reset; keep D10's no-reset behaviour on those branches unchanged."
+    resolution_note: >-
+      unlisted-gate fallback (no gate_id at the originating site; raised as an
+      IMPLEMENTATION.md Open Question and re-consulted during the implement phase at the
+      user's explicit instruction to consult Codex on unclear points). options:
+      carry_tracking_observation_on_every_branch / term_core_generation_counter /
+      synchronous_mode_change_hook / leave_as_planned. choice:
+      carry_tracking_observation_on_every_branch. codex_consulted: true
+      (run_codex_exec.sh against the default Codex provider returned a ChatGPT usage-limit
+      error, exit 1, retry-after 06:23; the same codex exec binary was re-run through the
+      local LiteLLM proxy profile, model muse-spark Standard tier, read-only sandbox, and
+      returned a reasoned comparison). opus_escalation: not run.
+      discussion: Codex answered the three questions as (1) accept the true zero-pointer-event
+      residual — apply_outcome only runs on pointer events, the worst effect is one notch
+      reported early or late on the first wheel event of the new session, self-correcting, no
+      stuck state and no security effect; (2) no purely host-side mechanism closes the literal
+      zero-event case under SPEC assumption A-4, though a term_core generation counter sampled
+      (not pushed) at pointer events arguably keeps the letter of A-4 while closing more of the
+      gap; (3) the planned last-observed bool is "redundant where the shared seam already works
+      and insufficient where it does not", because it is written only from what the decision
+      layer carries and the owner-recorded branches carry no tracking observation at all.
+      counter_example: accumulate 0.9 -> press while tracking is on (gesture_owner becomes
+      Report-owned) -> the application disables tracking -> release. decide_release's
+      owner-recorded branch returns RecordUpdates { gesture: Some(Clear(..)), ..Default::default() },
+      so reset stays false even though this release sampled tracking inactive; if tracking is
+      re-enabled before the next wheel event, decide_wheel_event sees active and an unchanged tab,
+      no reset fires, and the 0.9 leaks into the new tracking session. The same hole exists for
+      mid-drag motion (decide_motion_event's GestureOwner::Local / GestureOwner::Report branches,
+      which skip reset deliberately per D10).
+      verified_independently: yes — checked against
+      src-tauri/src/window_host/mouse_report.rs decide_release (owner-recorded branch at the
+      `return SequenceOutcome` with `gesture: Some(GestureUpdate::Clear(inputs.button))` and
+      `..Default::default()`; the no-owner branch below it does set `reset`). The counter-example
+      is real and is consistent with, not contradicted by, the earlier
+      create-plan.ac7-residual-observability record, which examined the no-owner branches only.
+      options_not_chosen: term_core_generation_counter was judged by Codex as strictly stronger
+      coverage (it would also detect an off/on cycle with zero intervening pointer events) but
+      requires a cross-crate bump contract on the 1000/1002/1003 mode writes in term_core, which
+      falls outside task0001's declared change set of five files under src-tauri/src/window_host/;
+      adopting it would be a scope expansion requiring a route back to planning, which is
+      disproportionate to a bounded sub-notch remainder. synchronous_mode_change_hook was judged
+      the worst fit by Codex — it breaks A-4 outright, adds lock and reentrancy risk, and
+      reintroduces the second synchronisation mechanism D1 was designed to avoid.
+      leave_as_planned was rejected because the plan's own stated goal ("every case reachable by
+      an actual event sequence resets") is not met by the bool as originally specified.
+      scope_assessment: the chosen option is a clarification of task0001.md's existing
+      "Observing a tracking-session boundary" requirement, not a new requirement — the declared
+      change set of five files is unchanged, the decision layer stays pure (NFR1), the host still
+      does not re-derive the reset (D2), D10's no-reset behaviour on the owner-recorded branches
+      is preserved, and the new field's default still means "change nothing" so the grid-rejected
+      branch stays byte-invariant (AC-8).
+      relayed_to_implementer: yes — sent to the running task0001 implementer as an AC-7
+      clarification, including a request to add the counter-example as an AC-7 test case.
+      residual_unchanged: the zero-pointer-event release-and-re-enable case stays out of scope
+      per IMPLEMENTATION.md Open Questions and the earlier
+      create-plan.ac7-residual-observability record.
+      follow_up: the term_core generation counter is recorded as a stronger out-of-scope
+      alternative and is filed as a separate Notion task rather than implemented here.
