@@ -101,7 +101,7 @@ tasks:
   task0001:
     title: "Per-region SC-8 rejection dispatch and disposition-pinning tests"
     plan: tasks/task0001.md
-    status: pending
+    status: in_progress
     files:
       - src-tauri/src/window_host/mouse_report.rs
       - src-tauri/src/window_host/pointer_routing.rs
@@ -110,7 +110,7 @@ tasks:
     domains: [input-handling, ui]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6]
-    branch: null
+    branch: em-workflow/mouse-report-guard-local-arms/task0001
     notes: null
 
 review:
