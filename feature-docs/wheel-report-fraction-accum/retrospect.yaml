@@ -1,0 +1,58 @@
+feature: wheel-report-fraction-accum
+collected_at: "2026-09-20T05:20:00+09:00"
+session_ids:
+  - 01a0bb52-70de-7244-881a-afbe40dbc23e
+signals:
+  review_critical_high:
+    - stable_id: ae089e04bcb3fa0f
+      category: comprehensive
+      file: src-tauri/src/window_host/pointer_routing.rs
+      title: >-
+        handle_mouse_wheel が disposition を見ずに report_accum を無条件に更新し、
+        AC-8/FR6 を本番経路で破っている
+      resolution: >-
+        round1 時点では unresolved（batch では sources == [claude:evaluator] のため
+        R4 の needs-judgment 経路に落ち、auto-fix がスキップされた）。round1 の
+        rework で修正され、round2 の dismissed_sites に
+        "already resolved per round_context" として記録されている。
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0002
+      files:
+        - src-tauri/src/window_host/mod.rs
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: >-
+        NFR2 がホイールイベントあたりの処理量とアロケーションの有界性を要求しており、
+        diff がイベントごとの入力ホットパス（pointer_routing / mouse_report）の
+        算術を変更しているため。round1 / round2 の両ラウンドで追加された。
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - >-
+    round1 / round2 の primary レビュアー（codex / litellm vertex-glm-5.2 /
+    muse-spark）が全ラン rate_limited でスキップされ、実効的なレビューは
+    Claude fallback のみになった。round1 は 15 ラン中 15 スキップ、round2 は
+    5 ラン中 5 スキップ。クロスバリデーションの価値がレート制限で丸ごと
+    失われる構造で、ハーネス到達性が review 品質の単一障害点になっている。
+  - >-
+    round1 で唯一の high finding が、評価者が per-finding sources を返さなかった
+    ために sources == [claude:evaluator] となり、R4 の candidate gate で
+    needs-judgment 扱い → batch では常に skip、という経路で auto-fix されずに
+    残った。severity は high なのに自動修正が一切走らない組み合わせがある。
+  - >-
+    review round2 の medium 3 件（bfb7c163abf1137d の dead_code 残骸、
+    12606d425b38d819 の AC-7 受け入れ証跡のテスト名不一致、
+    75e29a3b528d453b の tracking-active 観測責務の分散）が未解決のまま
+    review が completed に達した。R4 の candidate gate が critical/high のみを
+    対象とするため、medium は構造的に自動修正の対象外になる。
+  - >-
+    verify のビルドコマンドが、bundled フォント（gitignored）の都合で
+    workflow.yaml の逐語コマンドではなく前提付きの allowlist 文字列
+    （fetch-fonts + bun bundles 前置）で実行された。project.components の
+    build_command が worktree 単体では成立しないケースがある。
+  - >-
+    VERIFICATION.md のトラックパッド系 6 シナリオは物理ポインタデバイス入力を
+    要するため無人実行では未検証のまま残っている。本機能の中心的な受け入れ条件
+    （タッチパッドの細かいスクロールが届くこと）が自動検証では閉じない。
