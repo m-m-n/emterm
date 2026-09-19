@@ -14,8 +14,8 @@ use crate::selection::{Pos, Selection, SelectionMode};
 
 use super::WindowHost;
 use super::input_translate::{
-    MAX_WHEEL_REPORT_NOTCHES, accumulate_alt_scroll_lines, accumulate_wheel_report_lines,
-    alternate_scroll_wheel_bytes, winit_button_to_report_identity, winit_to_egui_button,
+    MAX_WHEEL_REPORT_NOTCHES, accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes,
+    winit_button_to_report_identity, winit_to_egui_button,
 };
 use super::mouse_report;
 
@@ -945,11 +945,16 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
     // never flip which whole notch `lines` crosses into) — duplicating
     // `bytes` verbatim by `notches.unsigned_abs()` therefore already
     // reports the direction matching the consumed notch's sign (D5).
+    //
+    // task0002 (D9): the per-event report step (`apply_wheel_report_step`)
+    // owns BOTH the ordering above and the gate that was missing here — it
+    // applies the outcome first, then folds `lines` into the accumulator
+    // and stores the fraction back only when the outcome it just applied
+    // is itself a report. This handler holds no fold-and-store logic of
+    // its own on this path any more.
     let mut records = host.mouse_report_records();
     let mut dest = Vec::new();
-    mouse_report::apply_outcome(outcome, &mut records, &mut dest);
-    let (notches, new_accum) = accumulate_wheel_report_lines(records.report_accum, lines);
-    records.report_accum = new_accum;
+    let notches = mouse_report::apply_wheel_report_step(outcome, &mut records, &mut dest, lines);
     host.set_mouse_report_records(records);
     if notches != 0 {
         if let Some((tab_id, bytes)) = dest.into_iter().next() {

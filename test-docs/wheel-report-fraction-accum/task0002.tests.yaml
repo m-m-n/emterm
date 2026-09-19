@@ -1,0 +1,94 @@
+task_id: task0002
+baseline_failures: []          # cargo test --lib --test-threads=1 on the merged
+                                # task0001 code: 3447 passed; 0 failed; 3 ignored
+final_failures: []             # same command after this task's changes:
+                                # 3457 passed; 0 failed; 3 ignored (10 new tests,
+                                # 0 regressions)
+acceptance_tests:
+  AC-1:
+    tests:
+      - apply_wheel_report_step_grid_rejected_notch_yields_zero_and_leaves_the_whole_record_unchanged
+      - rejected_event_mid_run_of_sub_notch_deltas_leaves_the_run_untouched
+    red_confirmed: true
+    red_reason: >-
+      Both tests call the new `mouse_report::apply_wheel_report_step` unit,
+      which did not exist in the merged task0001 code. `cargo check --tests`
+      against the reverted (pre-task0002) production files reported
+      `error[E0432]: unresolved import mouse_report::apply_wheel_report_step`
+      (7 errors total, matching all 7 new tests that reference this unit).
+  AC-2:
+    tests:
+      - apply_wheel_report_step_local_arm_dispositions_leave_the_accumulator_unaffected_by_the_fold
+      - local_arm_event_mid_run_of_sub_notch_deltas_leaves_the_run_untouched
+    red_confirmed: true
+    red_reason: >-
+      Same class as AC-1: both tests call `apply_wheel_report_step`, part of
+      the same 7 `unresolved import` compile errors confirmed against the
+      reverted pre-task0002 production files.
+  AC-3:
+    tests:
+      - apply_wheel_report_step_report_disposition_folds_the_delta_exactly_once
+      - apply_wheel_report_step_sub_notch_run_still_reports_exactly_at_the_crossing_event
+    red_confirmed: true
+    red_reason: >-
+      Same class as AC-1/AC-2: both tests call `apply_wheel_report_step`,
+      part of the same 7 `unresolved import` compile errors confirmed
+      against the reverted pre-task0002 production files.
+  AC-4:
+    tests:
+      - decide_wheel_event_reactivation_after_an_owner_recorded_release_accumulates_from_zero
+      - discard_at_release_survives_an_intervening_accepted_motion_before_the_next_wheel_event
+    red_confirmed: true
+    red_reason: >-
+      `decide_wheel_event_reactivation_after_an_owner_recorded_release_accumulates_from_zero`
+      (re-pointed from the task0001 reactivation test) was run live against
+      the reverted (pre-task0002) `apply_outcome`/`decide_wheel_event`: it
+      failed with `assertion left == right failed: ... left: 0.9 right: 0.0`
+      at the "the release's OWN apply_outcome call must discard the
+      remainder AT the observation" assertion, since the old apply_outcome
+      has no discard-on-inactive-observation branch (only the `reset` flag
+      zeroes the accumulator, and this release does not set `reset`).
+      `discard_at_release_survives_an_intervening_accepted_motion...` calls
+      `apply_wheel_report_step` and is red via the same compile-error class
+      as AC-1.
+  AC-5:
+    tests:
+      - discard_at_tracking_session_boundary_leaves_the_owner_recorded_and_the_drags_release_still_reports
+    red_confirmed: true
+    red_reason: >-
+      Run live against the reverted (pre-task0002) `apply_outcome` /
+      `decide_motion_event`: failed with `assertion left == right failed:
+      the tracking-session discard must have fired ... left: 0.6 right:
+      0.0` — the old apply_outcome has no discard branch independent of
+      `reset`, so an owner-established motion event observing tracking
+      inactive left the accumulator untouched instead of discarding it.
+  AC-6:
+    tests:
+      - wheel_report_notches_delegates_to_the_accumulating_unit_and_carries_no_dead_code_allowance
+    red_confirmed: true
+    red_reason: >-
+      Run live against the reverted (pre-task0002) input_translate.rs:
+      failed with `assertion failed: D11: wheel_report_notches must
+      delegate to accumulate_wheel_report_lines...` — the old
+      `wheel_report_notches` restates the non-finite/saturation/truncation/
+      sign rule inline instead of delegating, and still carries
+      `#[allow(dead_code)]`. The criterion's behavioural half (the
+      pre-feature `wheel_report_notches_*` expectations continuing to pass
+      unedited) is satisfied by those existing tests, left untouched, still
+      passing.
+  AC-7:
+    tests:
+      - wheel_report_and_alt_scroll_accumulators_reference_only_their_own_cap_constant
+    red_confirmed: true
+    red_reason: >-
+      The fix (bounding the report-path scan region at a following-item
+      marker) lives entirely inside this test's own slicing logic in
+      tests.rs, not in input_translate.rs, so reverting production files
+      cannot exercise old-vs-new TEST logic directly. Verified instead by a
+      direct, deterministic string-offset check against the actual
+      input_translate.rs content: the pre-fix unbounded scan
+      (`&src[report_start..]`, report_start byte offset 24888) reaches this
+      file's own `#[cfg(test)]` test-module marker (confirmed present in
+      that unbounded slice), which is exactly what the added assertion
+      (`!report_region.contains("#[cfg(test)]")`) is written to catch —
+      it would fail against the pre-fix unbounded computation.
