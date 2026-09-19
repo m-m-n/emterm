@@ -99,9 +99,19 @@ workflow:
     status: completed
     completed_at_commit: 8e7ebd086a3d25113df404b9978fc7b9c7756711
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: b1901eb42e61d25af0797fddd7bffeb8c8abbe63
+    result: pass
     failed_items: []
+    notes: >-
+      Build (main + cli_only) and the library test suite all pass: 3424 passed,
+      0 failed, 3 ignored. TS1-TS10 all pass. AC1-AC6 satisfied by the automated
+      scenarios; AC7 satisfied by manual item M1 (code inspection). M3 satisfied
+      by diff review: no dependency manifest changed and both new items are
+      pub(super) within the window_host module tree. M2 (wheel scrolling feel in
+      a mouse-tracking TUI) needs a human at a real display and is carried
+      forward; below-cap behaviour is provably unchanged (the clamp only engages
+      at |lines| >= 100). No excluded requirements.
   - id: retrospect
     status: pending
 
