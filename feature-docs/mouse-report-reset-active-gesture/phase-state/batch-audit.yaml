@@ -37,3 +37,60 @@ records:
       既存ヘルパー base_button_inputs / base_motion_inputs / base_wheel_inputs は
       既定が tracking ON なので mode_1002=false が必要、という実装上の注意も得た。
     outcome: adopted
+  - record_id: batch-audit-0002
+    recorded_at: "2026-09-20T03:00:00+09:00"
+    gate_id: null
+    gate_kind: user-requested-consultation
+    phase: create-spec
+    question: >-
+      Q4: 押下中ボタンのカーブアウトを reset の 2 つのトリガ両方に適用し、押下元タブを
+      スロットごとに持つ (A1) か、`!tracking_active` トリガだけに適用しタブ変更は今どおり
+      全消去のままにする (A2) か。
+      Q5: カーブアウトを decide_* の入力束 (B1) に置くか、apply_outcome (B2) に置くか。
+    options:
+      - "A1: 両トリガ + 押下元タブをスロットごとに保持"
+      - "A2: !tracking_active トリガのみ"
+      - "B1: ButtonEventInputs / WheelEventInputs に held フラグを追加"
+      - "B2: apply_outcome 側で除外（HeldButtons を受ける companion 関数）"
+    choice:
+      - "A2"
+      - "B2"
+    codex_consulted: true
+    opus_escalation: true
+    source: batch-opus-escalation
+    resolution_note: >-
+      ターン 2 の Codex 相談は run_codex_exec.sh が usage limit で失敗したため、
+      references/question-resolution.md の Codex consultation procedure step 1
+      (availability probe が unavailable なら Opus escalation が代役) に従い
+      Opus エスカレーションを 1 回実施した。
+      Q4 は A2 を採用。決め手は、A1 が守るべき制約そのものを破る点:
+      タブ変更中に Report 所有ボタンが押されたままだと、現状は解放が何も出さない
+      (mouse_report.rs:807 -> 852-861)。A1 はここでスロットを生かして押下元タブへ
+      解放レポートを出すため、「Report 所有の挙動はバイト単位で不変」という FR4 に
+      正面から反し、既存テスト
+      ac6_ts23_release_after_active_tab_change_targets_the_tab_the_press_recorded
+      (mouse_report.rs:2604-2630) を壊す。
+      さらに A1 は built_for_tab と重複する「どのタブの記録か」を二重に持つことになり、
+      motion は inputs.active_tab へ、release は押下元タブへ、と同一ジェスチャの前半と
+      後半が食い違う新たな不整合を生む。host.mouse_report_held は決定より前に更新される
+      (pointer_routing.rs:486-494) ため、新規押下が自分自身の古いスロットを温存する
+      自己参照の危険もある。
+      A2 の唯一の取りこぼしは「ジェスチャ中に本当にタブが変わった場合」だが、
+      これは今の挙動そのままで今回の退行ではなく、ローカルドラッグ側は FR2 の
+      所有権非依存の左解放後始末が受け止めるので、ユーザーから見えるゴーストドラッグは
+      残らない。再現手順はそもそもタブ変更を含まない
+      (左押下が built_for_tab = Some(active_tab) を立てるので tab_changed == false)。
+      Q5 は B2 を採用。B1 は RecordUpdates.reset が「セルキャッシュのリセット」と
+      「全スロット消去」の 2 つを兼ねているため分割が必須になり、記録のライフサイクル判断を
+      decide_* 側へ持ち込むので NFR2 の純粋性不変条件に反する。テスト側の完全リテラルも
+      button 約 11 件 / wheel 約 3 件の書き換えが要る。
+      B2 は decide_* と RecordUpdates を一切触らず、変更は production 3 箇所のみ。
+      HeldButtons は MouseReportRecords ではなくホスト側の別フィールド (mod.rs:263) なので
+      apply_outcome のシグネチャ変更は不可避だが、HeldButtons を受け取る companion 関数を
+      足して既存 apply_outcome を委譲ラッパとして残せば、インラインテスト約 30 箇所は
+      無編集で済む。
+      副産物として、tests.rs:1782-1791 が pointer_routing.rs のソースに
+      "mouse_report::apply_outcome(" というニードルが含まれることを構造テストとして
+      検査している事実が判明した。companion へ移行するとこのニードルに一致しなくなるため、
+      委譲先リストへ companion 名を足す 1 行のテスト修正が必要 (assumption A7)。
+    outcome: adopted
