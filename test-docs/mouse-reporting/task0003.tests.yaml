@@ -1,0 +1,133 @@
+task_id: task0003
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::mouse_report_press_guard_runs_after_the_profile_selector_guard_and_before_selection_start
+      - window_host::tests::mouse_report_press_guard_is_gated_by_shift_and_returns_on_report
+      - window_host::mouse_report::tests::button_code_press_bases_by_identity
+      - window_host::mouse_report::tests::encode_report_x10_left_press_at_origin
+      - window_host::mouse_report::tests::encode_report_x10_release_at_origin
+    red_confirmed: true
+    red_reason: >-
+      This AC's authoritative verification is manual (TS-10/TS-11/TS-13 per
+      the task plan's Test Notes — the routing function runs inside a
+      winit/egui context that cannot be constructed in a unit test).
+      Automated coverage is the structural precedence pins plus the SC-2/SC-3
+      encode units the routing depends on. Genuinely watched red->green for
+      mouse_report_press_guard_is_gated_by_shift_and_returns_on_report: with
+      the shift condition inverted, it failed with "the mouse-reporting block
+      must be gated by the Shift override (AC-4)"; restored, it passed. The
+      sibling ordering test and the mouse_report.rs pure-function tests were
+      authored alongside their implementation in this same session (not
+      strictly red-first) — their correctness is instead evidenced by
+      exhaustive input-space assertions (see AC-5's ctrl/alt/no-4 sweep) and
+      by cargo check/test passing clean on every increment.
+  AC-2:
+    tests:
+      - window_host::tests::mouse_report_motion_consults_the_motion_gate_before_the_cell_change_filter
+      - window_host::tests::mouse_report_motion_resets_the_cache_on_no_tracking_and_on_tab_change
+      - window_host::mouse_report::tests::motion_gate_no_tracking_or_1000_only_never_reports
+      - window_host::mouse_report::tests::motion_gate_1002_requires_a_held_button
+      - window_host::mouse_report::tests::motion_gate_1003_always_reports
+      - window_host::mouse_report::tests::motion_gate_multi_button_carries_the_lowest_numbered
+      - window_host::mouse_report::tests::cell_change_filter_reports_first_cell_then_suppresses_repeat
+      - window_host::mouse_report::tests::cell_change_filter_reports_on_crossing_and_resets
+    red_confirmed: false
+    red_reason: >-
+      Manual scenarios TS-10/TS-11 are this AC's authoritative check per the
+      task plan. The automated units above (motion-gate/cell-filter
+      exhaustive cases and the two structural pins on call order / reset
+      sites) were authored alongside pointer_routing.rs's motion-handling
+      block in this session rather than written and watched red before the
+      block existed, so no red observation was made for this specific AC's
+      entries. Confidence instead comes from the exhaustive per-mode-
+      combination coverage in mouse_report.rs and from the two adjacent AC-1/
+      AC-4 structural tests that WERE red/green-confirmed against the same
+      file (see those entries), which exercises the surrounding call-site
+      wiring this AC's tests also depend on.
+  AC-3:
+    tests:
+      - window_host::tests::mouse_report_wheel_decision_precedes_both_existing_wheel_consumers
+      - window_host::tests::wheel_consumer_tracking_active_shift_not_held_reports_to_application
+      - window_host::tests::wheel_report_notches_signed_whole_counts
+      - window_host::tests::wheel_report_notches_sub_notch_delta_is_zero
+    red_confirmed: false
+    red_reason: >-
+      Manual scenarios TS-10/TS-11 are authoritative. wheel_consumer and
+      wheel_report_notches were authored together with their tests in this
+      session; no pre-implementation red was observed for this AC's entries.
+      The wheel call site's D5 boundary (arrow-translation unreachable while
+      tracking is active) WAS red/green-confirmed — see AC-4.
+  AC-4:
+    tests:
+      - window_host::tests::mouse_report_wheel_tracking_active_branch_treats_arrow_translation_as_unreachable
+      - window_host::tests::mouse_report_press_guard_is_gated_by_shift_and_returns_on_report
+      - window_host::tests::wheel_consumer_tracking_active_shift_held_scrolls_scrollback_never_arrows
+    red_confirmed: true
+    red_reason: >-
+      Manual scenario TS-11 is authoritative for the end-to-end behaviour.
+      Two structural pins were genuinely watched red before being restored
+      green: (1) with the tracking-active TranslateToArrows arm's
+      `unreachable!()` replaced by a silent no-op, the test failed with "the
+      tracking-active branch's TranslateToArrows arm must be unreachable!()
+      (D5)"; (2) with the press/release Shift gate inverted, the test failed
+      with "the mouse-reporting block must be gated by the Shift override
+      (AC-4)". Both were then restored and re-confirmed green. The pure
+      wheel_consumer unit (shift-held branch) was authored alongside its
+      implementation and not separately red-confirmed.
+  AC-5:
+    tests:
+      - window_host::tests::mouse_report_press_guard_runs_after_the_profile_selector_guard_and_before_selection_start
+      - window_host::tests::mouse_report_press_guard_is_gated_by_shift_and_returns_on_report
+      - window_host::mouse_report::tests::button_code_ctrl_and_alt_bits_stack_and_never_produce_shift
+    red_confirmed: true
+    red_reason: >-
+      Manual scenario TS-11 is authoritative for the Ctrl+click / middle-
+      click end-to-end behaviour. The shared structural gate this AC relies
+      on (report path returns before the local match arms that implement
+      link-open / middle-paste) is the SAME assertion genuinely red/green-
+      confirmed under AC-4 (mouse_report_press_guard_is_gated_by_shift_and_returns_on_report).
+      button_code_ctrl_and_alt_bits_stack_and_never_produce_shift (the
+      exhaustive ctrl=16/alt=8/both=24/never-4 sweep) was authored alongside
+      its implementation, not separately red-confirmed.
+  AC-6:
+    tests:
+      - window_host::tests::mouse_report_press_guard_runs_after_the_profile_selector_guard_and_before_selection_start
+      - window_host::tests::mouse_wheel_handler_routes_sidebar_hits_to_egui_before_the_terminal_scroll_path
+      - window_host::tests::mouse_input_press_guard_queries_shared_sidebar_hit_region_before_selection_start
+    red_confirmed: false
+    red_reason: >-
+      Manual scenario TS-12 is authoritative (exercises the tab close
+      button, tab strip, status bar, scrollbar, mux sidebar in both
+      placements, and a CSD edge grab against a real window). The
+      pre-existing sidebar/status-bar/scrollbar guards are untouched by this
+      task (out of scope — "Reimplementing or altering the existing chrome
+      guards" — verified by inspection: the mouse-reporting block was
+      inserted strictly after every one of them, never inside or before).
+      mouse_report_press_guard_runs_after_the_profile_selector_guard_and_before_selection_start
+      pins that the new block sits after the LAST such guard textually;
+      it was authored alongside the insertion rather than red-first, so
+      marked false here (its Shift-gating sibling was red-confirmed under
+      AC-4, which exercises the same insertion point).
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Build/test outcome, not a test. Baseline (4a) ran the main test
+      command clean (3347 passed, 0 failed, 3 ignored) before any change
+      existed. After implementation: main build (cargo check) exit 0; main
+      test command 3379 passed, 0 failed, 3 ignored; core crate test command
+      (cargo test --manifest-path crates/term_core/Cargo.toml --lib) 856
+      passed, 0 failed, 13 ignored (one genuine regression was caught and
+      fixed here — see notes); CLI-only check (cargo check
+      --no-default-features) exit 0. Inspection: `git status --porcelain`
+      shows no file under a settings path touched, and `git diff | grep
+      'cfg(unix)\|cfg(windows)\|cfg(target_os'` finds nothing — confirming
+      the "no settings field, no platform-conditional branch" half of this
+      AC. The regression this AC's command half caught: adding SC-1's bit
+      handling for modes 1000/1002/1003/1006 in csi_modes.rs broke two
+      pre-existing csi_dispatch.rs tests that hardcoded mode 1000 as their
+      TS-fallback example; fixed by switching those two tests to mode 1005
+      (still genuinely TS-fallback) — see the deviations note in the report.
