@@ -14,11 +14,10 @@ use crate::selection::{Pos, Selection, SelectionMode};
 
 use super::WindowHost;
 use super::input_translate::{
-    accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes, wheel_consumer,
-    wheel_report_notches, winit_button_to_report_identity, winit_to_egui_button,
+    accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes, winit_button_to_report_identity,
+    winit_to_egui_button,
 };
-use super::input_translate::WheelConsumer;
-use super::mouse_report::{self, MouseButtonId, MouseEventKind, MouseReportEncoding};
+use super::mouse_report::{self, MouseEventKind, MouseReportEncoding};
 
 /// Snapshot of the SC-1 mouse-mode bits (IMPLEMENTATION.md; owned by
 /// task0001), read from the active tab's core on every event rather than
@@ -248,65 +247,104 @@ pub(super) fn handle_pointer_moved(
     }
 
     // ── Mouse reporting (task0003 FR3/FR7/FR9/FR11, SC-4/SC-5; task0004
-    // SC-8, D11) ────────────────────────────────────────────────────
-    // Decided independently of the local selection-drag path above: with
-    // no tracking mode active, with Shift held, or off the terminal grid
-    // (SC-8), this block is a no-op and today's drag-to-select behaviour
-    // is untouched.
-    if let Some(tab) = app.active_tab() {
-        let tracking = TrackingState::read(&tab.core.lock());
-        // D7/SC-9: the cell-change cache AND the gesture-ownership record
-        // are reset on an active-tab change — checked regardless of
-        // tracking/Shift state, so a cell (or a gesture owner) cached
-        // against one tab never suppresses a report (or strands a
-        // release) for another.
-        if host.mouse_report_last_active_tab != Some(app.active) {
-            host.mouse_report_cell_cache.reset();
-            host.mouse_report_gesture_owner.clear_all();
-            host.mouse_report_last_active_tab = Some(app.active);
-        }
-        if !tracking.any_active() {
-            // D7/SC-9: also reset whenever no tracking mode is active, so
-            // the first motion of the next tracking session always
-            // reports and no gesture owner survives the mode going away.
-            host.mouse_report_cell_cache.reset();
-            host.mouse_report_gesture_owner.clear_all();
-        } else {
-            // SC-8 (D11): evaluated before the motion gate (SC-5) and the
-            // cell-change filter (SC-4) below, so a motion SC-8 rejects
-            // can neither emit nor advance the cached cell (AC-3).
-            let belongs =
-                mouse_report::point_belongs_to_grid(grid_ownership_inputs(egui_pos, host, app));
-            if belongs && !host.current_mods.shift {
-                if let Some(identity) = mouse_report::motion_gate(
-                    tracking.mode_1000,
-                    tracking.mode_1002,
-                    tracking.mode_1003,
-                    host.mouse_report_held_left,
-                    host.mouse_report_held_middle,
-                    host.mouse_report_held_right,
-                ) {
-                    let (screen_row, col) = host.pixel_to_cell(position, app);
-                    let col1 = col as u32 + 1;
-                    let row1 = screen_row as u32 + 1;
-                    if host.mouse_report_cell_cache.should_report(col1, row1) {
-                        let encoding = tracking.encoding();
-                        let code = mouse_report::compose_button_code(
-                            MouseEventKind::Motion,
-                            identity,
-                            encoding,
-                            host.current_mods,
-                        );
-                        if let Some(bytes) =
-                            mouse_report::encode_report(code, col1, row1, encoding, false)
-                        {
-                            tab.write_input(bytes);
-                        }
-                    }
-                }
+    // SC-8, D11; task0005/task0006 SC-10/SC-11, D12) ───────────────────
+    // Decided independently of the local selection-drag path above: motion
+    // has no local arm of its own in this decision — the drag-to-select
+    // extension above already runs unconditionally, so today's behaviour
+    // is untouched regardless of what this decides.
+    {
+        // Gather: plain values only; this step holds no branch that
+        // chooses between reporting and local handling, and mutates no
+        // record.
+        let tracking = app
+            .active_tab()
+            .map(|tab| TrackingState::read(&tab.core.lock()))
+            .unwrap_or_default();
+        let (screen_row, col) = host.pixel_to_cell(position, app);
+        let col1 = col as u32 + 1;
+        let row1 = screen_row as u32 + 1;
+        // Decide.
+        let (report, reset, ops) = mouse_report::decide_motion(
+            grid_ownership_inputs(egui_pos, host, app),
+            tracking.any_active(),
+            tracking.mode_1000,
+            tracking.mode_1002,
+            tracking.mode_1003,
+            tracking.encoding(),
+            host.current_mods,
+            host.mouse_report_held,
+            app.active,
+            host.mouse_report_last_active_tab,
+            col1,
+            row1,
+            &host.mouse_report_records,
+        );
+        // Apply: the outcome's record updates are applied exactly once,
+        // never at the decision site above.
+        mouse_report::apply_motion(&mut host.mouse_report_records, reset, ops);
+        host.mouse_report_last_active_tab = Some(app.active);
+        // Perform: write the report bytes, if any, to the tab the
+        // outcome names.
+        if let Some(report) = report {
+            if let Some(tab) = app.tabs.get(report.tab) {
+                tab.write_input(report.bytes);
             }
         }
     }
+}
+
+/// SC-10/SC-11 gather→decide→apply→perform sequence (task0005/task0006,
+/// D12) for one button press or release. Returns `true` when the event
+/// was decided as a report — the caller must `return`, skipping every
+/// local arm — and `false` when the caller should fall through to its
+/// existing local handling, unchanged.
+fn run_button_decision(
+    kind: MouseEventKind,
+    button: MouseButton,
+    egui_pos: egui::Pos2,
+    host: &mut WindowHost,
+    app: &mut App,
+) -> bool {
+    // Gather: plain values only; no branch chooses between reporting and
+    // local handling here, and no record is mutated.
+    let identity = winit_button_to_report_identity(button);
+    let tracking = app
+        .active_tab()
+        .map(|tab| TrackingState::read(&tab.core.lock()))
+        .unwrap_or_default();
+    let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
+    let col1 = col as u32 + 1;
+    let row1 = screen_row as u32 + 1;
+    let inputs = mouse_report::ButtonEventInputs {
+        kind,
+        identity,
+        grid_ownership: grid_ownership_inputs(egui_pos, host, app),
+        mods: host.current_mods,
+        tracking_any_active: tracking.any_active(),
+        encoding: tracking.encoding(),
+        active_tab: app.active,
+        last_active_tab: host.mouse_report_last_active_tab,
+        col1,
+        row1,
+    };
+    // Decide.
+    let (decision, reset, ops) =
+        mouse_report::decide_button_event(inputs, &host.mouse_report_records);
+    // Apply: the outcome's record updates are applied exactly once, never
+    // at the decision site above.
+    mouse_report::apply_button_event(&mut host.mouse_report_records, reset, ops);
+    host.mouse_report_last_active_tab = Some(app.active);
+    // Perform: write the report bytes, if any, to the tab the outcome
+    // names.
+    if let mouse_report::ButtonDecision::Report(report) = decision {
+        if let Some(report) = report {
+            if let Some(tab) = app.tabs.get(report.tab) {
+                tab.write_input(report.bytes);
+            }
+        }
+        return true;
+    }
+    false
 }
 
 /// `WindowEvent::PointerButton` arm body: CSD edge-resize handoff, egui
@@ -384,57 +422,24 @@ pub(super) fn handle_pointer_button(
     // into the terminal must still be reportable by the motion gate.
     if let Some(identity) = winit_button_to_report_identity(button) {
         let held = state == ElementState::Pressed;
-        match identity {
-            MouseButtonId::Left => host.mouse_report_held_left = held,
-            MouseButtonId::Middle => host.mouse_report_held_middle = held,
-            MouseButtonId::Right => host.mouse_report_held_right = held,
-            MouseButtonId::None => {}
-        }
+        host.mouse_report_held.set(identity, held);
     }
     host.window().request_redraw();
 
-    // ── Gesture-ownership release short-circuit (task0004 SC-9, D10) ──
+    // ── Mouse reporting: release decision (task0004 SC-9, D10; task0005/
+    // task0006 SC-10/SC-11, D12) ───────────────────────────────────────
     // A release whose press was owned by the report side must reach
     // emission regardless of where the pointer now sits — ownership
-    // decides, not the release position, so none of the chrome guards
-    // below get a vote on an already-owned gesture's release (Test
-    // Notes: a press inside the grid whose release arrives over a
-    // guarded region still reports). The egui forward and the
-    // held-button bookkeeping above have already run for this event;
-    // a report-owned release skips only the positional chrome guards
-    // and the local selection handling that follow.
-    if state == ElementState::Released {
-        if let Some(identity) = winit_button_to_report_identity(button) {
-            if let Some(owner) = host.mouse_report_gesture_owner.take(identity) {
-                if owner == mouse_report::GestureOwner::Report {
-                    if let Some(tab) = app.active_tab() {
-                        let tracking = TrackingState::read(&tab.core.lock());
-                        let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
-                        let col1 = col as u32 + 1;
-                        let row1 = screen_row as u32 + 1;
-                        let encoding = tracking.encoding();
-                        let code = mouse_report::compose_button_code(
-                            MouseEventKind::Release,
-                            identity,
-                            encoding,
-                            host.current_mods,
-                        );
-                        if let Some(bytes) =
-                            mouse_report::encode_report(code, col1, row1, encoding, true)
-                        {
-                            tab.write_input(bytes);
-                        }
-                    }
-                    return;
-                }
-                // owner == Local: the local match arm below completes
-                // the gesture (drag flag clear, pending-anchor consume,
-                // PRIMARY copy) exactly as it already does today.
-            }
-            // No owner recorded: the press was off-grid (SC-8 rejected
-            // it), or predates this gesture-ownership tracking — fall
-            // through unchanged, same as before this task.
-        }
+    // decides, not the release position — so this runs BEFORE every
+    // chrome guard below (Test Notes: a press inside the grid whose
+    // release arrives over a guarded region still reports). The egui
+    // forward and the held-button bookkeeping above have already run for
+    // this event; a reported release skips only the positional chrome
+    // guards and the local selection handling that follow.
+    if state == ElementState::Released
+        && run_button_decision(MouseEventKind::Release, button, egui_pos, host, app)
+    {
+        return;
     }
 
     // Clicks that land on the egui-owned strip (CSD title
@@ -520,61 +525,20 @@ pub(super) fn handle_pointer_button(
         return;
     }
 
-    // ── Mouse reporting (task0003 FR2/FR7/FR8/FR10, SC-2/SC-3; task0004
-    // SC-8/SC-9, D10/D11) ────────────────────────────────────────────
+    // ── Mouse reporting: press decision (task0003 FR2/FR7/FR8/FR10, SC-2/
+    // SC-3; task0004 SC-8/SC-9, D10/D11; task0005/task0006 SC-10/SC-11,
+    // D12) ──────────────────────────────────────────────────────────────
     // Every existing chrome guard above has already had its chance to
-    // consume a LEFT press and return; SC-8 is the identity-independent
-    // counterpart that also covers a middle/right press and the CSD
-    // edge-resize hot zone, neither of which any guard above tests. With
-    // a tracking mode active, Shift not held and the position over the
-    // grid, a press reports instead of running the local selection /
-    // Ctrl+link-open / middle-paste handling below — AC-5's Ctrl+left
-    // and middle-press cases are covered here because this returns
-    // before the `match` arms that implement those paths — and records
-    // which side owns the gesture (SC-9) so the release short-circuit
-    // above routes the matching release here too, whatever Shift does
-    // in between (D10). Release handling for an OWNED gesture already
-    // happened above this function's guards; a release that reaches
-    // this point had no owner recorded and falls through unchanged.
-    if state == ElementState::Pressed {
-        if let Some(identity) = winit_button_to_report_identity(button) {
-            let belongs =
-                mouse_report::point_belongs_to_grid(grid_ownership_inputs(egui_pos, host, app));
-            if belongs {
-                if let Some(tab) = app.active_tab() {
-                    let tracking = TrackingState::read(&tab.core.lock());
-                    if tracking.any_active() && !host.current_mods.shift {
-                        let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
-                        let col1 = col as u32 + 1;
-                        let row1 = screen_row as u32 + 1;
-                        let encoding = tracking.encoding();
-                        let code = mouse_report::compose_button_code(
-                            MouseEventKind::Press,
-                            identity,
-                            encoding,
-                            host.current_mods,
-                        );
-                        if let Some(bytes) =
-                            mouse_report::encode_report(code, col1, row1, encoding, false)
-                        {
-                            tab.write_input(bytes);
-                        }
-                        host
-                            .mouse_report_gesture_owner
-                            .record_press(identity, mouse_report::GestureOwner::Report);
-                        return;
-                    }
-                }
-                // Over the grid, but no tracking mode active or Shift
-                // held: the local match arm below takes this gesture.
-                host
-                    .mouse_report_gesture_owner
-                    .record_press(identity, mouse_report::GestureOwner::Local);
-            }
-            // `!belongs`: SC-8 rejected the position — record no
-            // ownership (SC-9); the local match arm below runs
-            // unchanged, exactly as it did before this task.
-        }
+    // consume a LEFT press and return; this decision is the identity-
+    // independent counterpart that also covers a middle/right press and
+    // the CSD edge-resize hot zone, neither of which any guard above
+    // tests. Release handling for an OWNED gesture already happened above
+    // this function's guards; a release that reaches this point had no
+    // owner recorded and falls through unchanged.
+    if state == ElementState::Pressed
+        && run_button_decision(MouseEventKind::Press, button, egui_pos, host, app)
+    {
+        return;
     }
 
     match (button, state) {
@@ -815,33 +779,43 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
                 .get_mode(term_core::terminal_core::MODE_ALTERNATE_SCROLL)
         })
         .unwrap_or(false);
-    // task0004 SC-8 (D11): evaluated before the tracking-active read
-    // below. The chrome guards earlier in this function (profile
-    // selector, tab-bar band, mux sidebar) already forward-and-return
-    // for the regions they cover; this is the identity-independent
-    // counterpart that ALSO covers the bottom strip, the scrollbar
-    // overlay and the CSD edge-resize hot zone — none of which the
-    // wheel path tested at all before this task.
+    // ── Mouse reporting: wheel decision (task0003 FR4/FR7/FR8, SC-6;
+    // task0004 SC-8, D11; task0005/task0006 SC-10/SC-11, D12) ──────────
+    // Gather: plain values only. SC-8 covers the bottom strip, the
+    // scrollbar overlay and the CSD edge-resize hot zone, none of which
+    // the chrome guards earlier in this function test.
     let wheel_logical = host
         .cursor_pos
         .to_logical::<f32>(host.pixels_per_point as f64);
-    let belongs = mouse_report::point_belongs_to_grid(grid_ownership_inputs(
-        egui::pos2(wheel_logical.x, wheel_logical.y),
-        host,
-        app,
-    ));
-    // Mouse reporting (task0003 FR4/FR7/FR8, SC-6): the wheel decision is
-    // taken once, ahead of both existing wheel consumers below, and its
-    // result selects exactly one of the three (IMPLEMENTATION.md
-    // "Wheel call site"). Its tracking-active branch already folds in
-    // the Shift override (D5), so `host.current_mods.shift` is passed
-    // straight in rather than short-circuiting here.
     let tracking = app
         .active_tab()
         .map(|t| TrackingState::read(&t.core.lock()))
         .unwrap_or_default();
-    if tracking.any_active() {
-        if !belongs {
+    let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
+    let col1 = col as u32 + 1;
+    let row1 = screen_row as u32 + 1;
+    // Decide.
+    let (decision, reset) = mouse_report::decide_wheel(
+        grid_ownership_inputs(egui::pos2(wheel_logical.x, wheel_logical.y), host, app),
+        tracking.any_active(),
+        host.current_mods.shift,
+        app.alt_screen,
+        mode_bit_on,
+        app.settings.alternate_scroll_enabled,
+        tracking.encoding(),
+        host.current_mods,
+        lines,
+        app.active,
+        host.mouse_report_last_active_tab,
+        col1,
+        row1,
+    );
+    // Apply.
+    mouse_report::apply_wheel_reset(&mut host.mouse_report_records, reset);
+    host.mouse_report_last_active_tab = Some(app.active);
+    // Perform.
+    match decision {
+        mouse_report::WheelDecision::SuppressedByGrid => {
             // AC-4/FR10: no report and no other side effect — the
             // bottom strip, the scrollbar overlay and the CSD
             // edge-resize hot zone have no dedicated local wheel
@@ -851,75 +825,38 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
             // of those guards consumes is never reported").
             return;
         }
-        match wheel_consumer(
-            true,
-            host.current_mods.shift,
-            app.alt_screen,
-            mode_bit_on,
-            app.settings.alternate_scroll_enabled,
-        ) {
-            WheelConsumer::ReportToApplication => {
-                // AC-3: the scrollback offset is never touched and no
-                // alternate-scroll arrow bytes are written for a
-                // reported notch.
-                let notches = wheel_report_notches(lines);
-                if notches != 0 {
-                    if let Some(tab) = app.active_tab() {
-                        let event_kind = if notches > 0 {
-                            MouseEventKind::WheelUp
-                        } else {
-                            MouseEventKind::WheelDown
-                        };
-                        let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
-                        let col1 = col as u32 + 1;
-                        let row1 = screen_row as u32 + 1;
-                        let encoding = tracking.encoding();
-                        let code = mouse_report::compose_button_code(
-                            event_kind,
-                            MouseButtonId::None,
-                            encoding,
-                            host.current_mods,
-                        );
-                        let mut buf = Vec::new();
-                        for _ in 0..notches.unsigned_abs() {
-                            if let Some(bytes) =
-                                mouse_report::encode_report(code, col1, row1, encoding, false)
-                            {
-                                buf.extend_from_slice(&bytes);
-                            }
-                        }
-                        if !buf.is_empty() {
-                            tab.write_input(buf);
-                        }
-                    }
+        mouse_report::WheelDecision::Report(report) => {
+            // AC-3: the scrollback offset is never touched and no
+            // alternate-scroll arrow bytes are written for a reported
+            // notch.
+            if let Some(report) = report {
+                if let Some(tab) = app.tabs.get(report.tab) {
+                    tab.write_input(report.bytes);
                 }
             }
-            WheelConsumer::ScrollScrollback => {
-                // AC-4: Shift+wheel while tracking is active moves
-                // eMterm's scrollback and writes nothing at all to the
-                // PTY — no arrow bytes either, even on the alternate
-                // screen with the alternate-scroll mode bit and setting
-                // both on (D5). `host.alt_scroll_accum` is deliberately
-                // left untouched: it feeds only the arrow-translate
-                // path, which this branch can never select.
-                let step = app.settings.scroll_speed.max(1);
-                if lines > 0.0 {
-                    app.scroll_up_by(step);
-                    host.invalidate_link_hover();
-                    host.window().request_redraw();
-                } else if lines < 0.0 {
-                    app.scroll_down_by(step);
-                    host.invalidate_link_hover();
-                    host.window().request_redraw();
-                }
-            }
-            WheelConsumer::TranslateToArrows => {
-                unreachable!(
-                    "SC-6 (D5): the tracking-active branch never selects arrow translation"
-                );
-            }
+            return;
         }
-        return;
+        mouse_report::WheelDecision::ScrollScrollback => {
+            // AC-4: Shift+wheel while tracking is active moves eMterm's
+            // scrollback and writes nothing at all to the PTY — no arrow
+            // bytes either, even on the alternate screen with the
+            // alternate-scroll mode bit and setting both on (D5).
+            // `host.alt_scroll_accum` is deliberately left untouched: it
+            // feeds only the arrow-translate path, which this outcome
+            // can never select.
+            let step = app.settings.scroll_speed.max(1);
+            if lines > 0.0 {
+                app.scroll_up_by(step);
+                host.invalidate_link_hover();
+                host.window().request_redraw();
+            } else if lines < 0.0 {
+                app.scroll_down_by(step);
+                host.invalidate_link_hover();
+                host.window().request_redraw();
+            }
+            return;
+        }
+        mouse_report::WheelDecision::TrackingInactive => {}
     }
 
     // Tracking-inactive: today's matrix, reproduced byte-for-byte and

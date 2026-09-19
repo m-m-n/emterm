@@ -28,6 +28,7 @@ use super::key_routing::{
     egui_to_mux_input, handle_mux_dialog_key, handle_profile_selector_key, handle_search_key,
     handle_special_chord,
 };
+use super::mouse_report;
 use super::pointer_routing::{
     handle_mouse_wheel, handle_pointer_button, handle_pointer_left, handle_pointer_moved,
 };
@@ -239,6 +240,16 @@ impl ApplicationHandler for PocApp {
                     // gone, and a latched count would keep treating every
                     // hover motion as an actionable drag forever.
                     host.pointer_buttons_down = 0;
+                    // Mouse-reporting (AC-3, D12): the matching release
+                    // may never arrive once focus is gone either, so the
+                    // gesture-ownership and held-button records are just
+                    // as stale as the button-down count above — clear
+                    // them together so the first pointer event after
+                    // focus returns is decided from empty records.
+                    mouse_report::clear_gesture_and_held_state(
+                        &mut host.mouse_report_records,
+                        &mut host.mouse_report_held,
+                    );
                     host.update_link_cursor();
                 } else {
                     // Drop the user back into the cursor's "on" half-
