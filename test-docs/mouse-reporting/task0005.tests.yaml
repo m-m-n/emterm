@@ -1,0 +1,113 @@
+task_id: task0005
+baseline_failures: []          # cargo test --lib -- --test-threads=1: 3406 passed, 0 failed, 3 ignored
+final_failures: []             # same command after implementation: 3423 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::mouse_report::tests::ac1_report_disposition_carries_bytes_and_target_tab
+      - window_host::mouse_report::tests::ac1_local_and_nothing_dispositions_are_distinct_named_values
+      - window_host::mouse_report::tests::ac1_units_mutate_nothing_themselves_updates_travel_in_the_outcome
+    red_confirmed: true
+    red_reason: >-
+      Temporarily removed the entire new SC-10/SC-11 block (TabId through
+      clear_all, ~23KB) and ran `cargo test --lib window_host::mouse_report`:
+      compile failed with 139 errors — "cannot find type `ButtonEventInputs`" /
+      "cannot find type `Disposition`" / "cannot find type `LocalArm`" /
+      "cannot find function `decide_button_event`" etc. at every new test's
+      call site (E0422/E0425/E0433) — missing behavior, not an unrelated
+      compile error. Restoring the block made all new tests pass. AC-1's own
+      three tests additionally exercise the "named and disjoint" and
+      "mutates nothing itself" properties directly.
+  AC-2:
+    tests:
+      - window_host::mouse_report::tests::ac2_applier_appends_report_bytes_with_tab_and_applies_updates_once
+      - window_host::mouse_report::tests::ac2_applier_appends_nothing_for_nothing_or_local_dispositions
+      - window_host::mouse_report::tests::ac2_clear_all_empties_gesture_and_held_button_records
+    red_confirmed: true
+    red_reason: >-
+      Shares the AC-1 block-removal red observation (apply_outcome, clear_all,
+      HeldButtons, RecordUpdates, GestureUpdate did not exist; E0422/E0425
+      "cannot find function/type in this scope" at every call site).
+  AC-3:
+    tests:
+      - window_host::mouse_report::tests::ac3_ts19_guarded_regions_reject_every_event_kind_and_button
+      - window_host::mouse_report::tests::ac3_ts19_a_position_over_the_grid_with_no_region_claiming_it_produces_bytes
+    red_confirmed: true
+    red_reason: >-
+      Shares the AC-1 block-removal red observation (decide_button_event,
+      decide_motion_event, decide_wheel_event did not exist).
+  AC-4:
+    tests:
+      - window_host::mouse_report::tests::ac4_ts20_shift_press_then_lift_then_release_completes_selection_locally
+      - window_host::mouse_report::tests::ac4_ts20_no_shift_press_then_shift_arrives_release_still_reports_without_shift_bit
+      - window_host::mouse_report::tests::ac4_press_rejected_by_grid_ownership_records_no_owner
+      - window_host::mouse_report::tests::ac4_two_buttons_pressed_mid_gesture_are_owned_independently
+    red_confirmed: true
+    red_reason: >-
+      Beyond the AC-1 block-removal compile-failure red (all four share it),
+      additionally verified the specific D10 defect these two sequence-driven
+      tests exist to catch: temporarily made decide_motion_event ignore the
+      recorded gesture owner entirely (`let owner: Option<GestureOwner> =
+      None;`, replicating "the motion path branching on the instantaneous
+      Shift flag instead of the recorded gesture owner"). Re-ran
+      `cargo test --lib window_host::mouse_report::tests::ac4`:
+      ac4_ts20_no_shift_press_then_shift_arrives_release_still_reports_without_shift_bit
+      panicked ("an owned Report gesture keeps reporting motion despite
+      Shift" — motion returned Disposition::Nothing instead of Report) and
+      ac4_ts20_shift_press_then_lift_then_release_completes_selection_locally
+      panicked (`assertion left == right failed: left: Report{...}, right:
+      Nothing` — the motion between press and release incorrectly reported
+      once Shift was lifted). Restoring the owner-first logic made both pass.
+  AC-5:
+    tests:
+      - window_host::mouse_report::tests::ac5_ts21_rejected_motion_leaves_cached_cell_unchanged_then_next_motion_still_reports
+    red_confirmed: true
+    red_reason: >-
+      Beyond the AC-1 block-removal compile-failure red, additionally
+      verified the exact TS-21 ordering defect this criterion exists to
+      catch: temporarily restructured decide_motion_event so grid-ownership
+      (SC-8) gated only the final disposition instead of running first,
+      ahead of the cell-change filter (SC-4) — i.e. the filter's would-report
+      check and the cache_cell update still happened for a rejected
+      position, with only the byte-producing disposition suppressed
+      afterward. Re-ran the test: panicked with "the cached cell must be
+      exactly what it was before the rejected motion" (the rejected motion's
+      cell got committed to the cache despite emitting no bytes) — proving a
+      byte-emptiness-only assertion would have passed even with this defect,
+      exactly as the task plan's Test Notes describe. Restoring the
+      ownership-first order made the test pass.
+  AC-6:
+    tests:
+      - window_host::mouse_report::tests::ac6_ts22_release_with_tracking_cleared_mid_gesture_produces_no_bytes
+      - window_host::mouse_report::tests::ac6_ts23_release_after_active_tab_change_targets_the_tab_the_press_recorded
+      - window_host::mouse_report::tests::ac6_release_with_no_recorded_press_produces_no_bytes
+      - window_host::mouse_report::tests::ac6_button_and_wheel_paths_both_carry_the_two_reset_observations
+    red_confirmed: true
+    red_reason: >-
+      Beyond the AC-1 block-removal compile-failure red, additionally
+      verified the TS-23 tab-identity defect ac6_ts23 exists to catch:
+      temporarily changed the Report-owned release branch to target
+      `inputs.active_tab` (the tab active AT RELEASE) instead of
+      `records.built_for_tab` (the tab the press recorded) — replicating "the
+      release path ... writing to the tab active at release time instead of
+      the tab the press was recorded on". Re-ran
+      ac6_ts23_release_after_active_tab_change_targets_the_tab_the_press_recorded:
+      panicked with `assertion left == right failed: left: 2, right: 1` (the
+      release reported to tab 2, the newly-active tab, instead of tab 1,
+      the press's tab). Restoring `target_tab` made it pass.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/lint/scope criterion, not a behavioral one — there is no prior
+      "red" state to observe for "no platform-conditional branch, no logging
+      added, tests are inline". Verified instead by: (1) `git diff --stat`
+      showing only the two expected_files touched
+      (src-tauri/src/window_host/{mouse_report,mod}.rs); (2) manual review of
+      every diff hunk confirming no `#[cfg(unix)]`/`#[cfg(windows)]` branch
+      and no `log::`/`println!` call was added, and that all new tests live
+      in the existing inline `mod tests` next to the units they exercise,
+      each constructed explicitly with no shared global fixture; (3) all
+      four commands — project build, project test, `cargo test --lib`
+      (3423 passed, 0 failed, 3 ignored), and `cargo check
+      --no-default-features` — exiting 0 in this task's run.
