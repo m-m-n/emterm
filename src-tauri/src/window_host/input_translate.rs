@@ -445,15 +445,35 @@ pub(super) fn winit_button_to_report_identity(button: MouseButton) -> Option<Mou
     }
 }
 
+/// Upper bound on the notch count a single wheel event's mouse report can
+/// carry. This is a security property, not a feel-tuning knob: it bounds
+/// both [`wheel_report_notches`]'s output (this file) and the duplication
+/// step that turns notches into a PTY write
+/// (`pointer_routing::bounded_wheel_report_duplicate`) — two independent
+/// clamp layers referencing the SAME constant (task0001 D2), so removing
+/// either layer individually still leaves the overall bound intact. It is
+/// deliberately never aliased to, nor derived from, [`MAX_ALT_SCROLL_NOTCHES`]
+/// — that constant is tuned for feel on an unrelated path (task0001 D3).
+pub(super) const MAX_WHEEL_REPORT_NOTCHES: u32 = 100;
+
 /// task0003 (L3): convert a wheel delta (already normalized to "lines") into
 /// a signed whole-notch count. Fractional deltas smaller than one full line
 /// (high-precision trackpads) round toward zero and produce no report,
 /// rather than reporting a partial notch.
+///
+/// Security property (task0001 D2/D4): the result's absolute value is at
+/// most [`MAX_WHEEL_REPORT_NOTCHES`] for every possible `f32` input,
+/// including non-finite and extreme finite values. The magnitude is
+/// saturated at the cap while it is still a floating-point value, ahead of
+/// the float-to-integer conversion — casting an unclamped huge magnitude to
+/// `i32` would itself saturate at `i32::MAX`, which would make this
+/// function's cap postcondition false for the window between that cast and
+/// any later clamp.
 pub(super) fn wheel_report_notches(lines: f32) -> i32 {
     if !lines.is_finite() {
         return 0;
     }
-    let magnitude = lines.abs().floor() as i32;
+    let magnitude = lines.abs().floor().min(MAX_WHEEL_REPORT_NOTCHES as f32) as i32;
     if lines >= 0.0 { magnitude } else { -magnitude }
 }
 

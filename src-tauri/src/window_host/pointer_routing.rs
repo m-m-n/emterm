@@ -14,8 +14,8 @@ use crate::selection::{Pos, Selection, SelectionMode};
 
 use super::WindowHost;
 use super::input_translate::{
-    accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes, wheel_report_notches,
-    winit_button_to_report_identity, winit_to_egui_button,
+    MAX_WHEEL_REPORT_NOTCHES, accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes,
+    wheel_report_notches, winit_button_to_report_identity, winit_to_egui_button,
 };
 use super::mouse_report;
 
@@ -714,6 +714,26 @@ fn scroll_by_wheel_notch(host: &mut WindowHost, app: &mut App, lines: f32) {
     }
 }
 
+/// task0001 (wheel-report-notch-clamp) IMPLEMENTATION.md Shared Components,
+/// "Bounded wheel-report duplication helper": produces the buffer one wheel
+/// event writes to the PTY by repeating a single-notch report `payload`.
+/// Pure — reads no application, tab, host or terminal state; a function of
+/// its two arguments only. `requested_count` may be anywhere in the `u32`
+/// range; the effective count is capped at [`MAX_WHEEL_REPORT_NOTCHES`]
+/// (task0001 D2 — the duplication-side half of the report path's
+/// defense-in-depth cap; see `input_translate::wheel_report_notches` for
+/// the conversion-side half). That ONE capped value derives both the
+/// preallocation size and the repetition bound (task0001 D5), so they can
+/// never diverge. Security property, not a feel-tuning knob.
+pub(super) fn bounded_wheel_report_duplicate(payload: &[u8], requested_count: u32) -> Vec<u8> {
+    let capped = requested_count.min(MAX_WHEEL_REPORT_NOTCHES);
+    let mut buf = Vec::with_capacity(payload.len() * capped as usize);
+    for _ in 0..capped {
+        buf.extend_from_slice(payload);
+    }
+    buf
+}
+
 /// `WindowEvent::MouseWheel` arm body: profile-selector / tab-strip /
 /// mux-sidebar wheel forwarding to egui, and mouse reporting (D12: gather /
 /// decide / apply / perform, over task0005's SC-10/SC-11 seam) — which
@@ -914,10 +934,7 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
         let notches = wheel_report_notches(lines);
         if notches != 0 {
             if let Some(tab) = app.tabs.get(tab_id) {
-                let mut buf = Vec::with_capacity(bytes.len() * notches.unsigned_abs() as usize);
-                for _ in 0..notches.unsigned_abs() {
-                    buf.extend_from_slice(&bytes);
-                }
+                let buf = bounded_wheel_report_duplicate(&bytes, notches.unsigned_abs());
                 tab.write_input(buf);
             }
         }
