@@ -1,0 +1,47 @@
+schema_version: 1
+feature: wheel-report-notch-clamp
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 1de1e95dc54a74a8c539e3104cfdf004f4067c64
+last_input_digest: "sha256:3769048eeabe5e48a0b2b777de7486c0dfeb359baf61b89d9ed400ce3fab2b76"
+active_request_id: create-spec-run-0001
+packets: {}
+answers: []
+confirmed_facts:
+  - id: F1
+    statement: "requirements-analyst returned status completed on its first dispatch with no question_packet; every requirement was derivable from the task description's already-settled design decisions."
+  - id: F2
+    statement: "design_step recommendation is skipped — the change has no UI surface."
+assumptions:
+  - A1
+  - A2
+  - A3
+  - A4
+  - A5
+  - A6
+  - A7
+resolved_input_cache:
+  design_system_candidates:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+  e2e: []
+  package_files:
+    - package.json
+    - Cargo.toml
+    - src-tauri/Cargo.toml
+    - crates/app_settings/Cargo.toml
+    - crates/mux_ipc/Cargo.toml
+    - crates/term_core/Cargo.toml
+    - crates/term_images/Cargo.toml
+  reference_scan_targets:
+    - src-tauri/src/window_host/input_translate.rs
+    - src-tauri/src/window_host/pointer_routing.rs
+    - src-tauri/src/window_host/tests.rs
+worker_runs:
+  - request_id: create-spec-run-0001
+    worker: requirements-analyst
+    status: completed
+    note: >-
+      The worker's agent definition had no Write/Bash tool available in this session,
+      so it returned its result envelope inline and the orchestrator persisted it.
