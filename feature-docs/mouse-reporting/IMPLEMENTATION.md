@@ -52,6 +52,8 @@ D3).
 | **SC-7 Report emission** | Get the encoded bytes onto the wire | Every emitted report is written through the active tab's existing PTY input write path — the same one the alternate-scroll arrow translation already uses — so a local PTY and a mux-attached remote pane receive reports identically. **Post**: no new channel, no new transport state; the scrollback offset is never touched for a reported wheel notch | task0003 / — |
 | **SC-8 Grid ownership decision** | Answer once, for every pointer handler, whether an event belongs to the terminal grid | Inputs: the pointer position plus the plain geometry of each chrome region the host already hit-tests — the top strip, the bottom strip, the right-edge scrollbar overlay, the mux sidebar in whichever placement is active, the CSD edge-resize hot zone — and whether the profile selector is visible. Output: a boolean. **Post**: false for a position inside any of those regions and false unconditionally while the profile selector is visible; true only for a position over the grid with no region claiming it. The answer depends on POSITION ONLY — it is identical for a press and a release, for every button identity, for motion and for a wheel notch. **Pre**: evaluated before any reporting work on every emitting path, which on the motion path means before the SC-5 gate and the SC-4 filter, and on the wheel path means before the tracking-active read, so a suppressed event can neither emit nor mutate SC-4's cache. A false answer leaves the event's current local behaviour exactly as it is; it never changes the left-press-only gating of the existing local side effects | task0004 / task0003 |
 | **SC-9 Gesture ownership record** | Keep a button gesture on the side that took its press | Holds, per button identity, which side took the press: the report path, the local path, or nothing. Operations: record an owner at press, read-and-clear the owner at release, and clear all owners. **Post**: a release is routed to the owner its press recorded, whatever the shift state at release time; a press SC-8 rejected records no owner, so its release routes nowhere new; recording is idempotent per button identity, and a second button pressed mid-gesture is owned independently. **Pre for clear-all**: called on the same two observations that reset SC-4 — the host observing that no tracking mode is active, and an active-tab change — so a mode cleared mid-gesture strands no record | task0004 / task0003 |
+| **SC-10 Pointer decision sequence** | Answer, for one raw pointer event, what the host must do — as ONE value computed from plain inputs | One unit per pointer path (button, motion, wheel). Inputs, all plain values: the event kind (press / release / motion / wheel notch with its direction), the button identity, the pointer position together with the same chrome-region geometry and profile-selector visibility SC-8 takes, the ctrl / alt / shift flags, the three tracking-mode flags and the encoding flag as read at THIS event, an identifier for the currently active tab, the currently held buttons, and the current contents of the two records (SC-4's cached cell and SC-9's ownership record). Output: one enumerated outcome naming exactly one disposition plus the record updates it implies. **Post (shape)**: the dispositions are disjoint and each is named — emit a report (carrying the exact bytes AND the identifier of the tab the report is destined for), take one named local arm (begin a selection drag; complete a selection and publish it to PRIMARY; open a hovered link; paste PRIMARY; scroll the scrollback; translate to arrow bytes), or do nothing — so a test distinguishes "nothing happened" from "the local arm ran" without a window. **Post (ownership first)**: SC-8's answer is consulted first on all three sequences, ahead of SC-5, SC-4 and the tracking-active read, so a rejected event can neither emit nor update a record. **Post (release)**: a release's disposition follows SC-9's recorded owner and the tracking state, where tracking state means "at least one tracking mode is active" and not merely which encoding is selected; a reported release carries the tab identifier its PRESS recorded, never whichever tab is active at release time; a release with no recorded owner emits nothing. **Post (motion)**: while a gesture is owned by the local side, the motion disposition is local whatever the instantaneous shift flag has become. **Post (resets)**: every one of the three sequences carries the same two reset observations (no tracking mode active; the active tab differs from the one the records were built against) in its outcome, so a click or a wheel notch with no intervening motion resets exactly as a motion does. **Post (testability)**: constructible and callable with no winit window, no GPU surface and no live PTY | task0005 / task0006 |
+| **SC-11 Outcome application** | Perform an SC-10 outcome against plain state and a byte destination | Inputs: an SC-10 outcome, the pair of records (SC-4's cache and SC-9's ownership record) as a plain value a test constructs directly, and a caller-supplied byte destination. **Post**: report bytes are appended to that destination paired with their target tab identifier — never written at the decision site; the outcome's record updates are applied exactly once; a do-nothing or local-arm outcome appends no bytes and leaves the cached cell exactly as it was. The named local arm is NOT performed here — it is returned to the caller to perform, which is what keeps this unit free of window, GPU surface and PTY. A separate clear-all operation empties the ownership record and the held-button record together, for the host to invoke on focus loss | task0005 / task0006 |
 
 ## Conventions
 
@@ -250,6 +252,64 @@ identity-independent.
 
 **Affects**: task0004 (owns SC-8), task0003 (the three handlers it supersedes).
 
+### D12 — The three pointer handlers become gather-and-execute over a testable seam
+
+The three pointer handlers in `pointer_routing.rs` each take mutable references
+to the window host and to the application object, so none of them can be
+constructed in a unit test. Their decision sequences were therefore pinned only
+by source-text substring-ordering assertions, which verify round 1 rejected as
+coverage for TS-19, TS-20 and TS-21: a correct decision unit whose call site is
+miswired keeps those assertions green.
+
+**Structure.** Each pointer path is split into three parts:
+
+1. **Gather** — the handler reads plain values out of the host, the application
+   and the core mode state. This step contains no decision: no branch that
+   chooses between reporting and local handling, and no record mutation.
+2. **Decide** — SC-10 turns those plain values into one enumerated outcome.
+3. **Execute** — SC-11 applies the outcome's record updates and appends any
+   report bytes to a caller-supplied destination; the handler then performs the
+   outcome's named local arm and writes the captured bytes to the tab identifier
+   the outcome names.
+
+The residue that still cannot be unit-tested is step 1, a straight-line read
+with no decision in it. Steps 2 and 3 carry every decision this feature makes
+and are exercisable with no window, no GPU surface and no live PTY, which is
+what makes TS-19, TS-20 and TS-21 assertable as behaviour (bytes produced or
+not, record state after the call) instead of as source-text order.
+
+**Corrections this structure absorbs.** Four defects live in exactly the wiring
+this seam makes testable, and SC-10's postconditions state each as a contract
+rather than leaving it to the call site: the release path reading only the
+encoding instead of "any tracking mode active", and writing to the tab active at
+release time instead of the tab the press was recorded on; the two reset
+observations existing only on the motion path, so a click with no intervening
+motion uses stale records; the motion path branching on the instantaneous shift
+flag instead of the recorded gesture owner; and the absence of any focus-loss
+reset for the held-button and ownership records, unlike the existing pointer
+button-down record which is zeroed on focus loss.
+
+**Boundary.** The decision content of SC-2 through SC-9 is unchanged — the
+button codes, the encodings, the overflow rule, the motion gate's table, the
+wheel matrix and the grid-ownership region set are all carried into SC-10
+unaltered. What changes is where those decisions are evaluated from and how the
+result reaches the side effect.
+
+**Ownership split.** task0005 owns SC-10 and SC-11 and their behavioural tests,
+in the mouse-report module. task0006 owns the handler reduction, the focus-loss
+clear-all call site and the source-scanning assertions. Under D3 task0006
+declares the mouse-report module in its own file list and adopts the integration
+side for it on merge.
+
+**Source-scanning assertions.** They are not deleted wholesale: after this
+change their only legitimate residual subject is step 1's property that the
+handler body holds no decision. Anything else they used to pin is re-expressed
+as a behavioural assertion against SC-10 / SC-11 first.
+
+**Affects**: task0005 (owns SC-10, SC-11), task0006 (owns the handlers, the
+focus-loss call site and the assertions), task0003 and task0004 (the call sites
+this supersedes; their plans are left as the record of the work at the time).
+
 ## Risk Assessment
 
 | Risk | Likelihood | Impact | Mitigation |
@@ -261,6 +321,8 @@ identity-independent.
 | Parallel worktrees produce two divergent copies of a shared helper (D3) | Medium | Medium | Contracts SC-1 through SC-6 are pinned here in full; the owning task is authoritative on merge and consumers adopt the integration side |
 | The X10 overflow rule is implemented as a clamp, silently reporting the wrong cell on wide grids | Low | Medium | FR9 is expressed as an absent value in SC-3's contract, and TS-6 asserts the boundary exactly at 223/224 in both encodings |
 | The core change accidentally pulls a GUI-only dependency into the CLI-only build | Low | High | L1 depends on nothing above it (Layer Structure) and the CLI-only check is an acceptance criterion of every task (TS-14) |
+| task0005 and task0006 restructure the same pointer path in parallel and the merge drops one side's work (D12) | Medium | High | The two own disjoint files — task0005 the mouse-report module, task0006 the handlers, the focus-loss call site and the assertions — and SC-10 / SC-11 pin the seam's shape in full, so the consumer's stub is contract-identical to the owner's version it adopts on merge (D3) |
+| The seam is introduced but the decision logic stays inside the handlers, so the tests remain unable to observe it | Medium | High | SC-10's testability postcondition and D12's step-1 rule are acceptance criteria of both tasks; the residual source-scanning assertion's only subject is that step 1 holds no decision |
 
 ## Open Questions
 
