@@ -1,6 +1,6 @@
 task_id: task0006
 baseline_failures: []          # cargo test --lib -- --test-threads=1, captured before any edit: 3406 passed, 0 failed, 3 ignored
-final_failures: []             # same command after implementation: 3421 passed, 0 failed, 3 ignored
+final_failures: []             # same command after implementation (post task0005-merge, post rewrite): 3415 passed, 0 failed, 3 ignored
 acceptance_tests:
   AC-1:
     tests:
@@ -8,132 +8,187 @@ acceptance_tests:
     red_confirmed: true
     red_reason: >-
       This is the single retained source-scanning assertion (AC-5), re-aimed at
-      AC-1's structural subject. Confirmed red by temporarily inserting the
-      literal substring "mouse_report::motion_gate(" as a comment directly above
-      handle_pointer_moved in pointer_routing.rs and re-running this test: it
-      failed with "pointer_routing.rs must not call `mouse_report::motion_gate(`
-      directly (AC-1)". Reverted the comment immediately after observing the
-      failure; the full suite was re-run afterward and reproduced the same
-      3421/0/3 result, confirming an exact restoration.
+      AC-1's structural subject, against the CURRENT (post task0005-merge,
+      post-rewrite) pointer_routing.rs. Confirmed red by temporarily inserting
+      the literal comment `// TEMP MUTATION for red-confirmation only:
+      mouse_report::motion_gate(` directly above `handle_pointer_moved`'s
+      signature and re-running this test: it failed with "pointer_routing.rs
+      must not call `mouse_report::motion_gate(` directly (AC-1) — every
+      decision primitive runs exclusively inside mouse_report::decide_button_
+      event / decide_motion_event / decide_wheel_event (task0005's SC-10)".
+      Reverted immediately after observing the failure; a `grep -rn "TEMP
+      MUTATION"` afterward found nothing and the full suite reproduced the
+      same 3415/0/3 result. The other three forbidden markers
+      (compose_button_code, encode_report, point_belongs_to_grid) use the
+      identical `!src.contains(forbidden)` mechanism just exercised, as do the
+      four required-marker and four required-delegate checks in the same
+      test (identical `src.contains(marker)` mechanism, exercised indirectly:
+      the current file genuinely contains `run_button_decision`, all four
+      handler signatures and all four delegate calls — removing any one would
+      fail the corresponding assertion by the same string-search logic) — not
+      independently re-mutated in this pass to avoid repeatedly editing real
+      call sites; the one direct mutation above establishes the scanning
+      mechanism itself is live against the current file, not vacuously true.
   AC-2:
-    tests:
-      - window_host::mouse_report::tests::decide_button_press_reports_and_records_report_ownership_when_tracking_active_and_shift_not_held
-      - window_host::mouse_report::tests::decide_button_release_reports_to_the_owners_recorded_tab_regardless_of_current_position_or_active_tab
-      - window_host::mouse_report::tests::decide_wheel_reports_when_tracking_active_and_shift_not_held
-    red_confirmed: true
+    tests: []
+    red_confirmed: false
     red_reason: >-
-      decide_button_release_reports_to_the_owners_recorded_tab_regardless_of_current_position_or_active_tab
-      is the load-bearing case (D12's tab-follows-press correction): temporarily
-      replaced the release branch's `records.press_tab.peek(identity)`-derived
-      tab with `inputs.active_tab` unconditionally and re-ran the test — it
-      failed with "D12: a reported release must target the tab its PRESS was
-      recorded on, not whichever tab is active at release time (left: 9, right:
-      1)". Reverted immediately after observing the failure. The press and wheel
-      report-destination tests were written and pass against the same
-      PointerReport { tab, bytes } seam; they were not independently
-      mutation-tested since the tab field there is a direct pass-through of
-      `inputs.active_tab` with no D12 correction to miss. "A reported wheel
-      notch leaves the scrollback offset untouched" is not separately unit
-      tested: decide_wheel takes no App/scroll-state parameter, so a
-      WheelDecision::Report outcome cannot touch scroll state by construction —
-      only the WheelDecision::ScrollScrollback arm in pointer_routing.rs's match
-      calls app.scroll_up_by/scroll_down_by, and that call site is covered by
-      the AC-1 structural test's presence/absence checks plus the full test
-      suite's 0-regressions result.
+      Untestable without a winit window / GPU surface / live PTY, which the
+      task's Test Notes and Boundary both exclude from this task's test
+      surface ("keep every new test free of a winit window, a GPU surface and
+      a live PTY"): the perform step's tab dispatch
+      (`for (tab_id, bytes) in dest { if let Some(tab) = app.tabs.get(tab_id)
+      { tab.write_input(bytes); } }` in pointer_routing.rs) requires a real
+      `App`/`Tab` with a live PTY to observe bytes actually reaching a tab.
+      What IS covered: (1) that the outcome names the correct bytes and
+      target tab is task0005's contract, exercised by their
+      ac1_report_disposition_carries_bytes_and_target_tab /
+      ac2_applier_appends_report_bytes_with_tab_and_applies_updates_once /
+      ac6_ts23_release_after_active_tab_change_targets_the_tab_the_press_recorded
+      (inherited, not authored by this task); (2) `tab.write_input` itself is
+      untouched by this task (confirmed via `grep -rn "fn write_input"` —
+      defined in tabs/input.rs, outside this task's file scope, not present
+      in the task0006 diff) — "no new channel and no new transport state"
+      holds by absence of change, not by a fresh assertion; (3) "a reported
+      wheel notch leaves the scrollback offset untouched" holds by
+      construction: `WheelEventInputs`/`decide_wheel_event` take no
+      scroll-state parameter, so a `Disposition::Report` cannot name a
+      scrollback mutation — only `LocalArm::ScrollScrollback` reaches the
+      scrollback helpers, and AC-1's structural test already requires that
+      arm be performed through the handler rather than decided inline. Left
+      unconfirmed; reported in the final handback's `unconfirmed_reds`.
   AC-3:
     tests:
-      - window_host::mouse_report::tests::clear_gesture_and_held_state_empties_both_records
-      - window_host::mouse_report::tests::decide_button_release_after_focus_loss_clear_finds_no_owner
+      - window_host::tests::focus_loss_clear_all_empties_gesture_and_held_records_so_the_next_decision_starts_fresh
     red_confirmed: true
     red_reason: >-
-      clear_gesture_and_held_state_empties_both_records: temporarily removed the
-      `*held = HeldButtons::default();` line from clear_gesture_and_held_state
-      and re-ran the test — it failed with "assertion `left == right` failed
-      left: HeldButtons { left: true, middle: true, right: false } right:
-      HeldButtons { left: false, middle: false, right: false }". Reverted
-      immediately after observing the failure.
-      decide_button_release_after_focus_loss_clear_finds_no_owner was not
-      independently mutation-tested (it composes clear_gesture_and_held_state,
-      already confirmed above, with decide_button_event's already-covered
-      no-owner branch); it is included because it is the direct translation of
-      the criterion's second half ("the first pointer event after focus returns
-      is decided from empty records"), per the task's Test Notes.
-      event_loop.rs's wiring of the call into WindowEvent::Focused(false) itself
-      has no dedicated test, matching the Test Notes' guidance that AC-3 is
-      "testable at the record level" — the wiring is a single unconditional
-      call alongside the existing `host.pointer_buttons_down = 0;` line, visible
-      in the diff.
+      Per the Test Notes ("AC-3 is testable at the record level: drive the
+      clear-all the focus-loss path invokes and assert both records are
+      empty, then assert the next decision is taken from empty records"):
+      this test calls `mouse_report::clear_all` — the exact function
+      `event_loop.rs`'s `WindowEvent::Focused(false)` arm invokes on
+      `host.mouse_report_gesture_owner` / `host.mouse_report_held` alongside
+      the existing `host.pointer_buttons_down = 0;` line — on a populated
+      `GestureOwnership`/`HeldButtons` pair, asserts both are empty
+      afterward, then feeds a `Release` with no matching press through
+      `decide_button_event` against those now-empty records and asserts
+      `Disposition::Nothing`. Confirmed red by temporarily commenting out the
+      `clear_all(&mut gesture, &mut held);` call in the test body and
+      re-running it: failed with "assertion `left == right` failed: focus
+      loss must clear the gesture-ownership record (AC-3) / left:
+      Some(Report) / right: None". Reverted immediately after observing the
+      failure; the full suite was re-run afterward and reproduced 3415/0/3.
+      The call site itself in `event_loop.rs` (`WindowEvent::Focused(false)`)
+      cannot be driven in a test without a winit window, matching the Test
+      Notes; it is visible in the diff alongside the existing
+      `pointer_buttons_down = 0` zeroing it now sits next to.
   AC-4:
     tests:
-      - window_host::mouse_report::tests::decide_motion_is_local_when_the_held_buttons_gesture_is_owned_locally_regardless_of_shift
-      - window_host::mouse_report::tests::decide_motion_still_reports_when_the_held_buttons_gesture_is_owned_by_report_and_shift_becomes_held
-      - window_host::mouse_report::tests::decide_wheel_is_never_tracking_inactive_while_tracking_is_active
-      - window_host::mouse_report::tests::decide_wheel_is_tracking_inactive_when_no_tracking_mode_is_active
-      - window_host::tests::wheel_consumer_tracking_active_shift_held_scrolls_scrollback_never_arrows
+      - window_host::tests::mouse_input_press_guard_queries_shared_sidebar_hit_region_before_selection_start
+      - window_host::tests::press_and_wheel_guards_share_the_same_sidebar_hit_region_helper
+      - window_host::tests::mouse_wheel_handler_routes_sidebar_hits_to_egui_before_the_terminal_scroll_path
+      - window_host::tests::pointer_moved_hover_feed_shares_the_same_sidebar_hit_region_helper
+      - window_host::tests::fr1_wheel_up_in_alt_screen_emits_three_arrow_up
+      - window_host::tests::fr1_wheel_down_in_alt_screen_emits_three_arrow_down
+      - window_host::tests::fr1_wheel_scales_with_notches
+      - window_host::tests::fr1_wheel_suppressed_when_setting_off
+      - window_host::tests::fr1_wheel_suppressed_when_mode_bit_off
+      - window_host::tests::fr1_wheel_inert_outside_alt_screen
+      - window_host::tests::fr1_wheel_sub_notch_pixel_delta_is_noop
       - window_host::tests::wheel_consumer_tracking_inactive_reproduces_todays_matrix_ignoring_shift
-      - window_host::mouse_report::tests::decide_button_press_records_no_ownership_when_grid_ownership_rejects_the_position
-      - window_host::mouse_report::tests::decide_button_press_is_local_with_no_ownership_when_profile_selector_visible
     red_confirmed: true
     red_reason: >-
-      decide_motion_still_reports_when_the_held_buttons_gesture_is_owned_by_report_and_shift_becomes_held
-      is the load-bearing case for "motion consults no shift flag at all":
-      temporarily added `if mods.shift { return (None, reset,
-      MotionRecordOps::None); }` at the top of decide_motion's held-button
-      branch and re-ran both held-buttons tests — the Report-owner test failed
-      ("a Report-owned gesture must keep reporting even once Shift is held
-      mid-drag"), confirming the test genuinely exercises the no-branch
-      property. Reverted immediately after observing the failure. The two
-      wheel_consumer_* tests are pre-existing and unmodified by this task
-      (per the plan's Test Notes: "the existing tests for those paths must keep
-      passing unmodified") — they were already green before this task and are
-      listed as the regression guard for AC-4's tracking-inactive-matrix clause,
-      not as newly-red evidence; the two new decide_wheel_* tests establish that
-      tracking-active/tracking-inactive selection in the new seam matches that
-      pre-existing matrix's entry/exit conditions exactly.
-      decide_button_press_records_no_ownership_when_grid_ownership_rejects_the_position
-      and decide_button_press_is_local_with_no_ownership_when_profile_selector_visible
-      were not independently mutation-tested (they exercise
-      point_belongs_to_grid, already covered by task0004's red-confirmed AC-1
-      evidence in task0004.tests.yaml); they are listed because they are this
-      task's translation of "the guarded regions keep their current local
-      behaviour" onto the new decide_button_event seam.
+      This is the regression guard the Test Notes name ("the existing tests
+      for those paths must keep passing unmodified; changing one of them to
+      accommodate the reduction is a plan deviation to report"), so its red
+      evidence is a genuine, if unplanned, episode rather than a staged
+      mutation: the first rewrite pass of `handle_pointer_button` deleted the
+      standalone top-strip / bottom-strip-scrollbar-sidebar / profile-selector
+      chrome guards, reasoning they were subsumed by SC-8 inside
+      `decide_button_event`. Running the suite immediately after showed 2
+      failures — `mouse_input_press_guard_queries_shared_sidebar_hit_region_
+      before_selection_start` and `press_and_wheel_guards_share_the_same_
+      sidebar_hit_region_helper` — both real, both against my own change, not
+      staged. Per the task plan's own Boundary ("the existing chrome guards
+      ... are not rewritten — they are inputs the gather step reads"), the
+      fix was to restore the guards exactly as they were (never to touch the
+      tests): PRESS events fall through the guards before reaching SC-10,
+      RELEASE events are decided by SC-10 and return before the guards
+      (D12's release fix). Restoring the guards took both tests back to
+      green; a stale literal in
+      mouse_input_press_guard_queries_shared_sidebar_hit_region_before_
+      selection_start (`"(MouseButton::Left, ElementState::Pressed) => {"`,
+      a match arm the rewrite's `LocalArm`-based dispatch no longer has) then
+      needed its search target updated to `"LocalArm::BeginSelectionDrag"` —
+      same ordering property (sidebar guard before selection-start), adapted
+      literal, not a new assertion or a weakened one. The four wheel-matrix
+      tests (fr1_wheel_* / wheel_consumer_tracking_inactive_reproduces_
+      todays_matrix_ignoring_shift) exercise `alternate_scroll_wheel_bytes` /
+      `accumulate_alt_scroll_lines` / `wheel_consumer` directly — none of
+      those functions are touched by this task (confirmed unchanged against
+      the task0005-integration diff) and none went red at any point; they
+      are listed as the unmodified half of this regression guard, not as
+      freshly-red evidence. `mouse_wheel_handler_routes_sidebar_hits_to_egui_
+      before_the_terminal_scroll_path` and `pointer_moved_hover_feed_shares_
+      the_same_sidebar_hit_region_helper` likewise never went red during this
+      task's rewrite.
   AC-5:
     tests:
       - window_host::tests::pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam
     red_confirmed: true
     red_reason: >-
-      Same test and same red observation as AC-1 (this criterion is about the
-      retained/replaced assertion set as a whole; AC-1's structural half and
-      this criterion's "at most one retained assertion" half are the same
-      artifact). The eleven other properties the retired TS-19/TS-20/TS-21
-      assertions pinned (precedence order across all three handlers, the old
-      instantaneous-shift condition, the old release-position-dependent
-      routing, the four D12 defects) are now covered by the AC-1 through AC-4
-      behavioural tests listed above against decide_button_event / decide_motion
-      / decide_wheel / clear_gesture_and_held_state — no property is left
-      unpinned. The four other pre-existing source-scanning tests in tests.rs
-      (mouse_wheel_handler_routes_sidebar_hits_to_egui_before_the_terminal_scroll_path,
-      mouse_input_press_guard_queries_shared_sidebar_hit_region_before_selection_start,
-      press_and_wheel_guards_share_the_same_sidebar_hit_region_helper,
-      pointer_moved_hover_feed_shares_the_same_sidebar_hit_region_helper) were
-      left untouched: they scan the mux-sidebar guard blocks (task0010/task0011
-      concerns), not the mouse-report precedence blocks this task restructured,
-      and are outside this task's scope.
+      Same test, same red observation as AC-1 — this criterion is about the
+      retained/replaced assertion SET as a whole, and AC-1's structural half
+      is that one retained member. Count verified directly: exactly one
+      test in tests.rs now source-scans the mouse-report precedence/shift/
+      release-routing properties the old TS-19/TS-20/TS-21 assertions pinned
+      (`pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam`);
+      every other property those old assertions pinned (press/release/
+      motion/wheel block ordering, the old instantaneous-shift branch, the
+      old release-position-dependent tab routing, the four D12 wiring
+      defects) is now a behavioural assertion against
+      `mouse_report::decide_button_event` / `decide_motion_event` /
+      `decide_wheel_event` / `apply_outcome` in task0005's
+      `mouse_report::tests` (inherited, not authored by this task) plus this
+      task's own `focus_loss_clear_all_empties_gesture_and_held_records_so_
+      the_next_decision_starts_fresh` for the AC-3 clause — no property is
+      left unpinned. The four pre-existing source-scanning tests in
+      tests.rs owned by task0010/task0011
+      (mouse_wheel_handler_routes_sidebar_hits_to_egui_before_the_terminal_
+      scroll_path, mouse_input_press_guard_queries_shared_sidebar_hit_
+      region_before_selection_start, press_and_wheel_guards_share_the_same_
+      sidebar_hit_region_helper, pointer_moved_hover_feed_shares_the_same_
+      sidebar_hit_region_helper) are a different subject (the mux-sidebar
+      guard wiring, not the mouse-report precedence blocks this task
+      restructured) and were left in place, not counted against this
+      criterion's cap; one of them needed its literal marker adapted (see
+      AC-4's red_reason) because the code shape it scans changed, which is
+      not new source-scanning added by this task.
   AC-6:
     tests: []
-    red_confirmed: false
+    red_confirmed: true
     red_reason: >-
-      Negative/absence criterion (no new setting, no TypeScript settings-mirror
-      entry, no settings-panel row, no platform-conditional branch, no logging
-      on the pointer path) plus a build/test-exit-code criterion — there is no
-      prior "red" state to observe for "did not add X". Verified instead by:
-      (1) `git status --short` / `git diff --stat` in this worktree showing
-      only src-tauri/src/window_host/{pointer_routing,mouse_report,mod,
-      event_loop,tests}.rs touched, all within the task's expected_files plus
-      event_loop.rs (already listed in the task plan's Files to Modify); (2)
-      manual review of every diff hunk confirming no `#[cfg(unix)]` /
-      `#[cfg(windows)]` branch and no `log::`/`println!` call was added; (3) the
-      main build command's prerequisite chain (fetch-fonts, bun install,
-      build:viewer, build:settings) plus `cargo test --lib --
-      --test-threads=1` exiting 0 (3421 passed, 0 failed, 3 ignored); (4)
-      `cargo check --no-default-features` exiting 0.
+      Two-part criterion. The absence half (no user setting, no TypeScript
+      settings-mirror entry, no settings-panel row, no platform-conditional
+      branch, no logging on the pointer path) has no red state to observe by
+      nature — verified instead by `git diff em-workflow/mouse-reporting/
+      integration -- src-tauri/src/window_host/{pointer_routing,event_loop,
+      mod}.rs | grep -inE "log::|console\.|cfg\(target_os|cfg\(windows\)|
+      cfg\(unix\)|settings"`, which finds only pre-existing settings READS
+      (app.settings.copy_on_select / .middle_click_paste / .scroll_speed /
+      .alternate_scroll_enabled — all present on the integration side
+      already, none newly introduced), no `log::`/`console.` call and no
+      `cfg(windows|unix|target_os)` branch. The exit-0 half DID have a
+      genuine red episode: adopting task0005's integration side for
+      mod.rs/mouse_report.rs during the merge (D3) left the crate not
+      compiling until pointer_routing.rs was rewritten onto the real API —
+      `cargo test --lib` failed with `E0599: no method named 'any_active'
+      found for struct 'TrackingState'` at one point mid-rewrite (a method I
+      had dropped while still calling it in the wheel handler). Fixed by
+      restoring the method; re-ran all four required commands after the fix
+      and confirmed each exits 0: `cargo test --manifest-path
+      src-tauri/Cargo.toml --lib -- --test-threads=1` (3415 passed, 0
+      failed, 3 ignored), `cargo build --manifest-path src-tauri/Cargo.toml`,
+      `cargo test -p term_core` (858 passed, 0 failed, 13 ignored — this
+      task touches no term_core file), and `cargo check --manifest-path
+      src-tauri/Cargo.toml --no-default-features`.

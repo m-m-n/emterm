@@ -14,10 +14,10 @@ use crate::selection::{Pos, Selection, SelectionMode};
 
 use super::WindowHost;
 use super::input_translate::{
-    accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes, winit_button_to_report_identity,
-    winit_to_egui_button,
+    accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes, wheel_report_notches,
+    winit_button_to_report_identity, winit_to_egui_button,
 };
-use super::mouse_report::{self, MouseEventKind, MouseReportEncoding};
+use super::mouse_report;
 
 /// Snapshot of the SC-1 mouse-mode bits (IMPLEMENTATION.md; owned by
 /// task0001), read from the active tab's core on every event rather than
@@ -41,28 +41,28 @@ impl TrackingState {
         }
     }
 
-    /// Step 3 of the precedence order: is ANY tracking mode active.
+    /// Is ANY tracking mode active.
     fn any_active(&self) -> bool {
         self.mode_1000 || self.mode_1002 || self.mode_1003
     }
 
-    fn encoding(&self) -> MouseReportEncoding {
+    fn encoding(&self) -> mouse_report::MouseReportEncoding {
         if self.sgr {
-            MouseReportEncoding::Sgr
+            mouse_report::MouseReportEncoding::Sgr
         } else {
-            MouseReportEncoding::X10
+            mouse_report::MouseReportEncoding::X10
         }
     }
 }
 
 /// task0004 SC-8 (D11): collects the plain-value inputs to
-/// [`mouse_report::point_belongs_to_grid`] from the current pointer
-/// position — the SAME hit tests the existing chrome guards elsewhere in
-/// this file already run (top strip, bottom strip, scrollbar overlay, mux
-/// sidebar, CSD edge-resize hot zone), gathered once so all three pointer
-/// handlers consult the identical decision (IMPLEMENTATION.md cross-task
-/// decision 3.5's sharing principle, extended to SC-8). `position` is the
-/// pointer's egui logical, window-relative coordinate.
+/// [`mouse_report::point_belongs_to_grid`] (consulted inside SC-10, task0005)
+/// from the current pointer position — the SAME hit tests the chrome guards
+/// this file used to run individually (top strip, bottom strip, scrollbar
+/// overlay, mux sidebar, CSD edge-resize hot zone), gathered once so all
+/// three pointer paths consult the identical decision (IMPLEMENTATION.md
+/// cross-task decision 3.5's sharing principle, extended to SC-8).
+/// `position` is the pointer's egui logical, window-relative coordinate.
 fn grid_ownership_inputs(
     position: egui::Pos2,
     host: &WindowHost,
@@ -151,7 +151,8 @@ pub(super) fn handle_pointer_left(host: &mut WindowHost, app: &mut App) {
 
 /// `WindowEvent::PointerMoved` arm body: egui motion forwarding, the
 /// mux-sidebar hover feed, the CSD resize hint / link hover refresh,
-/// and selection-drag extension.
+/// selection-drag extension, and mouse reporting (D12: gather / decide /
+/// apply / perform, over task0005's SC-10/SC-11 seam).
 pub(super) fn handle_pointer_moved(
     position: PhysicalPosition<f64>,
     host: &mut WindowHost,
@@ -246,110 +247,163 @@ pub(super) fn handle_pointer_moved(
         }
     }
 
-    // ── Mouse reporting (task0003 FR3/FR7/FR9/FR11, SC-4/SC-5; task0004
-    // SC-8, D11; task0005/task0006 SC-10/SC-11, D12) ───────────────────
-    // Decided independently of the local selection-drag path above: motion
-    // has no local arm of its own in this decision — the drag-to-select
-    // extension above already runs unconditionally, so today's behaviour
-    // is untouched regardless of what this decides.
-    {
-        // Gather: plain values only; this step holds no branch that
-        // chooses between reporting and local handling, and mutates no
-        // record.
-        let tracking = app
-            .active_tab()
-            .map(|tab| TrackingState::read(&tab.core.lock()))
-            .unwrap_or_default();
+    // ── Mouse reporting (D12: gather / decide / apply / perform) ───────
+    // Gather: plain values only, out of the host / app / core mode state —
+    // no branch choosing between reporting and local handling, no record
+    // mutation. Decided independently of the local selection-drag path
+    // above: with no tracking mode active, over a guarded region, or with
+    // the currently-held gesture owned locally, SC-10/SC-11 (task0005)
+    // name no report and today's drag-to-select behaviour above is
+    // untouched.
+    if let Some(tab) = app.active_tab() {
+        let tracking = TrackingState::read(&tab.core.lock());
         let (screen_row, col) = host.pixel_to_cell(position, app);
         let col1 = col as u32 + 1;
         let row1 = screen_row as u32 + 1;
-        // Decide.
-        let (report, reset, ops) = mouse_report::decide_motion(
-            grid_ownership_inputs(egui_pos, host, app),
-            tracking.any_active(),
-            tracking.mode_1000,
-            tracking.mode_1002,
-            tracking.mode_1003,
-            tracking.encoding(),
-            host.current_mods,
-            host.mouse_report_held,
-            app.active,
-            host.mouse_report_last_active_tab,
-            col1,
-            row1,
-            &host.mouse_report_records,
-        );
-        // Apply: the outcome's record updates are applied exactly once,
-        // never at the decision site above.
-        mouse_report::apply_motion(&mut host.mouse_report_records, reset, ops);
-        host.mouse_report_last_active_tab = Some(app.active);
-        // Perform: write the report bytes, if any, to the tab the
-        // outcome names.
-        if let Some(report) = report {
-            if let Some(tab) = app.tabs.get(report.tab) {
-                tab.write_input(report.bytes);
+        let inputs = mouse_report::MotionEventInputs {
+            grid: grid_ownership_inputs(egui_pos, host, app),
+            mods: host.current_mods,
+            mode_1000: tracking.mode_1000,
+            mode_1002: tracking.mode_1002,
+            mode_1003: tracking.mode_1003,
+            encoding: tracking.encoding(),
+            active_tab: app.active,
+            held_left: host.mouse_report_held.left,
+            held_middle: host.mouse_report_held.middle,
+            held_right: host.mouse_report_held.right,
+            column: col1,
+            row: row1,
+            records: host.mouse_report_records(),
+        };
+        // Decide (SC-10).
+        let outcome = mouse_report::decide_motion_event(inputs);
+        // Execute (SC-11) + perform: motion never names a local arm (it
+        // is either a report or nothing), so writing any report bytes to
+        // the tab the outcome names is all there is to do here.
+        let mut records = host.mouse_report_records();
+        let mut dest = Vec::new();
+        mouse_report::apply_outcome(outcome, &mut records, &mut dest);
+        host.set_mouse_report_records(records);
+        for (tab_id, bytes) in dest {
+            if let Some(tab) = app.tabs.get(tab_id) {
+                tab.write_input(bytes);
             }
         }
     }
 }
 
-/// SC-10/SC-11 gather→decide→apply→perform sequence (task0005/task0006,
-/// D12) for one button press or release. Returns `true` when the event
-/// was decided as a report — the caller must `return`, skipping every
-/// local arm — and `false` when the caller should fall through to its
-/// existing local handling, unchanged.
-fn run_button_decision(
-    kind: MouseEventKind,
-    button: MouseButton,
-    egui_pos: egui::Pos2,
-    host: &mut WindowHost,
-    app: &mut App,
-) -> bool {
-    // Gather: plain values only; no branch chooses between reporting and
-    // local handling here, and no record is mutated.
-    let identity = winit_button_to_report_identity(button);
-    let tracking = app
-        .active_tab()
-        .map(|tab| TrackingState::read(&tab.core.lock()))
-        .unwrap_or_default();
+/// Perform [`mouse_report::LocalArm::BeginSelectionDrag`]: classify the
+/// press (single / double / triple click), start or commit the terminal
+/// selection accordingly, and arm the drag flag. Unchanged from the
+/// pre-task0006 `(MouseButton::Left, ElementState::Pressed)` local arm,
+/// minus the Ctrl+link-open check now named as its own local arm (see
+/// [`perform_open_hovered_link`]).
+fn begin_selection_drag(host: &mut WindowHost, app: &mut App) {
     let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
-    let col1 = col as u32 + 1;
-    let row1 = screen_row as u32 + 1;
-    let inputs = mouse_report::ButtonEventInputs {
-        kind,
-        identity,
-        grid_ownership: grid_ownership_inputs(egui_pos, host, app),
-        mods: host.current_mods,
-        tracking_any_active: tracking.any_active(),
-        encoding: tracking.encoding(),
-        active_tab: app.active,
-        last_active_tab: host.mouse_report_last_active_tab,
-        col1,
-        row1,
-    };
-    // Decide.
-    let (decision, reset, ops) =
-        mouse_report::decide_button_event(inputs, &host.mouse_report_records);
-    // Apply: the outcome's record updates are applied exactly once, never
-    // at the decision site above.
-    mouse_report::apply_button_event(&mut host.mouse_report_records, reset, ops);
-    host.mouse_report_last_active_tab = Some(app.active);
-    // Perform: write the report bytes, if any, to the tab the outcome
-    // names.
-    if let mouse_report::ButtonDecision::Report(report) = decision {
-        if let Some(report) = report {
-            if let Some(tab) = app.tabs.get(report.tab) {
-                tab.write_input(report.bytes);
+    // Anchor the press at its absolute buffer row so the
+    // selection (and double / triple-click classification)
+    // tracks the content across scrolls.
+    let abs_row = host.screen_row_to_abs(screen_row, app);
+    let cls = host.click_tracker.classify(Instant::now(), abs_row, col);
+    if cls.mode == SelectionMode::Character {
+        // Single click in character mode: do not
+        // materialize a one-cell selection yet — the
+        // user may just be moving the cursor / focus
+        // / clearing a prior selection. Record the
+        // press cell so the first motion (if any)
+        // can upgrade this into a real drag-select.
+        app.selection = None;
+        app.pending_selection_anchor = Some(Pos { row: abs_row, col });
+        host.window().request_redraw();
+    } else {
+        // Word (double click) / line (triple click)
+        // commit immediately so a static click still
+        // selects the targeted word or line.
+        let mut sel = Selection::new_with_mode(Pos { row: abs_row, col }, cls.mode);
+        if let Some(tab) = app.tabs.get(app.active) {
+            let core = tab.core.lock();
+            sel.extend(Pos { row: abs_row, col }, &core);
+        }
+        app.selection = Some(sel);
+        app.pending_selection_anchor = None;
+    }
+    host.dragging = true;
+}
+
+/// Perform [`mouse_report::LocalArm::OpenHoveredLink`]: re-detect and open
+/// the link under the pointer, falling back to
+/// [`begin_selection_drag`] when the fresh, click-time detection
+/// disagrees with the cached hover snapshot the gather step named this
+/// arm from (`try_open_link_at_pointer` always re-runs detection against
+/// the live grid rather than trusting the hover cache, exactly as it did
+/// before this task).
+fn perform_open_hovered_link(host: &mut WindowHost, app: &mut App) {
+    if !host.try_open_link_at_pointer(app) {
+        begin_selection_drag(host, app);
+    }
+}
+
+/// Perform [`mouse_report::LocalArm::CompleteSelectionAndPublishToPrimary`]:
+/// clear the drag flag, consume the pending single-click anchor (handling
+/// the fold-click toggle for a plain click), and publish a completed
+/// selection to PRIMARY (and CLIPBOARD when `copy_on_select` is on).
+/// Unchanged from the pre-task0006
+/// `(MouseButton::Left, ElementState::Released)` local arm.
+fn complete_selection_and_publish_to_primary(host: &mut WindowHost, app: &mut App) {
+    host.dragging = false;
+    // A press with no motion in Character mode left
+    // selection == None (see `begin_selection_drag`);
+    // there is nothing to copy in that case. `pending`
+    // is `Some` exactly for that case: a single (not
+    // word/line) press whose motion never upgraded it to
+    // a drag-select. Capture it before the reset so the
+    // fold-click path below can detect a plain click.
+    let pending = app.pending_selection_anchor.take();
+    // Plain left-click (no Ctrl; meta does not exist on
+    // Linux/Windows), no active selection, no drag: this
+    // is a candidate for a fold toggle. Mirrors the
+    // WebView `input-wiring.ts` routing (Ctrl/Meta →
+    // URL, else → handleFoldClick) plus
+    // `handleFoldClick`'s own "no text selection" guard.
+    // `handle_fold_click` is a no-op (returns false)
+    // when the click is not over a foldable region, so
+    // ordinary clicks-to-deselect fall through unchanged.
+    if pending.is_some() && app.selection.is_none() && !host.current_mods.ctrl {
+        if let Some((row, _col)) = host.pixel_to_grid_cell(host.cursor_pos, app) {
+            if app.handle_fold_click(row) {
+                host.invalidate_link_hover();
+                host.window().request_redraw();
+                return;
             }
         }
-        return true;
     }
-    false
+    if let Some(sel) = app.selection {
+        if let Some(tab) = app.tabs.get(app.active) {
+            let core = tab.core.lock();
+            let text = sel.resolve(&core, app.fold_layout());
+            drop(core);
+            host.set_primary(&text);
+            // `copy_on_select` opts into mirroring the
+            // selection to the system CLIPBOARD as
+            // well, matching the WebView build's
+            // toggle. PRIMARY is always updated above
+            // so the middle-click flow keeps working
+            // regardless.
+            if app.settings.copy_on_select && !text.is_empty() {
+                host.set_clipboard(&text);
+            }
+        }
+    }
 }
 
 /// `WindowEvent::PointerButton` arm body: CSD edge-resize handoff, egui
-/// click forwarding, the strip / scrollbar / sidebar press guards, and
-/// terminal selection start / commit plus middle-click paste.
+/// click forwarding, the strip / scrollbar / sidebar / profile-selector
+/// press guards (unchanged; left-press-only or unconditional, exactly as
+/// before this task), and mouse reporting (D12: gather / decide / apply /
+/// perform, over task0005's SC-10/SC-11 seam) for whichever press/release
+/// survives them. A release never reaches the guards at all (D12): its
+/// disposition is decided from the recorded gesture owner alone, position-
+/// independent.
 pub(super) fn handle_pointer_button(
     state: ElementState,
     button: ButtonSource,
@@ -383,9 +437,9 @@ pub(super) fn handle_pointer_button(
 
     // Forward to egui first so the tab bar / status bar can
     // see the click before we decide whether to start a
-    // terminal selection. This runs ahead of the gesture-ownership
-    // release short-circuit below so a report-owned release still
-    // balances the press egui already saw.
+    // terminal selection. This runs ahead of the mouse-
+    // reporting decision below so a report-owned release
+    // still balances the press egui already saw.
     let logical = host
         .cursor_pos
         .to_logical::<f32>(host.pixels_per_point as f64);
@@ -417,28 +471,43 @@ pub(super) fn handle_pointer_button(
         }
     }
     // Mouse reporting (SC-5 input): track which buttons are physically
-    // held, independent of any guard below that may go on to consume
+    // held, independent of any outcome below that may go on to consume
     // this event locally — a button held while the pointer later drags
     // into the terminal must still be reportable by the motion gate.
     if let Some(identity) = winit_button_to_report_identity(button) {
         let held = state == ElementState::Pressed;
-        host.mouse_report_held.set(identity, held);
+        match identity {
+            mouse_report::MouseButtonId::Left => host.mouse_report_held.left = held,
+            mouse_report::MouseButtonId::Middle => host.mouse_report_held.middle = held,
+            mouse_report::MouseButtonId::Right => host.mouse_report_held.right = held,
+            mouse_report::MouseButtonId::None => {}
+        }
     }
     host.window().request_redraw();
 
-    // ── Mouse reporting: release decision (task0004 SC-9, D10; task0005/
-    // task0006 SC-10/SC-11, D12) ───────────────────────────────────────
-    // A release whose press was owned by the report side must reach
-    // emission regardless of where the pointer now sits — ownership
-    // decides, not the release position — so this runs BEFORE every
-    // chrome guard below (Test Notes: a press inside the grid whose
-    // release arrives over a guarded region still reports). The egui
-    // forward and the held-button bookkeeping above have already run for
-    // this event; a reported release skips only the positional chrome
-    // guards and the local selection handling that follow.
-    if state == ElementState::Released
-        && run_button_decision(MouseEventKind::Release, button, egui_pos, host, app)
-    {
+    // ── Gesture-ownership release short-circuit (D12) ──────────────────
+    // A release is decided by SC-10 from the recorded gesture owner (SC-9)
+    // alone, never by the release position — so it must run before every
+    // chrome guard below gets a vote (Test Notes: a press inside the grid
+    // whose release arrives over a guarded region still gets its release,
+    // and D12's own correction: a Report-owned release must not be
+    // strandable behind a position check). The egui forward and the
+    // held-button bookkeeping above have already run for this event.
+    // `winit_button_to_report_identity` returning `None` (a side button
+    // with no DEC mouse-reporting encoding) means there is nothing for
+    // SC-10 to decide and no local arm this handler recognizes either —
+    // matching the pre-task0006 bottom match's `_ => {}` fallback, so an
+    // unmapped-button release returns here too with no observable effect.
+    if state == ElementState::Released {
+        if let Some(identity) = winit_button_to_report_identity(button) {
+            run_button_decision(
+                mouse_report::MouseEventKind::Release,
+                identity,
+                egui_pos,
+                host,
+                app,
+            );
+        }
         return;
     }
 
@@ -461,7 +530,7 @@ pub(super) fn handle_pointer_button(
     // happens to sit under the bar. Gated to the Pressed
     // edge only so a drag that *started* inside the
     // terminal still gets its Released event processed
-    // (clears `host.dragging`, commits selection) when the
+    // (handled by the release short-circuit above) when the
     // user happens to lift the button over the strip.
     if button == MouseButton::Left && state == ElementState::Pressed {
         let window_size_logical = host
@@ -489,13 +558,12 @@ pub(super) fn handle_pointer_button(
         let in_scrollbar = scrollbar_visible
             && egui_pos.x >= central_right - crate::ui::scrollbar::TRACK_W
             && egui_pos.x < central_right;
-        // AC-1/AC-4: query the SAME shared hit-region helper the
-        // MouseWheel guard below uses (IMPLEMENTATION.md cross-
-        // task decision 3.5), instead of the persistent-only
-        // width test above — that test's inset is 0 for the
-        // overlay placement, so a press on the floating overlay
-        // card used to fall through this guard and start a
-        // terminal selection on the cell underneath it.
+        // AC-1/AC-4 (task0011): query the SAME shared hit-region helper
+        // the MouseWheel guard uses (IMPLEMENTATION.md cross-task
+        // decision 3.5), instead of the persistent-only width test above
+        // — that test's inset is 0 for the overlay placement, so a press
+        // on the floating overlay card used to fall through this guard
+        // and start a terminal selection on the cell underneath it.
         let visible_placement = match app.mux_sidebar_visibility() {
             crate::app::MuxSidebarVisibility::Hidden => None,
             crate::app::MuxSidebarVisibility::Persistent => {
@@ -525,123 +593,132 @@ pub(super) fn handle_pointer_button(
         return;
     }
 
-    // ── Mouse reporting: press decision (task0003 FR2/FR7/FR8/FR10, SC-2/
-    // SC-3; task0004 SC-8/SC-9, D10/D11; task0005/task0006 SC-10/SC-11,
-    // D12) ──────────────────────────────────────────────────────────────
-    // Every existing chrome guard above has already had its chance to
-    // consume a LEFT press and return; this decision is the identity-
+    // ── Mouse reporting (D12: gather / decide / apply / perform) ───────
+    // Every chrome guard above has already had its chance to consume a
+    // LEFT press and return; SC-8 (inside SC-10 below) is the identity-
     // independent counterpart that also covers a middle/right press and
     // the CSD edge-resize hot zone, neither of which any guard above
-    // tests. Release handling for an OWNED gesture already happened above
-    // this function's guards; a release that reaches this point had no
-    // owner recorded and falls through unchanged.
-    if state == ElementState::Pressed
-        && run_button_decision(MouseEventKind::Press, button, egui_pos, host, app)
-    {
-        return;
+    // tests. `winit_button_to_report_identity` returning `None` means
+    // there is nothing for SC-10 to decide and no local arm this handler
+    // recognizes either (matching the bottom match's old `_ => {}`).
+    if let Some(identity) = winit_button_to_report_identity(button) {
+        run_button_decision(
+            mouse_report::MouseEventKind::Press,
+            identity,
+            egui_pos,
+            host,
+            app,
+        );
     }
+}
 
-    match (button, state) {
-        (MouseButton::Left, ElementState::Pressed) => {
-            // Ctrl+click opens a hovered URL / file path and
-            // skips starting a selection. Reuses the cached
-            // hover detection for the cell under the pointer
-            // (refreshed on the PointerMoved that brought us
-            // here), re-detecting only if the cached cell no
-            // longer matches the click cell.
-            if host.current_mods.ctrl && host.try_open_link_at_pointer(app) {
-                return;
-            }
-            let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
-            // Anchor the press at its absolute buffer row so the
-            // selection (and double / triple-click classification)
-            // tracks the content across scrolls.
-            let abs_row = host.screen_row_to_abs(screen_row, app);
-            let cls = host.click_tracker.classify(Instant::now(), abs_row, col);
-            if cls.mode == SelectionMode::Character {
-                // Single click in character mode: do not
-                // materialize a one-cell selection yet — the
-                // user may just be moving the cursor / focus
-                // / clearing a prior selection. Record the
-                // press cell so the first motion (if any)
-                // can upgrade this into a real drag-select.
-                app.selection = None;
-                app.pending_selection_anchor = Some(Pos { row: abs_row, col });
-                host.window().request_redraw();
-            } else {
-                // Word (double click) / line (triple click)
-                // commit immediately so a static click still
-                // selects the targeted word or line.
-                let mut sel = Selection::new_with_mode(Pos { row: abs_row, col }, cls.mode);
-                if let Some(tab) = app.tabs.get(app.active) {
-                    let core = tab.core.lock();
-                    sel.extend(Pos { row: abs_row, col }, &core);
-                }
-                app.selection = Some(sel);
-                app.pending_selection_anchor = None;
-            }
-            host.dragging = true;
+/// Gather / decide / apply / perform for one button press or release
+/// (D12), over task0005's SC-10/SC-11 seam.
+fn run_button_decision(
+    kind: mouse_report::MouseEventKind,
+    identity: mouse_report::MouseButtonId,
+    egui_pos: egui::Pos2,
+    host: &mut WindowHost,
+    app: &mut App,
+) {
+    // Gather: plain values only — no branch choosing between reporting
+    // and local handling, no record mutation.
+    let tracking = app
+        .active_tab()
+        .map(|tab| TrackingState::read(&tab.core.lock()))
+        .unwrap_or_default();
+    let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
+    let col1 = col as u32 + 1;
+    let row1 = screen_row as u32 + 1;
+    // Press-only inputs (SC-10 ignores them on a release): whether a link
+    // is hovered at the pointer, from the same cache
+    // `refresh_link_hover` maintains on every `PointerMoved` — the
+    // perform step's `OpenHoveredLink` arm still re-detects fresh at
+    // click time via `try_open_link_at_pointer` before actually opening
+    // anything, so a stale cache here can only under-name this arm
+    // (falling back to `BeginSelectionDrag`), never mis-open a link.
+    let hovered_link = !host.hover.link_cells.is_empty();
+    let middle_click_paste_enabled = app.settings.middle_click_paste;
+    let inputs = mouse_report::ButtonEventInputs {
+        kind,
+        button: identity,
+        grid: grid_ownership_inputs(egui_pos, host, app),
+        mods: host.current_mods,
+        mode_1000: tracking.mode_1000,
+        mode_1002: tracking.mode_1002,
+        mode_1003: tracking.mode_1003,
+        encoding: tracking.encoding(),
+        active_tab: app.active,
+        column: col1,
+        row: row1,
+        hovered_link,
+        middle_click_paste_enabled,
+        records: host.mouse_report_records(),
+    };
+    // Decide (SC-10).
+    let outcome = mouse_report::decide_button_event(inputs);
+    let local_arm = match &outcome.disposition {
+        mouse_report::Disposition::Local(arm) => Some(*arm),
+        _ => None,
+    };
+    // Execute (SC-11): apply the record updates and collect any report
+    // bytes, keyed by the tab identifier the outcome names (a release
+    // targets the tab its press recorded, never necessarily `app.active`).
+    let mut records = host.mouse_report_records();
+    let mut dest = Vec::new();
+    mouse_report::apply_outcome(outcome, &mut records, &mut dest);
+    host.set_mouse_report_records(records);
+    for (tab_id, bytes) in dest {
+        if let Some(tab) = app.tabs.get(tab_id) {
+            tab.write_input(bytes);
         }
-        (MouseButton::Left, ElementState::Released) => {
-            host.dragging = false;
-            // A press with no motion in Character mode left
-            // selection == None (see the Pressed branch);
-            // there is nothing to copy in that case. `pending`
-            // is `Some` exactly for that case: a single (not
-            // word/line) press whose motion never upgraded it to
-            // a drag-select. Capture it before the reset so the
-            // fold-click path below can detect a plain click.
-            let pending = app.pending_selection_anchor.take();
-            // Plain left-click (no Ctrl; meta does not exist on
-            // Linux/Windows), no active selection, no drag: this
-            // is a candidate for a fold toggle. Mirrors the
-            // WebView `input-wiring.ts` routing (Ctrl/Meta →
-            // URL, else → handleFoldClick) plus
-            // `handleFoldClick`'s own "no text selection" guard.
-            // `handle_fold_click` is a no-op (returns false)
-            // when the click is not over a foldable region, so
-            // ordinary clicks-to-deselect fall through unchanged.
-            if pending.is_some() && app.selection.is_none() && !host.current_mods.ctrl {
-                if let Some((row, _col)) = host.pixel_to_grid_cell(host.cursor_pos, app) {
-                    if app.handle_fold_click(row) {
-                        host.invalidate_link_hover();
-                        host.window().request_redraw();
-                        return;
-                    }
-                }
-            }
-            if let Some(sel) = app.selection {
-                if let Some(tab) = app.tabs.get(app.active) {
-                    let core = tab.core.lock();
-                    let text = sel.resolve(&core, app.fold_layout());
-                    drop(core);
-                    host.set_primary(&text);
-                    // `copy_on_select` opts into mirroring the
-                    // selection to the system CLIPBOARD as
-                    // well, matching the WebView build's
-                    // toggle. PRIMARY is always updated above
-                    // so the middle-click flow keeps working
-                    // regardless.
-                    if app.settings.copy_on_select && !text.is_empty() {
-                        host.set_clipboard(&text);
-                    }
-                }
+    }
+    // Perform: run the local arm the outcome named (if any) through the
+    // existing, unchanged local code paths.
+    match local_arm {
+        Some(mouse_report::LocalArm::BeginSelectionDrag) => begin_selection_drag(host, app),
+        Some(mouse_report::LocalArm::OpenHoveredLink) => perform_open_hovered_link(host, app),
+        Some(mouse_report::LocalArm::CompleteSelectionAndPublishToPrimary) => {
+            complete_selection_and_publish_to_primary(host, app)
+        }
+        Some(mouse_report::LocalArm::PastePrimary) => {
+            if let Some(text) = host.get_primary() {
+                host.deliver_paste(app, &text);
             }
         }
-        (MouseButton::Middle, ElementState::Pressed) => {
-            if app.settings.middle_click_paste {
-                if let Some(text) = host.get_primary() {
-                    host.deliver_paste(app, &text);
-                }
-            }
-        }
-        _ => {}
+        Some(other) => debug_assert!(false, "unexpected local arm for a button event: {other:?}"),
+        None => {} // Report (bytes already written above) or Nothing.
+    }
+}
+
+/// Run a plain scrollback scroll by `settings.scroll_speed` lines in the
+/// direction `lines` names — the mechanics shared by
+/// [`mouse_report::LocalArm::ScrollScrollback`] regardless of which branch
+/// of SC-6's wheel matrix named it (tracking active with Shift held, or
+/// tracking inactive with the alternate-scroll translation gate not fully
+/// satisfied).
+fn scroll_by_wheel_notch(host: &mut WindowHost, app: &mut App, lines: f32) {
+    // `settings.scroll_speed` is clamped to 1..=10 by the
+    // loader, so it's safe to feed directly into the scroll
+    // helpers (a runaway typo can't fly the viewport 1000
+    // rows per notch).
+    let step = app.settings.scroll_speed.max(1);
+    if lines > 0.0 {
+        app.scroll_up_by(step);
+        host.invalidate_link_hover();
+        host.window().request_redraw();
+    } else if lines < 0.0 {
+        app.scroll_down_by(step);
+        host.invalidate_link_hover();
+        host.window().request_redraw();
     }
 }
 
 /// `WindowEvent::MouseWheel` arm body: profile-selector / tab-strip /
-/// mux-sidebar wheel forwarding to egui, the DECSET 1007 AltScreen
-/// arrow translation, and the terminal scrollback scroll path.
+/// mux-sidebar wheel forwarding to egui, and mouse reporting (D12: gather /
+/// decide / apply / perform, over task0005's SC-10/SC-11 seam) — which
+/// selects exactly one of the DECSET 1007 AltScreen arrow translation, the
+/// terminal scrollback scroll, or a report to the application.
 pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost, app: &mut App) {
     // While the profile-selector modal is up, the wheel
     // scrolls the modal's list: translate to an egui
@@ -779,11 +856,13 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
                 .get_mode(term_core::terminal_core::MODE_ALTERNATE_SCROLL)
         })
         .unwrap_or(false);
-    // ── Mouse reporting: wheel decision (task0003 FR4/FR7/FR8, SC-6;
-    // task0004 SC-8, D11; task0005/task0006 SC-10/SC-11, D12) ──────────
-    // Gather: plain values only. SC-8 covers the bottom strip, the
-    // scrollbar overlay and the CSD edge-resize hot zone, none of which
-    // the chrome guards earlier in this function test.
+
+    // ── Mouse reporting (D12: gather / decide / apply / perform) ───────
+    // Gather: plain values only. SC-8 is consulted first inside SC-10
+    // (task0005), identity-independently, ahead of the tracking-active
+    // read — covering the bottom strip, the scrollbar overlay and the CSD
+    // edge-resize hot zone in addition to the mux-sidebar / tab-bar-band
+    // guards already handled above.
     let wheel_logical = host
         .cursor_pos
         .to_logical::<f32>(host.pixels_per_point as f64);
@@ -794,122 +873,113 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
     let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
     let col1 = col as u32 + 1;
     let row1 = screen_row as u32 + 1;
-    // Decide.
-    let (decision, reset) = mouse_report::decide_wheel(
-        grid_ownership_inputs(egui::pos2(wheel_logical.x, wheel_logical.y), host, app),
-        tracking.any_active(),
-        host.current_mods.shift,
-        app.alt_screen,
-        mode_bit_on,
-        app.settings.alternate_scroll_enabled,
-        tracking.encoding(),
-        host.current_mods,
-        lines,
-        app.active,
-        host.mouse_report_last_active_tab,
-        col1,
-        row1,
-    );
-    // Apply.
-    mouse_report::apply_wheel_reset(&mut host.mouse_report_records, reset);
-    host.mouse_report_last_active_tab = Some(app.active);
-    // Perform.
-    match decision {
-        mouse_report::WheelDecision::SuppressedByGrid => {
-            // AC-4/FR10: no report and no other side effect — the
-            // bottom strip, the scrollbar overlay and the CSD
-            // edge-resize hot zone have no dedicated local wheel
-            // behaviour to fall back to, so the notch is simply
-            // consumed here, the same way the chrome guards above
-            // consume theirs (SPEC.md FR10: "a ... wheel event that one
-            // of those guards consumes is never reported").
-            return;
-        }
-        mouse_report::WheelDecision::Report(report) => {
-            // AC-3: the scrollback offset is never touched and no
-            // alternate-scroll arrow bytes are written for a reported
-            // notch.
-            if let Some(report) = report {
-                if let Some(tab) = app.tabs.get(report.tab) {
-                    tab.write_input(report.bytes);
+    let kind = if lines >= 0.0 {
+        mouse_report::MouseEventKind::WheelUp
+    } else {
+        mouse_report::MouseEventKind::WheelDown
+    };
+    let inputs = mouse_report::WheelEventInputs {
+        kind,
+        grid: grid_ownership_inputs(egui::pos2(wheel_logical.x, wheel_logical.y), host, app),
+        mods: host.current_mods,
+        mode_1000: tracking.mode_1000,
+        mode_1002: tracking.mode_1002,
+        mode_1003: tracking.mode_1003,
+        encoding: tracking.encoding(),
+        active_tab: app.active,
+        column: col1,
+        row: row1,
+        on_alt_screen: app.alt_screen,
+        alt_scroll_mode_bit: mode_bit_on,
+        alt_scroll_setting: app.settings.alternate_scroll_enabled,
+        records: host.mouse_report_records(),
+    };
+    // Decide (SC-10).
+    let outcome = mouse_report::decide_wheel_event(&inputs);
+    let local_arm = match &outcome.disposition {
+        mouse_report::Disposition::Local(arm) => Some(*arm),
+        _ => None,
+    };
+    // Execute (SC-11): apply the record updates. A single `decide_wheel_event`
+    // call names the direction of exactly one notch; AC-2's "report bytes
+    // reach the tab the outcome names" reproduces the pre-task0006
+    // multi-notch loop by repeating that one notch's bytes
+    // `wheel_report_notches(lines)` times — the same magnitude gate
+    // (silently dropping a sub-notch delta) the loop already applied.
+    let mut records = host.mouse_report_records();
+    let mut dest = Vec::new();
+    mouse_report::apply_outcome(outcome, &mut records, &mut dest);
+    host.set_mouse_report_records(records);
+    if let Some((tab_id, bytes)) = dest.into_iter().next() {
+        let notches = wheel_report_notches(lines);
+        if notches != 0 {
+            if let Some(tab) = app.tabs.get(tab_id) {
+                let mut buf = Vec::with_capacity(bytes.len() * notches.unsigned_abs() as usize);
+                for _ in 0..notches.unsigned_abs() {
+                    buf.extend_from_slice(&bytes);
                 }
-            }
-            return;
-        }
-        mouse_report::WheelDecision::ScrollScrollback => {
-            // AC-4: Shift+wheel while tracking is active moves eMterm's
-            // scrollback and writes nothing at all to the PTY — no arrow
-            // bytes either, even on the alternate screen with the
-            // alternate-scroll mode bit and setting both on (D5).
-            // `host.alt_scroll_accum` is deliberately left untouched: it
-            // feeds only the arrow-translate path, which this outcome
-            // can never select.
-            let step = app.settings.scroll_speed.max(1);
-            if lines > 0.0 {
-                app.scroll_up_by(step);
-                host.invalidate_link_hover();
-                host.window().request_redraw();
-            } else if lines < 0.0 {
-                app.scroll_down_by(step);
-                host.invalidate_link_hover();
-                host.window().request_redraw();
-            }
-            return;
-        }
-        mouse_report::WheelDecision::TrackingInactive => {}
-    }
-
-    // Tracking-inactive: today's matrix, reproduced byte-for-byte and
-    // without consulting Shift at all (AC7) — this is the pre-existing
-    // mechanism SC-6's inactive branch's contract text points back to
-    // ("today's matrix, reproduced exactly"), including its own stateful
-    // sub-notch accumulation (`host.alt_scroll_accum`), which is why it
-    // stays a single unconditional block rather than being re-expressed
-    // through a fresh `WheelConsumer` match: the arrow-vs-scrollback
-    // choice here depends on carried-over fractional state from earlier
-    // events, not only on this event's inputs.
-    //
-    // FR1 accumulator: reset fractional state when not in AltScreen so
-    // entering AltScreen always starts clean.
-    if !app.alt_screen {
-        host.alt_scroll_accum = 0.0;
-    }
-    let (whole, new_frac) = accumulate_alt_scroll_lines(host.alt_scroll_accum, lines);
-    host.alt_scroll_accum = new_frac;
-    if whole != 0.0 {
-        if let Some(buf) = alternate_scroll_wheel_bytes(
-            whole,
-            app.alt_screen,
-            mode_bit_on,
-            app.settings.alternate_scroll_enabled,
-        ) {
-            if let Some(tab) = app.active_tab() {
                 tab.write_input(buf);
             }
-            // Visible content may shift under the pointer;
-            // drop the cached hover so the next PointerMoved
-            // re-detects.
-            host.invalidate_link_hover();
-            host.window().request_redraw();
-            return;
         }
     }
-
-    // `settings.scroll_speed` is clamped to 1..=10 by the
-    // loader, so it's safe to feed directly into the scroll
-    // helpers (a runaway typo can't fly the viewport 1000
-    // rows per notch).
-    let step = app.settings.scroll_speed.max(1);
-    if lines > 0.0 {
-        app.scroll_up_by(step);
-        // Scrollback content shifts under the pointer, so the
-        // cached hover no longer maps to the same text. Drop
-        // it; the next PointerMoved re-detects.
-        host.invalidate_link_hover();
-        host.window().request_redraw();
-    } else if lines < 0.0 {
-        app.scroll_down_by(step);
-        host.invalidate_link_hover();
-        host.window().request_redraw();
+    // Perform: run the local arm the outcome named.
+    match local_arm {
+        Some(mouse_report::LocalArm::ScrollScrollback) => {
+            if tracking.any_active() {
+                // D5: Shift+wheel while tracking is active moves eMterm's
+                // scrollback and writes nothing at all to the PTY — no
+                // arrow bytes either, even on the alternate screen with
+                // the alternate-scroll mode bit and setting both on.
+                // `host.alt_scroll_accum` is deliberately left untouched:
+                // it feeds only the arrow-translate path, which this
+                // branch can never select while tracking is active.
+                scroll_by_wheel_notch(host, app, lines);
+            } else {
+                // Tracking inactive, but the alternate-scroll translation
+                // gate (alt screen + mode bit + setting all on) is not
+                // fully satisfied: today's matrix still runs the
+                // fractional-accumulator bookkeeping unconditionally
+                // before falling back to a plain scroll, so a later
+                // mode-bit toggle mid-AltScreen-session doesn't lose the
+                // carried-over fractional notch.
+                if !app.alt_screen {
+                    host.alt_scroll_accum = 0.0;
+                }
+                let (_, new_frac) = accumulate_alt_scroll_lines(host.alt_scroll_accum, lines);
+                host.alt_scroll_accum = new_frac;
+                scroll_by_wheel_notch(host, app, lines);
+            }
+        }
+        Some(mouse_report::LocalArm::TranslateToArrowBytes) => {
+            if !app.alt_screen {
+                host.alt_scroll_accum = 0.0;
+            }
+            let (whole, new_frac) = accumulate_alt_scroll_lines(host.alt_scroll_accum, lines);
+            host.alt_scroll_accum = new_frac;
+            if whole != 0.0 {
+                if let Some(buf) = alternate_scroll_wheel_bytes(
+                    whole,
+                    app.alt_screen,
+                    mode_bit_on,
+                    app.settings.alternate_scroll_enabled,
+                ) {
+                    if let Some(tab) = app.active_tab() {
+                        tab.write_input(buf);
+                    }
+                    // Visible content may shift under the pointer;
+                    // drop the cached hover so the next PointerMoved
+                    // re-detects.
+                    host.invalidate_link_hover();
+                    host.window().request_redraw();
+                    return;
+                }
+            }
+            // Sub-notch delta, or the gate failed after all: fall back to
+            // a plain scroll using the raw (not accumulated) `lines`
+            // sign, exactly as today's matrix does.
+            scroll_by_wheel_notch(host, app, lines);
+        }
+        Some(other) => debug_assert!(false, "unexpected local arm for a wheel event: {other:?}"),
+        None => {} // Report (bytes already written above) or Nothing (SC-8 rejected).
     }
 }

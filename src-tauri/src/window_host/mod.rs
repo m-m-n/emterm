@@ -250,15 +250,17 @@ pub struct WindowHost {
     /// active-tab change, so the first motion of a new tracking session
     /// always reports.
     mouse_report_cell_cache: mouse_report::CellChangeFilter,
-    /// Mouse-reporting (SC-5 input): which of left/middle/right is
-    /// currently held, updated on every `PointerButton` press/release.
-    /// Tracked independently of `pointer_buttons_down` above, which
-    /// counts only egui-mapped buttons and discards which one. Plain
-    /// bools (not a `mouse_report`-owned struct) because `motion_gate`'s
-    /// contract takes three separate held-button parameters, not a type.
-    mouse_report_held_left: bool,
-    mouse_report_held_middle: bool,
-    mouse_report_held_right: bool,
+    /// Mouse-reporting (SC-5 input; SC-11/D12 "held-button record"):
+    /// which of left/middle/right is currently held, updated on every
+    /// `PointerButton` press/release. Tracked independently of
+    /// `pointer_buttons_down` above, which counts only egui-mapped
+    /// buttons and discards which one. task0006 folds this into
+    /// [`mouse_report::HeldButtons`] (task0005's SC-11 type) rather than
+    /// three loose bools, so [`mouse_report::clear_all`] can zero it
+    /// together with [`mouse_report_gesture_owner`](Self::mouse_report_gesture_owner)
+    /// on focus loss — `MotionEventInputs` still takes the three fields
+    /// separately at the call site (`held.left` / `.middle` / `.right`).
+    mouse_report_held: mouse_report::HeldButtons,
     /// Mouse-reporting (D7): last active-tab index observed by the
     /// cache-reset check. `None` means no observation has happened yet,
     /// so the first check always counts as a change.
@@ -273,9 +275,8 @@ pub struct WindowHost {
     /// cache above and the last-active-tab bookkeeping below into the
     /// plain [`mouse_report::MouseReportRecords`] value SC-11 operates on
     /// — see [`Self::mouse_report_records`] /
-    /// [`Self::set_mouse_report_records`]. `task0006` reduces the pointer
-    /// handlers onto that seam; these three fields stay as they are here
-    /// until then.
+    /// [`Self::set_mouse_report_records`]. task0006 reduces the pointer
+    /// handlers onto that seam.
     mouse_report_gesture_owner: mouse_report::GestureOwnership,
 }
 
@@ -476,9 +477,7 @@ impl WindowHost {
             frame_counter: FrameCounter::default(),
             rows_rebuilt_counter: RowsRebuiltCounter::default(),
             mouse_report_cell_cache: mouse_report::CellChangeFilter::default(),
-            mouse_report_held_left: false,
-            mouse_report_held_middle: false,
-            mouse_report_held_right: false,
+            mouse_report_held: mouse_report::HeldButtons::default(),
             mouse_report_last_active_tab: None,
             mouse_report_gesture_owner: mouse_report::GestureOwnership::default(),
         }
@@ -489,10 +488,9 @@ impl WindowHost {
     /// [`mouse_report::GestureOwnership`] (SC-9) — together with the tab
     /// they were last built against into the plain
     /// [`mouse_report::MouseReportRecords`] value SC-11 operates on.
-    /// `task0006` reads this pair, calls [`mouse_report::apply_outcome`],
+    /// task0006 reads this pair, calls [`mouse_report::apply_outcome`],
     /// then writes the result back with [`Self::set_mouse_report_records`]
-    /// when it reduces the pointer handlers onto this seam.
-    #[allow(dead_code)] // no caller yet in this worktree; task0006 wires the pointer handlers onto this seam.
+    /// — see `pointer_routing.rs`'s three handlers.
     fn mouse_report_records(&self) -> mouse_report::MouseReportRecords {
         mouse_report::MouseReportRecords {
             cell_cache: self.mouse_report_cell_cache,
@@ -502,7 +500,6 @@ impl WindowHost {
     }
 
     /// The write-back counterpart of [`Self::mouse_report_records`].
-    #[allow(dead_code)] // no caller yet in this worktree; task0006 wires the pointer handlers onto this seam.
     fn set_mouse_report_records(&mut self, records: mouse_report::MouseReportRecords) {
         self.mouse_report_cell_cache = records.cell_cache;
         self.mouse_report_gesture_owner = records.gesture_owner;

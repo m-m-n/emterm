@@ -246,8 +246,8 @@ impl ApplicationHandler for PocApp {
                     // as stale as the button-down count above — clear
                     // them together so the first pointer event after
                     // focus returns is decided from empty records.
-                    mouse_report::clear_gesture_and_held_state(
-                        &mut host.mouse_report_records,
+                    mouse_report::clear_all(
+                        &mut host.mouse_report_gesture_owner,
                         &mut host.mouse_report_held,
                     );
                     host.update_link_cursor();
