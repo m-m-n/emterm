@@ -1625,19 +1625,99 @@ fn pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam() {
             !src.contains(forbidden),
             "pointer_routing.rs must not call `{forbidden}` directly (AC-1) — every \
              decision primitive runs exclusively inside mouse_report::decide_button_event \
-             / decide_motion / decide_wheel"
+             / decide_motion_event / decide_wheel_event (task0005's SC-10)"
         );
     }
     for delegate in [
         "mouse_report::decide_button_event(",
-        "mouse_report::decide_motion(",
-        "mouse_report::decide_wheel(",
+        "mouse_report::decide_motion_event(",
+        "mouse_report::decide_wheel_event(",
+        "mouse_report::apply_outcome(",
     ] {
         assert!(
             src.contains(delegate),
             "expected the handlers to delegate to `{delegate}` (AC-1)"
         );
     }
+}
+
+/// task0006 (D12): `event_loop.rs`'s `WindowEvent::Focused(false)` arm calls
+/// exactly this function, `mouse_report::clear_all`, on the same two host
+/// fields (`mouse_report_gesture_owner`, `mouse_report_held`) it zeroes
+/// `pointer_buttons_down` alongside — that call site cannot be driven in a
+/// test without a winit window, so this pins the call's OWN two guaranteed
+/// properties (AC-3) at the record level the task plan's Test Notes name:
+/// both records end up empty, and a decision taken against them afterward
+/// behaves exactly as a decision against records that were never touched —
+/// i.e. a release with no recorded owner reports nothing and takes no local
+/// arm, matching `mouse_report::tests::ac6_release_with_no_recorded_press_
+/// produces_no_bytes` (task0005) for the identical "no owner" case, now
+/// reached via the actual clear path instead of a records value that was
+/// simply never populated.
+#[test]
+fn focus_loss_clear_all_empties_gesture_and_held_records_so_the_next_decision_starts_fresh() {
+    use mouse_report::{
+        ButtonEventInputs, Disposition, GestureOwner, GestureOwnership, GridOwnershipInputs,
+        HeldButtons, MouseButtonId, MouseEventKind, MouseReportEncoding, MouseReportRecords,
+        clear_all, decide_button_event,
+    };
+
+    // A left-button drag is mid-flight (as it would be if the window lost
+    // focus before the matching release arrived) and the right button is
+    // also physically held down.
+    let mut gesture = GestureOwnership::new();
+    gesture.record_press(MouseButtonId::Left, GestureOwner::Report);
+    let mut held = HeldButtons {
+        left: true,
+        middle: false,
+        right: true,
+    };
+
+    clear_all(&mut gesture, &mut held);
+
+    assert_eq!(
+        gesture.peek(MouseButtonId::Left),
+        None,
+        "focus loss must clear the gesture-ownership record (AC-3)"
+    );
+    assert_eq!(
+        held,
+        HeldButtons::default(),
+        "focus loss must clear the held-button record (AC-3)"
+    );
+
+    // The first pointer event after focus returns — here, a left release
+    // arriving with no matching press in the (now-empty) records, exactly
+    // what a stranded drag's release looks like post-clear — must be
+    // decided from those empty records: no report, no local arm.
+    let outcome = decide_button_event(ButtonEventInputs {
+        kind: MouseEventKind::Release,
+        button: MouseButtonId::Left,
+        grid: GridOwnershipInputs::default(),
+        mods: Modifiers::default(),
+        mode_1000: true,
+        mode_1002: false,
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 0,
+        column: 5,
+        row: 5,
+        hovered_link: false,
+        middle_click_paste_enabled: false,
+        records: MouseReportRecords {
+            gesture_owner: gesture,
+            built_for_tab: Some(0),
+            ..MouseReportRecords::default()
+        },
+    });
+
+    assert_eq!(
+        outcome.disposition,
+        Disposition::Nothing,
+        "a release decided from post-clear (empty) records must report nothing and take no \
+         local arm (AC-3) — the gesture the focus-loss path stranded is gone, not silently \
+         resumed"
+    );
 }
 
 // ── task0010 AC-2/AC-3: mux sidebar wheel-routing guard wiring ─────
@@ -1736,9 +1816,16 @@ fn mouse_input_press_guard_queries_shared_sidebar_hit_region_before_selection_st
         "the sidebar press guard must `return` on a hit so the selection-start arm \
          is genuinely skipped (AC-1)"
     );
+    // task0006 (D12): the selection-start arm is no longer a literal
+    // `match (button, state)` arm — it is `LocalArm::BeginSelectionDrag`,
+    // named by SC-10 and performed by `begin_selection_drag` only after
+    // every guard above (including this one) has had its chance to
+    // return. The ordering property this test pins is unchanged: the
+    // guard section located above ends before this marker appears.
     let selection_start_pos = arm_body
-        .find("(MouseButton::Left, ElementState::Pressed) => {")
-        .expect("selection-start arm not found in the PointerButton handler");
+        .find("LocalArm::BeginSelectionDrag")
+        .expect("selection-start arm (LocalArm::BeginSelectionDrag) not found in the \
+                 PointerButton handler");
     assert!(
         guard_start + sidebar_guard_pos < selection_start_pos,
         "the sidebar hit-region guard must run BEFORE the selection-start arm so a hit \
