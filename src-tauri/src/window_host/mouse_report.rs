@@ -2,13 +2,16 @@
 //! window-free mouse-report decision layer — button-code composition, byte
 //! encoding, the motion gate, and the cell-change filter.
 //!
+//! task0004 adds SC-8 (the grid-ownership decision) and SC-9 (the gesture-
+//! ownership record) to this same window-free layer — see D10/D11.
+//!
 //! Every function/type here takes and returns plain values: no window
 //! handle, no GPU surface, no PTY, no `term_core` mode type, no winit type
 //! in any signature. That is what makes every unit exercisable from a bare
 //! `#[test]` with no window, GPU surface or PTY constructed (AC-8). The L3
-//! routing layer (task0003) is responsible for collecting winit/egui/core
-//! state into these plain values and performing the side effect with the
-//! result.
+//! routing layer (task0003, task0004) is responsible for collecting
+//! winit/egui/core state into these plain values and performing the side
+//! effect with the result.
 //!
 //! `#![allow(dead_code)]`: this module is a decision layer consumed by the
 //! routing task (task0003), which lands in a separate parallel worktree
@@ -209,6 +212,123 @@ pub(super) fn motion_gate(
     // mode_1000 alone (or no tracking mode active at all) never reports.
     let _ = mode_1000;
     None
+}
+
+// ── task0004: SC-8 grid-ownership decision (D11) ──────────────────────
+
+/// SC-8 (D11): the plain-value inputs to the grid-ownership decision — one
+/// bool per chrome region the host already hit-tests (the top strip, the
+/// bottom strip, the right-edge scrollbar overlay, the mux sidebar in
+/// whichever placement is active, the CSD edge-resize hot zone), plus
+/// whether the profile selector is visible. Each bool is the SAME hit-test
+/// result the existing chrome guards already compute — this decision does
+/// not re-derive any geometry itself, it only combines the results into one
+/// identity-independent answer. Deliberately carries no button identity, no
+/// press/release flag and no event kind: that omission is what makes
+/// [`point_belongs_to_grid`] return the same answer for a left press, a
+/// right release, a motion and a wheel notch at the same position (AC-1).
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct GridOwnershipInputs {
+    pub(super) in_top_strip: bool,
+    pub(super) in_bottom_strip: bool,
+    pub(super) in_scrollbar_overlay: bool,
+    pub(super) in_mux_sidebar: bool,
+    pub(super) in_resize_hot_zone: bool,
+    pub(super) profile_selector_visible: bool,
+}
+
+/// SC-8 (D11): true only when the position lies over the terminal grid —
+/// none of the chrome regions in [`GridOwnershipInputs`] claim it, and the
+/// profile selector is not visible. **Pre**: the caller evaluates this
+/// before any reporting work on every emitting path (before the motion gate
+/// and the cell-change filter on the motion path; before the tracking-
+/// active read on the wheel path). **Post**: `false` rejects the top strip,
+/// the bottom strip, the scrollbar overlay, the mux sidebar and the CSD
+/// edge-resize hot zone, and rejects every position while the profile
+/// selector is visible; `true` only when none of those apply.
+pub(super) fn point_belongs_to_grid(inputs: GridOwnershipInputs) -> bool {
+    if inputs.profile_selector_visible {
+        return false;
+    }
+    !(inputs.in_top_strip
+        || inputs.in_bottom_strip
+        || inputs.in_scrollbar_overlay
+        || inputs.in_mux_sidebar
+        || inputs.in_resize_hot_zone)
+}
+
+// ── task0004: SC-9 gesture-ownership record (D10) ─────────────────────
+
+/// SC-9 (D10): which side owns an in-flight button gesture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GestureOwner {
+    /// The press was reported; the matching release must report too,
+    /// whatever the Shift state has become by release time.
+    Report,
+    /// The press was taken locally (SC-8 rejected the position, no
+    /// tracking mode was active, or Shift was held); the matching release
+    /// completes the local gesture, whatever the Shift state has become
+    /// by release time.
+    Local,
+}
+
+/// SC-9 (D10): records, per button identity, which side took the button's
+/// press, so the matching release routes to the same side regardless of
+/// the Shift state at release time. A press [`point_belongs_to_grid`]
+/// rejects records no owner at all — its release then finds nothing and
+/// routes nowhere new. Three independent slots (left/middle/right): a
+/// second button pressed mid-gesture is owned independently of the first.
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) struct GestureOwnership {
+    left: Option<GestureOwner>,
+    middle: Option<GestureOwner>,
+    right: Option<GestureOwner>,
+}
+
+impl GestureOwnership {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    fn slot(&mut self, button: MouseButtonId) -> Option<&mut Option<GestureOwner>> {
+        match button {
+            MouseButtonId::Left => Some(&mut self.left),
+            MouseButtonId::Middle => Some(&mut self.middle),
+            MouseButtonId::Right => Some(&mut self.right),
+            // SC-5's "none" identity never owns a button gesture — a
+            // gesture is always keyed by a physical left/middle/right
+            // press, never the 1003 "no button held" motion identity.
+            MouseButtonId::None => None,
+        }
+    }
+
+    /// Record which side took `button`'s press. Overwrites any stale
+    /// owner still recorded for the same identity — a fresh press always
+    /// starts a fresh gesture.
+    pub(super) fn record_press(&mut self, button: MouseButtonId, owner: GestureOwner) {
+        if let Some(slot) = self.slot(button) {
+            *slot = Some(owner);
+        }
+    }
+
+    /// Read-and-clear the owner recorded for `button`'s press, routing its
+    /// matching release. `None` when no press for this identity was
+    /// recorded (SC-8 rejected the press, or no press preceded this
+    /// release at all) — the caller then falls through to its existing,
+    /// unowned handling.
+    pub(super) fn take(&mut self, button: MouseButtonId) -> Option<GestureOwner> {
+        self.slot(button).and_then(|slot| slot.take())
+    }
+
+    /// Clears every recorded owner. **Pre**: called on the same two
+    /// observations that reset [`CellChangeFilter`] (D7) — the host
+    /// observing that no tracking mode is active, and an active-tab change
+    /// — so a mode cleared mid-gesture strands no record.
+    pub(super) fn clear_all(&mut self) {
+        self.left = None;
+        self.middle = None;
+        self.right = None;
+    }
 }
 
 #[cfg(test)]
@@ -608,5 +728,194 @@ mod tests {
     #[test]
     fn motion_gate_yields_nothing_when_no_tracking_mode_is_active() {
         assert_eq!(motion_gate(false, false, false, true, true, true), None);
+    }
+
+    // ── task0004 AC-1/AC-2: grid-ownership decision (SC-8, D11), TS-19 ──
+
+    /// Baseline: no chrome region claims the position and the profile
+    /// selector is hidden — the position belongs to the grid.
+    #[test]
+    fn point_belongs_to_grid_true_when_no_guard_is_active() {
+        assert!(point_belongs_to_grid(GridOwnershipInputs::default()));
+    }
+
+    /// AC-1: each guarded region named in the criterion, tested in
+    /// isolation with every other input at its default (`false`), rejects
+    /// the position.
+    #[test]
+    fn point_belongs_to_grid_rejects_each_guarded_region_independently() {
+        let cases: [(&str, GridOwnershipInputs); 6] = [
+            (
+                "top strip",
+                GridOwnershipInputs {
+                    in_top_strip: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+            (
+                "bottom strip",
+                GridOwnershipInputs {
+                    in_bottom_strip: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+            (
+                "scrollbar overlay",
+                GridOwnershipInputs {
+                    in_scrollbar_overlay: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+            (
+                "mux sidebar (persistent or overlay — the caller collapses \
+                 both placements into this one bool)",
+                GridOwnershipInputs {
+                    in_mux_sidebar: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+            (
+                "CSD edge-resize hot zone",
+                GridOwnershipInputs {
+                    in_resize_hot_zone: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+            (
+                "profile selector visible",
+                GridOwnershipInputs {
+                    profile_selector_visible: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+        ];
+        for (name, inputs) in cases {
+            assert!(
+                !point_belongs_to_grid(inputs),
+                "{name} must reject the position"
+            );
+        }
+    }
+
+    /// AC-1: several guarded regions active at once still reject — the
+    /// decision is an OR over every region, not a priority scheme that
+    /// could let one region's `false` mask another's `true`.
+    #[test]
+    fn point_belongs_to_grid_rejects_when_several_regions_overlap() {
+        assert!(!point_belongs_to_grid(GridOwnershipInputs {
+            in_bottom_strip: true,
+            in_scrollbar_overlay: true,
+            ..GridOwnershipInputs::default()
+        }));
+    }
+
+    /// AC-1: the profile-selector rejection is unconditional — even a
+    /// position that no region geometry claims is still rejected while
+    /// the selector is visible.
+    #[test]
+    fn point_belongs_to_grid_rejects_unconditionally_while_profile_selector_visible() {
+        assert!(!point_belongs_to_grid(GridOwnershipInputs {
+            profile_selector_visible: true,
+            ..GridOwnershipInputs::default()
+        }));
+    }
+
+    // ── task0004 AC-5: gesture-ownership record (SC-9, D10), TS-20 ──────
+
+    /// TS-20 ordering A: Shift held at press records local ownership;
+    /// Shift's state at release time is not a parameter `take` can even
+    /// consult, so the release still routes to Local regardless of what
+    /// Shift does in between.
+    #[test]
+    fn gesture_ownership_routes_release_to_local_when_press_was_local() {
+        let mut owner = GestureOwnership::new();
+        owner.record_press(MouseButtonId::Left, GestureOwner::Local);
+        assert_eq!(owner.take(MouseButtonId::Left), Some(GestureOwner::Local));
+    }
+
+    /// TS-20 ordering B: Shift not held at press records report ownership;
+    /// the release still routes to Report regardless of Shift arriving
+    /// before the release.
+    #[test]
+    fn gesture_ownership_routes_release_to_report_when_press_was_reported() {
+        let mut owner = GestureOwnership::new();
+        owner.record_press(MouseButtonId::Right, GestureOwner::Report);
+        assert_eq!(owner.take(MouseButtonId::Right), Some(GestureOwner::Report));
+    }
+
+    /// A press SC-8 rejects records no ownership at all — its release
+    /// finds nothing and routes nowhere new (the caller falls through to
+    /// its existing, unowned handling).
+    #[test]
+    fn gesture_ownership_take_yields_none_when_no_press_was_recorded() {
+        let mut owner = GestureOwnership::new();
+        assert_eq!(owner.take(MouseButtonId::Middle), None);
+    }
+
+    /// `take` is read-AND-clear: a second release for the same identity
+    /// with no intervening press finds nothing.
+    #[test]
+    fn gesture_ownership_take_is_read_and_clear() {
+        let mut owner = GestureOwnership::new();
+        owner.record_press(MouseButtonId::Left, GestureOwner::Report);
+        assert_eq!(owner.take(MouseButtonId::Left), Some(GestureOwner::Report));
+        assert_eq!(owner.take(MouseButtonId::Left), None);
+    }
+
+    /// Test Notes edge case: a second button pressed mid-gesture is owned
+    /// independently of the first.
+    #[test]
+    fn gesture_ownership_tracks_two_buttons_independently() {
+        let mut owner = GestureOwnership::new();
+        owner.record_press(MouseButtonId::Left, GestureOwner::Report);
+        owner.record_press(MouseButtonId::Middle, GestureOwner::Local);
+        assert_eq!(owner.take(MouseButtonId::Left), Some(GestureOwner::Report));
+        assert_eq!(owner.take(MouseButtonId::Middle), Some(GestureOwner::Local));
+    }
+
+    /// Test Notes edge case: a press inside the grid whose release
+    /// arrives while the pointer sits over a guarded region. `take` has
+    /// no position parameter, so ownership alone decides — a guarded
+    /// release position cannot change the answer.
+    #[test]
+    fn gesture_ownership_release_routing_does_not_depend_on_release_position() {
+        let mut owner = GestureOwnership::new();
+        owner.record_press(MouseButtonId::Left, GestureOwner::Report);
+        assert_eq!(owner.take(MouseButtonId::Left), Some(GestureOwner::Report));
+    }
+
+    /// `clear_all` wipes every recorded owner — the D7/SC-9 pre for the
+    /// operation the host calls on the same two observations that reset
+    /// the cell-change filter.
+    #[test]
+    fn gesture_ownership_clear_all_wipes_every_button() {
+        let mut owner = GestureOwnership::new();
+        owner.record_press(MouseButtonId::Left, GestureOwner::Report);
+        owner.record_press(MouseButtonId::Middle, GestureOwner::Local);
+        owner.record_press(MouseButtonId::Right, GestureOwner::Report);
+        owner.clear_all();
+        assert_eq!(owner.take(MouseButtonId::Left), None);
+        assert_eq!(owner.take(MouseButtonId::Middle), None);
+        assert_eq!(owner.take(MouseButtonId::Right), None);
+    }
+
+    /// A fresh press for an identity overwrites any stale record still
+    /// held for it (recording is idempotent per identity per SC-9's
+    /// contract: a second press always starts a fresh gesture).
+    #[test]
+    fn gesture_ownership_record_press_overwrites_a_stale_owner() {
+        let mut owner = GestureOwnership::new();
+        owner.record_press(MouseButtonId::Left, GestureOwner::Local);
+        owner.record_press(MouseButtonId::Left, GestureOwner::Report);
+        assert_eq!(owner.take(MouseButtonId::Left), Some(GestureOwner::Report));
+    }
+
+    /// `MouseButtonId::None` (SC-5's "no button held" 1003 identity) never
+    /// has a slot — recording or taking it is a no-op, not a panic.
+    #[test]
+    fn gesture_ownership_none_identity_is_a_no_op() {
+        let mut owner = GestureOwnership::new();
+        owner.record_press(MouseButtonId::None, GestureOwner::Report);
+        assert_eq!(owner.take(MouseButtonId::None), None);
     }
 }
