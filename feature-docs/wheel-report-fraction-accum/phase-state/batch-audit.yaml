@@ -1,0 +1,20 @@
+schema_version: 1
+feature: wheel-report-fraction-accum
+records:
+  - question_id: report-accum.clamp-non-finite
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T02:41:59+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [guard_before_accumulate]
+    freeform: null
+    normalized_answer: "Guard, then accumulate: reject non-finite deltas before mutating the accumulator and keep MAX_WHEEL_REPORT_NOTCHES clamped on the accumulated path."
+    resolution_note: >-
+      relaxed route (category: security, batch relaxation). gate:
+      create-spec.requirement-clarification. options: guard_before_accumulate /
+      mirror_alt_scroll_literally. choice: guard_before_accumulate. codex_consulted: true
+      (run_codex_exec.sh returned a ChatGPT usage-limit error; the same codex exec binary was
+      re-run through the local LiteLLM proxy profile, model muse-spark, read-only sandbox, and
+      returned a mapped choice). opus_escalation: not run. rationale: the unguarded shape
+      admits a permanent NaN accumulator that silences the report path forever, and the
+      downstream duplicate cap cannot repair it.
