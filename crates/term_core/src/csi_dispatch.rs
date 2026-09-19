@@ -244,16 +244,21 @@ mod tests {
 
     #[test]
     fn test_csi_internal_mode_ts_fallback_set() {
+        // Mode 1000 moved off the TS-fallback arm onto its own bit
+        // (mouse-reporting task0001, SC-1); 1005 remains on the fallback
+        // arm (D9) and exercises the same encoding shape.
         let mut core = TerminalCore::new(80, 24, 0);
-        core.handle_csi_internal(&[1000], &[b'?'], b'h');
-        assert_eq!(core.mode_actions, vec![0xFF, 0xE8, 0x03]); // TS_FALLBACK set, 1000 = 0x03E8
+        core.handle_csi_internal(&[1005], &[b'?'], b'h');
+        assert_eq!(core.mode_actions, vec![0xFF, 0xED, 0x03]); // TS_FALLBACK set, 1005 = 0x03ED
     }
 
     #[test]
     fn test_csi_internal_mode_ts_fallback_reset() {
+        // See test_csi_internal_mode_ts_fallback_set for why 1005 replaces
+        // 1000 here.
         let mut core = TerminalCore::new(80, 24, 0);
-        core.handle_csi_internal(&[1000], &[b'?'], b'l');
-        assert_eq!(core.mode_actions, vec![0xFE, 0xE8, 0x03]); // TS_FALLBACK reset
+        core.handle_csi_internal(&[1005], &[b'?'], b'l');
+        assert_eq!(core.mode_actions, vec![0xFE, 0xED, 0x03]); // TS_FALLBACK reset
     }
 
     #[test]

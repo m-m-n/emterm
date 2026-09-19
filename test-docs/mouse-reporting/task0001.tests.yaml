@@ -1,0 +1,27 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [csi_modes::tests::decset_mouse_modes_set_and_reset_toggle_their_own_bit]
+    red_confirmed: true
+    red_reason: "cannot find value `MODE_MOUSE_NORMAL_TRACKING` / `MODE_MOUSE_BUTTON_EVENT_TRACKING` / `MODE_MOUSE_ANY_EVENT_TRACKING` / `MODE_MOUSE_SGR_ENCODING` in this scope (E0425) — the four mode bits did not exist yet"
+  AC-2:
+    tests: [csi_modes::tests::decset_mouse_modes_set_and_reset_toggle_their_own_bit]
+    red_confirmed: true
+    red_reason: "same compile failure as AC-1 (E0425, undefined mode-bit constants); the reset half of the same test asserts this criterion"
+  AC-3:
+    tests: [csi_modes::tests::decset_mouse_modes_set_and_reset_toggle_their_own_bit, csi_modes::tests::decset_mouse_modes_clearing_one_leaves_others_untouched]
+    red_confirmed: true
+    red_reason: "same compile failure as AC-1/AC-2 (E0425, undefined mode-bit constants) for both tests before the bits were added"
+  AC-4:
+    tests: [csi_modes::tests::decset_1005_still_fallback_and_1015_still_unowned_no_op]
+    red_confirmed: false
+    red_reason: "this criterion describes behaviour this task deliberately leaves unchanged (D9): mode 1005 already fell back to TS and mode 1015 already fell through to the unknown-mode no-op before any change in this task, so the test passed immediately with no implementation change — it is a non-regression guard, not new behaviour."
+  AC-5:
+    tests: [csi_modes::tests::test_mode_ts_fallback]
+    red_confirmed: true
+    red_reason: "after moving 1000/1002/1003/1006 off the TS-fallback arm (before editing this test), the pre-existing loop asserting fallback for those modes failed: \"assertion `left == right` failed: Mode 1000 should fallback / left: 0 / right: 255\". The test was then edited per AC-5 to narrow the fallback list to [1, 1005] and add positive bit assertions for the four moved modes."
+  AC-6:
+    tests: []
+    red_reason: "build/test outcome, not a unit test: verified by running `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib` (858 passed, 0 failed), `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml` (exit 0), and `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features` (exit 0, the CLI-only check). No existing mode's bit position changed (MODE_ALT_SCREEN stayed at 15, MODE_ALTERNATE_SCROLL at 16; the four new modes took previously-unused bits 11-14)."
