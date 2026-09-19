@@ -108,8 +108,29 @@ impl TerminalCore {
                 MODE_ACTION_NONE
             }
 
+            // DECSET 1000/1002/1003/1006 (mouse tracking modes). Track the
+            // bits core-side so the host can read them via `get_mode`
+            // before deciding whether/how to report a pointer event,
+            // exactly as the alternate-scroll mode (1007) already does.
+            1000 => {
+                self.set_mode(MODE_MOUSE_NORMAL_TRACKING, enable);
+                MODE_ACTION_NONE
+            }
+            1002 => {
+                self.set_mode(MODE_MOUSE_BUTTON_EVENT_TRACKING, enable);
+                MODE_ACTION_NONE
+            }
+            1003 => {
+                self.set_mode(MODE_MOUSE_ANY_EVENT_TRACKING, enable);
+                MODE_ACTION_NONE
+            }
+            1006 => {
+                self.set_mode(MODE_MOUSE_SGR_ENCODING, enable);
+                MODE_ACTION_NONE
+            }
+
             // Multi-valued modes: TS fallback
-            1 | 1000 | 1002 | 1003 | 1005 | 1006 => MODE_ACTION_TS_FALLBACK,
+            1 | 1005 => MODE_ACTION_TS_FALLBACK,
 
             // Unknown mode: no-op
             _ => MODE_ACTION_NONE,
@@ -179,7 +200,10 @@ mod tests {
     #[test]
     fn test_mode_ts_fallback() {
         let mut core = TerminalCore::new(80, 24, 0);
-        for mode in [1, 1000, 1002, 1003, 1005, 1006] {
+        // 1000, 1002, 1003 and 1006 moved off the TS-fallback arm onto
+        // their own bits (SC-1); only the modes still on that arm are
+        // asserted here (AC-5).
+        for mode in [1, 1005] {
             assert_eq!(
                 core.handle_set_mode(mode, true),
                 0xFF,
@@ -187,6 +211,16 @@ mod tests {
                 mode
             );
         }
+        // Positive bit assertions replace the fallback assertion removed
+        // above for the four moved modes (AC-5).
+        assert_eq!(core.handle_set_mode(1000, true), 0);
+        assert!(core.get_mode(MODE_MOUSE_NORMAL_TRACKING));
+        assert_eq!(core.handle_set_mode(1002, true), 0);
+        assert!(core.get_mode(MODE_MOUSE_BUTTON_EVENT_TRACKING));
+        assert_eq!(core.handle_set_mode(1003, true), 0);
+        assert!(core.get_mode(MODE_MOUSE_ANY_EVENT_TRACKING));
+        assert_eq!(core.handle_set_mode(1006, true), 0);
+        assert!(core.get_mode(MODE_MOUSE_SGR_ENCODING));
         // 1004 and 2004 are boolean modes handled in WASM
         assert_eq!(core.handle_set_mode(1004, true), 0);
         assert!(core.get_mode(MODE_FOCUS_TRACKING));
@@ -258,6 +292,94 @@ mod tests {
         assert!(!core.get_mode(MODE_ALTERNATE_SCROLL));
         assert_eq!(core.handle_set_mode(1007, true), 0);
         assert!(core.get_mode(MODE_ALTERNATE_SCROLL));
+    }
+
+    // ── DECSET 1000/1002/1003/1006 (mouse tracking modes) ───
+
+    /// TS-1: DECSET 1000/1002/1003/1006 each set and clear their own bit,
+    /// returning `MODE_ACTION_NONE` in both directions, independently of
+    /// the other three mouse-mode bits (AC-1, AC-2, AC-3).
+    #[test]
+    fn decset_mouse_modes_set_and_reset_toggle_their_own_bit() {
+        let modes: [(u16, u8); 4] = [
+            (1000, MODE_MOUSE_NORMAL_TRACKING),
+            (1002, MODE_MOUSE_BUTTON_EVENT_TRACKING),
+            (1003, MODE_MOUSE_ANY_EVENT_TRACKING),
+            (1006, MODE_MOUSE_SGR_ENCODING),
+        ];
+
+        for (mode, bit) in modes {
+            let mut core = TerminalCore::new(80, 24, 0);
+
+            // AC-1: set returns no-action and the bit reports active
+            assert_eq!(
+                core.handle_set_mode(mode, true),
+                0,
+                "mode {mode} set returns no-action"
+            );
+            assert!(core.get_mode(bit), "mode {mode} bit active after set");
+
+            // AC-3: the other three mouse bits stay inactive
+            for (other_mode, other_bit) in modes {
+                if other_mode != mode {
+                    assert!(
+                        !core.get_mode(other_bit),
+                        "mode {mode} set leaves mode {other_mode} inactive"
+                    );
+                }
+            }
+
+            // AC-2: reset returns no-action and the bit reports inactive
+            assert_eq!(
+                core.handle_set_mode(mode, false),
+                0,
+                "mode {mode} reset returns no-action"
+            );
+            assert!(!core.get_mode(bit), "mode {mode} bit inactive after reset");
+        }
+    }
+
+    /// AC-3: clearing one of the four already-active mouse-mode bits
+    /// leaves the other three untouched.
+    #[test]
+    fn decset_mouse_modes_clearing_one_leaves_others_untouched() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_set_mode(1000, true);
+        core.handle_set_mode(1002, true);
+        core.handle_set_mode(1003, true);
+        core.handle_set_mode(1006, true);
+
+        core.handle_set_mode(1002, false);
+
+        assert!(core.get_mode(MODE_MOUSE_NORMAL_TRACKING));
+        assert!(!core.get_mode(MODE_MOUSE_BUTTON_EVENT_TRACKING));
+        assert!(core.get_mode(MODE_MOUSE_ANY_EVENT_TRACKING));
+        assert!(core.get_mode(MODE_MOUSE_SGR_ENCODING));
+    }
+
+    /// Edge case: setting an already-active mouse mode again, and
+    /// clearing one that was never set, are both no-ops that still
+    /// return `MODE_ACTION_NONE`.
+    #[test]
+    fn decset_mouse_mode_double_set_and_clear_of_unset_are_no_ops() {
+        let mut core = TerminalCore::new(80, 24, 0);
+
+        assert_eq!(core.handle_set_mode(1000, true), 0);
+        assert_eq!(core.handle_set_mode(1000, true), 0);
+        assert!(core.get_mode(MODE_MOUSE_NORMAL_TRACKING));
+
+        assert_eq!(core.handle_set_mode(1002, false), 0);
+        assert!(!core.get_mode(MODE_MOUSE_BUTTON_EVENT_TRACKING));
+    }
+
+    /// AC-4: mode 1005 is untouched by this task and still falls back to
+    /// TS; mode 1015 is deliberately given no bit and keeps falling
+    /// through the unknown-mode arm as a silent no-op.
+    #[test]
+    fn decset_1005_still_fallback_and_1015_still_unowned_no_op() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        assert_eq!(core.handle_set_mode(1005, true), 0xFF);
+        assert_eq!(core.handle_set_mode(1015, true), 0);
     }
 
     #[test]
