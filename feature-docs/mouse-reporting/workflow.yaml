@@ -101,9 +101,35 @@ workflow:
   status: completed
   completed_at_commit: e8ae8d68b1caf91cd200f26e434ff20906a3062d
 - id: verify
-  status: in_progress
-  result: null
-  failed_items: []
+  status: failed
+  result: fail
+  failed_items:
+  - id: TS-19
+    category: comprehensive
+    note: >-
+      VERIFICATION.md は「(region, event kind, button identity) の表駆動で、拒否域上の
+      middle / right の押下・解放、および bottom strip / scrollbar overlay 上のホイール
+      ノッチが no bytes になること」を求めているが、実処理（handle_pointer_button /
+      handle_mouse_wheel）に対する振る舞い検証は存在しない。実装されているのは
+      point_belongs_to_grid の純粋関数表テストと、pointer_routing.rs のソース文字列に
+      対する出現順アサーション（include_str! + 部分文字列位置比較）のみで、配線の
+      正しさ（実際にバイトが出ないこと）は確認されていない。
+  - id: TS-20
+    category: comprehensive
+    note: >-
+      VERIFICATION.md は「press → shift 状態変化 → release の系列」を求め、Shift 押下中の
+      press を Shift 解放後に release したとき「バイトが出ず、drag フラグが解除され、
+      pending selection anchor が消費され、選択が PRIMARY に届く」ことを要求している。
+      実装されているのは gesture_ownership_* の純粋関数テスト（press/release のルーティング
+      判定のみ）と release 短絡のソース出現順アサーションで、系列としての振る舞い、
+      drag フラグ、PRIMARY 到達はどこでもアサートされていない。
+  - id: TS-21
+    category: comprehensive
+    note: >-
+      VERIFICATION.md は「抑止されたモーションがキャッシュ済み最終報告セルを進めないことを、
+      バイト不在ではなくキャッシュ状態に対してアサートする」ことを求めている。実装は
+      belongs_pos < gate_pos / belongs_pos < filter_pos というソース文字列の出現順
+      アサーションのみで、mouse_report_cell_cache の状態は一切観測していない。
 - id: retrospect
   status: pending
 tasks:
@@ -455,8 +481,11 @@ requirements:
 batch:
   review_rework_count: 1
   verify_rework:
-    rounds: 0
-    failed_id_counts: {}
+    rounds: 1
+    failed_id_counts:
+      TS-19: 1
+      TS-20: 1
+      TS-21: 1
   infra_resume:
     rounds: 0
     cap: 2
