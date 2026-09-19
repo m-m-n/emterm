@@ -89,7 +89,8 @@ workflow:
       touches no Material Design 3 token, egui widget or child-WebView CSS.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 215545cdcc784ce20ab10e7962db4b236b4b0c3b
   - id: implement
     status: pending
     base_commit: 2be9cde80fd4c6c06384fe249cb0b2ad5dad7ce5
@@ -102,7 +103,21 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Bound the wheel-report path with a dedicated notch cap"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/window_host/input_translate.rs
+      - src-tauri/src/window_host/pointer_routing.rs
+      - src-tauri/src/window_host/tests.rs
+    skills: [backend-impl]
+    domains: [input-handling, external-io]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -116,98 +131,98 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS1]
+    tasks: [task0001]
+    tests: [TS1, TS9]
   FR2:
     title: "Saturate the magnitude before the i32 cast"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2, TS4]
   FR3:
     title: "Preserve existing wheel_report_notches semantics below the cap"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2, TS3, TS8]
   FR4:
     title: "Extract the duplication step into a testable pure function"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   FR5:
     title: "Second clamp layer at the call site (defense in depth)"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5, TS6, TS7]
   FR6:
     title: "Call site rewired through the bounded helper"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   FR7:
     title: "Boundary and pathological-input unit tests for the conversion"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2, TS3, TS4]
   FR8:
     title: "Unit tests for the bounded duplication helper"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5, TS6, TS7]
   NFR1:
     title: "Bounded worst-case allocation"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS7]
   NFR2:
     title: "Bounded PTY write volume per event"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS6, TS7]
   NFR3:
     title: "No perceptible change to normal scrolling"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3, TS8]
   NFR4:
     title: "No new dependencies and no widened visibility"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS10]
   NFR5:
     title: "Alternate-scroll path untouched"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS9]
   NFR6:
     title: "Test style matches the existing suite"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS8, TS9]
 
 batch:
