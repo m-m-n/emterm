@@ -93,9 +93,61 @@ workflow:
     status: completed
     completed_at_commit: 11dc40ebc07be73c614dd9422b24608d2560c240
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 4181d80020f263fcd4fad4e3e5708e0874b3f633
+    result: pass
     failed_items: []
+    notes: |-
+      AUTOMATED LAYERS: PASS. MANUAL LAYER (SC-C): NOT RUN - carried forward.
+      These are recorded as two separate states, not one blended verdict.
+
+      Build: both component commands exit 0.
+        main:     cargo check --manifest-path src-tauri/Cargo.toml -> 0
+        cli_only: cargo check ... --no-default-features -> 0 (feature gates intact)
+        Prerequisite: this worktree had no bundled fonts, so the approved
+        composite `bash scripts/fetch-fonts.sh && bun install && bun run
+        build:viewer && bun run build:settings && <cargo check>` was used to
+        satisfy build.rs before the check could run.
+
+      Test: cargo test --lib -> 0. 3424 passed, 0 failed, 3 ignored
+        (same 3 pre-existing ignores as baseline's 3415/0/3). 11 new test fns
+        added, 0 removed. TS1-TS11 all present and passing.
+
+      Code quality (format): PASS with note. `cargo fmt --check` reports drift
+        in 17 crate files including the 2 changed ones, but the drift in the
+        changed files is PRE-EXISTING on main. Proof: the pinned rustfmt
+        (1.96.0, style_edition 2024) was run against the `main` baseline copy
+        and the current copy of both files; the set of proposed +/- lines is
+        byte-identical. This feature introduces zero new format violations.
+        Resolved via Codex consultation - see phase-state/batch-audit.yaml
+        question_id verify.code-quality-verdict.
+
+      Success criteria: SC-A ok (FR1-FR10 + NFR1-NFR6 each map to >=1 passing
+        scenario). SC-B ok (TS1-TS11 pass). SC-C NOT RUN (manual, see below).
+        SC-D ok (decision units pure; every new test runs bare, no window/GPU/
+        PTY constructed). SC-E ok (no Disposition and no LocalArm variant added
+        - diff contains no enum change). SC-F ok (pointer_routing.rs diff is
+        only the region-flag population splitting in_top_strip into
+        in_title_bar_band + in_tab_bar_band, plus a doc comment; no guard added
+        or removed, early-return order unchanged). SC-G ok (0 test fns removed;
+        the guarded-region sweep went from 6 regions to 7 and gained expected-
+        disposition columns - TS9's intended strengthening - with the existing
+        byte-absence assertion retained; no pre-existing assertion weakened).
+        SC-H ok (all five documents present and consistent). SC-I ok (review
+        round 1 recorded 0 findings, residual_critical_high 0).
+
+      E2E: none. Project has no E2E harness; both components declare an empty
+        e2e_test_command. Not applicable, not a failure.
+
+      MANUAL SCENARIOS MS1-MS4: NOT RUN. They need a human at a release build
+        of a GPU/windowed terminal, which an unattended batch run cannot
+        provide. SC-C therefore remains unsatisfied and is carried forward to
+        the human evaluator, who must click through MS1-MS4 (listed verbatim in
+        VERIFICATION.md) before this branch is considered fully verified.
+        Resolved via Codex consultation - see phase-state/batch-audit.yaml
+        question_id verify.manual-scenarios-unattended.
+
+      No requirement carries status: excluded, so no scenario was excluded.
   - id: retrospect
     status: pending
 
