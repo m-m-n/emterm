@@ -19,8 +19,19 @@ pub const MODE_FOCUS_TRACKING: u8 = 6;
 pub const MODE_COLUMN_132: u8 = 7;
 pub const MODE_SYNCHRONIZED_OUTPUT: u8 = 8;
 // Bits 9-10: cursor keys (2 bits)
-// Bits 11-12: mouse tracking (2 bits)
-// Bits 13-14: mouse encoding (2 bits)
+/// DECSET 1000 (normal tracking / VT200 mouse). Set/cleared by
+/// `handle_set_mode`; the host reads it back through `get_mode` before
+/// deciding whether to report a button press or release.
+pub const MODE_MOUSE_NORMAL_TRACKING: u8 = 11;
+/// DECSET 1002 (button-event tracking). Adds motion-while-a-button-is-held
+/// reporting on top of normal tracking.
+pub const MODE_MOUSE_BUTTON_EVENT_TRACKING: u8 = 12;
+/// DECSET 1003 (any-event tracking). Reports every pointer motion, with or
+/// without a button held.
+pub const MODE_MOUSE_ANY_EVENT_TRACKING: u8 = 13;
+/// DECSET 1006 (SGR mouse encoding). Selects the SGR report format over
+/// the default X10 format.
+pub const MODE_MOUSE_SGR_ENCODING: u8 = 14;
 /// Alternate-screen flag, set/cleared by the buffer-switch modes
 /// (CSI ?47 / ?1047 / ?1049 h/l). Internal bookkeeping so parse-time
 /// consumers (OSC 133 prompt-mark capture) can suppress work while a
