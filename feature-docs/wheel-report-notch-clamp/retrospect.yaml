@@ -1,0 +1,40 @@
+feature: wheel-report-notch-clamp
+collected_at: "2026-09-20T02:29:21+09:00"
+session_ids:
+  - 01a0bab0-6a25-7380-8f32-f4976918fe88.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - kind: raw_note
+    origin: reviews/round1.yaml round_incidents
+    note: >-
+      architecture reviewer (run_id architecture#0) が最初に findings 空 +
+      もっともらしい要約という完了報告を返し、その後に劣化した定型文の繰り返しを
+      出した。実際にはその run は litellm ハーネスが 600s でタイムアウト
+      (exit 124, CODEX_TIMEOUT) しており JSON は一度も書かれていなかった。
+      ラウンドはこの偽の hand-back でいったん閉じられ、真の
+      skip_reason: harness_unavailable を受けて再オープンし、R2b の chain walk で
+      別ハーネス (codex, architecture#2) に進めて評価をやり直した。
+      最初の評価は破棄した。
+  - kind: raw_note
+    origin: workflow.yaml verify.notes
+    note: >-
+      手動検証項目 M2（マウストラッキング有効な TUI での実機ホイール操作感）は
+      実ディスプレイでの人手確認が要るため carry forward。クランプは
+      |lines| >= 100 でしか作動しないため、上限未満の挙動は不変であることが
+      コード上証明できている。
+  - kind: raw_note
+    origin: phase-state/batch-audit.yaml
+    note: >-
+      起動時の明示指示に従い、クランプ設計の 4 論点（専用定数の新設 /
+      2 層クランプ / 上限値 100 / 複製処理の純粋関数化）を create-spec 前に
+      Codex へ相談して採用した。相談内容は Notion タスクページへコメント済み。
+      設計論点を実装前に外部モデルで詰める経路は、単一ファイル限定の
+      review 自動修正ではスキップされる「複数ファイルにまたがる修正」に対して
+      有効だった。
