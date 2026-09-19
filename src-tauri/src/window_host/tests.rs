@@ -1574,6 +1574,9 @@ fn wheel_consumer_tracking_inactive_reproduces_todays_matrix_ignoring_shift() {
 }
 
 // ── task0003 AC-1/AC-4/AC-5/AC-6: mouse-report precedence order ────
+// (task0004 AC-6 updates the assertions below to the SC-8/SC-9
+// restructuring — see that task's Design "The spatial half" / "The
+// temporal half" and IMPLEMENTATION.md D10/D11.)
 //
 // The routing function runs inside a winit/egui context that cannot be
 // constructed in a unit test (see the task plan's Test Notes), so the
@@ -1619,7 +1622,12 @@ fn mouse_report_press_guard_runs_after_the_profile_selector_guard_and_before_sel
 /// AC-1/AC-4/AC-5: the mouse-reporting block must be gated by the Shift
 /// override and must `return` once it decides to report — the local
 /// selection / Ctrl+link-open / middle-paste handling below is otherwise
-/// still reachable, double-driving the event.
+/// still reachable, double-driving the event. task0004 D10 updates the
+/// literal shift-condition text this pins (see task0004 AC-6): Shift is
+/// now consulted alongside `tracking.any_active()` in one compound
+/// condition rather than its own standalone `if`, and a reported press
+/// records report ownership (SC-9) instead of trusting a re-check at
+/// release time.
 #[test]
 fn mouse_report_press_guard_is_gated_by_shift_and_returns_on_report() {
     let src = include_str!("pointer_routing.rs");
@@ -1631,7 +1639,7 @@ fn mouse_report_press_guard_is_gated_by_shift_and_returns_on_report() {
         .expect("match block not found after the mouse-reporting block");
     let block = &src[start..start + end];
     assert!(
-        block.contains("if !host.current_mods.shift {"),
+        block.contains("!host.current_mods.shift"),
         "the mouse-reporting block must be gated by the Shift override (AC-4)"
     );
     assert!(
@@ -1642,6 +1650,94 @@ fn mouse_report_press_guard_is_gated_by_shift_and_returns_on_report() {
         block.contains("return;"),
         "the mouse-reporting block must return once it reports, skipping the local \
          selection / link-open / middle-paste handling (AC-1/AC-5)"
+    );
+    assert!(
+        block.contains("GestureOwner::Report"),
+        "task0004 D10: a reported press must record report ownership (SC-9) so the \
+         matching release routes here too"
+    );
+}
+
+/// task0004 AC-1/AC-2 (SC-8, D11): the press-decision block must consult
+/// the SAME identity-independent grid-ownership decision
+/// (`mouse_report::point_belongs_to_grid`) that gates every other pointer
+/// handler — this is what makes a middle/right press over a guarded
+/// region (the bottom strip / scrollbar overlay / sidebar / CSD
+/// edge-resize hot zone) produce no report, not just a left press (AC-2),
+/// closing the identity-dependent gap review round 1 findings
+/// `a4377ac1f3430e7c` / `5175da13ae0becec` / `c99335940bf23416` reported.
+#[test]
+fn mouse_report_press_decision_consults_the_grid_ownership_decision() {
+    let src = include_str!("pointer_routing.rs");
+    let start = src
+        .find("Mouse reporting (task0003 FR2/FR7/FR8/FR10")
+        .expect("mouse-reporting block marker not found in pointer_routing.rs");
+    let end = src[start..]
+        .find("match (button, state) {")
+        .expect("match block not found after the mouse-reporting block");
+    let block = &src[start..start + end];
+    assert!(
+        block.contains("if state == ElementState::Pressed {"),
+        "the grid-ownership press decision must be scoped to a press — the matching \
+         release is routed by the gesture-ownership short-circuit above this block, \
+         not re-decided here"
+    );
+    let belongs_pos = block
+        .find("mouse_report::point_belongs_to_grid(")
+        .expect("point_belongs_to_grid call not found in the press-decision block");
+    let tracking_pos = block
+        .find("tracking.any_active()")
+        .expect("tracking-active read not found in the press-decision block");
+    assert!(
+        belongs_pos < tracking_pos,
+        "the grid-ownership decision (SC-8) must be consulted before the \
+         tracking-active read on the button path too"
+    );
+    assert!(
+        block.contains("GestureOwner::Local"),
+        "task0004 D10: a press taken locally (no tracking, Shift held, or rejected by \
+         SC-8's caller before reaching this block) must still record which side took \
+         it, or record nothing when SC-8 rejects the position"
+    );
+}
+
+/// task0004 AC-5 (SC-9, D10): a release whose press was owned by the
+/// report side must be routed BEFORE any position-based chrome guard gets
+/// a chance to consume it — otherwise a press inside the grid whose
+/// release drifts over a guarded region (Test Notes edge case) would lose
+/// its release report to the guard instead of reaching emission.
+#[test]
+fn mouse_report_release_short_circuit_runs_before_every_chrome_guard() {
+    let src = include_str!("pointer_routing.rs");
+    let arm_start = src
+        .find("pub(super) fn handle_pointer_button(")
+        .expect("PointerButton handler not found in pointer_routing.rs");
+    let arm_body = &src[arm_start..];
+    let short_circuit_pos = arm_body
+        .find("Gesture-ownership release short-circuit (task0004 SC-9, D10)")
+        .expect("gesture-ownership release short-circuit marker not found");
+    let top_strip_guard_pos = arm_body
+        .find("if if_in_egui_strip {")
+        .expect("top-strip guard not found in handle_pointer_button");
+    let profile_guard_pos = arm_body
+        .find("if app.profile_selector.visible {")
+        .expect("profile-selector guard not found in handle_pointer_button");
+    assert!(
+        short_circuit_pos < top_strip_guard_pos,
+        "the release short-circuit must run before the top-strip guard, so an owned \
+         gesture's release is never lost to it"
+    );
+    assert!(
+        short_circuit_pos < profile_guard_pos,
+        "the release short-circuit must run before the profile-selector guard, so an \
+         owned gesture's release is never lost to it"
+    );
+    let short_circuit_body =
+        &arm_body[short_circuit_pos..short_circuit_pos + (top_strip_guard_pos - short_circuit_pos)];
+    assert!(
+        short_circuit_body.contains("mouse_report_gesture_owner.take("),
+        "the release short-circuit must consult the gesture-ownership record, not the \
+         release's current position"
     );
 }
 
@@ -1668,9 +1764,45 @@ fn mouse_report_motion_consults_the_motion_gate_before_the_cell_change_filter() 
     );
 }
 
+/// task0004 AC-3 (SC-8, D11): the grid-ownership decision must be
+/// consulted before the motion gate (SC-5) too — TS-21's point is
+/// ordering: a test that only checks "no bytes" for a suppressed motion
+/// would still pass if the guard ran after the gate or the filter, so
+/// this pins the ordering directly rather than only the absence of bytes.
+#[test]
+fn mouse_report_motion_consults_grid_ownership_before_the_motion_gate() {
+    let src = include_str!("pointer_routing.rs");
+    let arm_start = src
+        .find("pub(super) fn handle_pointer_moved(")
+        .expect("PointerMoved handler not found in pointer_routing.rs");
+    let arm_body = &src[arm_start..];
+    let belongs_pos = arm_body
+        .find("mouse_report::point_belongs_to_grid(")
+        .expect("point_belongs_to_grid call not found in handle_pointer_moved");
+    let gate_pos = arm_body
+        .find("mouse_report::motion_gate(")
+        .expect("motion_gate call not found in handle_pointer_moved");
+    let filter_pos = arm_body
+        .find("mouse_report_cell_cache.should_report(")
+        .expect("cell-change filter call not found in handle_pointer_moved");
+    assert!(
+        belongs_pos < gate_pos,
+        "the grid-ownership decision (SC-8) must be consulted before the motion gate \
+         (SC-5), so a suppressed motion cannot even reach it"
+    );
+    assert!(
+        belongs_pos < filter_pos,
+        "the grid-ownership decision (SC-8) must be consulted before the cell-change \
+         filter (SC-4), so a suppressed motion cannot advance the cached cell (AC-3)"
+    );
+}
+
 /// AC-2/D7: the cache must be reset both when no tracking mode is
 /// active and on an active-tab change — both conditions checked in
 /// `handle_pointer_moved`, independent of the reporting branch itself.
+/// task0004 SC-9 shares the same two reset points (its "Pre for
+/// clear-all"): a mode cleared mid-gesture, or a tab switch, must strand
+/// no gesture-ownership record either.
 #[test]
 fn mouse_report_motion_resets_the_cache_on_no_tracking_and_on_tab_change() {
     let src = include_str!("pointer_routing.rs");
@@ -1687,6 +1819,12 @@ fn mouse_report_motion_resets_the_cache_on_no_tracking_and_on_tab_change() {
         reset_count, 2,
         "expected exactly two reset call sites (no-tracking observation and \
          active-tab-change observation, D7); found {reset_count}"
+    );
+    let clear_all_count = moved_body.matches("mouse_report_gesture_owner.clear_all()").count();
+    assert_eq!(
+        clear_all_count, 2,
+        "task0004 SC-9: expected exactly two gesture-ownership clear-all call sites, \
+         alongside the two cell-cache reset call sites (D7); found {clear_all_count}"
     );
     assert!(
         moved_body.contains("host.mouse_report_last_active_tab != Some(app.active)"),
@@ -1721,6 +1859,50 @@ fn mouse_report_wheel_decision_precedes_both_existing_wheel_consumers() {
     assert!(
         decision_pos < scrollback_pos,
         "the wheel decision must be taken before the plain scrollback-scroll path"
+    );
+}
+
+/// task0004 AC-4 (SC-8, D11): the grid-ownership decision must be
+/// consulted before the tracking-active read, and a rejected position
+/// must short-circuit out of the tracking-active branch before the wheel
+/// decision (SC-6) runs — this is what makes a wheel notch over the
+/// bottom strip or the scrollbar overlay produce no report while
+/// tracking is active (Design "the wheel handler runs the sidebar and
+/// tab-band tests but no bottom-strip or scrollbar-overlay test").
+#[test]
+fn mouse_report_wheel_consults_grid_ownership_before_the_tracking_active_read() {
+    let src = include_str!("pointer_routing.rs");
+    let arm_start = src
+        .find("pub(super) fn handle_mouse_wheel(")
+        .expect("MouseWheel handler not found in pointer_routing.rs");
+    let arm_body = &src[arm_start..];
+    let belongs_pos = arm_body
+        .find("mouse_report::point_belongs_to_grid(")
+        .expect("point_belongs_to_grid call not found in handle_mouse_wheel");
+    let tracking_read_pos = arm_body
+        .find("TrackingState::read(&t.core.lock())")
+        .expect("tracking-active read not found in handle_mouse_wheel");
+    let tracking_if_pos = arm_body
+        .find("if tracking.any_active() {")
+        .expect("tracking-active branch not found in handle_mouse_wheel");
+    let decision_pos = arm_body
+        .find("wheel_consumer(")
+        .expect("wheel_consumer call not found in handle_mouse_wheel");
+    assert!(
+        belongs_pos < tracking_read_pos,
+        "the grid-ownership decision (SC-8) must be consulted before the \
+         tracking-active read on the wheel path"
+    );
+    let tracking_body = &arm_body[tracking_if_pos..decision_pos];
+    assert!(
+        tracking_body.contains("if !belongs {"),
+        "the tracking-active branch must short-circuit on a rejected grid-ownership \
+         answer before the wheel decision (SC-6) runs (AC-4)"
+    );
+    assert!(
+        tracking_body.contains("return;"),
+        "a rejected grid-ownership answer must return, producing no report and no \
+         other side effect (AC-4, SPEC.md FR10)"
     );
 }
 
