@@ -1,0 +1,112 @@
+task_id: task0004
+baseline_failures: []          # cargo test --lib -- --test-threads=1: 3389 passed, 0 failed, 3 ignored
+final_failures: []             # same command after implementation: 3406 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::mouse_report::tests::point_belongs_to_grid_true_when_no_guard_is_active
+      - window_host::mouse_report::tests::point_belongs_to_grid_rejects_each_guarded_region_independently
+      - window_host::mouse_report::tests::point_belongs_to_grid_rejects_when_several_regions_overlap
+      - window_host::mouse_report::tests::point_belongs_to_grid_rejects_unconditionally_while_profile_selector_visible
+    red_confirmed: true
+    red_reason: >-
+      Temporarily block-commented the new SC-8 implementation (GridOwnershipInputs,
+      point_belongs_to_grid) and ran `cargo test --lib window_host::mouse_report`:
+      compile failed with "cannot find type `GridOwnershipInputs` in this scope" /
+      "cannot find function `point_belongs_to_grid` in this scope" at every new
+      test's call site — missing behavior, not an unrelated compile error. Restoring
+      the implementation made all four tests pass.
+  AC-2:
+    tests:
+      - window_host::mouse_report::tests::point_belongs_to_grid_rejects_each_guarded_region_independently
+      - window_host::tests::mouse_report_press_decision_consults_the_grid_ownership_decision
+    red_confirmed: true
+    red_reason: >-
+      point_belongs_to_grid_rejects_each_guarded_region_independently shares the
+      AC-1 red observation above (missing type/function). The structural test
+      mouse_report_press_decision_consults_the_grid_ownership_decision was written
+      against the (still unmodified) pointer_routing.rs and confirmed failing —
+      `.expect("point_belongs_to_grid call not found in the press-decision
+      block")` panicked, since the pre-task press block gated only on
+      `!host.current_mods.shift` + `tracking.any_active()` with no grid-ownership
+      call at all, and its identity check (`winit_button_to_report_identity`)
+      accepted middle/right buttons unconditionally — which is exactly the
+      identity-dependent gap this criterion closes.
+  AC-3:
+    tests:
+      - window_host::tests::mouse_report_motion_consults_grid_ownership_before_the_motion_gate
+    red_confirmed: true
+    red_reason: >-
+      Written and run against the unmodified handle_pointer_moved before this
+      task's edit: `.expect("point_belongs_to_grid call not found in
+      handle_pointer_moved")` panicked, since the pre-task motion path ran no
+      region test at all (motion reporting was gated only by tracking-active and
+      Shift, straight into motion_gate/should_report).
+  AC-4:
+    tests:
+      - window_host::tests::mouse_report_wheel_consults_grid_ownership_before_the_tracking_active_read
+    red_confirmed: true
+    red_reason: >-
+      Written and run against the unmodified handle_mouse_wheel before this
+      task's edit: `.expect("point_belongs_to_grid call not found in
+      handle_mouse_wheel")` panicked, since the pre-task wheel path tested only
+      the mux-sidebar and tab-bar-band regions (via early-return-to-egui blocks)
+      and ran no bottom-strip / scrollbar-overlay / CSD-edge-resize test at all
+      before reaching the tracking-active read and the report decision.
+  AC-5:
+    tests:
+      - window_host::mouse_report::tests::gesture_ownership_routes_release_to_local_when_press_was_local
+      - window_host::mouse_report::tests::gesture_ownership_routes_release_to_report_when_press_was_reported
+      - window_host::mouse_report::tests::gesture_ownership_take_yields_none_when_no_press_was_recorded
+      - window_host::mouse_report::tests::gesture_ownership_take_is_read_and_clear
+      - window_host::mouse_report::tests::gesture_ownership_tracks_two_buttons_independently
+      - window_host::mouse_report::tests::gesture_ownership_release_routing_does_not_depend_on_release_position
+      - window_host::mouse_report::tests::gesture_ownership_clear_all_wipes_every_button
+      - window_host::mouse_report::tests::gesture_ownership_record_press_overwrites_a_stale_owner
+      - window_host::mouse_report::tests::gesture_ownership_none_identity_is_a_no_op
+      - window_host::tests::mouse_report_release_short_circuit_runs_before_every_chrome_guard
+    red_confirmed: true
+    red_reason: >-
+      The nine mouse_report unit tests share the AC-1 red observation (compile
+      failure: "cannot find type `GestureOwnership`" / "cannot find type
+      `GestureOwner`" at every call site — confirmed by the same
+      block-comment-and-rerun described above). The structural test
+      mouse_report_release_short_circuit_runs_before_every_chrome_guard was
+      written and run against the unmodified handle_pointer_button:
+      `.expect("gesture-ownership release short-circuit marker not found")`
+      panicked, since the pre-task code had no ownership record and no
+      release-position-independent short-circuit at all — the release path
+      re-asked the Shift question at release time instead (the exact defect
+      D10 describes).
+  AC-6:
+    tests:
+      - window_host::tests::mouse_report_press_guard_is_gated_by_shift_and_returns_on_report
+      - window_host::tests::mouse_report_press_guard_runs_after_the_profile_selector_guard_and_before_selection_start
+    red_confirmed: true
+    red_reason: >-
+      After restructuring pointer_routing.rs but before touching tests.rs, ran
+      `cargo test --lib mouse_report_press_guard`:
+      mouse_report_press_guard_is_gated_by_shift_and_returns_on_report panicked
+      at tests.rs:1633 ("the mouse-reporting block must be gated by the Shift
+      override (AC-4)") because the literal substring `if !host.current_mods.shift
+      {` no longer appears verbatim — Shift is now consulted as
+      `tracking.any_active() && !host.current_mods.shift` in one compound
+      condition, and the release side no longer re-checks Shift at all (D10).
+      mouse_report_press_guard_runs_after_the_profile_selector_guard_and_before_selection_start
+      passed unchanged (the block-order it pins was preserved), so its coverage
+      is carried forward, not newly red, but it remains an accurate pin of the
+      restructured code and is listed for completeness of the required update.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Negative/absence criterion (no new setting, no TypeScript settings-mirror
+      entry, no settings-panel row, no platform-conditional branch, no logging
+      on the pointer path) plus a build/test-exit-code criterion — there is no
+      prior "red" state to observe for "did not add X". Verified instead by: (1)
+      `git diff --stat` against the four expected_files showing no touched file
+      outside src-tauri/src/window_host/{pointer_routing,mouse_report,mod,tests}.rs;
+      (2) manual review of every diff hunk confirming no `#[cfg(unix)]` /
+      `#[cfg(windows)]` branch and no `log::`/`println!` call was added; (3) the
+      four commands (project build, project test, `cargo test --lib`, `cargo
+      check --no-default-features`) all exiting 0 in this task's run.
