@@ -210,7 +210,8 @@ tasks:
     - NFR1
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mouse-reporting/task0004
     provenance:
       source: review
       review_round: 1
