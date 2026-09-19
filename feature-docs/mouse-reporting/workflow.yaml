@@ -94,7 +94,7 @@ workflow:
   status: completed
   completed_at_commit: 23906ac661365375fb2b32df87528d5f0bea530f
 - id: implement
-  status: completed
+  status: pending
   base_commit: 1d5af0d319021e901aa843398fd558e5a65893dc
   completed_at_commit: f6725b51834b781d18a6b25a97ed85481ee35960
 - id: review
@@ -186,6 +186,39 @@ tasks:
     status: merged
     notes: 'retry 1/1 (prior launch orphaned) merged at 2ccb377abd3c82758bb7ba5c10475b9d7e796818; conflict_retries 1 (parent-side adoption of task0001/task0002 contracts); tests pass'
     branch: em-workflow/mouse-reporting/task0003
+  task0004:
+    title: One pointer-ownership decision for reporting
+    plan: tasks/task0004.md
+    files:
+    - src-tauri/src/window_host/pointer_routing.rs
+    - src-tauri/src/window_host/mouse_report.rs
+    - src-tauri/src/window_host/mod.rs
+    - src-tauri/src/window_host/tests.rs
+    skills:
+    - frontend-impl
+    domains:
+    - input-handling
+    - ui
+    - external-io
+    complexity: high
+    requirements:
+    - FR2
+    - FR3
+    - FR4
+    - FR7
+    - FR10
+    - NFR1
+    - NFR5
+    - NFR6
+    status: pending
+    provenance:
+      source: review
+      review_round: 1
+      source_ids:
+      - 97676659aa15db37
+      - a4377ac1f3430e7c
+      - 5175da13ae0becec
+      - c99335940bf23416
 review:
   status: pending
   rounds_completed: 1
@@ -225,10 +258,12 @@ requirements:
     tasks:
     - task0002
     - task0003
+    - task0004
     tests:
     - TS-3
     - TS-4
     - TS-10
+    - TS-20
   FR3:
     title: Motion reporting for 1002 and 1003
     status: ok
@@ -237,10 +272,12 @@ requirements:
     tasks:
     - task0002
     - task0003
+    - task0004
     tests:
     - TS-3
     - TS-9
     - TS-10
+    - TS-21
   FR4:
     title: Wheel reporting takes precedence over both local wheel consumers
     status: ok
@@ -249,10 +286,12 @@ requirements:
     tasks:
     - task0002
     - task0003
+    - task0004
     tests:
     - TS-3
     - TS-8
     - TS-10
+    - TS-19
   FR5:
     title: X10 and SGR (1006) report encodings
     status: ok
@@ -281,10 +320,12 @@ requirements:
     tasks:
     - task0002
     - task0003
+    - task0004
     tests:
     - TS-5
     - TS-8
     - TS-11
+    - TS-20
   FR8:
     title: Ctrl+click and middle-click are reported while tracking is active
     status: ok
@@ -311,8 +352,10 @@ requirements:
     excluded_reason: null
     tasks:
     - task0003
+    - task0004
     tests:
     - TS-12
+    - TS-19
   FR11:
     title: Reports are written to the active tab's PTY
     status: ok
@@ -331,9 +374,11 @@ requirements:
     tasks:
     - task0002
     - task0003
+    - task0004
     tests:
     - TS-7
     - TS-10
+    - TS-21
   NFR2:
     title: No new user setting
     status: ok
@@ -373,6 +418,7 @@ requirements:
     - task0001
     - task0002
     - task0003
+    - task0004
     tests:
     - TS-17
   NFR6:
@@ -382,6 +428,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0002
+    - task0004
     tests:
     - TS-3
     - TS-4
@@ -403,7 +450,7 @@ requirements:
     - TS-6
     - TS-18
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework:
     rounds: 0
     failed_id_counts: {}
