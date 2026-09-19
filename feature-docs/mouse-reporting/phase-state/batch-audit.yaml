@@ -8,9 +8,31 @@ records:
   answer_mode: select_or_freeform
   selected_option_ids:
   - shift_always_scrollback
-  freeform: Shift+wheel while a tracking mode is active emits nothing to the PTY (no mouse report, no DECSET 1007 arrow bytes) and drives eMterm's scrollback instead.
-  normalized_answer: OQ-1 = Option B; decision D5 flipped. OQ-3 = Option A (lowest-numbered held button), endorsed and unchanged.
-  resolution_note: 'gate: create-plan open questions OQ-1 / OQ-3 (planner-recorded reversible assumptions, no gate_id). Raised because the user''s launch instruction required consulting Codex on unclear points and adopting the comparatively better option. codex_consulted: true. First attempt via the default Codex provider failed with a usage-limit error (no opinion returned); re-run through the LiteLLM harness (codex exec -p litellm -m vertex-glm-5.2) succeeded on the first try, no fallback model needed. OQ-1 verdict: Option B over the plan''s D5/Option A -- Shift is the user''s escape from the application''s mouse grab, so emitting 1007 arrow bytes would make Shift+wheel the only one of AC9''s four Shift overrides that still feeds the application; AC9''s literal wording already states Option B and FR7''s vague ''existing local handling'' was the sole source of the apparent conflict; supporting convention (WezTerm bypass_mouse_reporting_modifiers defaulting to SHIFT, and the tmux/Ghostty/Alacritty Shift+wheel-to-scrollback idiom) reported at medium-high confidence as documented convention, not a primary ctlseqs.txt citation. Adopted: D5 flipped and SC-6 restructured to branch on tracking-active first, which removes the conflict structurally; VERIFICATION.md TS-8/TS-11, task0002 and task0003 updated to match. SPEC.md and REQUIREMENTS.md unchanged -- Option B satisfies AC9 literally and is a valid reading of FR7, so no spec-change transition was needed. OQ-3 verdict: keep Option A (lowest-numbered held button) -- matches xterm''s held-button-mask derivation, order-independent, keeps a left-drag reported as left; medium-strength evidence; no plan change. Options not chosen: OQ-1 Option A (fall through to today''s matrix, i.e. arrow translation on the alternate screen with 1007 + setting on); OQ-3 Option B (most recently pressed held button). Opus escalation: not run -- the consultation returned a decisive verdict on both questions. OQ-2 (window_host module root) was resolved by direct inspection, not by consultation: mod.rs exists and window_host.rs does not, so the phantom path was dropped from task0002 / task0003 files.'
+  freeform: Shift+wheel while a tracking mode is active emits nothing to the PTY (no mouse report, no
+    DECSET 1007 arrow bytes) and drives eMterm's scrollback instead.
+  normalized_answer: OQ-1 = Option B; decision D5 flipped. OQ-3 = Option A (lowest-numbered held button),
+    endorsed and unchanged.
+  resolution_note: 'gate: create-plan open questions OQ-1 / OQ-3 (planner-recorded reversible assumptions,
+    no gate_id). Raised because the user''s launch instruction required consulting Codex on unclear points
+    and adopting the comparatively better option. codex_consulted: true. First attempt via the default
+    Codex provider failed with a usage-limit error (no opinion returned); re-run through the LiteLLM harness
+    (codex exec -p litellm -m vertex-glm-5.2) succeeded on the first try, no fallback model needed. OQ-1
+    verdict: Option B over the plan''s D5/Option A -- Shift is the user''s escape from the application''s
+    mouse grab, so emitting 1007 arrow bytes would make Shift+wheel the only one of AC9''s four Shift
+    overrides that still feeds the application; AC9''s literal wording already states Option B and FR7''s
+    vague ''existing local handling'' was the sole source of the apparent conflict; supporting convention
+    (WezTerm bypass_mouse_reporting_modifiers defaulting to SHIFT, and the tmux/Ghostty/Alacritty Shift+wheel-to-scrollback
+    idiom) reported at medium-high confidence as documented convention, not a primary ctlseqs.txt citation.
+    Adopted: D5 flipped and SC-6 restructured to branch on tracking-active first, which removes the conflict
+    structurally; VERIFICATION.md TS-8/TS-11, task0002 and task0003 updated to match. SPEC.md and REQUIREMENTS.md
+    unchanged -- Option B satisfies AC9 literally and is a valid reading of FR7, so no spec-change transition
+    was needed. OQ-3 verdict: keep Option A (lowest-numbered held button) -- matches xterm''s held-button-mask
+    derivation, order-independent, keeps a left-drag reported as left; medium-strength evidence; no plan
+    change. Options not chosen: OQ-1 Option A (fall through to today''s matrix, i.e. arrow translation
+    on the alternate screen with 1007 + setting on); OQ-3 Option B (most recently pressed held button).
+    Opus escalation: not run -- the consultation returned a decisive verdict on both questions. OQ-2 (window_host
+    module root) was resolved by direct inspection, not by consultation: mod.rs exists and window_host.rs
+    does not, so the phantom path was dropped from task0002 / task0003 files.'
 - question_id: implement.wake-decline
   packet_id: null
   answered_at: '2026-09-19T20:17:30+09:00'
@@ -19,7 +41,14 @@ records:
   selected_option_ids: []
   freeform: declined
   normalized_answer: declined
-  resolution_note: 'task_id: task0001; declined deviation path: crates/term_core/src/terminal_core/types.rs; failing evidence part: the named identifier. The report cited SC-1, a shared-component contract row in IMPLEMENTATION.md, which is neither an AC-n of task0001''s own plan (that plan declares AC-1..AC-6) nor a requirement id registered in workflow.yaml (FR1..FR11 / NFR1..NFR7). The path-shape part and the observable-outcome part were not reached. The path is therefore not auto-added to tasks.task0001.files and remains an ordinary deviation for the containment check. Admitted alongside it: crates/term_core/src/csi_dispatch.rs, which cited AC-1 (present in task0001''s plan) and named the pre-existing tests test_csi_internal_mode_ts_fallback_set/_reset as unable to pass without the edit.'
+  resolution_note: 'task_id: task0001; declined deviation path: crates/term_core/src/terminal_core/types.rs;
+    failing evidence part: the named identifier. The report cited SC-1, a shared-component contract row
+    in IMPLEMENTATION.md, which is neither an AC-n of task0001''s own plan (that plan declares AC-1..AC-6)
+    nor a requirement id registered in workflow.yaml (FR1..FR11 / NFR1..NFR7). The path-shape part and
+    the observable-outcome part were not reached. The path is therefore not auto-added to tasks.task0001.files
+    and remains an ordinary deviation for the containment check. Admitted alongside it: crates/term_core/src/csi_dispatch.rs,
+    which cited AC-1 (present in task0001''s plan) and named the pre-existing tests test_csi_internal_mode_ts_fallback_set/_reset
+    as unable to pass without the edit.'
 - question_id: implement.wake-decline
   packet_id: null
   answered_at: '2026-09-19T21:20:00+09:00'
@@ -28,7 +57,15 @@ records:
   selected_option_ids: []
   freeform: declined
   normalized_answer: declined
-  resolution_note: 'task_id: task0003; two declined deviation paths. (1) crates/term_core/src/csi_dispatch.rs -- failing evidence part: the named identifier (none cited). The report also states the edit was superseded by ''git checkout --theirs'' during parent-side adoption and leaves no trace in the final tree, so there is nothing to add. (2) src-tauri/src/window_host/tests.rs -- failing evidence part: the named identifier (none cited) and the rationale, which is stated as matching the module''s convention of centralizing tests in tests.rs. That is a structural preference, which the deviation auto-addition rule explicitly excludes; no acceptance criterion or requirement is shown to be dropped without the path. Neither path is auto-added to tasks.task0003.files; both remain ordinary deviations for the review phase''s containment check.'
+  resolution_note: 'task_id: task0003; two declined deviation paths. (1) crates/term_core/src/csi_dispatch.rs
+    -- failing evidence part: the named identifier (none cited). The report also states the edit was superseded
+    by ''git checkout --theirs'' during parent-side adoption and leaves no trace in the final tree, so
+    there is nothing to add. (2) src-tauri/src/window_host/tests.rs -- failing evidence part: the named
+    identifier (none cited) and the rationale, which is stated as matching the module''s convention of
+    centralizing tests in tests.rs. That is a structural preference, which the deviation auto-addition
+    rule explicitly excludes; no acceptance criterion or requirement is shown to be dropped without the
+    path. Neither path is auto-added to tasks.task0003.files; both remain ordinary deviations for the
+    review phase''s containment check.'
 - question_id: review.auto-fix-outcome
   packet_id: null
   answered_at: '2026-09-19T21:20:00+09:00'
@@ -36,9 +73,37 @@ records:
   answer_mode: select_or_freeform
   selected_option_ids:
   - revert_auto_fix
-  freeform: Revert the loop-1 auto-fix commit, record the finding as unresolved, and let rework address H1/H2/H3 as one coherent change.
+  freeform: Revert the loop-1 auto-fix commit, record the finding as unresolved, and let rework address
+    H1/H2/H3 as one coherent change.
   normalized_answer: Option A (revert) adopted; commit b1244629 reverted at ae47aa35.
-  resolution_note: 'gate: review phase loop-1 auto-fix outcome (orchestrator-raised, no gate_id; resolved per batch-mode.md''s unlisted-gate fallback, which mandates Codex consultation first). Raised because the user''s launch instruction required consulting Codex on unclear points and adopting the comparatively better option. codex_consulted: true (codex-harness second-opinion agent, read-only sandbox, gpt-5.4-codex; one call, exit 0, no fallback needed). Situation put to Codex: the bounded auto-fix stage could only act on the single non-spec critical/high finding (97676659aa15db37, stuck selection-drag), and the applied single-file edit added `release_owned_by_local_drag` to the press/release guard. The mandatory post-loop re-review then found three consequences, two of which I verified mechanically by grep: (R1) it broke the committed source-scanning assertion at tests.rs:1633, because `if !host.current_mods.shift {` no longer occurred anywhere in the file; (R2) it covered only one direction of the race, so a bare press followed by Shift-before-release left the application''s button state stuck down; (R3) a spec reviewer read it as contradicting FR7''s sole-override rule. Options put to Codex: A = revert the commit and let rework handle H1/H2/H3 together; B = keep the commit and widen the rework task set to carry R1/R2/R3. Codex verdict: Option A, on four grounds -- a known-failing test should not sit on the integration branch even temporarily; fixing one direction relocates the inconsistency rather than resolving it; the fix direction itself contradicts FR7, so it is a design premise to rethink rather than an incomplete-but-correct step; and H1/H2/H3 share one root cause (report-path vs local-path ownership and guard precedence recomputed independently in three handlers), so a partial fix would constrain the rework design and have to be undone first. Codex also noted that `git revert` preserves the attempt in history, which reads better in the eventual pull request than a known-incomplete fix patched by later commits, and advised citing R1/R2/R3 in the revert record. Option not chosen: B (keep the commit) -- its safety depends on someone remembering to widen a task set that the tooling builds from critical/high findings only, and R1/R2/R3 are all medium. Opus escalation: not run -- the consultation returned a decisive verdict. Adopted: reverted b1244629 at ae47aa35; 97676659aa15db37 recorded as `unresolved` (not `fixed`) so the rework planner receives it as residual input; R1/R2/R3 recorded as `declined` in reviews/round1.yaml with the revert as the reason, with b6f106806d26b55e kept as an explicit FR7 constraint on the rework fix; auto_fix.termination recorded as `no-progress` since net progress for the loop is zero.'
+  resolution_note: 'gate: review phase loop-1 auto-fix outcome (orchestrator-raised, no gate_id; resolved
+    per batch-mode.md''s unlisted-gate fallback, which mandates Codex consultation first). Raised because
+    the user''s launch instruction required consulting Codex on unclear points and adopting the comparatively
+    better option. codex_consulted: true (codex-harness second-opinion agent, read-only sandbox, gpt-5.4-codex;
+    one call, exit 0, no fallback needed). Situation put to Codex: the bounded auto-fix stage could only
+    act on the single non-spec critical/high finding (97676659aa15db37, stuck selection-drag), and the
+    applied single-file edit added `release_owned_by_local_drag` to the press/release guard. The mandatory
+    post-loop re-review then found three consequences, two of which I verified mechanically by grep: (R1)
+    it broke the committed source-scanning assertion at tests.rs:1633, because `if !host.current_mods.shift
+    {` no longer occurred anywhere in the file; (R2) it covered only one direction of the race, so a bare
+    press followed by Shift-before-release left the application''s button state stuck down; (R3) a spec
+    reviewer read it as contradicting FR7''s sole-override rule. Options put to Codex: A = revert the
+    commit and let rework handle H1/H2/H3 together; B = keep the commit and widen the rework task set
+    to carry R1/R2/R3. Codex verdict: Option A, on four grounds -- a known-failing test should not sit
+    on the integration branch even temporarily; fixing one direction relocates the inconsistency rather
+    than resolving it; the fix direction itself contradicts FR7, so it is a design premise to rethink
+    rather than an incomplete-but-correct step; and H1/H2/H3 share one root cause (report-path vs local-path
+    ownership and guard precedence recomputed independently in three handlers), so a partial fix would
+    constrain the rework design and have to be undone first. Codex also noted that `git revert` preserves
+    the attempt in history, which reads better in the eventual pull request than a known-incomplete fix
+    patched by later commits, and advised citing R1/R2/R3 in the revert record. Option not chosen: B (keep
+    the commit) -- its safety depends on someone remembering to widen a task set that the tooling builds
+    from critical/high findings only, and R1/R2/R3 are all medium. Opus escalation: not run -- the consultation
+    returned a decisive verdict. Adopted: reverted b1244629 at ae47aa35; 97676659aa15db37 recorded as
+    `unresolved` (not `fixed`) so the rework planner receives it as residual input; R1/R2/R3 recorded
+    as `declined` in reviews/round1.yaml with the revert as the reason, with b6f106806d26b55e kept as
+    an explicit FR7 constraint on the rework fix; auto_fix.termination recorded as `no-progress` since
+    net progress for the loop is zero.'
 - question_id: develop.once-boundary-review-rework
   packet_id: null
   answered_at: '2026-09-19T21:27:00+09:00'
@@ -46,6 +111,69 @@ records:
   answer_mode: select_or_freeform
   selected_option_ids:
   - not_a_boundary
-  freeform: Review-sourced rework is not a --once phase boundary; the launch continues into the implement phase.
-  normalized_answer: Reading 1 adopted — continue into implement, end the turn at the next explicitly listed boundary.
-  resolution_note: 'gate: --once phase-boundary classification for review-sourced rework (orchestrator-raised, no gate_id; resolved per batch-mode.md''s unlisted-gate fallback, which mandates Codex consultation first). Raised because the user''s launch instruction required consulting Codex on unclear points and adopting the comparatively better option. codex_consulted: true (codex-harness second-opinion agent, read-only sandbox, gpt-5.6-sol; one call, exit 0). Question: skills/develop/SKILL.md''s "--once のフェーズ境界" table lists four boundary kinds, one of which is verify-failure rework (rework patch applied, implement and verify returned to pending, committed). Review-sourced rework produces a structurally identical committed state — rework patch applied, implement returned to pending, next launch resumes at implement — but is not listed anywhere in that table. Options put to Codex: Reading 1 = the table is a closed enumeration of named transitions, so review-sourced rework is not a boundary and the launch must continue into implement; Reading 2 = the omission is an oversight and the launch ends now. Codex verdict: Reading 1, on three grounds -- the ordinary-step row requires status == completed and review.status is pending, so that row does not apply; the verify-rework row exists precisely because the ordinary-step rule would not have covered it, so writing a separate row for verify-rework while writing none for review-rework is evidence of deliberate scoping rather than an oversight to be filled by analogy; and the explicitly stated non-boundary (never mid-implement) is motivated by not losing in-flight implementer work to process exit, which is a safety concern during execution and does not license extending the boundary set by structural similarity. Codex added that making review-sourced rework a boundary would require an explicit amendment to that table. Option not chosen: Reading 2 (stop now). Opus escalation: not run -- the consultation returned a decisive verdict. Adopted: the launch continues into the implement phase and will end at the next explicitly listed boundary.'
+  freeform: Review-sourced rework is not a --once phase boundary; the launch continues into the implement
+    phase.
+  normalized_answer: Reading 1 adopted — continue into implement, end the turn at the next explicitly
+    listed boundary.
+  resolution_note: 'gate: --once phase-boundary classification for review-sourced rework (orchestrator-raised,
+    no gate_id; resolved per batch-mode.md''s unlisted-gate fallback, which mandates Codex consultation
+    first). Raised because the user''s launch instruction required consulting Codex on unclear points
+    and adopting the comparatively better option. codex_consulted: true (codex-harness second-opinion
+    agent, read-only sandbox, gpt-5.6-sol; one call, exit 0). Question: skills/develop/SKILL.md''s "--once
+    のフェーズ境界" table lists four boundary kinds, one of which is verify-failure rework (rework patch applied,
+    implement and verify returned to pending, committed). Review-sourced rework produces a structurally
+    identical committed state — rework patch applied, implement returned to pending, next launch resumes
+    at implement — but is not listed anywhere in that table. Options put to Codex: Reading 1 = the table
+    is a closed enumeration of named transitions, so review-sourced rework is not a boundary and the launch
+    must continue into implement; Reading 2 = the omission is an oversight and the launch ends now. Codex
+    verdict: Reading 1, on three grounds -- the ordinary-step row requires status == completed and review.status
+    is pending, so that row does not apply; the verify-rework row exists precisely because the ordinary-step
+    rule would not have covered it, so writing a separate row for verify-rework while writing none for
+    review-rework is evidence of deliberate scoping rather than an oversight to be filled by analogy;
+    and the explicitly stated non-boundary (never mid-implement) is motivated by not losing in-flight
+    implementer work to process exit, which is a safety concern during execution and does not license
+    extending the boundary set by structural similarity. Codex added that making review-sourced rework
+    a boundary would require an explicit amendment to that table. Option not chosen: Reading 2 (stop now).
+    Opus escalation: not run -- the consultation returned a decisive verdict. Adopted: the launch continues
+    into the implement phase and will end at the next explicitly listed boundary.'
+- gate_id: review.auto-fix-judgment
+  phase: review
+  round: 2
+  resolved_at: '2026-09-19T22:35:00+09:00'
+  question: 'Needs-judgment finding 5669af5d6e1485e2 (prose prescription): apply as-is, or skip?'
+  options:
+  - Apply as-is (editor interprets)
+  - Skip
+  choice: Apply as-is (editor interprets), with a Codex-endorsed fix shape passed as user_chosen_approach
+  codex_consulted: true
+  resolution_note: 'batch-mode.md の Non-packet gates 表が定める既定（Apply as-is）を採用。加えて、ユーザーの明示指示『不明点は Codex
+    に相談し、比較して良いほうを採用する』に従い、修正の形について Codex CLI（readonly）に 3 択を提示して相談した。選択肢 A: 状態記帳 2 ブロックだけを短絡より前へ移す /
+    選択肢 B: 状態記帳と egui 転送をまとめて短絡より前へ移す / 選択肢 C: 短絡分岐の中で該当ボタンの held を落として return。Codex は実コードを読んだうえで B を推奨。理由:
+    報告所有の『押下』は既に egui へ転送済み（egui 転送が press 側の報告処理より前にある）なので、対になる解放を転送しないと egui のボタン状態が押下中のまま残る。pointer_buttons_down
+    は frame_pacing.rs の has_actionable_egui_input が読むだけのカウンターであり、これを減らしても egui 自身の入力状態は直らない。したがって A と
+    C は不十分。解放を egui へ渡しても、egui は押下時の候補部品に対してのみクリックを成立させ、報告所有の押下は SC-8 によりグリッド内なのでタブの閉じるボタン等は候補になっておらず、誤作動しない。また
+    egui 転送は所有権判定ではないため D10 / SC-9 の『所有権が決め、解放位置は決めない』は維持され、FR7 / FR10 の判定順序も不変。あわせて Codex は、この return
+    を tracking.any_active() で条件付けてはならない（報告所有の押下をローカル側は受け取っていないため、解放だけローカル処理へ落とせない）と指摘し、タブ変更時の所有権破棄はボタン経路でも観測すべき別修正だと述べた。採用結果:
+    B を user_chosen_approach として review-editor へ渡し、適用後に cargo check 成功・window_host 単体テスト 193 件 pass を確認。ソースおよび結果:
+    scratchpad/codex-q1.txt, scratchpad/codex-a1.txt'
+- gate_id: null
+  phase: review
+  round: 2
+  resolved_at: '2026-09-19T22:45:00+09:00'
+  question: 'Phase R4 loop 2: run another auto-fix loop over the 4 residual high findings, or terminate
+    the loop and defer them?'
+  options:
+  - (i) run loop 2 (4 single-file prose edits)
+  - (ii) terminate the loop, record as deferred, file a follow-up task
+  choice: (ii) terminate the loop
+  codex_consulted: true
+  resolution_note: 'gate_id を持たない orchestrator 判断。batch-mode.md の unlisted-gate fallback（Codex 相談 → 決着しなければ副作用の小さいほうを採る）と、ユーザーの明示指示に従って相談した。Codex
+    CLI 本体は usage limit（2026-09-20 01:13 まで）、LiteLLM vertex-glm-5.2 は 429 のため、同じ Codex ハーネス経由で muse-spark
+    に実施。回答: (1) 4135f94ec9964b5b / bb91070f9025c277 / 8da023ee6248e388 は独立した 3 件ではなく 1 つの所有権ライフサイクルの 3
+    側面。正しい修正には『押下時タブ付きの所有記録』『3 入口で共有するリセット判断』『モーションの所有権参照』という共通部品が必要で、1 件ずつ別編集すると判断が3 通りに割れ、リセット文の増殖や後発による先発の破壊が起きる。(2)
+    2e8190c3e97ab655 は mod.rs だけでは直らない。呼び出し側の Focused(false) は event_loop.rsにあり 1 ファイル契約の範囲外。ヘルパを足しても未使用の死んだコードになり『修正済み』と誤認される。(3)
+    完全な誤検出は無い。ただし 4135f94ec9964b5b のタブ同一性側と bb91070f9025c277 は成立条件が狭く、深刻度は一段下げてよい。修正の方向は 4 件とも妥当。(4) 推奨は
+    (ii)。(i) の具体的リスクは、同一ファイルへの盲目的な連続編集・モーションと解放の所有権意味のずれによる新しい固着バグ・H4 の死にコード化であり、『1 ファイルだけ触ったか』というスコープ検証はこの種の修正の正しさを何も保証しない。採用結果:
+    (ii)。auto_fix.termination = no-progress とし、4 件の high を resolution: deferred（batch mode: rework cap
+    reached）で round2.yaml に記録し、残る medium 4 件も unresolved として記録したうえで、後続タスクとして Notion に起票した。ソースおよび結果: scratchpad/codex-q2.txt,
+    scratchpad/codex-a2.txt'
