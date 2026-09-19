@@ -116,3 +116,24 @@ records:
       create-plan.ac7-residual-observability record.
       follow_up: the term_core generation counter is recorded as a stronger out-of-scope
       alternative and is filed as a separate Notion task rather than implemented here.
+  - question_id: implement.deviation-decline.task0002
+    packet_id: null
+    answered_at: "2026-09-20T04:53:00+09:00"
+    source: orchestrator-deviation-rule
+    answer_mode: select_or_freeform
+    selected_option_ids: [decline]
+    freeform: null
+    normalized_answer: "Declined: the reported deviation adding src-tauri/src/window_host/mod.rs to task0002's declared change set is not auto-added to tasks.task0002.files."
+    resolution_note: >-
+      deviation auto-addition rule (implement wake phase, Step I.2.b step 3). task_id: task0002.
+      path: src-tauri/src/window_host/mod.rs. evidence parts missing: part 2 (the identifier of
+      the acceptance criterion or requirement that would otherwise be dropped) — the report cites
+      the task plan's Design section prose ("do not leave it in place as dead state") but names no
+      AC-n of tasks/task0002.md and no requirement id registered in workflow.yaml; and part 3 (how
+      it fails without the path, stated as an observable outcome) — the report states a
+      design-cleanliness rationale, not a named test that cannot be written or cannot pass. part 1
+      (the path) is satisfied and the path passes the shape check and is not a workflow control
+      path. effect: tasks.task0002.files is unchanged; the deviation surfaces as an ordinary
+      deviation and the containment check handles it unchanged. note: the same path is already
+      declared in tasks.task0001.files, so the feature-wide declared change set does cover it; the
+      decline is scoped to task0002's own file set.
