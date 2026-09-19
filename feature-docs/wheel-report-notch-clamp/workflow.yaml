@@ -115,7 +115,7 @@ tasks:
     domains: [input-handling, external-io]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/wheel-report-notch-clamp/task0001
 
