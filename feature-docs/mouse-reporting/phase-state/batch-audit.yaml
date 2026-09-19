@@ -20,3 +20,12 @@ records:
   freeform: declined
   normalized_answer: declined
   resolution_note: 'task_id: task0001; declined deviation path: crates/term_core/src/terminal_core/types.rs; failing evidence part: the named identifier. The report cited SC-1, a shared-component contract row in IMPLEMENTATION.md, which is neither an AC-n of task0001''s own plan (that plan declares AC-1..AC-6) nor a requirement id registered in workflow.yaml (FR1..FR11 / NFR1..NFR7). The path-shape part and the observable-outcome part were not reached. The path is therefore not auto-added to tasks.task0001.files and remains an ordinary deviation for the containment check. Admitted alongside it: crates/term_core/src/csi_dispatch.rs, which cited AC-1 (present in task0001''s plan) and named the pre-existing tests test_csi_internal_mode_ts_fallback_set/_reset as unable to pass without the edit.'
+- question_id: implement.wake-decline
+  packet_id: null
+  answered_at: '2026-09-19T21:20:00+09:00'
+  source: batch-decision-table
+  answer_mode: freeform
+  selected_option_ids: []
+  freeform: declined
+  normalized_answer: declined
+  resolution_note: 'task_id: task0003; two declined deviation paths. (1) crates/term_core/src/csi_dispatch.rs -- failing evidence part: the named identifier (none cited). The report also states the edit was superseded by ''git checkout --theirs'' during parent-side adoption and leaves no trace in the final tree, so there is nothing to add. (2) src-tauri/src/window_host/tests.rs -- failing evidence part: the named identifier (none cited) and the rationale, which is stated as matching the module''s convention of centralizing tests in tests.rs. That is a structural preference, which the deviation auto-addition rule explicitly excludes; no acceptance criterion or requirement is shown to be dropped without the path. Neither path is auto-added to tasks.task0003.files; both remain ordinary deviations for the review phase''s containment check.'
