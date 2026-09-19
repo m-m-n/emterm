@@ -120,7 +120,7 @@ tasks:
     - FR1
     - NFR3
     - NFR5
-    status: failed
+    status: in_progress
     notes: launching session died before any work landed (journal reason: orphaned); batch retry 1/1 consumed
     branch: em-workflow/mouse-reporting/task0001
   task0002:
@@ -149,7 +149,7 @@ tasks:
     - NFR5
     - NFR6
     - NFR7
-    status: failed
+    status: in_progress
     notes: launching session died before any work landed (journal reason: orphaned); batch retry 1/1 consumed
     branch: em-workflow/mouse-reporting/task0002
   task0003:
@@ -181,7 +181,7 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: failed
+    status: in_progress
     notes: launching session died before any work landed (journal reason: orphaned); batch retry 1/1 consumed
     branch: em-workflow/mouse-reporting/task0003
 review:
