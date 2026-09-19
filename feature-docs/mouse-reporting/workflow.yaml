@@ -101,35 +101,32 @@ workflow:
   status: completed
   completed_at_commit: a7280f69be1a3dccced70c5b8f27c32acf30d075
 - id: verify
-  status: in_progress
-  result: fail
-  failed_items:
-  - id: TS-19
-    category: comprehensive
-    note: >-
-      VERIFICATION.md は「(region, event kind, button identity) の表駆動で、拒否域上の
-      middle / right の押下・解放、および bottom strip / scrollbar overlay 上のホイール
-      ノッチが no bytes になること」を求めているが、実処理（handle_pointer_button /
-      handle_mouse_wheel）に対する振る舞い検証は存在しない。実装されているのは
-      point_belongs_to_grid の純粋関数表テストと、pointer_routing.rs のソース文字列に
-      対する出現順アサーション（include_str! + 部分文字列位置比較）のみで、配線の
-      正しさ（実際にバイトが出ないこと）は確認されていない。
-  - id: TS-20
-    category: comprehensive
-    note: >-
-      VERIFICATION.md は「press → shift 状態変化 → release の系列」を求め、Shift 押下中の
-      press を Shift 解放後に release したとき「バイトが出ず、drag フラグが解除され、
-      pending selection anchor が消費され、選択が PRIMARY に届く」ことを要求している。
-      実装されているのは gesture_ownership_* の純粋関数テスト（press/release のルーティング
-      判定のみ）と release 短絡のソース出現順アサーションで、系列としての振る舞い、
-      drag フラグ、PRIMARY 到達はどこでもアサートされていない。
-  - id: TS-21
-    category: comprehensive
-    note: >-
-      VERIFICATION.md は「抑止されたモーションがキャッシュ済み最終報告セルを進めないことを、
-      バイト不在ではなくキャッシュ状態に対してアサートする」ことを求めている。実装は
-      belongs_pos < gate_pos / belongs_pos < filter_pos というソース文字列の出現順
-      アサーションのみで、mouse_report_cell_cache の状態は一切観測していない。
+  status: completed
+  completed_at_commit: 76132a8f119d4889dcb741d528f1500ab185e20c
+  result: pass
+  failed_items: []
+  notes: >-
+    Verify round 2. Scope executed: 4/4 build commands exit 0 (main, term_core,
+    cli_only --no-default-features, web bundles); src-tauri --lib 3415 passed /
+    0 failed, term_core --lib 858 passed / 0 failed, bun test 349 pass / 0 fail.
+    Automated scenarios TS-1..TS-9 and TS-19..TS-24 pass; inspection checks
+    TS-14..TS-18 pass. Round 1's three failures (TS-19 / TS-20 / TS-21) are
+    cleared: their coverage is now behavioural against the IMPLEMENTATION.md D12
+    seam (decide_button_event / decide_motion_event / decide_wheel_event +
+    apply_outcome in window_host/mouse_report.rs), asserting produced bytes,
+    cell_cache state and gesture_owner state, with the handler wiring confirmed
+    at pointer_routing.rs 279/285 (motion), 659/669 (button), 898/911 (wheel)
+    and event_loop.rs:249 (focus-loss clear_all).
+    NOT EXECUTED, pending human confirmation on a real display: TS-10, TS-11,
+    TS-12, TS-13 and the manual release-build section. They are typed Manual in
+    VERIFICATION.md and require a window, a pointer device and a live
+    mouse-aware application, so an unattended run cannot reach them. This pass
+    is scoped to the automated + inspection surface and does not assert them.
+    Residual risk: the D12 gather step (the hit-test reads that build
+    GridOwnershipInputs) is pinned only by source-ordering assertions, and TS-12
+    is the scenario that would catch a miswired hit-test. The mux sidebar's
+    persistent-vs-overlay distinction is covered behaviourally only by the
+    pre-existing ui::mux_sidebar::tests::ac1_* rect tests plus manual TS-12.
 - id: retrospect
   status: pending
 tasks:
