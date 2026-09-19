@@ -270,9 +270,9 @@ tasks:
     - NFR1
     - NFR5
     - NFR6
-    status: in_progress
+    status: merged
     branch: em-workflow/mouse-reporting/task0005
-    notes: null
+    notes: 'merged at ed154393c568f0704057b56aa1c82456f3183151; conflict_retries 0; tests pass (3406 passed / 0 failed); no deviations'
     provenance:
       source: verify
       source_ids:
