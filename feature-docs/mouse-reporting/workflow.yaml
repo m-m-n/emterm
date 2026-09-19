@@ -98,7 +98,8 @@ workflow:
   base_commit: 1d5af0d319021e901aa843398fd558e5a65893dc
   completed_at_commit: c4d862dc6b1b98f3fc1336efc511bd8d3a4c8731
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: e8ae8d68b1caf91cd200f26e434ff20906a3062d
 - id: verify
   status: pending
   result: null
@@ -222,8 +223,8 @@ tasks:
       - 5175da13ae0becec
       - c99335940bf23416
 review:
-  status: pending
-  rounds_completed: 1
+  status: completed
+  rounds_completed: 2
   plan:
     floor:
     - comprehensive
@@ -240,7 +241,7 @@ review:
     architecture: completed
     spec: completed
   residual_critical_high: 4
-  needs_rework: true
+  needs_rework: false
 requirements:
   FR1:
     title: Core-side mouse-tracking mode state

@@ -1,0 +1,360 @@
+round: 2
+executed_at: "2026-09-19T22:40:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 1d5af0d319021e901aa843398fd558e5a65893dc
+  head_commit: e8ae8d68b1caf91cd200f26e434ff20906a3062d
+  changed_files:
+  - crates/term_core/src/csi_dispatch.rs
+  - crates/term_core/src/csi_modes.rs
+  - crates/term_core/src/terminal_core/types.rs
+  - src-tauri/src/window_host/input_translate.rs
+  - src-tauri/src/window_host/mod.rs
+  - src-tauri/src/window_host/mouse_report.rs
+  - src-tauri/src/window_host/pointer_routing.rs
+  - src-tauri/src/window_host/tests.rs
+  - test-docs/mouse-reporting/task0001.tests.yaml
+  - test-docs/mouse-reporting/task0002.tests.yaml
+  - test-docs/mouse-reporting/task0003.tests.yaml
+  - test-docs/mouse-reporting/task0004.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: vertex-glm-5.2, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+- {run_id: "security#loop1", perspective: security, role: primary, source: codex, status: skipped, skip_reason: "rate_limited"}
+- {run_id: "security#loop1-1", perspective: security, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "comprehensive#loop1", perspective: comprehensive, role: primary, source: codex, status: skipped, skip_reason: "rate_limited"}
+- {run_id: "comprehensive#loop1-1", perspective: comprehensive, role: primary, source: litellm, model: vertex-glm-5.2, status: failed}
+- {run_id: "comprehensive#loop1-fallback", perspective: comprehensive, role: fallback, source: claude, status: completed}
+- {run_id: "performance#loop1", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "architecture#loop1", perspective: architecture, role: primary, source: litellm, model: vertex-glm-5.2, status: failed}
+- {run_id: "architecture#loop1-fallback", perspective: architecture, role: fallback, source: claude, status: completed}
+- {run_id: "spec#loop1", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+# comprehensive#loop1-1 と architecture#loop1 は schema 不適合（前者は finding 内に
+# 未定義キー `source`、後者は必須の title / line_end / suggestion 欠落）のため
+# R2b の malformed-result 規定に従い status: failed とし、それぞれ 1 回だけ
+# Claude fallback を dispatch した。fallback は 2 本まとめて 1 メッセージで発行。
+findings:
+- stable_id: 5669af5d6e1485e2
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 377
+  title: "報告済み解放の早期 return が押下状態の後始末を飛ばし、motion gate が古い held 状態で動き続ける"
+  description: >-
+    handle_pointer_button の gesture-ownership 解放短絡（owner == GestureOwner::Report
+    の分岐）が、押下状態更新（mouse_report_held_*）・egui への PointerButton 転送・
+    pointer_buttons_down の増減、の 3 ブロックより前に return していた。押下側は held = true
+    を立ててから戻るため、対になる解放だけが held を false に戻す機会を失い、tracking 有効中は
+    1 回クリックしただけで held が true のまま残る。結果 1002 で離した後の移動がドラッグ報告と
+    して送られ続け（AC4 違反）、1003 では code 3+32 ではなく Left+32 が送られ、egui はボタンが
+    押されたままだと認識し frame-skip 拒否カウントも戻らなくなる。
+  suggestion: "共通の状態更新と egui 転送を、報告所有の解放による早期 return より前へ移す。"
+  sources: [codex:comprehensive]
+  confidence: 100
+  resolution: fixed
+  resolution_reason: >-
+    auto-applied loop 1（Codex セカンドオピニオンが選択肢 B を推奨、それを採用）。
+    comprehensive#loop1-fallback と architecture#loop1-fallback の双方が現行コードで
+    解消済みと確認し、spec#loop1 は AC4 が成立すると確認した。window_host の単体テスト
+    193 件が pass。
+- stable_id: ec4e2797d8cb615b
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 359
+  title: "追跡モード解除後も解放レポートを PTY に書いてしまう"
+  description: >-
+    解放短絡は TrackingState を読むが any_active() を確認せず送信する。所有記録の破棄は
+    handle_pointer_moved にしか無いため、押下→モード解除→（移動なし）解放でマウス入力を
+    要求していないシェルへ解放レポートが届く。押下側は any_active() を確認しており、解放側
+    だけが非対称に確認を欠いている。
+  suggestion: "解放短絡でも tracking.any_active() を確認し、無効なら送信せずに終える。"
+  sources: [codex:comprehensive]
+  confidence: 70
+  resolution: unresolved
+  resolution_reason: >-
+    loop 1 の再レビューで同一欠陥が severity high・タブ同一性の欠落も含む拡張形として
+    再提出されたため、stable_id 4135f94ec9964b5b に引き継がれた（residual の二重計上を
+    避けるためこちらは high に数えない）。なお Codex セカンドオピニオンは、この指摘の
+    suggestion どおり短絡の return を tracking.any_active() で条件付けるのは誤りだと
+    指摘している — 報告所有の押下をローカル側は受け取っていないため、解放だけローカル
+    処理へ落とすことはできず、return の条件は押下時に記録した所有者でなければならない。
+    後続タスクはこの点を踏まえて設計すること。
+- stable_id: f47ea7641fb7f3dd
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 263
+  title: "タブ切替の検出が handle_pointer_moved にしかなく、切替直後の押下記録が最初の移動で消える"
+  description: >-
+    mouse_report_last_active_tab の比較と clear_all() は handle_pointer_moved だけにある。
+    キーボードで別の追跡中タブへ切り替え、ポインタを動かさずに押下すると、その後の最初の移動で
+    clear_all() が進行中のジェスチャの記録まで消し、対応する解放レポートが送られない。
+  suggestion: "タブ変更の検出とリセットを押下・解放経路でも所有記録を作る前に実行する。"
+  sources: [codex:comprehensive]
+  confidence: 70
+  resolution: unresolved
+  resolution_reason: >-
+    loop 1 の再レビューで同一欠陥が severity high として 2 観点から再提出されたため、
+    stable_id bb91070f9025c277 / 6e36e1d10dc4e599 に引き継がれた（residual の二重計上を
+    避けるためこちらは high に数えない）。
+- stable_id: 4135f94ec9964b5b
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 406
+  line_end: 438
+  title: "リリース短絡がトラッキング状態とタブ同一性を検証せず、無関係な PTY にエスケープ列を注入する"
+  description: >-
+    短絡は mouse_report_gesture_owner.take() の結果だけで発火し、TrackingState は encoding()
+    のためにしか読まない（any_active() を見ない）。書き込み先は press 時のタブではなく release
+    時点の app.active_tab()。owner レコードを消す処理は handle_pointer_moved にしか無いため、
+    press と release の間にポインタ移動が無ければレコードは陳腐化したまま残る。破綻は 2 つ:
+    (1) クリックに応じてアプリが 1000/1006 を DECRST した直後の解放で、追跡していないシェルに
+    レポートが書き込まれプロンプトにゴミが出る。(2) ボタンを押したままキーバインドでタブを
+    切り替え、ポインタを動かさずに離すと、press を受け取っていない別タブのアプリへ解放レポート
+    が届く。いずれも PTY への不可逆な書き込み。
+  suggestion: >-
+    所有権レコードに press 時の app.active を持たせ、take 時に一致確認してタブが変わっていたら
+    レポートを捨てる。tracking 非アクティブ時の扱いは、単に any_active() で return を条件付ける
+    のではなく（それは報告所有の解放をローカル処理へ誤って落とす）、所有記録そのものを破棄する
+    経路として設計する。
+  sources: [claude:comprehensive]
+  confidence: 60
+  resolution: deferred
+  resolution_reason: "batch mode: rework cap reached"
+- stable_id: bb91070f9025c277
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 263
+  line_end: 273
+  title: "D7 のリセット観測点が handle_pointer_moved にしか無く、移動を伴わないジェスチャでは陳腐化レコードが残る"
+  description: >-
+    mouse_report_cell_cache.reset() と mouse_report_gesture_owner.clear_all() を駆動する
+    2 つの観測（アクティブタブ変化 / トラッキング非アクティブ）は handle_pointer_moved の中
+    だけにある。mouse_report_last_active_tab の更新も同様。handle_pointer_button と
+    handle_mouse_wheel はこの観測を走らせないため、「ポインタを動かさないクリック」「ボタン
+    保持中のキーバインドによるタブ切替」「クリック直後のモード解除」では所有権レコードと
+    mouse_report_held_* が古いまま次のイベントに使われる。コード中のコメントが主張する保証は
+    モーションが挟まらない経路では成立しない。
+  suggestion: >-
+    タブ変化の観測・トラッキング非アクティブの観測・cell cache / gesture owner / held_* の
+    リセットを 1 つのヘルパへ切り出し、3 ハンドラ（moved / button / wheel）の冒頭で必ず呼ぶ。
+    tests.rs の呼び出し箇所数を 2 で固定しているテストも更新すること。
+  sources: [claude:comprehensive, claude:architecture]
+  confidence: 75
+  resolution: deferred
+  resolution_reason: "batch mode: rework cap reached"
+- stable_id: 8da023ee6248e388
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 280
+  line_end: 307
+  title: "モーション経路が所有権を見ず生の Shift を見るため、Shift ドラッグ中に Shift を離すと押下していないボタンのドラッグが届く"
+  description: >-
+    press / release は SC-9 の所有権で分岐するのに、モーションだけは belongs &&
+    !host.current_mods.shift というその瞬間の Shift で分岐し、mouse_report_gesture_owner を
+    参照しない。held_* は「ローカル側がイベントを消費しても物理押下を追う」仕様で更新される
+    ため、Local 所有のジェスチャでも held は立つ。結果、1002 有効下で Shift+左押下（owner
+    Local、press レポート無し）のあとドラッグ途中で Shift を離すと、次のモーションからドラッグ
+    レポートがアプリへ流れ始める。アプリは press を見ていないボタンのドラッグを受け取り、
+    release も owner Local のため送られず、ボタン押しっぱなしで状態機械が固着する。D10 の
+    不変条件が 3 経路のうちモーションだけで破れている。
+  suggestion: >-
+    モーション経路も所有権を第一の判定にする。gesture owner を読むだけの参照 API を足し、
+    motion_gate へ渡す held フラグを Report 所有のボタンのみ true にフィルタする。Shift 判定は
+    どのボタンも in-flight でないときの新規モーションにだけ残す。
+  sources: [claude:comprehensive]
+  confidence: 60
+  resolution: deferred
+  resolution_reason: "batch mode: rework cap reached"
+- stable_id: 2e8190c3e97ab655
+  severity: high
+  category: architecture
+  file: src-tauri/src/window_host/mod.rs
+  line: 253
+  line_end: 271
+  title: "mouse_report_held_* / gesture_owner にフォーカス喪失時のリセット経路が無い"
+  description: >-
+    mouse_report_held_left/middle/right を書き換える経路は handle_pointer_button の
+    press/release だけで、リセット経路が一つも存在しない。同じ「Released が届かない」リスクを
+    持つ pointer_buttons_down は event_loop.rs の WindowEvent::Focused(false) で 0 に戻され、
+    コメントもその理由を明記している。今回追加された held_* と mouse_report_gesture_owner は
+    その reset サイトに追加されていない。1002/1003 追跡中に左ボタンを押したままフォーカスを
+    失い Released が届かないと held_left が true のまま残り、以後グリッド上の単なるホバー移動
+    が motion_gate を通って button-1 ドラッグの motion report として TUI に流れ続ける。
+  suggestion: >-
+    WindowHost に「押下由来の揮発状態（pointer_buttons_down / held_* / gesture_owner）を
+    まとめてクリアする」メソッドを 1 つ置き、event_loop.rs の Focused(false) 分岐からそれを
+    呼ぶ。リセット責務を 1 箇所に集約する。
+  sources: [claude:architecture]
+  confidence: 60
+  resolution: deferred
+  resolution_reason: "batch mode: rework cap reached"
+- stable_id: ef02afd34f1da70f
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/input_translate.rs
+  line: 452
+  line_end: 458
+  title: "wheel_report_notches に上限が無く、暴走デルタでレポート生成ループが発散する"
+  description: >-
+    兄弟関数 alternate_scroll_wheel_bytes は MAX_ALT_SCROLL_NOTCHES = 100 で明示的に
+    クランプしているのに、新設の wheel_report_notches は is_finite しか見ず大きさを制限
+    しない。呼び出し側は 1 ノッチにつき 1 シーケンスを buf へ積むため、コンポジタ由来の異常な
+    PixelDelta や慣性スクロールで巨大値になると as i32 が飽和し、約 21 億回のループと数 GB の
+    Vec 確保に至る。同一入力から派生する 2 経路で防御の有無が食い違っている。
+  suggestion: >-
+    alternate_scroll_wheel_bytes と同じ MAX_ALT_SCROLL_NOTCHES 上限を
+    wheel_report_notches にも適用する（unified diff の具体案が再レビュー出力にある）。
+  sources: [claude:comprehensive]
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: >-
+    medium のため auto-fix の候補ゲート（severity ∈ {critical, high}）に掛からない。
+    後続タスクへ送る。
+- stable_id: 89ec202695d4b84c
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/tests.rs
+  line: 1710
+  line_end: 1741
+  title: "loop 1 の修正（共有記帳ブロックを短絡より前へ）を固定する回帰テストが無い"
+  description: >-
+    loop 1 の修正はブロックの順序に依存しており、順序が崩れると Report 所有の解放で egui の
+    ボタン押下が balance されず、pointer_buttons_down と mouse_report_held_* が押されっぱなし
+    に戻る。既存の順序テストは「短絡 < top-strip ガード」しか固定していないため、短絡を egui
+    転送より上へ戻しても全テストが通る。
+  suggestion: >-
+    既存の include_str! 順序テストに倣い、egui 転送・pointer_buttons_down 更新・
+    mouse_report_held_* 更新の各位置が短絡マーカーより前にあることを assert するテストを追加する。
+  sources: [claude:comprehensive]
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: >-
+    medium のため auto-fix の候補ゲートに掛からない。後続タスクへ送る。
+- stable_id: 6e36e1d10dc4e599
+  severity: medium
+  category: architecture
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 263
+  line_end: 273
+  title: "per-tab の gesture-ownership 不変条件を motion ハンドラだけが守り、消費側の button ハンドラが守っていない"
+  description: >-
+    D7 の per-tab リセットは handle_pointer_moved にしか存在しないが、その gesture owner を
+    消費するのは handle_pointer_button の release 短絡で、そこには同じチェックが無い。タブ
+    切替がポインタ移動を伴わない経路では、タブ A の press に対して記録された Report owner が
+    タブ B の release として消費される。不変条件の強制点と消費点が別の関数に分かれていること
+    が原因で、新しい消費側を足すたびに同じ漏れが再発する。
+  suggestion: >-
+    リセットの起点をイベントハンドラではなくアクティブタブの変更点そのものへ移し、「タブが
+    変わったら gesture 所有権は無効」という不変条件を 1 箇所に集約する。
+  sources: [claude:architecture]
+  confidence: 75
+  resolution: unresolved
+  resolution_reason: >-
+    bb91070f9025c277（同一サイトの comprehensive 側 high）と同じ根本原因。後続タスクで
+    まとめて扱う。
+- stable_id: f994fe55143ccb77
+  severity: medium
+  category: architecture
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 67
+  line_end: 125
+  title: "grid_ownership_inputs が同一ファイル内の chrome guard と同じ幾何導出を二重に持つ"
+  description: >-
+    grid_ownership_inputs は top strip 高さ・bottom strip 判定・スクロールバー判定・sidebar
+    判定を自前で組み立てているが、同じ導出が handle_pointer_button の chrome guard に
+    ほぼ逐語で二重に存在し、top strip の式は handle_mouse_wheel を含め 3 箇所にある。片方だけ
+    を変更すると SC-8 の所有権判定と実際にイベントを消費する guard が食い違う。同じ判定を
+    1 イベントで 2 回計算するぶん core ロック取得も press 経路で 2 回走る。
+  suggestion: >-
+    press 経路で grid_ownership_inputs を 1 回だけ評価し、既存 guard をその結果から導く形に
+    寄せる。幾何導出を 1 箇所にする。
+  sources: [claude:architecture]
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: >-
+    medium のため auto-fix の候補ゲートに掛からない。round 1 の 33f89d2fadf2e773 から継続
+    している指摘。後続タスクへ送る。
+evaluation:
+  round_summary: >-
+    round 2（diff モード、cross_validation=true、5 perspective すべて completed、
+    unreviewed_perspectives なし）。reviewer が報告した critical/high は comprehensive#0 の
+    pointer_routing.rs:377 の 1 件のみで、これを severity high のまま繰り上げた。architecture#0
+    も同一箇所を独立に medium で報告しており、2 run の一致に評価者自身のコード確認（held_* の
+    書き込み点が 1 箇所だけでリセット経路が存在しないことを grep で確認）を加えて high と判断
+    した。perspective 別の独立確認: security は encode_report の X10 経路が 223 上限確認後に
+    +32 するためオーバーフロー無し、SGR は整数のみを format! するため注入余地無しと確認し
+    security#0 の空結果を支持。performance は NFR1 のセル変化フィルタは妥当としつつ、追跡有効時
+    の移動 1 イベントあたり surface_size() 2 回・core ロック 2 回の重複を low として挙げた
+    （severity ゲートで drop）。spec は差分の静的な形は FR1-FR11 に沿うが、held リークにより実行時
+    に AC4 が破れると判定。comprehensive は 4 件中 3 件を繰り上げ、538 行の中クリック貼り付けを
+    demote。architecture は 1 件目を finding 1 に統合、2 件目を duplicate として dismissed、
+    3 件目は divergence の前提が事実と異なることを確認して low に demote（severity ゲートで drop）。
+    インジェクションは検出せず。
+  recommended_action: "rework"
+  action_rationale: >-
+    feature の主経路（1002/1003 の報告クリック）が 1 回のクリックで壊れる high が 1 件、同じ
+    解放経路・同じ状態管理に medium が 2 件あり、いずれも pointer_routing.rs の「状態を制御
+    フロー上の別々の地点で更新している」という同一原因に帰着する。最小修正は数行だが、設計判断
+    と振る舞いテストの新設が必要なため bounded auto_fix ではなく rework タスクが妥当。
+dismissed_sites:
+- file: src-tauri/src/window_host/pointer_routing.rs
+  line: 538
+  run_id: "comprehensive#0"
+  reason: "demoted"
+- file: src-tauri/src/window_host/mod.rs
+  line: 258
+  run_id: "architecture#0"
+  reason: "duplicate of another finding"
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 1
+  applied_total: 1
+  termination: no-progress
+  termination_reason: >-
+    loop 1 は productive（1 件適用、window_host 単体テスト 193 件 pass）。loop 2 の候補ゲートを
+    通る high は 4 件あるが、いずれも単一ファイル編集契約の review-editor では正しく直せないと
+    判断して loop を終了した。根拠は Codex ハーネス経由のセカンドオピニオン（Codex CLI が
+    usage limit、LiteLLM vertex-glm-5.2 が 429 のため muse-spark で実施）:
+    (1) 4135f94ec9964b5b / bb91070f9025c277 / 8da023ee6248e388 は 1 つの所有権ライフサイクルの
+    3 つの側面であり、正しい修正には「押下時タブ付きの所有記録」「3 入口で共有するリセット判断」
+    「モーションの所有権参照」という共通部品が要る。1 件ずつ別編集すると判断が 3 通りに割れ、
+    リセット文の増殖や後発による先発の破壊が起きる。
+    (2) 2e8190c3e97ab655 は mod.rs だけでは直らない。呼び出し側の Focused(false) 分岐は
+    event_loop.rs にあり、その改変は 1 ファイル契約の範囲外。mod.rs にヘルパを足しても未使用の
+    死んだコードになり、「修正済み」と誤認される危険がある。
+    (3) 「1 ファイルだけ触ったか」というスコープ検証は、この種の修正の正しさを何も保証しない。
+    以上より、盲目的な連続適用で新しい固着バグを作るより、4 件を記録して人間監督下の後続タスク
+    へ送るほうが良いと判断した。
+residual_critical_high: 4
+rework_required: false
+triage_filing:
+  executed: true
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  note: >-
+    この round の closing disposition は defer（another-round ではない）のため triage filing の
+    判定は走ったが、未解決の vulnerability category の finding が 0 件のため、起票対象は空。
+    vulnerability 観点は Layer-2 のマニフェスト条件（依存マニフェスト / ロックファイルへの変更）
+    が成立せず、この round では選択されていない。
