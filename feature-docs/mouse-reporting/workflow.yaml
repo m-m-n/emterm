@@ -110,6 +110,7 @@ tasks:
     plan: tasks/task0001.md
     files:
     - crates/term_core/src/csi_modes.rs
+    - crates/term_core/src/csi_dispatch.rs
     skills:
     - backend-impl
     domains:
@@ -120,9 +121,9 @@ tasks:
     - FR1
     - NFR3
     - NFR5
-    status: pending
-    notes: null
-    branch: null
+    status: merged
+    notes: 'retry 1/1 (prior launch orphaned) merged at aeaa58c05bf9a26d9a9c8a394b627727bd2283ed; conflict_retries 0; tests pass'
+    branch: em-workflow/mouse-reporting/task0001
   task0002:
     title: Mouse report encoding and routing-decision helpers
     plan: tasks/task0002.md
@@ -149,9 +150,9 @@ tasks:
     - NFR5
     - NFR6
     - NFR7
-    status: pending
-    notes: null
-    branch: null
+    status: merged
+    notes: 'retry 1/1 (prior launch orphaned) merged at 6242c124d5d314d600110a369bb9e3c8869a5e11; conflict_retries 0; tests pass; no deviations'
+    branch: em-workflow/mouse-reporting/task0002
   task0003:
     title: Pointer routing integration and report emission
     plan: tasks/task0003.md
@@ -181,9 +182,9 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
-    notes: null
-    branch: null
+    status: in_progress
+    notes: launching session died before any work landed (journal reason: orphaned); batch retry 1/1 consumed
+    branch: em-workflow/mouse-reporting/task0003
 review:
   status: pending
   rounds_completed: 0

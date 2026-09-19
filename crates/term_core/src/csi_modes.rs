@@ -10,28 +10,6 @@ const MODE_ACTION_SWITCH_TO_MAIN: u8 = 3;
 // in WASM instead of deferring to TS via mode actions.
 const MODE_ACTION_TS_FALLBACK: u8 = 0xFF;
 
-// ── Mouse-tracking mode bits (SC-1, IMPLEMENTATION.md "mouse-reporting") ──
-//
-// Owned by task0001, which is the only task that may change this contract.
-// Declared here (rather than `terminal_core::types`, where the existing
-// `MODE_ALTERNATE_SCROLL` lives) because task0003 — a parallel consumer of
-// this contract per cross-task decision D3 — does not have task0001's own
-// edit in this worktree and creates the minimum needed to compile against
-// the pinned contract. The integration (task0001) side of this file is
-// adopted verbatim on merge; see D3.
-//
-/// DECSET 1000: X10 / "normal" mouse tracking — reports a press with no
-/// motion or release.
-pub const MODE_MOUSE_NORMAL_TRACKING: u8 = 17;
-/// DECSET 1002: button-event tracking — normal tracking plus motion while
-/// a button is held.
-pub const MODE_MOUSE_BUTTON_EVENT_TRACKING: u8 = 18;
-/// DECSET 1003: any-event tracking — reports motion with no button held
-/// too.
-pub const MODE_MOUSE_ANY_EVENT_TRACKING: u8 = 19;
-/// DECSET 1006: SGR mouse-report encoding.
-pub const MODE_MOUSE_SGR_ENCODING: u8 = 20;
-
 impl TerminalCore {
     /// CSI ? Pm h/l - Set/Reset DEC Private Mode.
     /// Returns action code for TS-side execution.
@@ -130,12 +108,10 @@ impl TerminalCore {
                 MODE_ACTION_NONE
             }
 
-            // DECSET 1000/1002/1003 (mouse tracking) and 1006 (SGR
-            // encoding): track the bit core-side so the host can read
-            // tracking-active state and encoding choice through the
-            // existing mode-query accessor (SC-1; see the module-level
-            // doc on the constants above for the task0001/task0003 D3
-            // relationship).
+            // DECSET 1000/1002/1003/1006 (mouse tracking modes). Track the
+            // bits core-side so the host can read them via `get_mode`
+            // before deciding whether/how to report a pointer event,
+            // exactly as the alternate-scroll mode (1007) already does.
             1000 => {
                 self.set_mode(MODE_MOUSE_NORMAL_TRACKING, enable);
                 MODE_ACTION_NONE
@@ -165,10 +141,6 @@ impl TerminalCore {
 #[cfg(test)]
 mod tests {
     use crate::terminal_core::*;
-    use super::{
-        MODE_MOUSE_ANY_EVENT_TRACKING, MODE_MOUSE_BUTTON_EVENT_TRACKING,
-        MODE_MOUSE_NORMAL_TRACKING, MODE_MOUSE_SGR_ENCODING,
-    };
 
     // ── Sprint 4: Mode Tests ────────────────────────────────
 
@@ -228,8 +200,9 @@ mod tests {
     #[test]
     fn test_mode_ts_fallback() {
         let mut core = TerminalCore::new(80, 24, 0);
-        // 1000/1002/1003/1006 moved off this arm onto their own mode bits
-        // (SC-1) — narrowed to the modes still genuinely falling back.
+        // 1000, 1002, 1003 and 1006 moved off the TS-fallback arm onto
+        // their own bits (SC-1); only the modes still on that arm are
+        // asserted here (AC-5).
         for mode in [1, 1005] {
             assert_eq!(
                 core.handle_set_mode(mode, true),
@@ -238,6 +211,16 @@ mod tests {
                 mode
             );
         }
+        // Positive bit assertions replace the fallback assertion removed
+        // above for the four moved modes (AC-5).
+        assert_eq!(core.handle_set_mode(1000, true), 0);
+        assert!(core.get_mode(MODE_MOUSE_NORMAL_TRACKING));
+        assert_eq!(core.handle_set_mode(1002, true), 0);
+        assert!(core.get_mode(MODE_MOUSE_BUTTON_EVENT_TRACKING));
+        assert_eq!(core.handle_set_mode(1003, true), 0);
+        assert!(core.get_mode(MODE_MOUSE_ANY_EVENT_TRACKING));
+        assert_eq!(core.handle_set_mode(1006, true), 0);
+        assert!(core.get_mode(MODE_MOUSE_SGR_ENCODING));
         // 1004 and 2004 are boolean modes handled in WASM
         assert_eq!(core.handle_set_mode(1004, true), 0);
         assert!(core.get_mode(MODE_FOCUS_TRACKING));
@@ -311,40 +294,92 @@ mod tests {
         assert!(core.get_mode(MODE_ALTERNATE_SCROLL));
     }
 
-    // ── DECSET 1000/1002/1003/1006 (mouse tracking / SGR encoding) ──
-    //
-    // Created here per D3 (task0003, consumer of SC-1) so the routing
-    // integration has a working mode bit to read from; task0001 owns
-    // this contract and this test is superseded by its own on merge.
+    // ── DECSET 1000/1002/1003/1006 (mouse tracking modes) ───
 
-    /// Each of the four mouse mode bits toggles independently: setting one
-    /// leaves the other three untouched, and a reset clears only the one
-    /// that was set.
+    /// TS-1: DECSET 1000/1002/1003/1006 each set and clear their own bit,
+    /// returning `MODE_ACTION_NONE` in both directions, independently of
+    /// the other three mouse-mode bits (AC-1, AC-2, AC-3).
     #[test]
-    fn decset_mouse_modes_toggle_independently() {
-        let mut core = TerminalCore::new(80, 24, 0);
-        for (mode, bit) in [
+    fn decset_mouse_modes_set_and_reset_toggle_their_own_bit() {
+        let modes: [(u16, u8); 4] = [
             (1000, MODE_MOUSE_NORMAL_TRACKING),
             (1002, MODE_MOUSE_BUTTON_EVENT_TRACKING),
             (1003, MODE_MOUSE_ANY_EVENT_TRACKING),
             (1006, MODE_MOUSE_SGR_ENCODING),
-        ] {
-            assert_eq!(core.handle_set_mode(mode, true), 0, "mode {mode} set");
-            assert!(core.get_mode(bit), "mode {mode} bit should be set");
-            assert_eq!(core.handle_set_mode(mode, false), 0, "mode {mode} reset");
-            assert!(!core.get_mode(bit), "mode {mode} bit should be cleared");
+        ];
+
+        for (mode, bit) in modes {
+            let mut core = TerminalCore::new(80, 24, 0);
+
+            // AC-1: set returns no-action and the bit reports active
+            assert_eq!(
+                core.handle_set_mode(mode, true),
+                0,
+                "mode {mode} set returns no-action"
+            );
+            assert!(core.get_mode(bit), "mode {mode} bit active after set");
+
+            // AC-3: the other three mouse bits stay inactive
+            for (other_mode, other_bit) in modes {
+                if other_mode != mode {
+                    assert!(
+                        !core.get_mode(other_bit),
+                        "mode {mode} set leaves mode {other_mode} inactive"
+                    );
+                }
+            }
+
+            // AC-2: reset returns no-action and the bit reports inactive
+            assert_eq!(
+                core.handle_set_mode(mode, false),
+                0,
+                "mode {mode} reset returns no-action"
+            );
+            assert!(!core.get_mode(bit), "mode {mode} bit inactive after reset");
         }
     }
 
-    /// Setting exactly one mouse mode leaves the other three inactive.
+    /// AC-3: clearing one of the four already-active mouse-mode bits
+    /// leaves the other three untouched.
     #[test]
-    fn decset_mouse_modes_are_independent_bits() {
+    fn decset_mouse_modes_clearing_one_leaves_others_untouched() {
         let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_set_mode(1000, true);
         core.handle_set_mode(1002, true);
-        assert!(core.get_mode(MODE_MOUSE_BUTTON_EVENT_TRACKING));
-        assert!(!core.get_mode(MODE_MOUSE_NORMAL_TRACKING));
-        assert!(!core.get_mode(MODE_MOUSE_ANY_EVENT_TRACKING));
-        assert!(!core.get_mode(MODE_MOUSE_SGR_ENCODING));
+        core.handle_set_mode(1003, true);
+        core.handle_set_mode(1006, true);
+
+        core.handle_set_mode(1002, false);
+
+        assert!(core.get_mode(MODE_MOUSE_NORMAL_TRACKING));
+        assert!(!core.get_mode(MODE_MOUSE_BUTTON_EVENT_TRACKING));
+        assert!(core.get_mode(MODE_MOUSE_ANY_EVENT_TRACKING));
+        assert!(core.get_mode(MODE_MOUSE_SGR_ENCODING));
+    }
+
+    /// Edge case: setting an already-active mouse mode again, and
+    /// clearing one that was never set, are both no-ops that still
+    /// return `MODE_ACTION_NONE`.
+    #[test]
+    fn decset_mouse_mode_double_set_and_clear_of_unset_are_no_ops() {
+        let mut core = TerminalCore::new(80, 24, 0);
+
+        assert_eq!(core.handle_set_mode(1000, true), 0);
+        assert_eq!(core.handle_set_mode(1000, true), 0);
+        assert!(core.get_mode(MODE_MOUSE_NORMAL_TRACKING));
+
+        assert_eq!(core.handle_set_mode(1002, false), 0);
+        assert!(!core.get_mode(MODE_MOUSE_BUTTON_EVENT_TRACKING));
+    }
+
+    /// AC-4: mode 1005 is untouched by this task and still falls back to
+    /// TS; mode 1015 is deliberately given no bit and keeps falling
+    /// through the unknown-mode arm as a silent no-op.
+    #[test]
+    fn decset_1005_still_fallback_and_1015_still_unowned_no_op() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        assert_eq!(core.handle_set_mode(1005, true), 0xFF);
+        assert_eq!(core.handle_set_mode(1015, true), 0);
     }
 
     #[test]
