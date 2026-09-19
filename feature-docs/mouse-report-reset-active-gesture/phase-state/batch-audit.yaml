@@ -161,3 +161,76 @@ records:
       A6 の無条件アームからの意図的な狭め（FR5 由来）であり、A6 が担保する
       「進行中ドラッグを伴う左解放は必ずフラグを落とす」は保たれる。
     outcome: adopted
+  - record_id: batch-audit-0004
+    recorded_at: "2026-09-20T05:55:00+09:00"
+    gate_id: verify.manual-scenario-ts9
+    question_id: verify.manual-scenario-ts9
+    packet_id: null
+    gate_kind: orchestrator-opened
+    phase: verify
+    question: >-
+      verify フェーズの判断ゲート（verify.manual-scenario-ts9）。
+    options:
+      - "A (verify = pass; TS-9 を未実行の手動残件として明示報告)"
+      - "B: TS-9 を failed_item にして自動 rework を回す"
+      - "C: TS-9 の自動化プロキシ（headless winit を駆動する統合テスト）を今作る"
+    choice: "A (verify = pass; TS-9 を未実行の手動残件として明示報告)"
+    codex_consulted: false
+    opus_escalation: true
+    source: batch-codex-consultation
+    resolution_note: >-
+      TS-9 は VERIFICATION.md 上で type=Manual と宣言され、同文書の SC-B 自身が "TS-9 is user-executed" と書いている。TS-9a..TS-9f は実ウィンドウ上の PRIMARY 選択・middle-click 貼り付け・link hover・resize カーソルを人間が確かめる項目で、無人実行では 原理的に実行できない。B はどの実装タスクでも解消できない失敗を記録することになり、rework が既レビュー済みコードを非欠陥に対して書き換えて無人サイクルを浪費する。C はゲート時点でのスコープ拡大で、レビュー後に未レビューのテストコードを足すうえ、headless では PRIMARY vs CLIPBOARD の区別も hover も正直には代替できない。自動側の証拠（両 feature 構成の cargo check 緑、--test-threads=1 で 3446 件全通過、reset カーブアウト / 無条件左解放ターミネータ / focus-loss 真理値表 / decide_* 純粋性 / 構造 delegate アサーションを覆う新規テスト 13 件）は TS-1..TS-8 と TS-10..TS-14 を満たす。よって pass とし、TS-9a..TS-9f 全 6 項目を PR 本文と実行レポートに未実行残件として明記する。
+      なお Codex 本体は usage limit、LiteLLM フォールバックは全モデル 429 で
+      相談ターンを 1 度も実行できなかったため、question-resolution.md の
+      Codex consultation procedure に従い Opus エスカレーションが Codex の
+      代わりに 1 回だけ走り、この判断を返した。option_id へのマッピング判断は
+      オーケストレーター側で行っている。
+    outcome: adopted
+  - record_id: batch-audit-0005
+    recorded_at: "2026-09-20T05:55:00+09:00"
+    gate_id: verify.format-gate
+    question_id: verify.format-gate
+    packet_id: null
+    gate_kind: orchestrator-opened
+    phase: verify
+    question: >-
+      verify フェーズの判断ゲート（verify.format-gate）。
+    options:
+      - "A (format ゲートをスキップし、その旨をレポートに明記)"
+      - "B: クレート全体の cargo fmt --check を走らせ、ヒットを verify 失敗として扱う"
+    choice: "A (format ゲートをスキップし、その旨をレポートに明記)"
+    codex_consulted: false
+    opus_escalation: true
+    source: batch-codex-consultation
+    resolution_note: >-
+      実測による判断。この worktree で cargo fmt --manifest-path src-tauri/Cargo.toml --check は 57 hunk を報告するが、その大半は main と byte 単位で同一のファイルにある （render/theme.rs 22 件、tests/mux_hot_upgrade.rs 6 件、agent_status_exit_latch.rs、window_host/input_translate.rs — いずれも git diff main...HEAD で無変更を確認）。つまり main 自体がこのゲートを通らないので、B は既存のリポジトリ全体のドリフトを 本 feature に帰属する verify 失敗に変えてしまい、Q1 の失敗経路と合わさると本 feature が 一度も触っていないコードに対して rework を走らせる。workflow.yaml も format_command: "" と 宣言しており、このワークフローに format ゲートは構成されていない。なお相談時の前提「rustfmt 未インストール」は誤りで、rust-toolchain.toml が 1.96.0 を rustfmt component 付きでピンし cargo fmt --version は 1.9.0-stable を返す。ただしそれは測定結果を強めるだけ（ゲートは実行可能で、無関係ファイルで落ちる）。ユーザーのグローバルルールもクレート全体 fmt を禁じている。
+      なお Codex 本体は usage limit、LiteLLM フォールバックは全モデル 429 で
+      相談ターンを 1 度も実行できなかったため、question-resolution.md の
+      Codex consultation procedure に従い Opus エスカレーションが Codex の
+      代わりに 1 回だけ走り、この判断を返した。option_id へのマッピング判断は
+      オーケストレーター側で行っている。
+    outcome: adopted
+  - record_id: batch-audit-0006
+    recorded_at: "2026-09-20T05:55:00+09:00"
+    gate_id: verify.extra-evidence
+    question_id: verify.extra-evidence
+    packet_id: null
+    gate_kind: orchestrator-opened
+    phase: verify
+    question: >-
+      verify フェーズの判断ゲート（verify.extra-evidence）。
+    options:
+      - "NONE (追加の自動証拠は不要)"
+      - "MORE: 追加コマンドを最大 2 本要求する"
+    choice: "NONE (追加の自動証拠は不要)"
+    codex_consulted: false
+    opus_escalation: true
+    source: batch-codex-consultation
+    resolution_note: >-
+      workflow 自身の build_command が両 feature 構成で緑、ライブラリスイート全体が --test-threads=1 で通過済み（本プロジェクトの tabs.rs replay を決定的にするために必要な直列化）。diff は src-tauri/src/window_host/ 配下の Rust のみで TypeScript を含まないため bun test / bun run typecheck は新たな信号を生まない。触れたファイルに cfg(windows) / cfg(unix) / cfg(target_os) は 1 つも無く、Windows クロスビルドの 追加リスクは発生しない。src-tauri/tests/ の統合バイナリは CLI subcommand と mux hot-upgrade の経路を見るもので GUI 専用のポインタ決定層には届かず、うち 2 本は既知の flaky（tmux_sockets discover、並列時の replay）なので、要求すれば無人ゲートに flake リスクを持ち込むだけで証拠にならない。
+      なお Codex 本体は usage limit、LiteLLM フォールバックは全モデル 429 で
+      相談ターンを 1 度も実行できなかったため、question-resolution.md の
+      Codex consultation procedure に従い Opus エスカレーションが Codex の
+      代わりに 1 回だけ走り、この判断を返した。option_id へのマッピング判断は
+      オーケストレーター側で行っている。
+    outcome: adopted
