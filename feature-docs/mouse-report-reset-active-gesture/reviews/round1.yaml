@@ -96,6 +96,66 @@ findings:
     confidence: 60
     resolution: unresolved
     resolution_reason: "medium severity; the auto-fix candidate gate excludes category spec unconditionally"
+  - stable_id: f8102391ba47175c
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/window_host/event_loop.rs
+    line: 253
+    title: "focus-loss の drag 終端が、まだ生きているドラッグを途中で打ち切る"
+    description: >-
+      winit の WindowEvent::Focused(false) は「キーボードフォーカス喪失」であって、ポインタの
+      implicit grab は維持されるため、左ボタンが物理的に押されたままなら PointerMoved も
+      PointerButton(Released) もこのウィンドウに届き続ける。にもかかわらず event_loop.rs:253-255 の
+      arm は local_drag_in_flight が真なら無条件で publish_local_drag を実行し、host.dragging = false
+      にして pending anchor を取り上げる（オーケストレーターが該当行を読んで確認済み）。結果として
+      (1) その時点までの部分選択が PRIMARY に、copy_on_select が有効なら CLIPBOARD にも書き込まれる、
+      (2) handle_pointer_moved の if host.dragging ガードにより、フォーカスが戻ってボタンを押したままでも
+      選択が伸びなくなる、(3) 後から届く release は gesture slot が mouse_report::clear_all で消され
+      drag_in_flight も偽になっているため Disposition::Nothing になり、ドラッグが静かに切り捨てられる。
+      本アプリでは PTY 出力由来の OSC で子 WebView（markdown / data viewer）が非同期に開いてフォーカスを
+      奪うため、ドラッグ中のフォーカス喪失は現実に到達しうる経路。さらに今回同時に入った decide_release の
+      no-owner フォールバック（drag_in_flight が真なら CompleteSelectionAndPublishToPrimary）が
+      「release が届くケース」を既にカバーしているので、この arm が必要なのは release が本当に来ない
+      ケースだけ。なお FR3 がこの無条件終端を明示要求している可能性は残るため、仕様側の意図確認が要る。
+    suggestion: >-
+      「release がもう来ない」ケースだけに絞るのが素直。mouse_report::clear_all より前（held 記録が
+      まだ生きているうち）に左ボタンの物理状態を見て、押されたままなら release 経路の drag_in_flight
+      フォールバックに終端を任せる - 例えば条件を
+      `if !host.mouse_report_held.left && local_drag_in_flight(host, &self.app)` にする
+      （host.mouse_report_held は同 arm の 264 行目で既に触っているのでアクセス可能）。代案として、
+      publish はするが host.dragging は落とさない形にしてフォーカス復帰後もドラッグを継続させる手もあるが、
+      その場合 release 時に完全な選択で再 publish される点を許容する設計判断が要る。
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity; below the auto-fix candidate gate (critical/high only)"
+  - stable_id: af839059e5de363c
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/window_host/tests.rs
+    line: 1769
+    title: "held 非対応の `apply_outcome` が無防備に残り、退行ガードが弱くなっている"
+    description: >-
+      production の 3 箇所（handle_pointer_moved / run_button_decision / handle_mouse_wheel）は
+      apply_outcome_with_held に移ったが、旧 apply_outcome（HeldButtons::default() で委譲＝「全 slot を
+      消す」旧挙動）は pub(super) のまま残り、production からの呼び出しはゼロになった。mouse_report.rs は
+      27 行目に #![allow(dead_code)] があるので未使用警告も出ず、使われていないことがコンパイラからは
+      見えない（いずれもオーケストレーターが該当行を読んで確認済み）。一方 tests.rs:1769-1774 の
+      forbidden 配列には mouse_report::apply_outcome( が無く、delegate 側のコメントは新 needle が旧 needle を
+      「置き換えた」と明記している。よって将来ハンドラが誤って apply_outcome を呼び戻しても全テストが緑の
+      まま通り、D1 / AC-1 の held slot 除外が無効化されてゴーストドラッグ退行がそのまま再導入される。
+      needle は "mouse_report::apply_outcome(" と "mouse_report::apply_outcome_with_held(" で文字列として
+      区別できる（前者は直後の ( を要求するので後者にはマッチしない）ため、negative assertion として
+      復活させられる。architecture 側の 592613773b46218d と同じ根を別の site から見たもの。
+    suggestion: >-
+      削除ではなく forbidden 側へ移し、"mouse_report::apply_outcome(" を tests.rs:1769-1774 の配列に
+      追加する（forbidden 側のメッセージ文面は「decision primitive」前提なので、この 1 件だけ理由が違う点は
+      必要ならメッセージを分岐させる）。あるいは apply_outcome 自体を削除し、テスト側の約 30 箇所を
+      apply_outcome_with_held(.., HeldButtons::default()) に置き換えて委譲ラッパーごと無くす。
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity; below the auto-fix candidate gate (critical/high only)"
 evaluation:
   round_summary: >-
     Round 1, diff mode, cross_validation=true. 11 of 15 dispatched runs were rate-limited skips;
@@ -194,12 +254,15 @@ late_reviewer_results:
     pointer_routing.rs:392) - were therefore taken through the Phase R3b mechanical gates directly,
     the same path R3b's evaluator-failure degradation and R4's in-loop re-review use: self-reported
     category checked against the dispatching perspective, sources set to that run's own identity,
-    confidence 60. The orchestrator additionally verified both against the real source (apply_outcome
+    confidence 60. The comprehensive fallback run likewise emitted a final hand-back after the
+    evaluator had been dispatched, replacing its own two fabricated preliminary findings with two
+    code-grounded ones - f8102391ba47175c (event_loop.rs:253) and af839059e5de363c (tests.rs:1769) -
+    which were taken through the same gates. The orchestrator additionally verified both against the real source (apply_outcome
     at mouse_report.rs:1078 with its three production call sites moved to apply_outcome_with_held;
     publish_local_drag at pointer_routing.rs:392 taking &mut WindowHost) before persisting them.
     Both are medium, so neither changes the completion gate and neither is an auto-fix candidate.
     This is disclosure, not a gate.
-  entries: [592613773b46218d, 79f4847088dad493]
+  entries: [592613773b46218d, 79f4847088dad493, f8102391ba47175c, af839059e5de363c]
 auto_fix:
   loops_run: 0
   applied_total: 0
