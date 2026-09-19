@@ -21,6 +21,11 @@ counterpart by construction: they verify requirements SPEC.md already states
 to manual confirmation, which is why the round-1 defects reached review. The
 requirement set itself is unchanged.
 
+TS-22 through TS-24 were added after verify round 1, on the same basis: they
+verify FR2, FR3, FR7, FR11 and NFR1 — all already stated by SPEC.md — at the
+granularity the seam of IMPLEMENTATION.md D12 makes observable. The requirement
+set is again unchanged.
+
 The design step is `skipped` for this feature, so no mockup visual comparison is
 part of this plan.
 
@@ -78,15 +83,35 @@ test inventory, verified as TS-18 below rather than as a percentage.
 
 ### Rework Scenarios (added after review round 1)
 
-These three scenarios are the automated coverage for task0004. Each runs with no
-winit window, no GPU surface and no live PTY, under the same inline test
-convention as TS-1 through TS-9.
+These three scenarios are the automated coverage for task0004, task0005 and
+task0006. Each runs with no winit window, no GPU surface and no live PTY, under
+the same inline test convention as TS-1 through TS-9.
+
+A source-text assertion — one that reads the routing source and compares
+substring positions — does not satisfy any of these three. Each is satisfied
+only by driving the real decision path and observing its result: the bytes it
+produces (or produces none of) and the state it leaves behind. This was the
+finding of verify round 1 against all three, and is what IMPLEMENTATION.md D12's
+seam exists to make possible.
 
 | ID | Scenario | Expected Result | Test Type |
 |----|----------|-----------------|-----------|
 | TS-19 | One grid-ownership decision covers every chrome region, every button identity and every event kind | Table-driven over (region, event kind, button identity): the decision rejects the top strip, the status-bar bottom strip, the right-edge scrollbar overlay, the mux sidebar in both persistent and overlay placement, and the CSD edge-resize hot zone, and rejects everything while the profile selector is visible — identically for a left / middle / right press, a left / middle / right release, a motion and a wheel notch — and accepts a position over the grid with no region claiming it. A middle or right press or release over each rejected region, and a wheel notch over the bottom strip or the scrollbar overlay, produce no bytes | Unit |
 | TS-20 | A button gesture is owned by whichever side took its press, in both shift orderings | Driven as a sequence (press → shift-state change → release). Press with Shift held then release after Shift is lifted: no bytes are emitted, the drag flag is cleared, the pending selection anchor is consumed and the selection reaches PRIMARY. Press without Shift then release after Shift is pressed: the matching release report is emitted and its button code does not carry the shift bit. A press the TS-19 decision rejects records no owner; the record is cleared when its release is delivered and on the observations that reset the cell cache; a second button pressed mid-gesture is owned independently | Unit |
 | TS-21 | A suppressed motion advances no cached cell | With a tracking mode active, a motion over each region TS-19 rejects, and any motion while the profile selector is visible, emits nothing AND leaves the cached last-reported cell unchanged — asserted on the cache state, not only on the absence of bytes — so a following motion over the grid at a different cell still reports. This is the ordering assertion: the guard runs before the motion gate and the cell-change filter | Unit |
+
+### Rework Scenarios (added after verify round 1)
+
+These three scenarios cover the wiring defects that the D12 seam makes
+observable. They run under the same conditions as TS-19 through TS-21 — no
+winit window, no GPU surface, no live PTY — and are likewise not satisfiable by
+a source-text assertion.
+
+| ID | Scenario | Expected Result | Test Type |
+|----|----------|-----------------|-----------|
+| TS-22 | A release is governed by its own gesture, not by the state at release time | Driven as a sequence. (a) A reported press followed by the application clearing every tracking mode before the button is released: the release emits no bytes at all — the release path reads "at least one tracking mode is active", not merely which encoding is selected. (b) A reported press followed by an active-tab change before the button is released: the release report is destined for the tab identifier the PRESS recorded, not the tab active at release time. (c) A release arriving with no recorded press: no bytes. In every case the assertion is on the produced bytes and their target tab identifier | Unit |
+| TS-23 | Stale records cannot survive into any pointer path | (a) The two reset observations — no tracking mode active, and the active tab differing from the one the records were built against — are carried by the button, motion and wheel decisions alike, so a press or a wheel notch arriving with no intervening motion clears the cached cell and the gesture-ownership record exactly as a motion does; asserted by observing the record state after driving each of the three paths, not only the bytes. (b) A focus-loss clear empties the gesture-ownership record and the held-button record together, so the first event after focus returns is decided from empty records | Unit |
+| TS-24 | Motion follows the gesture's owner, not the instantaneous Shift state | With a tracking mode active: a press taken locally because Shift was held, then Shift released, then pointer motion with the button still down — the motion emits no bytes, because the motion decision consults the recorded gesture owner rather than the current shift flag. The mirror case holds too: a reported press, then Shift pressed, then motion — motion reports as before, and the emitted button code does not carry the shift bit | Unit |
 
 ## Code Quality Verification
 
@@ -110,7 +135,7 @@ convention as TS-1 through TS-9.
 | AC6 | Wheel emits 64 / 65 on both screens and leaves the scrollback offset unchanged | TS-8, TS-3, TS-10 |
 | AC7 | With no tracking mode active, wheel behaviour is byte-for-byte today's, Shift included | TS-8 (tracking-inactive branch), TS-10 |
 | AC8 | Ctrl+left press reports with bit 16 and does not open the link; middle press reports base 1 and does not paste | TS-5, TS-11 |
-| AC9 | Shift suppresses the report and the local behaviour happens instead — for the wheel this is the scrollback scroll on both screens, never arrow bytes; for a drag this includes the release that completes the selection, whatever the shift state has become by then (IMPLEMENTATION.md D10) | TS-8 (tracking-active branch), TS-20, TS-11 |
+| AC9 | Shift suppresses the report and the local behaviour happens instead — for the wheel this is the scrollback scroll on both screens, never arrow bytes; for a drag this includes the motion and the release that complete the selection, whatever the shift state has become by then (IMPLEMENTATION.md D10) | TS-8 (tracking-active branch), TS-20, TS-24, TS-11 |
 | AC10 | No emitted report ever carries the shift bit | TS-5 |
 | AC11 | Column/row 224 emits nothing under X10 and the true coordinate under SGR | TS-6 |
 | AC12 | An event over any chrome guard emits nothing and keeps its local behaviour — for every button identity, and for motion and wheel alike | TS-19, TS-21, TS-12 |
@@ -124,22 +149,22 @@ convention as TS-1 through TS-9.
 | Requirement | Tasks | Verification |
 |-------------|-------|--------------|
 | FR1 | task0001 | TS-1, TS-2 |
-| FR2 | task0002, task0003, task0004 | TS-3, TS-4, TS-10, TS-20 |
-| FR3 | task0002, task0003, task0004 | TS-3, TS-9, TS-10, TS-21 |
-| FR4 | task0002, task0003, task0004 | TS-3, TS-8, TS-10, TS-19 |
+| FR2 | task0002, task0003, task0004, task0005, task0006 | TS-3, TS-4, TS-10, TS-20, TS-22, TS-23 |
+| FR3 | task0002, task0003, task0004, task0005, task0006 | TS-3, TS-9, TS-10, TS-21, TS-23, TS-24 |
+| FR4 | task0002, task0003, task0004, task0005, task0006 | TS-3, TS-8, TS-10, TS-19 |
 | FR5 | task0002 | TS-3, TS-4, TS-6 |
 | FR6 | task0002 | TS-5 |
-| FR7 | task0002, task0003, task0004 | TS-5, TS-8, TS-11, TS-20 |
+| FR7 | task0002, task0003, task0004, task0005, task0006 | TS-5, TS-8, TS-11, TS-20, TS-22, TS-24 |
 | FR8 | task0003 | TS-10, TS-11 |
 | FR9 | task0002 | TS-6 |
-| FR10 | task0003, task0004 | TS-12, TS-19 |
-| FR11 | task0003 | TS-10, TS-13 |
-| NFR1 | task0002, task0003, task0004 | TS-7, TS-10, TS-21 |
+| FR10 | task0003, task0004, task0005, task0006 | TS-12, TS-19 |
+| FR11 | task0003, task0005, task0006 | TS-10, TS-13, TS-22 |
+| NFR1 | task0002, task0003, task0004, task0005, task0006 | TS-7, TS-10, TS-21, TS-23 |
 | NFR2 | task0003 | TS-15 |
 | NFR3 | task0001, task0002, task0003 | TS-14 |
-| NFR4 | task0002, task0003 | TS-16 |
-| NFR5 | task0001, task0002, task0003, task0004 | TS-17 |
-| NFR6 | task0002, task0004 | TS-3, TS-4, TS-5, TS-6, TS-7, TS-18 |
+| NFR4 | task0002, task0003, task0006 | TS-16 |
+| NFR5 | task0001, task0002, task0003, task0004, task0005, task0006 | TS-17 |
+| NFR6 | task0002, task0004, task0005 | TS-3, TS-4, TS-5, TS-6, TS-7, TS-18 |
 | NFR7 | task0002 | TS-3, TS-4, TS-5, TS-6, TS-18 |
 
 ## E2E Testing
@@ -196,8 +221,9 @@ persists nothing (NFR2), so no security check is defined here.
 | Test scenarios (TS-10 – TS-13) | 4 | 0 | 0 | 4 |
 | Success-criteria checks (TS-14 – TS-18) | 5 | 2 | 0 | 3 |
 | Rework scenarios (TS-19 – TS-21) | 3 | 3 | 0 | 0 |
+| Rework scenarios (TS-22 – TS-24) | 3 | 3 | 0 | 0 |
 | Build verification | 4 | 4 | 0 | 0 |
-| **Total** | **25** | **18** | **0** | **7** |
+| **Total** | **28** | **21** | **0** | **7** |
 
 The three manual success-criteria checks are the inspection items TS-15, TS-16
 and TS-18, performed against the integrated diff rather than against a running
