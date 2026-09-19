@@ -306,9 +306,9 @@ tasks:
     - NFR1
     - NFR4
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/mouse-reporting/task0006
-    notes: null
+    notes: 'merged at 9b1a9810ffef7fac8de7e05dc666968f31c962e2; conflict_retries 1 (parent-side adoption of task0005 SC-10/SC-11 API); tests pass (3415 passed / 0 failed); deviations reported, all within the declared files contract'
     provenance:
       source: verify
       source_ids:
