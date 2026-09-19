@@ -399,7 +399,17 @@ pub(super) fn handle_pointer_button(
     // local selection / Ctrl+link-open / middle-paste handling below —
     // AC-5's Ctrl+left and middle-press cases are covered here because
     // this returns before the `match` arms that implement those paths.
-    if !host.current_mods.shift {
+    // A press and its matching release must be settled by the SAME owner
+    // (report path vs. local path) even if Shift's state changes between
+    // them — otherwise a Shift+press that started a local selection-drag
+    // (which sets `host.dragging`) can have its release re-decided into
+    // the report path if Shift is lifted first, leaving `host.dragging`
+    // stuck and `pending_selection_anchor` never taken. Route a Left
+    // release back to the local arm whenever a local drag is in flight,
+    // regardless of the Shift state at release time.
+    let release_owned_by_local_drag =
+        state == ElementState::Released && button == MouseButton::Left && host.dragging;
+    if !host.current_mods.shift && !release_owned_by_local_drag {
         if let Some(identity) = winit_button_to_report_identity(button) {
             if let Some(tab) = app.active_tab() {
                 let tracking = TrackingState::read(&tab.core.lock());
