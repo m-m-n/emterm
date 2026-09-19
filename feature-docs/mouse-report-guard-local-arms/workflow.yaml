@@ -1,0 +1,229 @@
+schema_version: 1
+feature: mouse-report-guard-local-arms
+created: 2026-09-20
+base_branch: main
+goal: |
+  マウスレポート: ガード領域のホイール・中クリックがローカル挙動ごと無効化される (9813504a)
+
+  出典: Notion タスク https://www.notion.so/3e03509ec8ee8134a304d6016bdbc798
+  種別: バグ / 優先度: 高
+
+  ## 現象 (必須)
+  マウスレポート実装（PR #69 / `em-workflow/mouse-reporting/integration`）の導入により、SC-8（グリッド所有判定）が false を返す領域でホイール操作が**レポートを抑止するだけでなくローカル挙動ごと消える**。
+  対象領域は 4 つ。
+  - 下端のステータスバー
+  - 右端のスクロールバーオーバーレイ
+  - CSD タイトルバー帯（`TITLE_BAR_HEIGHT` 以下）
+  - CSD リサイズホットゾーン（四辺）
+  これらの上でホイールを回してもスクロールバックが一切動かない。SC-8 はトラッキングモードの読み取りより前に参照されるため、**マウスレポートが無効でも発生する**。
+  押下側も同じ形をしている。base commit `1d5af0d` の下端ストリップ / スクロールバー / サイドバーのガードは `button == Left && state == Pressed` 条件付きだったが、SC-8 はボタン非依存なので、これらの領域での中クリックが PRIMARY ペーストに到達しなくなっている。
+
+  ## 再現手順 (必須)
+  1. `em-workflow/mouse-reporting/integration` をビルドして eMterm を起動する
+  2. スクロールバックが十分たまった状態にする（マウスレポート有効・無効どちらでもよい）
+  3. 下端のステータスバー上にポインタを置いてホイールを回す
+  4. 右端のスクロールバーオーバーレイ上、CSD タイトルバー帯、四辺のリサイズ帯でも同様に回す
+  いずれもスクロールバックが動かない。
+
+  ## 期待する挙動 (必須)
+  SPEC AC12 および IMPLEMENTATION SC-8 の Post が定めるとおり、ガード領域のイベントは**レポートを出さないが、それまでのローカル挙動は保持する**。つまりホイールはスクロールバックを動かし、ステータスバー上の中クリックは PRIMARY をペーストする。
+
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある（ステータスバー上 / スクロールバーオーバーレイ上 / CSD タイトルバー帯 / リサイズ帯の各ホイールがスクロールバックを動かすこと、ステータスバー上の中押下が PRIMARY をペーストすること）
+
+  ## 該当箇所 (任意)
+  - `src-tauri/src/window_host/mouse_report.rs:863` — `decide_wheel_event` が `point_belongs_to_grid` false で `SequenceOutcome::nothing()` を返す（863-865）
+  - `src-tauri/src/window_host/pointer_routing.rs:983` — perform ステップが `None => {}` に落ち、ローカルアームを一切実行しない
+
+  ## 実害・発生条件 (任意)
+  マウスレポートの有効・無効を問わず常時発生する。ステータスバー / スクロールバー上でのホイールは日常操作なので影響が大きい。レビュー round 3 の deferred high、stable_id `9813504a38663827`（confidence 85）。task0005 / task0006 の rework で新規に入った退行で、ブランチ上の残存指摘のうち影響が最大と判定されている。
+  レビュアーの提案は 2 案あり相互排他。(a) 拒否アームが `Disposition::Local(LocalArm::ScrollScrollback)` を返す、(b) 4 つ目の `Disposition::NotGridOwned` を追加してハンドラが task0006 以前のローカル経路へそのまま流す。修正は `mouse_report.rs` と `pointer_routing.rs` の 2-3 ファイルにまたがるため、レビューの自動修正（単一ファイル限定）ではスキップされた。
+
+  ## 起動時の追加指示
+  Once the implementation is finished, push the integration branch to the remote and create a Pull Request against base_branch with gh pr create. Keep the integration branch both locally and on the remote (do not auto-merge it into base_branch).
+  Consult Codex on any unclear points and adopt the option judged to be comparatively better.
+  Record the content of that discussion in Notion.
+parent_branch: em-workflow/mouse-report-guard-local-arms/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    cli_only:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: c2a0c617fb96ff520b37fc761132229035ef05b7
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      window_host 内の純粋なイベントルーティング修復。UI 要素・レイアウト・
+      デザイントークン・視覚面のいずれにも触れない。doc/UI-DESIGN-GUIDELINES.yaml と
+      その 2 つのミラー (src-tauri/web-shared/styles.css, src-tauri/src/ui/md3.rs) は
+      いずれも変更されない。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: 1de1e95d
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+
+requirements:
+  FR1:
+    title: "Wheel over a damaged guard region names the pre-regression wheel consumer"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "Guard regions consumed by an upstream early branch keep `Nothing` on the wheel path"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "Middle press over a guard region pastes PRIMARY in the four regions it previously reached"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "Left and right presses over a guard region name no local arm"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: "A rejected press still records no gesture owner"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: "Motion over a guard region stays `Nothing`"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: "No rejected position ever reports"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: "A rejected event's record updates stay as they are"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR9:
+    title: "`GridOwnershipInputs.in_top_strip` decomposes into two region bools"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR10:
+    title: "Region-specific dispatch, with a stated precedence for overlapping regions"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "The decide units stay pure functions"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "No new `Disposition` variant"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Guard order and SC-8 semantics unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "No new cost or logging on the pointer hot path"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: "The repair is independent of mouse-reporting being enabled"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: "Existing mouse-reporting behaviour is not regressed"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []

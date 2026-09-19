@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mouse-report-guard-local-arms
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: 7d9151e1
 last_input_digest: "sha256:11f22dc831ffbf227a96ef3e54ffe557963accb045b0ff037cbf3b96b4e77cd1"
@@ -55,7 +55,21 @@ worker_runs:
     status: needs_user_input
     input_digest: "sha256:11f22dc831ffbf227a96ef3e54ffe557963accb045b0ff037cbf3b96b4e77cd1"
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:11f22dc831ffbf227a96ef3e54ffe557963accb045b0ff037cbf3b96b4e77cd1"
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: "sha256:11f22dc831ffbf227a96ef3e54ffe557963accb045b0ff037cbf3b96b4e77cd1"
+    output_digest: null
+artifacts:
+  - path: feature-docs/mouse-report-guard-local-arms/REQUIREMENTS.md
+    sha256: "sha256:7929c08dae31c473c908fb804f1d857e39aac8bc5403077682bcb5b6cff897a6"
+    produced_by: create-spec-run-0003
+  - path: feature-docs/mouse-report-guard-local-arms/SPEC.md
+    sha256: "sha256:9bcd89332bd3555c210d3cc10c371db74d1fed53ce8304afdb80b0792f0ab645"
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
