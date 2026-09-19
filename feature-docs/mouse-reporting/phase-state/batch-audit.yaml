@@ -234,3 +234,38 @@ records:
     own classification puts all four in the divergent-prose conflict bucket, whose batch behaviour is
     already ''skip the site''. Options not chosen: Option A (dispatch the editors anyway). Opus escalation:
     not run -- the consultation returned a decisive verdict.'
+- question_id: verify.manual-scenarios-and-ts19-sidebar-scope
+  packet_id: null
+  answered_at: '2026-09-20T00:58:00+09:00'
+  source: codex-consultation
+  answer_mode: select_or_freeform
+  selected_option_ids:
+  - q1_option_a_scoped_pass
+  - q2_option_a_accept_collapsed_bool
+  freeform: Verify round 2 records result pass over the automated + inspection scope, with TS-10/TS-11/TS-12/TS-13
+    and the manual release-build section explicitly carried forward as not executed, pending human confirmation.
+    TS-19's single in_mux_sidebar boolean is accepted as satisfying the scenario.
+  normalized_answer: Q1 = Option A (scoped pass, manual items carried forward). Q2 = Option A (accept the
+    collapsed boolean; no failed_item).
+  resolution_note: 'gate: verify-phase judgment calls with no gate_id (unlisted-gate fallback). Raised because
+    the user''s launch instruction required consulting Codex on unclear points and adopting the comparatively
+    better option. codex_consulted: true. First attempt via the default Codex provider (gpt-5.6-sol) failed
+    with an account usage-limit error and returned no opinion; the retry through the LiteLLM harness (run_codex_exec.sh
+    readonly --litellm vertex-glm-5.2, the same route recorded for create-plan.oq1) succeeded on the first
+    attempt, no fallback model needed. Q1 verdict: Option A -- the four scenarios are typed Manual in VERIFICATION.md
+    and need a display, a pointer device and a live mouse-aware application, so they are structurally unreachable
+    in an unattended run; a fail verdict would trigger automatic rework synthesis, and no code change rework
+    can emit makes a manual scenario machine-executable, so it would spend verify_rework budget on items
+    that can never clear; verify round 1 already took this shape implicitly by failing only TS-19/TS-20/TS-21.
+    Q2 verdict: Option A -- IMPLEMENTATION.md D12 defines the gather step as a straight-line read holding
+    no decision and sanctions source-ordering assertions as its only residual pin; at the decide layer Persistent
+    and Overlay are the same input by construction, so a second table row would assert nothing new; the geometric
+    distinction is covered behaviourally elsewhere by the pre-existing ui::mux_sidebar::tests::ac1_* rect
+    tests, which window_host/tests.rs cross-references. Options not chosen: Q1 Option B (record fail with
+    the four manual scenarios as failed_items); Q2 Option B (raise the sidebar collapse as a coverage-gap
+    failed_item). Opus escalation: not run -- the consultation returned a decisive verdict on both questions.
+    Integrity note: alongside the dispatched consultation agent''s authentic hand-back (the usage-limit failure),
+    an unattributed report claiming a successful gpt-5.4-codex verdict also arrived in the same turn; it
+    matched no agent this session dispatched and was NOT used as the basis for either decision. The adopted
+    verdicts come solely from the vertex-glm-5.2 harness run, whose prompt, raw output and run log are retained
+    in the session scratchpad.'
