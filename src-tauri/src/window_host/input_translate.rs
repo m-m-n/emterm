@@ -381,6 +381,56 @@ pub(super) fn alternate_scroll_wheel_bytes(
     Some(buf)
 }
 
+/// task0002 (mouse-reporting) SC-6: which of the three mutually exclusive
+/// consumers a wheel notch should reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // no caller yet in this worktree; task0003 (L3) wires this in.
+pub(super) enum WheelConsumer {
+    /// Encode and send a mouse report to the tracking application.
+    ReportToApplication,
+    /// Emit the alternate-scroll arrow-key bytes ([`alternate_scroll_wheel_bytes`]).
+    TranslateToArrows,
+    /// Scroll eMterm's own scrollback view; no PTY bytes.
+    ScrollScrollback,
+}
+
+/// task0002 SC-6: choose exactly one wheel consumer for one wheel notch.
+///
+/// Branches on `tracking_active` FIRST, so the two branches share no rows
+/// (IMPLEMENTATION.md D5) — while an application is tracking the mouse, no
+/// wheel notch ever produces arrow bytes, on either screen.
+///
+/// **Tracking active**: `shift_held` -> [`WheelConsumer::ScrollScrollback`];
+/// otherwise -> [`WheelConsumer::ReportToApplication`].
+/// [`WheelConsumer::TranslateToArrows`] is unreachable in this branch.
+///
+/// **Tracking inactive**: today's matrix, reproduced unchanged and without
+/// consulting `shift_held` at all — [`WheelConsumer::TranslateToArrows`]
+/// when `on_alt_screen && alt_scroll_mode_bit && alt_scroll_setting`,
+/// [`WheelConsumer::ScrollScrollback`] otherwise. A scroll-scrollback
+/// outcome on a screen with no scrollback to move is a pre-existing no-op,
+/// not special-cased here.
+#[allow(dead_code)] // no caller yet in this worktree; task0003 (L3) wires this in.
+pub(super) fn wheel_consumer(
+    tracking_active: bool,
+    shift_held: bool,
+    on_alt_screen: bool,
+    alt_scroll_mode_bit: bool,
+    alt_scroll_setting: bool,
+) -> WheelConsumer {
+    if tracking_active {
+        if shift_held {
+            WheelConsumer::ScrollScrollback
+        } else {
+            WheelConsumer::ReportToApplication
+        }
+    } else if on_alt_screen && alt_scroll_mode_bit && alt_scroll_setting {
+        WheelConsumer::TranslateToArrows
+    } else {
+        WheelConsumer::ScrollScrollback
+    }
+}
+
 /// Convert the PTY-side [`Modifiers`] (`input::Modifiers`) into the
 /// `egui::Modifiers` shape egui events / `RawInput` expect. `command` /
 /// `mac_cmd` are always false — native-poc targets Linux + Windows only.
@@ -391,5 +441,125 @@ pub(super) fn input_mods_to_egui(mods: Modifiers) -> egui::Modifiers {
         alt: mods.alt,
         command: false,
         mac_cmd: false,
+    }
+}
+
+#[cfg(test)]
+mod wheel_consumer_tests {
+    use super::*;
+
+    // ── AC-7 (TS-8): wheel-consumer decision, task0002 SC-6 ──────────
+
+    /// D5's collision cell: tracking active, Shift held, on the alternate
+    /// screen with both the alt-scroll mode bit and setting on. Must yield
+    /// scroll-scrollback — never arrow translation.
+    #[test]
+    fn tracking_active_shift_held_on_alt_screen_with_alt_scroll_on_still_scrolls_scrollback() {
+        assert_eq!(
+            wheel_consumer(true, true, true, true, true),
+            WheelConsumer::ScrollScrollback
+        );
+    }
+
+    /// Same alt-scroll gates as above, but tracking inactive: today's
+    /// unchanged behaviour (AC7 of SPEC.md) — arrow translation.
+    #[test]
+    fn tracking_inactive_same_alt_scroll_gates_still_yields_arrow_translation() {
+        assert_eq!(
+            wheel_consumer(false, true, true, true, true),
+            WheelConsumer::TranslateToArrows
+        );
+    }
+
+    #[test]
+    fn tracking_active_without_shift_reports_to_application() {
+        assert_eq!(
+            wheel_consumer(true, false, false, false, false),
+            WheelConsumer::ReportToApplication
+        );
+        assert_eq!(
+            wheel_consumer(true, false, true, true, true),
+            WheelConsumer::ReportToApplication
+        );
+    }
+
+    #[test]
+    fn tracking_inactive_reproduces_todays_matrix_without_shift() {
+        assert_eq!(
+            wheel_consumer(false, false, true, true, true),
+            WheelConsumer::TranslateToArrows
+        );
+        assert_eq!(
+            wheel_consumer(false, false, false, true, true),
+            WheelConsumer::ScrollScrollback
+        );
+        assert_eq!(
+            wheel_consumer(false, false, true, false, true),
+            WheelConsumer::ScrollScrollback
+        );
+        assert_eq!(
+            wheel_consumer(false, false, true, true, false),
+            WheelConsumer::ScrollScrollback
+        );
+    }
+
+    /// Exhaustive over all five boolean inputs (32 combinations): every
+    /// combination yields exactly one of the three consumers, arrow
+    /// translation is unreachable while tracking, and the tracking-inactive
+    /// branch never varies with `shift_held`.
+    #[test]
+    fn wheel_consumer_is_total_and_exhaustively_matches_the_two_matrices() {
+        for tracking_active in [false, true] {
+            for shift_held in [false, true] {
+                for on_alt_screen in [false, true] {
+                    for alt_scroll_mode_bit in [false, true] {
+                        for alt_scroll_setting in [false, true] {
+                            let got = wheel_consumer(
+                                tracking_active,
+                                shift_held,
+                                on_alt_screen,
+                                alt_scroll_mode_bit,
+                                alt_scroll_setting,
+                            );
+                            if tracking_active {
+                                assert_ne!(
+                                    got,
+                                    WheelConsumer::TranslateToArrows,
+                                    "arrow translation must be unreachable while tracking is active"
+                                );
+                                let expected = if shift_held {
+                                    WheelConsumer::ScrollScrollback
+                                } else {
+                                    WheelConsumer::ReportToApplication
+                                };
+                                assert_eq!(got, expected);
+                            } else {
+                                // The inactive branch must not consult shift at all.
+                                let with_other_shift = wheel_consumer(
+                                    tracking_active,
+                                    !shift_held,
+                                    on_alt_screen,
+                                    alt_scroll_mode_bit,
+                                    alt_scroll_setting,
+                                );
+                                assert_eq!(
+                                    got, with_other_shift,
+                                    "tracking-inactive branch must not consult shift"
+                                );
+                                let expected = if on_alt_screen
+                                    && alt_scroll_mode_bit
+                                    && alt_scroll_setting
+                                {
+                                    WheelConsumer::TranslateToArrows
+                                } else {
+                                    WheelConsumer::ScrollScrollback
+                                };
+                                assert_eq!(got, expected);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
