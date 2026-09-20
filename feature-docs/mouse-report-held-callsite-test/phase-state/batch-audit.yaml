@@ -230,3 +230,55 @@ records:
       mitigation adopted: the TS -> delivered-name mapping and this pass
       judgment are stated in the run report, and a separate Notion follow-up
       task is filed to align SPEC.md / VERIFICATION.md with the delivered names.
+  - question_id: develop.codex-consultation.retrospect-boundary-vs-step-c
+    packet_id: null
+    answered_at: "2026-09-21T04:12:00+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [end_at_phase_boundary_no_pr]
+    freeform: "--once boundary wins again at the retrospect boundary; Step C and the PR belong to the next launch, which must itself carry --pr."
+    normalized_answer: "Option A — execute retrospect only, end the turn at the --once boundary, do not push, do not create a PR."
+    resolution_note: >-
+      gate: user-directed Codex consultation on a launch-argument ambiguity (no gate_id;
+      requested by the launch instruction "Consult Codex on any unclear points").
+      ambiguity: the launch carried --batch --once --pr plus the prose instruction
+      "Once the implementation is finished, push the integration branch to the remote and
+      create a Pull Request against base_branch with gh pr create. Keep the integration
+      branch both locally and on the remote (do not auto-merge it into base_branch)."
+      retrospect was the last pending step; completing it is a --once phase boundary, and
+      Step C (the only PR-creating site) is the sole remaining work. This is the SECOND
+      occurrence of the same ambiguity class on this feature — the first was at the
+      implement boundary (develop.codex-consultation.once-vs-pr-boundary) — but the facts
+      had changed materially: review and verify have since run and both passed, so two of
+      the first consultation's five reasons (work may still be defective; a PR would
+      front-run review/verify) no longer apply.
+      options: (A) execute retrospect only, end at the boundary, no push and no PR, and
+      state in the report that the launch reaching Step C must itself carry --pr;
+      (B) execute retrospect and then also Step C in the same launch (push, gh pr create,
+      keep the branch local + remote, remove the worktree), because retrospect + Step C is
+      all that remains and the user's prose explicitly asks for the PR.
+      codex_consulted: true (codex CLI, read-only sandbox, exit 0).
+      opus_escalation: false. chosen: A.
+      codex reasoning: (1) the --once contract is explicit and on-point — this launch's
+      boundary is "retrospect reaches completed and is committed", Step C is defined as an
+      independent phase carried to the NEXT launch, and --pr is explicitly per-invocation
+      and never inherited; a general prose instruction stating an end goal does not
+      override an on-point procedural rule about timing and authorization. (2) Step C now
+      would perform an outward-facing, not-fully-reversible action (git push + gh pr
+      create) on a launch the contract does not authorize for it; the quality-risk
+      concern from the first consultation is indeed reduced now that review and verify are
+      green, but the phase-boundary/authorization concern is unchanged and is the
+      decisive one. (3) consistency with the first consultation's precedent also favors A,
+      though Codex treats the contract itself rather than precedent-matching as the
+      deciding factor. (4) the cost of one more launch is acceptable relative to executing
+      an unauthorized outward-facing action unattended.
+      options not chosen and why: (B) would front-run Step C and break the execution order
+      that --once exists to bound, and would take an irreversible external action without
+      contract authorization on this launch.
+      caveats carried forward: (a) --pr is per-invocation and never inherited, so the
+      launch that finally reaches Step C MUST carry --pr, or no PR will ever be created;
+      (b) the integration branch em-workflow/mouse-report-held-callsite-test/integration
+      exists LOCALLY ONLY — it is unpushed and no PR exists; (c) all seven workflow steps
+      are now completed (design skipped), so the next launch does nothing but Step C.
+      side effects of this run: none outward-facing. No git push, no gh pr create, no
+      remote branch, no PR.
