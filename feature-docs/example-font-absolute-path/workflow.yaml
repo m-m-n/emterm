@@ -129,7 +129,8 @@ workflow:
       SC-8 は font_select_probe -- Inconsolata の face 列挙出力で確認。
       除外要件: なし (status: excluded の要件は無い)
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 2a8687162a123eec26145ba0b541a47a6dfc34a8
 
 tasks:
   task0001:
