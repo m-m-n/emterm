@@ -79,25 +79,25 @@ workflow:
   status: completed
   completed_at_commit: 552acf60de3aba5b5e919248a03a948bc85e083c
 - id: verify
-  status: pending
-  result: fail
-  failed_items:
-  - id: TS-10
-    category: comprehensive
-    note: >-
-      TS-10 requires the no-selection focus-loss test to reach its closing
-      sink-emptiness assertion with no compile-time-decidable branch. In
-      focus_loss_cleanup_with_no_selection_publishes_nothing
-      (src-tauri/src/window_host/tests.rs:4680) resolved_text is bound to a
-      statically-known None, so the `if let Some(text) = resolved_text` arm is
-      dead, publish_to_targets is never invoked and the emptiness assertion is
-      a tautology; the `if targets.primary` false arm at
-      pointer_routing.rs:472 is exercised by no test. The direct destination
-      assertion and its mutation proof DO hold, so TS-10 is partially met.
-      Same site as unresolved review finding 2a1ad49b9263cb95 (round 2) and
-      the partially-applied round-1 rework task0003. The test doc comment
-      (tests.rs:4674-4678), task0001.tests.yaml AC-4 and task0003.tests.yaml
-      AC-1 all assert the opposite and are inaccurate as written.
+  status: completed
+  completed_at_commit: 0e52783755dd3f067f5f4451bf46af1033089c92
+  result: pass
+  failed_items: []
+  notes: >-
+    Round 2. Build (main + cli_only) exit 0; library suite 3486 passed / 0
+    failed / 3 ignored with --test-threads=1; make fmt left the tree clean.
+    TS-10 now holds: publish_to_targets is called unconditionally in
+    focus_loss_cleanup_with_no_selection_publishes_nothing (tests.rs:4707),
+    and deleting the `if targets.primary` guard in pointer_routing.rs makes
+    that test fail on its closing sink-emptiness assertion (tests.rs:4708),
+    not on the destination assertion — mutation re-run in this worktree and
+    reverted. TS-12 holds: the test doc comment, task0001 AC-4 and task0003
+    AC-1 all describe the unconditional call and name the mutation evidence.
+    TS-9 / TS-11 re-inspected and hold; the unqualified full-suite command
+    still fails to compile at examples/swash_emoji.rs (missing
+    assets/fonts/NotoColorEmoji.ttf) exactly as the records state — a
+    pre-existing gap outside this feature. TS-8 stays on the manual
+    checklist (real hardware; not executable unattended).
 - id: retrospect
   status: pending
 tasks:
