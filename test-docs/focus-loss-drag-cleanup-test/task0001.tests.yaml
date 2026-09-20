@@ -1,6 +1,22 @@
 task_id: task0001
-baseline_failures: []
-final_failures: []
+# Corrected by task0003 (round 1 rework, D6): baseline_failures/final_failures
+# and the AC-4/AC-6 entries below are restated to match what this record's
+# orchestrator correction established (feature-docs/focus-loss-drag-cleanup-test/
+# tasks/task0003.md, "Orchestrator correction to this plan"). The unqualified
+# `cargo test --manifest-path src-tauri/Cargo.toml` DID compile and run in
+# task0001's own worktree, because that task's implementer manually fetched
+# src-tauri/assets/fonts/NotoColorEmoji.ttf into the gitignored assets/fonts/
+# directory first (recorded in phase-state/batch-audit.yaml,
+# implement.deviation-review / implement.codex-consultation, and never
+# disputed as untrue). On a clean checkout, without that manual fetch, the
+# same command fails to compile at the same blocker
+# test-docs/focus-loss-drag-cleanup-test/task0002.tests.yaml records. Both
+# facts are stated below so the two records agree once the precondition is
+# named, per AC-4.
+baseline_failures:
+  - "BUILD: cargo test (default features) fails to compile on a clean checkout — examples/swash_emoji.rs: couldn't read src-tauri/examples/../assets/fonts/NotoColorEmoji.ttf: No such file or directory (pre-existing, unrelated to this task; same blocker task0002.tests.yaml records; this task's actual run avoided it by manually fetching that font first — see AC-6)"
+final_failures:
+  - "BUILD: cargo test (default features) fails to compile on a clean checkout — examples/swash_emoji.rs: couldn't read src-tauri/examples/../assets/fonts/NotoColorEmoji.ttf: No such file or directory (unchanged after this task's implementation; same blocker task0002.tests.yaml records; this task's actual run avoided it by manually fetching that font first — see AC-6)"
 acceptance_tests:
   AC-1:
     tests:
@@ -48,7 +64,26 @@ acceptance_tests:
     red_reason: >-
       Same stash-and-check verification as AC-1/AC-2/AC-3 (this test
       depends on the same new symbols): E0432 unresolved imports before
-      the implementation was restored.
+      the implementation was restored. Corrected by task0003
+      (focus-loss-drag-cleanup-test, round 1 rework): the no-selection
+      test, focus_loss_cleanup_with_no_selection_publishes_nothing,
+      previously routed its publish call through
+      `if let Some(text) = None::<&str> { ... }`, a branch whose
+      condition is a compile-time-decidable literal, so the publish never
+      ran and the closing sink-emptiness assertion held regardless of
+      what the destination decision actually was. It now asserts the
+      destination decision returned for the no-selection termination
+      directly — `assert_eq!(targets, SelectionPublishTargets { primary:
+      false, clipboard: false }, ...)`, the value FR6's preserved write
+      rule requires for that case — before ever attempting the publish
+      step, and that publish step is now driven by `resolved_text`, a
+      value-carrying `Option<&str>` binding, not by the literal. task0003
+      demonstrated the corrected assertion has force with a deliberate
+      mutation (altering `selection_publish_targets`'s no-selection arm
+      to select PRIMARY, observing the test fail, reverting, observing it
+      pass; never committed) — see
+      test-docs/focus-loss-drag-cleanup-test/task0003.tests.yaml AC-3 for
+      the transcript. No test name here has assertions that cannot fail.
   AC-5:
     tests:
       - window_host::tests::focus_loss_arm_never_calls_the_fold_click_toggle
@@ -70,15 +105,35 @@ acceptance_tests:
     red_confirmed: false
     red_reason: >-
       Verifiable outcome is the full suite passing with additions only,
-      plus the CLI-only feature check compiling. Baseline (before any
-      change): `cargo test --manifest-path src-tauri/Cargo.toml` = 3470
-      passed, 0 failed, 3 ignored. After implementation: 3486 passed
-      (3470 + 16 new tests), 0 failed, 3 ignored — no existing test
-      weakened or deleted. CLI-only check:
-      `cargo check --manifest-path src-tauri/Cargo.toml
+      plus the CLI-only feature check compiling. This run required
+      manually fetching src-tauri/assets/fonts/NotoColorEmoji.ttf into
+      the gitignored assets/fonts/ directory first — it is not one of the
+      fonts scripts/fetch-fonts.sh fetches, and the gui-gated swash_emoji
+      example (examples/swash_emoji.rs) include_bytes!'s it, so
+      `cargo test --manifest-path src-tauri/Cargo.toml` does not compile
+      without that manual step. Baseline (before any change, with
+      NotoColorEmoji.ttf already present from that manual fetch):
+      `cargo test --manifest-path src-tauri/Cargo.toml` = 3470 passed, 0
+      failed, 3 ignored. After implementation: 3486 passed (3470 + 16 new
+      tests), 0 failed, 3 ignored — no existing test weakened or deleted.
+      CLI-only check: `cargo check --manifest-path src-tauri/Cargo.toml
       --no-default-features` compiles clean with no window-only type
       leaking into CLI-shared code (this task's additions are entirely
-      inside the gui-gated window_host module).
+      inside the gui-gated window_host module). On a clean checkout,
+      without the manual fetch, the same command does not reach a test
+      binary: it fails to compile at examples/swash_emoji.rs for the
+      missing NotoColorEmoji.ttf, exactly as
+      test-docs/focus-loss-drag-cleanup-test/task0002.tests.yaml records
+      (task0003, focus-loss-drag-cleanup-test worktree, reproduced this
+      compile failure independently before and after its own change).
+      SPEC AC-5's unqualified full-suite framing therefore holds only
+      under the manual-fetch precondition stated here, not on a bare
+      checkout of this worktree, and is not recorded as unconditionally
+      passed. The underlying repo gap (NotoColorEmoji.ttf missing from
+      scripts/fetch-fonts.sh) is a pre-existing, unrelated environment gap
+      outside this feature's declared change set; it is filed separately
+      at
+      https://app.notion.com/p/cargo-test-swash_emoji-3e13509ec8ee81e288c2ce50e48d14fe.
   AC-7:
     tests: []
     red_confirmed: false
