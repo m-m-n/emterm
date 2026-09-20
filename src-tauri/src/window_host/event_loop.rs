@@ -31,7 +31,7 @@ use super::key_routing::{
 use super::mouse_report;
 use super::pointer_routing::{
     handle_mouse_wheel, handle_pointer_button, handle_pointer_left, handle_pointer_moved,
-    local_drag_in_flight, publish_local_drag,
+    local_drag_in_flight, publish_local_drag, should_terminate_drag,
 };
 use super::{WindowHost, terminal_font_family};
 
@@ -241,16 +241,23 @@ impl ApplicationHandler for PocApp {
                     // gone, and a latched count would keep treating every
                     // hover motion as an actionable drag forever.
                     host.pointer_buttons_down = 0;
-                    // task0001 (FR3, D3, D4, D5): a live local selection
-                    // drag has no other terminator once focus is lost —
-                    // the matching release may never arrive either.
-                    // Evaluate the drag-in-flight signal (Shared
-                    // Components) before any terminator runs and, only
-                    // when it is true, run the publish half alone: never
-                    // the fold-click toggle (D4), which stays exclusive to
-                    // the release path. With the signal false this is a
-                    // no-op in every respect, matching today's behaviour.
-                    if local_drag_in_flight(host, &self.app) {
+                    // task0001 (focus-loss-drag-termination, D2, D3, D4,
+                    // D5): a live local left drag whose button is still
+                    // physically held is NOT destroyed by focus loss —
+                    // only a drag with the left button already up is
+                    // terminated here. Read the left-held bool from the
+                    // host's event-derived held-button record BEFORE the
+                    // clear routine below empties it (D3); a read placed
+                    // after the clear would observe "not held"
+                    // unconditionally and silently reintroduce today's
+                    // unconditional termination. A drag preserved because
+                    // the button is held is left exactly as-is: no field
+                    // is touched, and its eventual termination is
+                    // delegated to the release path's existing no-owner
+                    // fallback (D4) — never the fold-click toggle, which
+                    // stays exclusive to the release path.
+                    let left_held = host.mouse_report_held.left;
+                    if should_terminate_drag(local_drag_in_flight(host, &self.app), left_held) {
                         publish_local_drag(host, &mut self.app);
                     }
                     // Mouse-reporting (AC-3, D12): the matching release
