@@ -118,7 +118,7 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/asset-manifest-scanner-hardening/task0001
 review:
