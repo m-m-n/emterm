@@ -1,0 +1,99 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - walk_does_not_exclude_path_whose_final_component_starts_with_build_output_prefix
+      - walk_does_not_exclude_single_component_path_starting_with_build_output_prefix
+    red_confirmed: true
+    red_reason: >-
+      Both failed against the pre-fix is_excluded_path (which applied the
+      prefix rule to every component, including the final one):
+      "src/target-shaped-file.rs" must not be excluded ... (panicked, was
+      excluded) and assertion failed: !is_excluded_path(Path::new(
+      "target-shaped-file.rs")) (the single-component boundary case).
+  AC-2:
+    tests:
+      - walk_excludes_build_output_directories
+      - walk_excludes_its_own_source_file
+    red_confirmed: false
+    red_reason: >-
+      Invariant per Test Notes: these pre-existing tests must stay green
+      before and after the change, so they were not rewritten to fail
+      first. Confirmed green on both the pre-fix and post-fix
+      implementation during this task's TDD cycle.
+  AC-3:
+    tests:
+      - scan_finds_embed_in_file_whose_name_begins_with_build_output_prefix
+      - scan_finds_nothing_when_embed_is_inside_build_output_directory
+    red_confirmed: true
+    red_reason: >-
+      scan_finds_embed_in_file_whose_name_begins_with_build_output_prefix
+      failed against the pre-fix implementation: "a file whose own name
+      begins with the build-output prefix must still be scanned left: {}
+      right: {\"Boundary-Regular.ttf\"}" (the file was wrongly excluded from
+      the walk). scan_finds_nothing_when_embed_is_inside_build_output_directory
+      is the directory-side invariant (D1's walk-level is_build_output_dir
+      check, untouched by this task) and passed both before and after, as
+      expected for that half of the criterion.
+  AC-4:
+    tests:
+      - embedded_font_names_non_literal_argument_does_not_leak_into_unrelated_literal
+      - embedded_font_names_call_missing_closing_parenthesis_ends_scan_without_panicking
+    red_confirmed: true
+    red_reason: >-
+      embedded_font_names_non_literal_argument_does_not_leak_into_unrelated_literal
+      failed against the pre-fix implementation ("a non-literal macro
+      argument must not leak into a later unrelated literal" — the old
+      unbounded quote search picked up "UnrelatedFile.ttf" from an
+      unrelated statement as if it were the call's argument).
+      embedded_font_names_call_missing_closing_parenthesis_ends_scan_without_panicking
+      is the Test Notes edge case (a region with no closing parenthesis)
+      and also failed pre-fix: left: {"Alpha-Regular.ttf"} right: {} — the
+      old code had no parenthesis bound at all, so a truncated call still
+      yielded its literal instead of ending the scan.
+  AC-5:
+    tests:
+      - embedded_font_names_non_literal_argument_does_not_misalign_following_real_call
+    red_confirmed: true
+    red_reason: >-
+      Failed against the pre-fix implementation: "a stray quote after a
+      non-literal argument must not misalign the scan left: {} right:
+      {\"Alpha-Regular.ttf\"}" — the old unbounded quote search paired the
+      stray quote with the real literal's opening quote, consumed past it,
+      and never recovered the real font name.
+  AC-6:
+    tests:
+      - exactly_the_documented_fonts_are_embedded
+      - embedded_fonts_are_declared_in_fetch_script_and_inventory
+      - font_missing_fetch_script_declaration_is_reported
+      - font_missing_inventory_row_is_reported
+      - font_missing_both_declarations_is_reported
+      - font_declared_in_both_is_not_reported
+      - declaration_without_matching_embed_is_not_reported
+      - fetch_script_names_are_parsed_from_fetch_one_calls
+      - inventory_names_are_parsed_from_table_rows
+      - embedded_font_names_extracts_basename_of_font_extension_literals
+      - non_font_extension_embed_is_ignored
+      - scan_requires_no_font_binaries_present
+    red_confirmed: false
+    red_reason: >-
+      Invariant per Test Notes: every pre-existing test in the file, left
+      unmodified, must stay green before and after. Confirmed via the
+      pre-implementation baseline run (0 failures, `asset_manifest` target
+      14/14 passed) and the post-implementation run (`asset_manifest`
+      target 21/21 passed, full crate suite 3492/3492 lib tests +
+      cli_subcommands/examples_source_hygiene/mux_hot_upgrade unchanged).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Inspection-based per Test Notes, not assertion-based: verified that
+      `git diff` touches only src-tauri/tests/asset_manifest.rs, and that
+      src-tauri/Cargo.toml's [dependencies]/[dev-dependencies] are
+      byte-identical to before this task (no crate added, removed, or
+      version-moved). Both changed functions (`is_excluded_path`,
+      `embedded_font_names`) remain pure text/path logic with no
+      filesystem access and no process-state dependence beyond what
+      existed already.
