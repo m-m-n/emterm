@@ -1,0 +1,195 @@
+round: 1
+executed_at: "2026-09-21T01:00:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 8c3b4cce8fc15692cdd859d1fdfec09ec796b2c2
+  head_commit: 8ddefa0cd30079523ae467a45b58ef79f006f754
+  changed_files:
+  - src-tauri/src/window_host/tests.rs
+  - test-docs/mouse-drag-latch-regression/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+- {run_id: "comprehensive#loop1", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "security#loop1", perspective: security, role: primary, source: codex, status: completed}
+- {run_id: "spec#loop1", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+findings:
+- stable_id: e51d010850c6d79e
+  severity: high
+  category: spec
+  file: src-tauri/src/window_host/tests.rs
+  line: 4985
+  title: "Extra sixth test exceeds mandated five-test set"
+  description: >-
+    task0001.md の Scope / Files to Modify は「add five regression tests to the
+    existing inline test module; nothing else in the file changes」と定め、SPEC の
+    Test Scenarios も TS-1..TS-5 の 5 本だけを定義している。ループ 1 の auto-fix が
+    6 本目の #[test] 関数
+    button_and_wheel_paths_pass_live_held_buttons_into_the_held_aware_seam_entry_points
+    を追加し、その doc コメントは自身を「AC-3 (task0007)」と別タスク由来として
+    ラベルしていた。task0001.tests.yaml の mutation_probes / acceptance_tests にも
+    記載が無く、同 yaml の notes は「baseline ... plus the 5 new tests」と書かれている。
+  suggestion: >-
+    この source-scan テストを差分から取り除き、task0001 の TS-1..TS-5 の 5 本だけを
+    残す。必要なら独自の SPEC / AC を持つ別タスクとして起票する。
+  sources: [litellm:muse-spark:spec]
+  confidence: 60
+  resolution: fixed
+  resolution_reason: >-
+    ループ 1 の auto-fix コミット 964be64d を 8ddefa0c で revert して解消した。
+    revert 後の tests.rs は auto-fix 前とバイト一致（git hash-object
+    dc1d0c5755d604f91e4d3f3e56602fc72e8e0d41）を確認済み。
+- stable_id: 1c5cda6dce5fee4f
+  severity: high
+  category: spec
+  file: src-tauri/src/window_host/tests.rs
+  line: 4962
+  title: "Foreign-task test lacks required mechanism label"
+  description: >-
+    ループ 1 の auto-fix が追加したテストは、task0001.md の表が定める 4 つの
+    mechanism ラベル（reset-clears-held-gesture-slot / held-unaware-apply-entry-point /
+    ungated-no-owner-left-release / focus-loss-gate-inversion）のいずれも
+    見出しに持たず、SPEC NFR5 が要求する観測可能な契約（disposition / gesture slot の
+    peek / dragging / publish sink）ではなく include_str! で読み込んだソース文字列に
+    対してアサートしていた。
+  suggestion: >-
+    task0001 のスコープからこのテストを削除する。必要なら独自の SPEC / AC を持つ
+    別タスクとして提案する。
+  sources: [litellm:muse-spark:spec]
+  confidence: 60
+  resolution: fixed
+  resolution_reason: >-
+    e51d010850c6d79e と同じ revert（8ddefa0c）で解消した。
+- stable_id: a3855d779d6ae931
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/tests.rs
+  line: 4962
+  title: "ボタン経路の呼び出し側が live held 値を渡すことを固定するテストが無く、AC-3 の半分が未達"
+  description: >-
+    新規テスト second_button_press_mid_left_drag_preserves_held_gesture_slot_and_completes_selection
+    は apply_outcome_with_held を直接呼び、held をテスト自身が組み立てて渡している。
+    そのため本番のボタン経路の呼び出し側 run_button_decision
+    （pointer_routing.rs:850 付近）が held 非対応の mouse_report::apply_outcome
+    （内部で HeldButtons::default()）に戻っても、このテストは緑のままになる。
+    既存の構造テスト pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam
+    （tests.rs:1770 付近）は pointer_routing.rs 全体に対する contains でしかなく、
+    motion 経路の呼び出しが残る限り緑のままなので検出できない。
+    test-docs の mutation probe B も呼ばれる側を変異させており、呼び出し側の
+    退行は検証されていない。
+  suggestion: >-
+    run_button_decision / handle_mouse_wheel の関数本文に絞った構造テストを追加し、
+    host.mouse_report_held が held 対応シームの実引数として現れることを確認する。
+  sources: [codex:comprehensive]
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: >-
+    severity が medium のため auto-fix の候補ゲート（critical/high 限定）の対象外。
+    ループ 1 で一度 fix を適用したが、その修正が task0001 のスコープ（テスト 5 本）と
+    SPEC NFR5（観測可能な契約をアサート）に反することが spec 再レビューで判明したため
+    revert した。task0001 の枠内では解消できず、SPEC 変更を伴う別タスクが必要。
+    フォローアップとして Notion に起票する。
+    confidence は evaluator が数値ではなく "high" を返したため 85 に正規化した値。
+- stable_id: c48b3bbd49f304fa
+  severity: medium
+  category: spec
+  file: src-tauri/src/window_host/tests.rs
+  line: 4790
+  title: "TS-1 doc names two mechanism labels"
+  description: >-
+    task0001.md の Shared authoring rules と AC-6 は「Each test names exactly one
+    mechanism label in its doc comment (FR6)」と定める。TS-1
+    （wheel_notch_mid_left_drag_preserves_held_gesture_slot_and_completes_selection）の
+    doc 見出しは tests.rs:4793-4794 で "Mechanism: reset-clears-held-gesture-slot —
+    also exercises held-unaware-apply-entry-point" と 2 つのラベルを逐語で挙げている。
+    同ファイル 4788 行のセクションヘッダ自身も「names exactly one of the four
+    mechanism labels」と書いており、記述と実体が食い違う。
+  suggestion: >-
+    見出しに残すラベルを 1 つ（reset-clears-held-gesture-slot）に絞り、
+    もう一方の経路はラベル文字列を使わない散文で説明する。
+  sources: [litellm:muse-spark:spec]
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: >-
+    severity が medium で、かつ category が spec のため auto-fix の候補ゲートの
+    対象外（review-phase.md Phase R4: category != spec）。完了ゲート
+    （residual critical/high == 0）には影響しない。
+- stable_id: 5c6f95cc82a7beda
+  severity: medium
+  category: spec
+  file: src-tauri/src/window_host/tests.rs
+  line: 4875
+  title: "TS-2 doc names two mechanism labels"
+  description: >-
+    c48b3bbd49f304fa と同じ AC-6 / FR6 の exactly-one 規則違反。TS-2
+    （second_button_press_mid_left_drag_preserves_held_gesture_slot_and_completes_selection）の
+    doc 見出しは tests.rs:4908 で "Mechanism: held-unaware-apply-entry-point — also
+    exercises reset-clears-held-gesture-slot" と 2 つのラベルを挙げている。
+    task0001.tests.yaml の AC-6 red_reason は 2 つ目を散文のみで触れていると記録して
+    いるが、実際の差分はラベル文字列そのものを使っている。
+  suggestion: >-
+    見出しを 1 つのラベル（held-unaware-apply-entry-point）に絞り、
+    もう一方はラベル文字列を使わない散文に書き換える。
+  sources: [litellm:muse-spark:spec]
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: >-
+    c48b3bbd49f304fa と同じ理由（medium かつ category spec のため auto-fix 対象外）。
+evaluation:
+  round_summary: >-
+    レビュー 1 巡目。3 パースペクティブすべて完了し、primary ラウンドでは critical/high
+    の指摘は 0 件、medium 1 件を独立検証のうえ繰り上げた。差分は
+    src-tauri/src/window_host/tests.rs への 421 行追加（削除 0）と test-docs の記録のみで、
+    src-tauri/ 配下のプロダクションコードは無変更であることを git diff で独立確認した
+    （FR4 / AC-6）。削除 0 行であることから既存の固定テスト 2 本も無変更であることを
+    確認した（FR5 / AC-7）。reviewer_outputs および YAML 記録にプロンプトインジェクションの
+    試み・役割上書き・指示文の混入は検出されなかった。独立検査:
+    comprehensive = findings（AC-3 のボタン経路側が未カバーである点を production 呼び出し側
+    pointer_routing.rs:850/293/1129 と既存構造テスト tests.rs:1770 まで辿って裏付け）/
+    security = corroborated（変更はテストモジュールと YAML 記録のみ。ファイル I/O・
+    ネットワーク・プロセス起動・新規依存・unsafe をいずれも導入していない）/
+    spec = findings。
+  recommended_action: auto_fix
+  action_rationale: >-
+    critical/high は 0 件。唯一の指摘は medium で、tests.rs に構造テストを 1 本足すだけの
+    局所的かつ境界の明確な修正であり、プロダクションコードに触れず FR4 を保ったまま
+    AC-3 の未達半分を埋められる。もう 1 巡のレビューや rework を要する不確実性は無いため、
+    bounded auto_fix が適切。
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 1
+  applied_total: 1
+  reverted_total: 1
+  termination: clean
+  note: >-
+    ループ 1 で comprehensive の medium 指摘 a3855d779d6ae931 に対して 1 件適用した
+    （コミット 964be64d）。ループ 1 の再レビューで spec が high 2 件（スコープ違反と
+    NFR5 違反）を返し、task0001.md の「テスト 5 本のみ」と SPEC NFR5「観測可能な契約を
+    アサート」に反することをオーケストレーターが実地で確認したため、8ddefa0c で
+    revert した。revert 後の tests.rs は適用前とバイト一致。
+    cargo test --lib は revert 後に 3492 passed / 0 failed、make fmt-check も clean。
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  note: >-
+    disposition は complete（another-round ではない）のため実行対象。ただし
+    vulnerability パースペクティブは今回のレイヤー選択で選ばれておらず
+    （差分に依存マニフェスト / ロックファイル / vendored コードが含まれないため）、
+    未解決の vulnerability findings は 0 件。よって filing は no-op。
