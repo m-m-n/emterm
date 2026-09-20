@@ -1,0 +1,25 @@
+feature: wheel-report-tests-yaml-name-drift
+collected_at: "2026-09-20T22:05:00+09:00"
+session_ids: ["01a0bec8-0c8f-75e7-9417-7d47da8dffbc"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - note: >-
+      review round 1 の evaluator と verify フェーズが、独立に同じ論点
+      （NFR2 の「周囲の行折り返しスタイルを保つ」に対し、folded scalar 内から
+      語を削った結果 57/67/73/74 行が短いままになった件）を検出した。
+      review 側は severity low として R3b の重大度ゲートで落とし、verify 側は
+      Codex 相談の結果 pass と判定した（phase-state/batch-audit.yaml の
+      verify.nfr2-wrapping-judgement）。判定は一致したが、同じ論点が 2 フェーズで
+      別経路の判断に載った点は記録に値する。
+  - note: >-
+      implementer が fresh worktree で build.rs を通すために
+      scripts/fetch-fonts.sh を実行した。生成先 src-tauri/assets/fonts/ は
+      gitignored のため変更集合に現れず、files への自動追加は declined。
+      ドキュメントのみ変更のタスクでも worktree の初期化コストが発生する。
