@@ -72,7 +72,7 @@ workflow:
   status: completed
   completed_at_commit: 1d9c0bd53e787e6c868c49e429feb309748c4e0f
 - id: implement
-  status: completed
+  status: pending
   completed_at_commit: 49870b2f0b463148dd70cb7eb934e94c56b23ef7
   base_commit: d2e39b1fae5aa120b826dfa71097b78091bd7564
 - id: review
@@ -112,6 +112,38 @@ tasks:
     status: merged
     branch: em-workflow/focus-loss-drag-cleanup-test/task0002
     notes: null
+  task0003:
+    title: Make task0001's recorded test evidence true
+    plan: tasks/task0003.md
+    files:
+    - src-tauri/src/window_host/tests.rs
+    - test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml
+    skills: [backend-impl]
+    domains: [external-io, config-infra]
+    complexity: low
+    requirements: [FR3, FR6, NFR1, NFR3]
+    status: pending
+    notes: null
+    provenance:
+      source: review
+      source_ids: [5cd234f39613770d, 3623270de026dc88]
+      review_round: 1
+  task0004:
+    title: Reword the prior feature's backfilled rows to what the tests actually drive
+    plan: tasks/task0004.md
+    files:
+    - feature-docs/mouse-report-reset-active-gesture/SPEC.md
+    - feature-docs/mouse-report-reset-active-gesture/VERIFICATION.md
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR8]
+    status: pending
+    notes: null
+    provenance:
+      source: review
+      source_ids: [de41ddfa4f021530]
+      review_round: 1
 review:
   status: pending
   rounds_completed: 1
@@ -149,9 +181,11 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0003
     tests:
     - TS-1
     - TS-5
+    - TS-10
   FR4:
     title: Injectable sink seam plus recording test double
     status: ok
@@ -179,10 +213,12 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0003
     tests:
     - TS-1
     - TS-3
     - TS-5
+    - TS-10
   FR7:
     title: Fold-toggle exclusivity preserved
     status: ok
@@ -199,8 +235,10 @@ requirements:
     excluded_reason: null
     tasks:
     - task0002
+    - task0004
     tests:
     - TS-8
+    - TS-11
   NFR1:
     title: Window-free reachability
     status: ok
@@ -208,12 +246,14 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0003
     tests:
     - TS-1
     - TS-2
     - TS-3
     - TS-4
     - TS-5
+    - TS-10
   NFR2:
     title: decide_* purity
     status: ok
@@ -231,9 +271,11 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0003
     tests:
     - TS-6
     - TS-7
+    - TS-9
   NFR4:
     title: Identifier-collision avoidance
     status: ok
@@ -244,7 +286,7 @@ requirements:
     tests:
     - TS-6
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework:
     rounds: 0
     failed_id_counts: {}
