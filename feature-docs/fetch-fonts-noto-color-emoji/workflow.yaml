@@ -132,7 +132,7 @@ workflow:
   completed_at_commit: 350e0271f4e8f892e888e3124f40d321cca8ce88
   base_commit: 74c5206427fd0cafa716f74bc4cde14cc9972b27
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -173,8 +173,23 @@ tasks:
     notes: null
     branch: em-workflow/fetch-fonts-noto-color-emoji/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - spec
+    discretionary:
+    - perspective: license
+      reason: The diff touches dependency manifests/lockfiles (src-tauri/Cargo.toml
+        removes the png dev-dependency, Cargo.lock drops its entry), which is R1
+        Layer 2's mandatory license trigger.
+    - perspective: vulnerability
+      reason: Same manifest/lockfile trigger as license; served deterministically by
+        axis 2 (scan-dependencies.py), not by a Task-dispatched reviewer.
+    cross_validation: true
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
