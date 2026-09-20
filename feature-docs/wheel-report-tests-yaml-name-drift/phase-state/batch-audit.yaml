@@ -17,3 +17,38 @@ records:
       the declared change set — the populated directory is gitignored and does
       not appear in the observed change set. The containment check is
       unaffected; the observed change set remains a subset of the declared one.
+  - question_id: verify.nfr2-wrapping-judgement
+    packet_id: null
+    answered_at: "2026-09-20T21:35:00+09:00"
+    source: codex-consultation
+    answer_mode: single_select
+    selected_option_ids: ["pass"]
+    freeform: null
+    normalized_answer: "pass"
+    resolution_note: >-
+      Unlisted judgement raised during the verify phase (no gate_id at its
+      originating site; recorded here for audit). Question: does NFR2
+      ("keeps ... the surrounding line wrapping style") fail because the
+      four repaired locations in
+      test-docs/wheel-report-fraction-accum/task0001.tests.yaml left ragged
+      short lines (57, 67, 73, 74 - line 74 is "existed, this", ~20 cols)
+      after words were deleted from inside folded block scalars without
+      re-flowing? Options: (A) pass, treating the wrapping CONVENTION
+      (folded scalar, 6-space indent, ~70-col block) as the thing NFR2
+      protects and the ragged line lengths as cosmetic, since YAML folds
+      newlines to single spaces so the scalar VALUE is unaffected;
+      (B) fail and rework to re-flow lines 55-58 and 66-75. Codex was
+      consulted (readonly sandbox, ~0 file reads, prompt carried the SPEC
+      text and the resulting file excerpt) and returned verdict A. Its
+      reasoning: every other NFR2 clause holds (valid YAML, folded scalars,
+      escaped-backtick convention, key order), the folded value and the
+      structure are unaffected, and re-flowing would edit lines outside the
+      four locations FR5 explicitly confines edits to - so option B would
+      require the implementation side to resolve a conflict between two
+      stated requirements on its own. Option A was adopted. Option B was
+      not chosen because it trades a documented FR5 boundary for a cosmetic
+      gain. Risk of A as stated by Codex: it is the less literal reading of
+      NFR2's wording. The raggedness is disclosed here and in the verify
+      result rather than silently dropped; review round 1's evaluator had
+      independently recorded the same nuance at severity low, where the R3b
+      severity gate dropped it. No Opus escalation ran.
