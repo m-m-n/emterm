@@ -1,7 +1,7 @@
 schema_version: 1
 feature: asset-manifest-scanner-hardening
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 117f00771282466b359e4bf1003f435a214b92e6
 last_input_digest: sha256:51c31e6df9eab0d4b4ee9d1c741d110c41b7f26bfcbdfbda929017421908da92
