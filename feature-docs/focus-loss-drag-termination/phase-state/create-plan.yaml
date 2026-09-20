@@ -1,10 +1,22 @@
 schema_version: 1
 feature: focus-loss-drag-termination
 phase: create-plan
-status: in_progress
+status: completed
 generation: 1
 base_revision: 36bf948501e898297551d94b0798df3a64f67e19
 last_input_digest: sha256:a882bf2a0c177f9ee8126ea4b8db61816cdd1aab487bee20292199cf98efb209
-active_request_id: create-plan-r0001
-packets: {}
+active_request_id: null
+packets:
+  create-plan-r0001:
+    status: completed
+    issued_at: '2026-09-20T16:58:00+09:00'
+    questions: []
 answers: {}
+applied_patch:
+  patch_id: create-plan-p0001
+  applied: true
+  applied_at_commit: 47f6234aba22c3ab91843b70fd00d09c23db45d4
+artifacts:
+  IMPLEMENTATION.md: sha256:902da8e54a54e60750e271ca9dd61a1a91722c60457f2df0095e4fb12ed84395
+  VERIFICATION.md: sha256:c24b3a3e67dc7749b3060881452cf25148c7dd1719ef0e8ac78aa80f0194b037
+  tasks/task0001.md: sha256:8a603b31682b88c8f03d40ee9d968830de2ea8b634feef9867e7f9f9c0d99b7f
