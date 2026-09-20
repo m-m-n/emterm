@@ -234,7 +234,11 @@ impl From<HandoffDocumentV1> for HandoffDocumentV2 {
             listen_fd: v1.listen_fd,
             next_session_id: v1.next_session_id,
             next_pane_id: v1.next_pane_id,
-            sessions: v1.sessions.into_iter().map(HandoffSessionV2::from).collect(),
+            sessions: v1
+                .sessions
+                .into_iter()
+                .map(HandoffSessionV2::from)
+                .collect(),
         }
     }
 }

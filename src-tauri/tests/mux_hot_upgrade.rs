@@ -294,8 +294,7 @@ fn poison_binary_at(path: &Path) {
             .expect("poisoned path has a file name")
             .to_string_lossy()
     ));
-    std::fs::write(&tmp_path, "#!/bin/sh\nexit 1\n")
-        .expect("write replacement candidate binary");
+    std::fs::write(&tmp_path, "#!/bin/sh\nexit 1\n").expect("write replacement candidate binary");
     let mut perms = std::fs::metadata(&tmp_path)
         .expect("stat replacement candidate binary")
         .permissions();
@@ -387,11 +386,7 @@ fn handshake(stream: &mut UnixStream) -> WelcomeMsg {
         client_type: ClientType::Gui,
         protocol_version: PROTOCOL_VERSION,
     };
-    write_frame(
-        stream,
-        &MuxMessage::control(MessageType::Hello, 0, &hello),
-    )
-    .expect("send Hello");
+    write_frame(stream, &MuxMessage::control(MessageType::Hello, 0, &hello)).expect("send Hello");
     let frame = read_frame(stream).expect("read Welcome frame within handshake timeout");
     assert_eq!(
         frame.msg_type,
@@ -416,10 +411,12 @@ fn total_pane_count(welcome: &WelcomeMsg) -> u32 {
 /// `WelcomeMsg::Accepted`.
 fn first_session_id(welcome: &WelcomeMsg) -> u32 {
     match welcome {
-        WelcomeMsg::Accepted { sessions, .. } => sessions
-            .first()
-            .unwrap_or_else(|| panic!("expected at least one session in Welcome, got none"))
-            .id,
+        WelcomeMsg::Accepted { sessions, .. } => {
+            sessions
+                .first()
+                .unwrap_or_else(|| panic!("expected at least one session in Welcome, got none"))
+                .id
+        }
         WelcomeMsg::Rejected { reason } => panic!("expected an accepted handshake, got: {reason}"),
     }
 }
@@ -430,7 +427,12 @@ fn first_session_id(welcome: &WelcomeMsg) -> u32 {
 /// `pane_id`. Required before this (freshly (re)connected) connection will
 /// receive `PtyOutput` for a pre-existing pane again — a bare Hello/Welcome
 /// alone does not subscribe a connection to any pane's output.
-fn attach_and_await_pane(stream: &mut UnixStream, session_id: u32, pane_id: u32, timeout: Duration) {
+fn attach_and_await_pane(
+    stream: &mut UnixStream,
+    session_id: u32,
+    pane_id: u32,
+    timeout: Duration,
+) {
     write_frame(
         stream,
         &MuxMessage::control(MessageType::Attach, 0, &AttachMsg { session_id }),
@@ -687,12 +689,7 @@ fn await_daemon_reachable_again(sock_path: &Path, timeout: Duration) -> (UnixStr
                 client_type: ClientType::Gui,
                 protocol_version: PROTOCOL_VERSION,
             };
-            if write_frame(
-                &mut s,
-                &MuxMessage::control(MessageType::Hello, 0, &hello),
-            )
-            .is_ok()
-            {
+            if write_frame(&mut s, &MuxMessage::control(MessageType::Hello, 0, &hello)).is_ok() {
                 if let Ok(frame) = read_frame(&mut s) {
                     if frame.msg_type == MessageType::Welcome {
                         if let Some(welcome) = frame.decode_payload::<WelcomeMsg>() {
@@ -1888,8 +1885,7 @@ fn attach_and_capture_snapshot(
                     && msg.msg_type == MessageType::SnapshotRestore
                     && msg.pane_id == pane_id =>
             {
-                let (_segments, content) =
-                    mux_ipc::protocol::decode_snapshot_payload(&msg.payload);
+                let (_segments, content) = mux_ipc::protocol::decode_snapshot_payload(&msg.payload);
                 return content.to_vec();
             }
             Ok(msg) if msg.msg_type == MessageType::Error => {

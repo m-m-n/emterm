@@ -69,8 +69,7 @@ impl TerminalCore {
             return;
         };
         for response in responder.respond(code, payload, terminator) {
-            if self.response_queue.len() + response.len() > MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS
-            {
+            if self.response_queue.len() + response.len() > MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS {
                 continue;
             }
             self.response_queue.extend_from_slice(&response);
@@ -539,7 +538,10 @@ mod tests {
         );
         let drained = core.take_response();
         assert_eq!(drained.len(), MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS);
-        assert!(core.get_response_bytes().is_empty(), "drain empties the pending store");
+        assert!(
+            core.get_response_bytes().is_empty(),
+            "drain empties the pending store"
+        );
 
         core.process_pty_data_fully(b"\x1b]4;1;?\x07");
         assert_eq!(
@@ -585,8 +587,7 @@ mod tests {
         // exceeds the byte budget (SC-8(b)). Built programmatically and
         // asserted on length only, never by comparing whole byte strings.
         let per_dispatch_response = vec![b'Q'; 128];
-        let (mut core, _recorder) =
-            core_with_fixed_responder(4, vec![per_dispatch_response]);
+        let (mut core, _recorder) = core_with_fixed_responder(4, vec![per_dispatch_response]);
         let mut input = Vec::new();
         for _ in 0..10_000 {
             input.extend_from_slice(b"\x1b]4;1;?\x07");
@@ -598,7 +599,10 @@ mod tests {
             "AC-5: pending content stays bounded regardless of dispatch count: \
              {pending_len} bytes"
         );
-        assert!(pending_len > 0, "sanity: at least the first responses were appended");
+        assert!(
+            pending_len > 0,
+            "sanity: at least the first responses were appended"
+        );
     }
 
     #[test]

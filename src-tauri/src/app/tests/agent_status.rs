@@ -715,7 +715,7 @@ fn agent_notification_rate_limit_key_derives_mux_and_tab_forms_independent_of_le
 // stronger reason that the derivation cannot read the map at all.
 #[test]
 fn agent_notification_rate_limit_key_learned_value_matching_a_tab_key_leaves_the_mux_key_unchanged()
- {
+{
     use crate::agent_status_model::{ConnectionScope, PaneKey};
 
     let tab_key = agent_notification_rate_limit_key(&PaneKey::Tab(5));
@@ -1586,9 +1586,8 @@ fn ac3_detach_releases_model_entry_public_id_and_rate_limit_identity() {
 
     assert_eq!(app.mux_public_pane_id(scope, 7), Some("xyz-7"));
     assert!(app.agent_status_pane_badge(scope, 7).is_some());
-    let rate_limit_key = agent_notification_rate_limit_key(
-        &crate::agent_status_model::PaneKey::MuxPane(scope, 7),
-    );
+    let rate_limit_key =
+        agent_notification_rate_limit_key(&crate::agent_status_model::PaneKey::MuxPane(scope, 7));
     // The pump's own transition-drain already fired once for this real
     // Set (None -> Blocked) and armed the pane's rate-limit window under
     // the derived key.

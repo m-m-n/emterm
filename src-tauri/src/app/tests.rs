@@ -116,7 +116,10 @@ fn clear_selection_unsets_both_when_both_are_set() {
     // AC-3: called with both fields set, `clear_selection` leaves both
     // unset.
     let mut app = app_with_seeded_trackers();
-    assert!(app.selection.is_some(), "test setup: selection must start set");
+    assert!(
+        app.selection.is_some(),
+        "test setup: selection must start set"
+    );
     assert!(
         app.pending_selection_anchor.is_some(),
         "test setup: pending anchor must start set"
@@ -146,10 +149,7 @@ fn clear_selection_is_a_noop_when_nothing_is_selected() {
     let needs_full_redraw_before = app.needs_full_redraw;
     app.clear_selection();
     assert!(app.selection.is_none(), "still unset (AC-3)");
-    assert!(
-        app.pending_selection_anchor.is_none(),
-        "still unset (AC-3)"
-    );
+    assert!(app.pending_selection_anchor.is_none(), "still unset (AC-3)");
     assert_eq!(
         app.needs_full_redraw, needs_full_redraw_before,
         "clear_selection must not request a redraw of its own (NFR5): the \

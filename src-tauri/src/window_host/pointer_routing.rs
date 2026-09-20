@@ -83,8 +83,7 @@ fn grid_ownership_inputs(
         .surface_size()
         .to_logical::<f32>(host.pixels_per_point as f64);
     let bottom_strip_top = window_size_logical.height - host.status_bar_bot_inset_logical;
-    let in_bottom_strip =
-        host.status_bar_bot_inset_logical > 0.0 && position.y >= bottom_strip_top;
+    let in_bottom_strip = host.status_bar_bot_inset_logical > 0.0 && position.y >= bottom_strip_top;
     let scrollbar_visible = app
         .active_tab()
         .map(|tab| {

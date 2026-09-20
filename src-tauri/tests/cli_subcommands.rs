@@ -214,7 +214,10 @@ fn version_flag_prints_crate_version_and_exits_zero() {
         .output()
         .expect("spawn emterm --version");
 
-    assert!(output.status.success(), "--version should exit with status 0");
+    assert!(
+        output.status.success(),
+        "--version should exit with status 0"
+    );
     let expected = format!("{}\n", env!("CARGO_PKG_VERSION"));
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),

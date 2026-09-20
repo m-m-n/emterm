@@ -1003,7 +1003,12 @@ impl ThemeColorResponder {
 }
 
 impl term_core::OscResponder for ThemeColorResponder {
-    fn respond(&self, code: u16, payload: &str, terminator: term_core::OscTerminator) -> Vec<Vec<u8>> {
+    fn respond(
+        &self,
+        code: u16,
+        payload: &str,
+        terminator: term_core::OscTerminator,
+    ) -> Vec<Vec<u8>> {
         if !matches!(code, 4 | 10 | 11 | 12) {
             return Vec::new();
         }

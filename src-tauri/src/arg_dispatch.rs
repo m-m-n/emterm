@@ -406,7 +406,12 @@ mod tests {
                 .collect();
             assert_eq!(
                 value_taking,
-                vec!["--viewer", "--image-viewer", "--data-viewer", "--html-viewer"],
+                vec![
+                    "--viewer",
+                    "--image-viewer",
+                    "--data-viewer",
+                    "--html-viewer"
+                ],
                 "only --settings and --version should be valueless"
             );
         }

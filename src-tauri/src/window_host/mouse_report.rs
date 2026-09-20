@@ -985,8 +985,7 @@ fn report_motion(inputs: &MotionEventInputs, cache: CellChangeFilter) -> Sequenc
         inputs.encoding,
         inputs.mods,
     );
-    let disposition = match encode_report(code, inputs.column, inputs.row, inputs.encoding, false)
-    {
+    let disposition = match encode_report(code, inputs.column, inputs.row, inputs.encoding, false) {
         Some(bytes) => Disposition::Report {
             bytes,
             tab: inputs.active_tab,
@@ -1096,8 +1095,12 @@ pub(super) fn decide_wheel_event(inputs: &WheelEventInputs) -> SequenceOutcome {
     );
     let disposition = match consumer {
         WheelConsumer::ReportToApplication => {
-            let code =
-                compose_button_code(inputs.kind, MouseButtonId::None, inputs.encoding, inputs.mods);
+            let code = compose_button_code(
+                inputs.kind,
+                MouseButtonId::None,
+                inputs.encoding,
+                inputs.mods,
+            );
             match encode_report(code, inputs.column, inputs.row, inputs.encoding, false) {
                 Some(bytes) => Disposition::Report {
                     bytes,
@@ -2340,7 +2343,10 @@ mod tests {
         let mut records = MouseReportRecords::default();
         let outcome = decide_wheel_event(&base_wheel_inputs(MouseEventKind::WheelUp));
         apply_outcome(outcome, &mut records, &mut dest);
-        assert!(!dest.is_empty(), "wheel notch over the open grid must report");
+        assert!(
+            !dest.is_empty(),
+            "wheel notch over the open grid must report"
+        );
     }
 
     // ── AC-1, AC-12 (TS-1): rejected wheel on arm-bearing regions ───────
@@ -2658,7 +2664,10 @@ mod tests {
             Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary)
         );
         apply_outcome(outcome, &mut records, &mut dest);
-        assert!(dest.is_empty(), "a completed local selection emits no bytes");
+        assert!(
+            dest.is_empty(),
+            "a completed local selection emits no bytes"
+        );
         assert_eq!(
             records.gesture_owner.peek(MouseButtonId::Left),
             None,
@@ -3038,7 +3047,12 @@ mod tests {
                 records,
                 ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Left)
             };
-            apply_outcome_with_held(decide_button_event(left_press), &mut records, &mut dest, held);
+            apply_outcome_with_held(
+                decide_button_event(left_press),
+                &mut records,
+                &mut dest,
+                held,
+            );
             assert_eq!(
                 records.gesture_owner.peek(MouseButtonId::Left),
                 Some(GestureOwner::Local)
@@ -3129,7 +3143,10 @@ mod tests {
     #[test]
     fn no_owner_left_release_completes_selection_only_when_drag_in_flight() {
         for (drag_in_flight, expected) in [
-            (true, Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary)),
+            (
+                true,
+                Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary),
+            ),
             (false, Disposition::Nothing),
         ] {
             let inputs = ButtonEventInputs {
@@ -3137,7 +3154,10 @@ mod tests {
                 ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
             };
             let outcome = decide_button_event(inputs);
-            assert_eq!(outcome.disposition, expected, "drag_in_flight={drag_in_flight}");
+            assert_eq!(
+                outcome.disposition, expected,
+                "drag_in_flight={drag_in_flight}"
+            );
         }
     }
 
