@@ -1,0 +1,142 @@
+task_id: task0001
+
+# The documented test command (`cargo test --manifest-path src-tauri/Cargo.toml`,
+# default features) could not compile at all before this task: the retired
+# `swash_emoji` example embeds a font that no longer exists, so the whole
+# build failed before a single test could run. That total build failure is
+# recorded here as the baseline, in place of individual test names.
+baseline_failures:
+  - "BUILD_FAILURE(default features): could not compile `emterm` (example \"swash_emoji\") — error: couldn't read src-tauri/examples/../assets/fonts/NotoColorEmoji.ttf: No such file or directory (os error 2), at src-tauri/examples/swash_emoji.rs:22:27"
+
+final_failures: []
+
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Not test-shaped (a removal + absence-of-reference check). Before the
+      fix, `src-tauri/examples/swash_emoji.rs` existed and
+      `src-tauri/Cargo.toml` declared its `[[example]]` target — both
+      confirmed present by reading the files prior to editing. After
+      deleting the file and removing the manifest declaration, `grep -rn
+      swash_emoji` over src-tauri/Cargo.toml, Makefile, scripts/,
+      .github/workflows/, .claude/rules/, and doc/SPECIFICATION.md returns
+      no match (verified via Bash `grep`, exit 1 on every path).
+
+  AC-2:
+    tests: []
+    red_reason: >-
+      Not test-shaped (a build + manifest-content check). Before the fix,
+      `CARGO_TARGET_DIR=src-tauri/target cargo build --manifest-path
+      src-tauri/Cargo.toml --examples` failed with the same
+      NotoColorEmoji.ttf error recorded in baseline_failures. After removing
+      the `[[example]] name = "swash_emoji"` block and the `png = "0.17"`
+      dev-dependency (plus its comment) from Cargo.toml, the same build
+      command succeeds and produces exactly
+      `bold_raster_probe`/`font_select_probe`/`m_placement_probe` under
+      `src-tauri/target/debug/examples/` (verified directly). Both
+      `cargo test` (default features) and `cargo test --no-default-features`
+      subsequently compile clean, confirming no surviving consumer of `png`.
+    red_confirmed: true
+
+  AC-3:
+    tests:
+      - exactly_the_documented_fonts_are_embedded
+      - embedded_fonts_are_declared_in_fetch_script_and_inventory
+    red_confirmed: true
+    red_reason: >-
+      Against an intentionally-wrong stub (embedded_font_names /
+      find_missing_declarations returning a fixed non-empty dummy
+      regardless of input): `exactly_the_documented_fonts_are_embedded`
+      failed with `assertion left == right failed ... left:
+      {"STUB-SENTINEL.ttf"} right: {"Inconsolata-Bold.otf", ...}` (7
+      documented names); `embedded_fonts_are_declared_in_fetch_script_and_inventory`
+      failed with `asset_manifest: font(s) embedded at compile time are
+      missing a declaration: STUB-SENTINEL.ttf: missing scripts/fetch-fonts.sh
+      entry and assets/fonts/README.md inventory row`. Both pass unmodified
+      on the current tree after the real implementation replaced the stubs.
+
+  AC-4:
+    tests:
+      - font_missing_fetch_script_declaration_is_reported
+      - font_missing_inventory_row_is_reported
+      - font_missing_both_declarations_is_reported
+    red_confirmed: true
+    red_reason: >-
+      Against the same intentionally-wrong stub: all three failed on the
+      reported font name / missing-flags not matching the synthetic
+      scenario, e.g. `font_missing_inventory_row_is_reported` failed with
+      `assertion failed: !missing[0].missing_fetch_script` (stub always
+      marks both flags true regardless of which set actually lacks the
+      font).
+
+  AC-5:
+    tests:
+      - scan_requires_no_font_binaries_present
+    red_confirmed: true
+    red_reason: >-
+      Against the stub: failed with `assertion left == right failed left:
+      {"STUB-SENTINEL.ttf"} right: {"Fake-Regular.ttf"}` when scanning a
+      temp directory containing only a `.rs` file with a synthetic
+      `include_bytes!` literal and no `assets/fonts/` directory at all —
+      proving the scan needs no font binary to exist. The cwd-independence
+      / no-absolute-dev-path half of AC-5 is verified by construction
+      (`crate_root()` resolves via the compile-time `env!("CARGO_MANIFEST_DIR")`,
+      never `std::env::current_dir()` and never a literal absolute path) —
+      not by a dynamic test, since mutating the process's current directory
+      inside a parallel test binary would make other tests
+      (`tests/cli_subcommands.rs`, which reads relative fixture paths
+      assuming cwd = crate root) non-deterministic. Recorded as a
+      structural guarantee rather than an executed red/green cycle.
+
+  AC-6:
+    tests:
+      - non_font_extension_embed_is_ignored
+      - walk_excludes_build_output_directories
+      - walk_excludes_its_own_source_file
+    red_confirmed: true
+    red_reason: >-
+      Against the stub: `non_font_extension_embed_is_ignored` failed with
+      `assertion failed: embedded_font_names(text).is_empty()` (stub always
+      returns a non-empty dummy set); `walk_excludes_build_output_directories`
+      failed with `target/debug/build/x/out.rs should be excluded as a
+      build-output path` (stub `is_excluded_path` always returned `false`);
+      `walk_excludes_its_own_source_file` failed with `assertion failed:
+      is_excluded_path(Path::new(SELF_RELATIVE_PATH))` for the same reason.
+
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Not a single test — a cross-configuration + scope-discipline check.
+      Before the fix, `cargo test` (default features) failed to compile at
+      all (see baseline_failures), so no configuration could even attempt
+      the new check. After the fix: `CARGO_TARGET_DIR=src-tauri/target
+      cargo test --manifest-path src-tauri/Cargo.toml` (default features)
+      passes in full (3487 passed, 0 failed, 3 ignored in the lib suite;
+      14/14 in tests/asset_manifest.rs; 26/26 cli_subcommands; 10/10
+      mux_hot_upgrade; mux_throughput's one test intentionally ignored,
+      pre-existing/unrelated); `cargo test --manifest-path
+      src-tauri/Cargo.toml --no-default-features` also builds and passes in
+      full including the same 14/14 asset_manifest tests; `cargo check
+      --manifest-path src-tauri/Cargo.toml --no-default-features` (the
+      documented features-off check command) still passes. `git status` /
+      `git diff --stat` confirm only src-tauri/examples/swash_emoji.rs
+      (deleted), src-tauri/Cargo.toml, src-tauri/tests/asset_manifest.rs
+      (new), and the workspace-root Cargo.lock changed — no
+      continuous-integration workflow file, fetch script, inventory
+      document, or production source file was touched.
+
+notes: >-
+  Cargo.lock deviation: the crate is a member of the workspace rooted at
+  the repository root (see top-level Cargo.toml `[workspace] members =
+  [...]`), so `cargo build`/`cargo test` maintain a single lockfile at the
+  workspace root, not `src-tauri/Cargo.lock`. Removing the `png`
+  dev-dependency regenerated the root `Cargo.lock` (one line removed: `"png
+  0.17.16"` from emterm's dependency list); `src-tauri/Cargo.lock` is a
+  stale, untouched-by-cargo artifact dating back to before this crate
+  became a workspace member (last modified at the "promote native-poc to
+  main implementation" commit) and was left as-is per the task plan's
+  instruction to commit whatever the build tool regenerates rather than
+  hand-editing it — the build tool does not touch that file at all.
