@@ -1,0 +1,203 @@
+schema_version: 1
+feature: example-font-absolute-path
+created: 2026-09-21
+base_branch: main
+goal: |
+  example が Inconsolata を個人環境の絶対パスから読むため作者以外の環境で動かない
+
+  ## 現象 (必須)
+  `src-tauri/examples/bold_raster_probe.rs` と `src-tauri/examples/m_placement_probe.rs`
+  が、Inconsolata を個人環境の絶対パスから読んでいる。
+  ```plain text
+  /home/sakura/workspace/Inconsolata/fonts/otf/Inconsolata-Regular.otf
+  /home/sakura/workspace/Inconsolata/fonts/otf/Inconsolata-Bold.otf
+  ```
+  このパスは他のマシンには存在しないため、クリーンなチェックアウトで
+  `bash scripts/fetch-fonts.sh` を実行したあとでも、この 2 つの example は実行時に
+  落ちる（`bold_raster_probe.rs` は `.expect("font file")`、`m_placement_probe.rs` は
+  `.unwrap()`）。コンパイルは通るので `cargo test` は壊れない。
+  同じ 2 ファイル（および `font_select_probe.rs`）の実行手順コメントが、
+  `7935cba5 refactor: promote native-poc to main implementation` で削除された
+  `native-poc/` レイアウトを今も指している。
+  ```plain text
+  CARGO_TARGET_DIR=native-poc/target ... --manifest-path native-poc/Cargo.toml
+  ```
+  なお Inconsolata-Regular.otf / Inconsolata-Bold.otf はどちらも
+  `scripts/fetch-fonts.sh` が `src-tauri/assets/fonts/` に取得済みで、
+  `src-tauri/src/render/font/resolver.rs:50,58` が
+  `include_bytes!("../../../assets/fonts/Inconsolata-{Regular,Bold}.otf")` で
+  参照している。つまり絶対パス参照は不要。
+
+  ## 再現手順 (必須)
+  1. `/home/sakura/workspace/Inconsolata/` が存在しない環境でチェックアウトする
+  2. `bash scripts/fetch-fonts.sh` を実行する（成功する）
+  3. `CARGO_TARGET_DIR=src-tauri/target cargo run --manifest-path src-tauri/Cargo.toml --example bold_raster_probe` を実行する
+  4. フォント読み込みで panic する。`m_placement_probe` も同様
+
+  ## 期待する挙動 (必須)
+  `bash scripts/fetch-fonts.sh` のあとは、`src-tauri/examples/` 配下の example が
+  どれもそのまま実行できること。フォントは `CARGO_MANIFEST_DIR` 起点で
+  `src-tauri/assets/fonts/` から解決し、個人環境の絶対パスに依存しないこと。
+  実行手順コメントも現在のディレクトリ構成に合わせること。
+
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所 (任意)
+  - `src-tauri/examples/bold_raster_probe.rs:22` — Inconsolata-Regular.otf の絶対パス
+  - `src-tauri/examples/bold_raster_probe.rs:26` — Inconsolata-Bold.otf の絶対パス
+  - `src-tauri/examples/m_placement_probe.rs:8` — Inconsolata-Regular.otf の絶対パス
+  - `src-tauri/examples/bold_raster_probe.rs:5-6` — 古い `native-poc/` 実行手順
+  - `src-tauri/examples/font_select_probe.rs:6-7` — 古い `native-poc/` 実行手順
+  - 参考: `src-tauri/src/render/font/resolver.rs:50,58` — 同じフォントの正しい参照方法
+  - 参考: `scripts/fetch-fonts.sh:161,165` — 両フォントの取得エントリ
+  `font_select_probe.rs` は `fontdb::Database::load_system_fonts()` だけを使い、
+  バンドルアセットに依存しない。修正対象は実行手順コメントのみ。
+
+  ## 実害・発生条件 (任意)
+  - 作者以外の開発者・CI・無人ワークフローでは、この 2 つの example が最初から動かない。
+  - コンパイルは通るため `cargo test` は落ちず、気付きにくい。
+  - 発生条件は「`/home/sakura/workspace/Inconsolata/` が無いこと」。作者の環境では再現しない。
+
+  ## 由来
+  em-workflow の `fetch-fonts-noto-color-emoji` フィーチャー（Notion タスク
+  `https://www.notion.so/3db3509ec8ee81859c85ca94adb01dbc` 、
+  `fetch-fonts.sh` が `NotoColorEmoji.ttf` を取得しない件）の create-spec フェーズで、
+  example の資産依存を調べている最中に検出した。同フィーチャーは `cargo test` の
+  コンパイル失敗だけを対象とするため、Codex 相談のうえこの件はスコープ外と判断し、
+  別タスクとして切り出した。判断の記録は
+  `feature-docs/fetch-fonts-noto-color-emoji/phase-state/create-spec.yaml` の
+  `answers.other-examples-scope`。
+parent_branch: em-workflow/example-font-absolute-path/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo build --manifest-path src-tauri/Cargo.toml --examples"
+      test_command: "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 0d431fc93effa29a441079836e435a491d1217b1
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "変更対象は src-tauri/examples/ の診断用 probe のソース内文字列 (フォントパスと実行手順コメント) とソース走査テストの追加のみで、UI 表示面・画面遷移・デザイントークンに一切触れない。design ステップが生む成果物がない。"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "bold_raster_probe のフォント読み込みを実行時解決にする"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS4, TS5]
+  FR2:
+    title: "m_placement_probe のフォント読み込みを実行時解決にする"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS4, TS5]
+  FR3:
+    title: "bold_raster_probe の実行手順コメントを現行レイアウトに更新する"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2]
+  FR4:
+    title: "font_select_probe の実行手順コメントを現行レイアウトに更新する"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2]
+  FR5:
+    title: "ソース走査による回帰テストを追加する"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS2]
+  FR6:
+    title: "本体側のフォント埋め込みは変更しない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3]
+  NFR1:
+    title: "テストのフォント非依存"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  NFR2:
+    title: "プラットフォーム非依存のパス組み立て"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS4]
+  NFR3:
+    title: "既存のビルド構成を変えない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3, TS4]
+  NFR4:
+    title: "probe の出力内容を変えない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5]
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2

@@ -1,11 +1,11 @@
 schema_version: 1
 feature: example-font-absolute-path
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: 8c3b4cce8fc15692cdd859d1fdfec09ec796b2c2
-last_input_digest: sha256:e3f370a3301fd49d4a31941e878258d5bfe40be5d966269ac70f98c3df64d015
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:787fa334fcc067b0fe2a910fc69cb169673c779a1237f04ba2c38cd215106d58
+active_request_id: null
 packets:
   example-font-absolute-path-q0001:
     status: answered
@@ -68,7 +68,19 @@ worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
     input_digest: sha256:e3f370a3301fd49d4a31941e878258d5bfe40be5d966269ac70f98c3df64d015
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:1dd702b0277543d1a13700ff0960b2a420875a570ae584695f2f4925241ed7c3
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:787fa334fcc067b0fe2a910fc69cb169673c779a1237f04ba2c38cd215106d58
+artifacts:
+  - path: feature-docs/example-font-absolute-path/REQUIREMENTS.md
+    sha256: sha256:08238b0cd049841b546d6f381e2c1e6929b54a63a10336c297816f25d24fc5ab
+    produced_by: create-spec-run-0003
+  - path: feature-docs/example-font-absolute-path/SPEC.md
+    sha256: sha256:3381a0888ea36643c809cf38d01138730769f11464ad82e644978ab56586f4f6
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0

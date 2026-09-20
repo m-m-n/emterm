@@ -1,0 +1,48 @@
+schema_version: 1
+feature: example-font-absolute-path
+records:
+  - question_id: create-spec.command-approval
+    packet_id: null
+    answered_at: "2026-09-21T00:16:58+09:00"
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "auto_record"
+    normalized_answer: "workflow.yaml project.components.main の 3 コマンドを自動承認・記録した"
+    resolution_note: >-
+      gate: create-spec.command-approval;
+      references/batch-policies.yaml の action auto_record を適用。refusal pattern 該当なし（bash_guard.py --record exit 0）。
+      auto-approved command strings（新規記録 2 件）:
+      (1) build_command = "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo build --manifest-path src-tauri/Cargo.toml --examples";
+      (2) test_command = "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1".
+      既承認のため再記録不要だったもの 1 件: format_command = "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check"。
+      e2e_test_command は空（test/README.md が E2E 基盤の不在を明記）。
+      コマンド文字列の選定は Codex 相談（harness entry: codex、1 ターンで収束）で決めた。
+      前提として、新規 worktree では src-tauri/assets/fonts/ にフォント実体が無く（LICENSE と README.md のみ）、
+      src-tauri/{viewer,settings}/dist/ も存在しないため、素の cargo test は gui feature 既定有効下でビルド失敗する。
+      Q(test_command): 選択肢 full_suite_serial / full_suite_parallel / lib_only_serial / bare_full_suite →
+      採用 full_suite_serial。Codex の理由: 前提資産を先に用意するので新規 worktree でもビルドでき、
+      --lib に限定しないため本フィーチャーが追加する統合テスト（src-tauri/tests/ のソース走査テスト）も実行され、
+      --test-threads=1 で既知の並列フレーク（tabs.rs replay / tmux_sockets discover）を避けられる。
+      不採用: lib_only_serial は新規統合テストを実行しない、full_suite_parallel はフレーク由来の偽陽性を招く、
+      bare_full_suite は前提資産が無い worktree でビルド失敗する。
+      Q(build_command): 選択肢 prereq_examples / bare_examples / prereq_release → 採用 prereq_examples。
+      Codex の理由: フォントと埋め込み資産を先に用意し、gui 既定有効 + --examples で変更対象の example をコンパイルできる。
+      不採用: bare_examples は前提資産が無くビルド失敗、prereq_release は --examples を含まず本件の検証信号にならない。
+      orchestrator の判断（Codex には諮っていない）: project.components は Rust の main 1 件のみとした。
+      本フィーチャーの変更は src-tauri/examples/*.rs と src-tauri/tests/ の新規テストに閉じ（NFR3）、
+      TypeScript 側（bun test / typecheck）に影響し得ないため、verify に TS コンポーネントを足しても信号が増えずコストだけが増える。
+  - question_id: create-spec.design-system
+    packet_id: null
+    answered_at: "2026-09-21T00:16:58+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [top_candidate_or_none]
+    freeform: null
+    normalized_answer: "project_native"
+    resolution_note: >-
+      gate: create-spec.design-system; references/batch-policies.yaml の select/top_candidate_or_none を適用。
+      design ステップは skipped だが候補が 3 件（ゼロではない）ため、create-spec-phase.md 11a の例外に当たらず
+      pending と同じ手順で確定した。候補あり → project_native。
+      paths: doc/UI-DESIGN-GUIDELINES.yaml（トークン定義の正本）/ src-tauri/src/ui/md3.rs（ネイティブミラー）/
+      src-tauri/web-shared/styles.css（WebView ミラー）。本フィーチャーはいずれにも触れない。
