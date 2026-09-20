@@ -1,0 +1,19 @@
+schema_version: 1
+feature: wheel-report-tests-yaml-name-drift
+records:
+  - question_id: implement.deviation-auto-addition
+    packet_id: null
+    answered_at: "2026-09-20T21:13:00+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "declined"
+    normalized_answer: "declined"
+    resolution_note: >-
+      task_id: task0001; deviation: ran scripts/fetch-fonts.sh to populate the
+      gitignored src-tauri/assets/fonts/ so build.rs could complete in a fresh
+      worktree. Declined for auto-addition to tasks.task0001.files because the
+      first evidence part is absent: the deviation names no path being added to
+      the declared change set — the populated directory is gitignored and does
+      not appear in the observed change set. The containment check is
+      unaffected; the observed change set remains a subset of the declared one.

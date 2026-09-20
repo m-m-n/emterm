@@ -106,7 +106,7 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/wheel-report-tests-yaml-name-drift/task0001
 
