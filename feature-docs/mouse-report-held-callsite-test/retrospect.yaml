@@ -1,0 +1,38 @@
+feature: mouse-report-held-callsite-test
+collected_at: "2026-09-21T04:08:33+09:00"
+session_ids: ["01a0c037-b0ed-71c5-bc4a-2c203870083e.jsonl"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - note: |
+      SPEC が「観測可能な契約のみをアサートする」と定める NFR を持つとき、呼び出し側の
+      引数受け渡しを固定する手段が存在しなくなる。本 feature はその NFR に明示的な例外を
+      置いて source-scan を許可することで解消した。元の feature
+      (mouse-drag-latch-regression) では同じ修正が NFR 違反として revert されており、
+      「SPEC の制約が退行検出そのものを不可能にする」パターンとして再利用価値がある。
+  - note: |
+      round 1 の evaluator が per-finding の `confidence` を整数ではなく "high"/"medium"
+      の文字列で返した。Phase R3b はこのフィールドで整数演算を行うため型不整合になる。
+      evaluator 契約側で整数を強制するか、R3b にフィールド単位の修復を明記するかの
+      どちらかを検討する価値がある（今回は Codex 相談で中立値 60 を打つ形に解決）。
+  - note: |
+      scan-dependencies.py file-tasks が degraded=true / listing_exit_nonzero を返した
+      （notion-task-dispatch の listing probe が非ゼロ終了）。今回は findings 空のため
+      影響なしだが、vulnerability findings があるラウンドでは外部起票に落ちない。
+      listing probe の非ゼロ終了要因を別途調べる価値がある。
+  - note: |
+      SPEC の TS-1..TS-6 というラベルと、実際に納品されたテスト名が一対一で対応しない
+      （TS-4/TS-5 は約 16 本に細分化された）。VERIFICATION.md が「文字単位で一致」を
+      検査項目に置いていたため verify で判断が必要になった。計画段階で TS ラベルを
+      「シナリオ ID」であってテスト関数名ではないと明記しておくと、この摩擦は起きない。
+  - note: |
+      --batch --once --pr の組み合わせは、フェーズ境界ごとにターンが終わるため Step C に
+      到達せず、--pr が効かないまま起動が繰り返される。本 feature では implement 境界と
+      retrospect 境界の 2 回、同じ曖昧性で Codex 相談が発生した。起動側が --once を
+      使う場合の --pr の扱いを運用ルールとして固める価値がある。
