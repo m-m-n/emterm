@@ -1,0 +1,28 @@
+schema_version: 1
+feature: asset-manifest-scanner-hardening
+records:
+  - question_id: implement.focused-test-command-approval
+    packet_id: null
+    answered_at: "2026-09-21T02:20:00+09:00"
+    source: batch-codex-consulted
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "pre-record the focused test command into the approval store before launching the implementer"
+    normalized_answer: "pre-record the focused test command into the approval store before launching the implementer"
+    resolution_note: >-
+      gate: unlisted non-packet gate — the task plan's focused iteration command
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test asset_manifest`
+      is neither declared in workflow.yaml nor present in the approval store, so bash_guard.py
+      returns no decision and the command falls through to the non-deterministic permission
+      classifier; a prior incident in this project stalled an unattended run for hours on an
+      `ask` verdict. options: (a) pre-record the focused command; (b) leave it out and let the
+      implementer fall back to the already-approved whole-suite test command; (c) rewrite the
+      task plan to use only the whole-suite command. codex_consulted: true. Codex converged on
+      (a): (b) is not actually a safe fallback because the stall itself blocks the fallback, and
+      the focused command is a read-only subset of the already-approved whole-suite invocation,
+      so the incremental privilege is effectively narrower than what is already granted. Codex
+      preferred a task-scoped/expiring approval where the tooling supports one; bash_guard.py's
+      approval store has no scoping or expiry, so the permanent registration form was used.
+      opus_escalation: not run. chosen: (a) — recorded
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test asset_manifest`
+      via `bash_guard.py --record`.
