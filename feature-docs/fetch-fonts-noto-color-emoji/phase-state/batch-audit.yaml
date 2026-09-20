@@ -23,3 +23,34 @@ records:
       test that cannot be written or cannot pass) was MISSING -- no observable
       outcome was stated. Not auto-added; surfaced as an ordinary deviation for
       the containment check.
+  - question_id: review.deleted-path-in-changed-files
+    packet_id: null
+    answered_at: "2026-09-20T23:40:00+09:00"
+    source: codex-consultation
+    answer_mode: single_select
+    selected_option_ids: ["option_b"]
+    freeform: null
+    normalized_answer: "keep in diff, exclude from Read list, disclose"
+    resolution_note: >-
+      Unlisted-gate fallback (no gate_id at the originating site; batch-mode.md
+      "Any other non-packet AskUserQuestion site"). Review Phase R0 step 3
+      requires every path in changed_files to be a regular file, but
+      `src-tauri/examples/swash_emoji.rs` is deleted by this feature's diff
+      (git-confirmed via `git diff --diff-filter=D`), so it cannot exist at
+      HEAD. Options put to Codex: (A) abort the whole review phase, since the
+      protocol says "abort on violation, never sanitize"; (B) keep the deleted
+      path in the `git diff` command so the deletion stays reviewable as diff
+      content, exclude it from the file list reviewers are told to Read, and
+      disclose the exclusion in the round record; (C) silently drop it from
+      both. Codex (gpt-6-astra, readonly, reasoning xhigh) chose B, reasoning
+      that a deletion is a real reviewable change so review coverage must be
+      preserved, while the gate's actual security purpose -- preventing
+      reviewers from Reading outside project_root -- is fully served by
+      excluding it from the Read list only. It added that the exclusion must be
+      narrowed to paths git itself confirms as deletions, that the lexical path
+      checks stay in force, and that the regular-file / symlink / realpath
+      checks stay in force for every Read target. It rejected A as halting the
+      review over an ordinary deletion and C as silently hiding a change from
+      reviewers. Adopted B verbatim: the deleted path is git-confirmed, passes
+      the lexical checks, is carried in diff_cmd_quoted, is absent from the
+      reviewers' Read list, and is disclosed in reviews/round1.yaml.
