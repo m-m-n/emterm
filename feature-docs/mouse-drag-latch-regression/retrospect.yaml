@@ -1,0 +1,49 @@
+feature: mouse-drag-latch-regression
+collected_at: "2026-09-21T01:10:36+09:00"
+session_ids:
+  - 01a0bf94-5b8d-75be-8826-d3c182bc3b84
+signals:
+  review_critical_high:
+    - stable_id: e51d010850c6d79e
+      category: spec
+      file: src-tauri/src/window_host/tests.rs
+      title: "Extra sixth test exceeds mandated five-test set"
+      resolution: fixed
+    - stable_id: 1c5cda6dce5fee4f
+      category: spec
+      file: src-tauri/src/window_host/tests.rs
+      title: "Foreign-task test lacks required mechanism label"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1 の auto-fix ループ 1 が comprehensive の medium 指摘 a3855d779d6ae931 に
+     対して 6 本目のテストを追加したが、それが task0001 のスコープ（テスト 5 本のみ）と
+     SPEC NFR5（観測可能な契約をアサートする / ソース文字列 include_str! ではない）に
+     違反し、同ラウンドの spec 再レビューで high 2 件として跳ね返った。適用 1 / revert 1 で
+     差し引きゼロ。auto-fix editor は single-file の finding を受け取るがタスクの
+     scope 宣言（tasks/taskNNNN.md の Scope / Files to Modify）を参照していない。"
+  - "medium かつ category:spec の findings（c48b3bbd49f304fa / 5c6f95cc82a7beda）は
+     auto-fix の候補ゲートから二重に外れて unresolved のまま残った。内容は
+     『doc コメントに mechanism ラベルを 1 つだけ書く』という AC-6 違反で、
+     修正コストは 2 行。severity/category だけで機械的に切ると、極小コストで
+     AC に戻せる指摘が残留する。"
+  - "TS-M1（実機ポインタ操作の手動確認）は無人 batch では原理的に実行不能で、
+     verify.not_executed_items として記録した。VERIFICATION.md に手動項目を書く時点で、
+     batch 実行では必ずこのゲート（verify.manual-item-unexecutable）に当たる。
+     計画段階で『この項目は batch では not executed になる』と明記できると
+     Codex 相談 1 往復を省ける。"
+  - "本フィーチャは Notion チケットの『期待する挙動』3 点のうち 1 点
+     （フォーカス喪失時に host.dragging と pending anchor を落とす）を意図的に採用しなかった。
+     先行フィーチャ focus-loss-drag-termination の SPEC Supersession が
+     !left_held ゲートを製品判断として確定させていたため。チケット起票時点（review round 3 の
+     deferred finding）より後に仕様が動いており、deferred finding を起票する際に
+     『起票時点の仕様』をスナップショットしておかないと、実行時に矛盾として現れる。"
+  - "Codex 相談で turn 1 の推奨（B: 仕様を覆して本番コードを変更）が、
+     turn 2 でこちらが 3 つの証拠（Supersession セクション / event_loop.rs の D2-D5 コメント /
+     finding の起票時期）を提示したら A に反転した。Codex に渡す初期コンテキストに
+     『その挙動が意図的である根拠へのポインタ』を含めておくと 1 往復で済む。"
