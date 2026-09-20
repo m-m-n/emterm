@@ -1,0 +1,192 @@
+schema_version: 1
+feature: mouse-drag-latch-regression
+records:
+  - question_id: develop.scope-already-fixed
+    packet_id: null
+    answered_at: "2026-09-21T00:05:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [proceed_new_feature]
+    freeform: "proceed_new_feature"
+    normalized_answer: "Start the feature: the reported defect's first three mechanisms are already fixed on main, but the definition of done is not yet met."
+    resolution_note: >-
+      gate: orchestrator-opened scope question raised before Step A's create-spec,
+      because the reported defect appeared to be already fixed on main (8c3b4cce).
+      Options: proceed_new_feature / stop_already_fixed.
+      codex_consulted: true (harness entry `codex`, turn 1 of the consultation).
+      Codex verified five checks against the repository and reported items 1-3
+      satisfied (apply_outcome_with_held clears only unheld slots at
+      mouse_report.rs:1164; the held-aware entry point is reached from
+      pointer_routing.rs:850 and mouse_report.rs:1235; the no-owner left release is
+      gated on drag_in_flight at mouse_report.rs:935 / pointer_routing.rs:364) and
+      items 4-5 unsatisfied (the focus-loss arm does not terminate a drag whose left
+      button is held; no regression test covers the three named cases end to end).
+      Chosen: proceed_new_feature. Not chosen: stop_already_fixed — rejected because
+      the definition of done's regression-test requirement is demonstrably unmet.
+      opus_escalation: not run (Codex's suggestion mapped onto an offered option).
+  - question_id: develop.scope-focus-loss-semantics
+    packet_id: null
+    answered_at: "2026-09-21T00:12:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [scope_to_regression_tests_only]
+    freeform: "scope_to_regression_tests_only"
+    normalized_answer: >-
+      Keep the deliberate `!left_held` focus-loss gate and scope the feature to the
+      missing regression tests, asserting the current intended semantics.
+    resolution_note: >-
+      gate: orchestrator-opened scope question, turn 2 of the same Codex consultation.
+      Options: terminate_on_focus_loss_unconditionally / keep_held_gate_add_focus_loss_release_path /
+      scope_to_regression_tests_only.
+      codex_consulted: true (harness entry `codex`).
+      Crux settled by Codex: after focus loss with the left button still physically
+      held, the window still receives the matching release (event_loop.rs:583 handles
+      button notifications without conditioning on focus state; clear_all at
+      mouse_report.rs:1249 clears only the ownership and held records, not OS event
+      delivery), so the release reaches decide_release's "left release while a drag is
+      in flight" branch (mouse_report.rs:935) and publish_local_drag
+      (pointer_routing.rs:564 -> :426) clears host.dragging, consumes
+      app.pending_selection_anchor and publishes the selection. No latch remains.
+      Ordering fact recorded: host.mouse_report_held is zeroed on focus loss AFTER the
+      termination predicate is evaluated (event_loop.rs:259 reads the left-held record,
+      :260 evaluates, :269 calls clear_all).
+      The `!left_held` gate is deliberate, pinned by
+      tests.rs:1938 should_terminate_drag_terminates_only_when_in_flight_and_left_not_held
+      and documented as out of scope in
+      feature-docs/focus-loss-drag-termination/tasks/task0001.md:151.
+      Chosen: scope_to_regression_tests_only. Not chosen:
+      terminate_on_focus_loss_unconditionally and keep_held_gate_add_focus_loss_release_path
+      — both overturn the existing held-drag-preservation behaviour and its pinning test.
+      Consequence recorded as a feature assumption: the task's "期待する挙動" bullet asking
+      for unconditional drag termination on focus loss is intentionally not adopted.
+      opus_escalation: not run (Codex's suggestion mapped onto an offered option).
+  - question_id: create-plan.mutation-probe-revert-safety
+    packet_id: null
+    answered_at: "2026-09-21T00:22:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [verify_revert_inside_task]
+    freeform: "verify_revert_inside_task"
+    normalized_answer: >-
+      Keep the mutation probe, and make its revert mechanically verifiable inside
+      task0001: before committing, the implementer verifies the working tree against
+      the task's base revision, and any byte-level difference outside
+      src-tauri/src/window_host/tests.rs fails the task.
+    resolution_note: >-
+      gate: orchestrator-opened planning-quality question, raised after the planner
+      returned warning #2 — task0001 prescribes a mutation probe (inject the named
+      regression locally, observe the new test fail, revert) whose revert is
+      mandatory, and an unattended batch implementer that misses a revert would ship
+      a production mutation in violation of FR4. This gate carries no gate_id at its
+      originating site, so it resolves per references/batch-mode.md's unlisted-gate
+      fallback: Codex consultation first, minimum-side-effect option if no decision
+      is reached. Options presented to Codex: A keep_as_written (rely on AC-7 / TS-6 /
+      review to catch a missed revert) / B verify_revert_inside_task / C
+      drop_mutation_probe / D other.
+      codex_consulted: true (harness entry `codex`, readonly sandbox, run_codex_exec.sh,
+      working dir = integration worktree). Codex recommended B, reasoning that an
+      unattended run is safer failing inside the phase that created the change than
+      relying on a later phase to catch it; that the probe's evidential value — proof
+      each new test actually detects its named regression — is real and is lost under
+      C; and that A leaves an operational dependency on a later phase always catching
+      a missed revert. Codex noted D (a throwaway probe workspace) would isolate
+      further but costs more complexity than a single-file task warrants.
+      Chosen: B (verify_revert_inside_task) — adopted per the launch instruction to
+      take the option judged comparatively better. Not chosen: A — leaves the missed
+      revert to be caught only after it is committed; C — loses the mutation
+      evidence; D — disproportionate for a one-file change set.
+      applied_as: the planner (same run, create-plan-run-0001) amended
+      tasks/task0001.md only — the mutation-probe note now requires a pre-commit
+      working-tree comparison against the task's base revision, with any non-test-file
+      difference failing the task, and a new AC-8 asserts that the comparison ran,
+      reported no non-test-file difference, and is recorded in the task's test record.
+      No other artifact was written; IMPLEMENTATION.md and VERIFICATION.md are
+      unchanged.
+      opus_escalation: not run (Codex's recommendation mapped onto an offered option).
+  - question_id: develop.scope-reconfirm-implement-entry
+    packet_id: null
+    answered_at: "2026-09-21T09:20:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [keep_current_spec_tests_only]
+    freeform: "keep_current_spec_tests_only"
+    normalized_answer: >-
+      Keep the current SPEC (production code unchanged, regression tests only) and
+      file the residual focus-loss ghost-drag concern as a separate Notion task.
+    resolution_note: >-
+      gate: orchestrator-opened scope re-confirmation raised at the implement-phase
+      entry of this run, because the launch instruction requires consulting Codex on
+      any unclear point and adopting the option judged comparatively better. The
+      unclear point: the Notion ticket's stated expectation ("drop host.dragging and
+      the pending anchor on focus loss") contradicts SPEC FR3, which pins the
+      opposite semantics. Options: A keep_current_spec_tests_only / B
+      overturn_spec_and_change_production_code.
+      codex_consulted: true (harness entry `codex`, readonly sandbox,
+      run_codex_exec.sh, working dir = integration worktree, two turns).
+      Turn 1: Codex recommended B, arguing the focus-loss arm still leaves a
+      reachable ghost drag when the matching release never arrives while unfocused,
+      and that the current SPEC inverts the ticket's expectation without an explicit
+      product decision.
+      Turn 2: the orchestrator supplied three pieces of decisive evidence Codex had
+      not seen - (1) feature-docs/focus-loss-drag-termination/SPEC.md's Supersession
+      section, which names and replaces the prior FR3/AC-3 with the !left_held gate
+      as a deliberate product decision; (2) the event_loop.rs Focused(false) arm's
+      own D2-D5 comments, which acknowledge the never-arriving release and
+      deliberately leave host.dragging / the pending anchor untouched; (3) the
+      ticket's provenance as a deferred review finding (mouse-reporting review round
+      3, stable_id 1ac64f41111531a6) authored before that supersession landed.
+      Codex then reversed to A, reasoning that the later SPEC is the current formal
+      product decision, that B would retract a settled specification rather than fix
+      a defect, that the residual ghost drag self-heals on the next left click and is
+      a known trade-off of "a focus steal must not destroy a live drag", and that an
+      unattended batch run has no basis to presume human approval for a product
+      decision reversal.
+      Chosen: A (keep_current_spec_tests_only) - adopted per the launch instruction.
+      Not chosen: B - would require a specification-change transition (create-spec
+      back to needs_update) and a human product decision that batch mode cannot
+      grant.
+      follow_up: the residual focus-loss ghost-drag concern is filed as a separate
+      Notion task at run end (notion-batch-develop's residual-task rule).
+      opus_escalation: not run (Codex's final recommendation mapped onto an offered
+      option).
+  - question_id: verify.manual-item-unexecutable
+    packet_id: null
+    answered_at: "2026-09-21T01:20:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [pass_on_automated_record_manual_as_not_executed]
+    freeform: "pass_on_automated_record_manual_as_not_executed"
+    normalized_answer: >-
+      Record verify as pass on the automated criteria, and record TS-M1 explicitly as
+      "not executed — requires a human at a physical display", carrying it in the run
+      report and filing it as a separate follow-up task.
+    resolution_note: >-
+      gate: orchestrator-opened verify-phase question. VERIFICATION.md's TS-M1 sits
+      under "Manual Testing (E2E Not Possible)" and requires a human to launch a
+      release build and drive the pointer on a physical display. This run is headless
+      and unattended, and the project has no E2E harness for the wgpu-rendered native
+      terminal surface, so TS-M1 cannot be executed by any means available to the run.
+      The gate carries no gate_id at its originating site, so it resolves per
+      references/batch-mode.md's unlisted-gate fallback: Codex consultation first,
+      minimum-side-effect option if no decision is reached.
+      Options presented to Codex: A record_ts_m1_as_failed_item (verify.status =
+      failed, triggering an auto-rework round) / B
+      pass_on_automated_record_manual_as_not_executed / C omit_ts_m1_as_out_of_scope.
+      codex_consulted: true (harness entry `codex`, readonly sandbox,
+      run_codex_exec.sh, working dir = integration worktree, one turn).
+      Codex recommended B, reasoning that every executable check passed so recording
+      verify as pass on those is the honest reading; that TS-M1 must be judged neither
+      pass nor fail but recorded as not executed, which fabricates no verification;
+      that FR4 is independently verified by TS-6's diff inspection so no requirement
+      loses its coverage; and that carrying the item in both the run report and a
+      tracked follow-up keeps the human evaluator informed. Codex named the residual
+      risk: the real-hardware behaviour TS-M1 checks stays unverified until a human
+      runs it.
+      Chosen: B — adopted per the launch instruction to take the option judged
+      comparatively better; it is also the minimum-side-effect option. Not chosen:
+      A — treats an unexecutable item as a failure and burns a rework round on
+      something no code change can fix, since the feature is test-only and the
+      production repair it would exercise predates this feature (assumption A3);
+      C — hides an unexecuted item from the evaluator and damages the transparency of
+      the verification record.
+      opus_escalation: not run (Codex's recommendation mapped onto an offered option).
