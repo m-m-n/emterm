@@ -150,3 +150,41 @@ records:
     `assets/fonts/NotoColorEmoji.ttf`, which `scripts/fetch-fonts.sh` does not fetch,
     so `cargo test` with default features cannot compile on a clean checkout. Both
     implementers hit this independently. Pre-existing, unrelated to this feature.
+- gate_id: implement.codex-consultation
+  phase: implement
+  decision: adopted
+  codex_consulted: true
+  resolution_note: |
+    User-requested Codex consultation on the two unresolved judgment points left by
+    the implement phase. Codex CLI (readonly sandbox) was asked to pick between the
+    enumerated options; both of its picks were adopted.
+
+    Point A — format-command substitution.
+      Context: workflow.yaml's approved format command is `make fmt` (crate-wide
+      `cargo fmt --all` + `bunx biome format --write .`). The task0001 implementer ran
+      `cargo fmt --manifest-path src-tauri/Cargo.toml -- <the 3 touched files>` instead,
+      citing the task plan's own Out-of-Scope clause forbidding a crate-wide run and the
+      matching project rule. `git status --short` confirmed no other file changed.
+      Options offered: A1 accept and read `make fmt` as diff-scoped `cargo fmt` in verify
+      too; A2 accept now but run the approved `make fmt` verbatim in verify and report
+      (not commit) unrelated diffs; A3 fail the implement phase and re-run `make fmt`.
+      Codex chose A1. Its reasoning: the task plan explicitly puts crate-wide formatting
+      out of scope, the touched files are already formatted, and the substitution produced
+      no unrelated diff — so treating it as diff-scoped in verify as well is consistent.
+      ADOPTED: A1. Options not chosen: A2, A3.
+
+    Point B — pre-existing build-blocking gap.
+      Context: `src-tauri/examples/swash_emoji.rs` does
+      `include_bytes!("../assets/fonts/NotoColorEmoji.ttf")`, but that file is gitignored
+      AND absent from `scripts/fetch-fonts.sh`'s manifest, so default-feature `cargo test`
+      cannot compile on a clean checkout. Both implementers hit this independently; the
+      task0001 implementer worked around it by downloading the font manually (gitignored
+      build asset only, no tracked file touched).
+      Options offered: B1 treat as out of scope and file a separate task; B2 fix inside
+      this feature by adding the font to fetch-fonts.sh; B3 do nothing.
+      Codex chose B1. Its reasoning: it is a pre-existing environment/repo gap unrelated
+      to this change, so it does not belong in this feature; record the repro and the
+      temporary workaround in a separate task instead.
+      ADOPTED: B1. Options not chosen: B2, B3.
+
+    No Opus escalation was run: Codex returned a decision for both points.
