@@ -1,0 +1,19 @@
+schema_version: 1
+feature: wheel-report-tests-yaml-name-drift
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: fe52d7134f5b0cf784430847c8169d909481a658
+last_input_digest: sha256:cd5115bd596facb24b8f5a78fec5552528c95e476d41f7b119b67abb85818a91
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:cd5115bd596facb24b8f5a78fec5552528c95e476d41f7b119b67abb85818a91
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
