@@ -1,0 +1,21 @@
+schema_version: 1
+feature: fetch-fonts-noto-color-emoji
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: af0ad485f62d1c0903aa2bb383afc6bab4103bd4
+last_input_digest: sha256:a5b08c16943d9c84aa861246c87313d6ebbafcb30210ee2872651ecbd9450d05
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:a5b08c16943d9c84aa861246c87313d6ebbafcb30210ee2872651ecbd9450d05
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
