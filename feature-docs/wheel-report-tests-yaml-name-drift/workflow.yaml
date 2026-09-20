@@ -88,7 +88,8 @@ workflow:
     completed_at_commit: d89ed6f43aa82a96d9fb03634fde78f42b161664
     base_commit: 25570eb6659431027b35a009872fd443a3ebbfa1
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 066d64a0d4b6aa6fb08b940cd813c81e04787050
   - id: verify
     status: pending
     result: null
@@ -112,8 +113,9 @@ tasks:
     branch: em-workflow/wheel-report-tests-yaml-name-drift/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, spec]
   residual_critical_high: 0
   needs_rework: false
   plan:
