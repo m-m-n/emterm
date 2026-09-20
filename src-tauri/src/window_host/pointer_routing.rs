@@ -376,6 +376,107 @@ pub(super) fn local_drag_in_flight(host: &WindowHost, app: &App) -> bool {
     drag_in_flight(host.dragging, app.pending_selection_anchor.is_some())
 }
 
+/// task0001 (focus-loss-drag-cleanup-test, Shared Components,
+/// "Destination predicate"): the pair of selection-write destinations the
+/// publish path should write to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SelectionPublishTargets {
+    pub(super) primary: bool,
+    pub(super) clipboard: bool,
+}
+
+/// task0001 (focus-loss-drag-cleanup-test, Shared Components, "Destination
+/// predicate"): pure, total map from (selection present, copy-on-select,
+/// text empty) to the destinations FR6's preserved write rule names — no
+/// mutation, no I/O, no global access. See the task plan's "Preserved
+/// write rule" table: nothing is written when there is no selection;
+/// PRIMARY is written whenever a selection is present (even for empty
+/// resolved text — pinned current behaviour, not corrected here);
+/// CLIPBOARD is additionally written when copy-on-select is on AND the
+/// text is non-empty. Truth table asserted in full by
+/// `selection_publish_targets_*` in `tests.rs`.
+pub(super) fn selection_publish_targets(
+    selection_present: bool,
+    copy_on_select: bool,
+    text_empty: bool,
+) -> SelectionPublishTargets {
+    if !selection_present {
+        return SelectionPublishTargets {
+            primary: false,
+            clipboard: false,
+        };
+    }
+    SelectionPublishTargets {
+        primary: true,
+        clipboard: copy_on_select && !text_empty,
+    }
+}
+
+/// task0001 (focus-loss-drag-cleanup-test, Shared Components, "Window-free
+/// drag-termination state core"): performs the local drag terminator's two
+/// state effects — clearing the drag flag and consuming the pending
+/// selection anchor — and asks [`selection_publish_targets`] for the
+/// destination decision, from owned state and plain values alone. Names no
+/// window type anywhere in its signature or body, so a bare test can drive
+/// it with no winit window. **Pre**: receives only owned state (`dragging`,
+/// `pending_anchor`) and plain values (`resolved_text`, `copy_on_select`).
+/// **Post**: `*dragging` reads `false`, `*pending_anchor` is emptied, and
+/// the returned anchor is exactly the value that was pending before the
+/// call (`None` when there was none).
+pub(super) fn consume_drag_termination(
+    dragging: &mut bool,
+    pending_anchor: &mut Option<Pos>,
+    resolved_text: Option<&str>,
+    copy_on_select: bool,
+) -> (Option<Pos>, SelectionPublishTargets) {
+    *dragging = false;
+    let anchor = pending_anchor.take();
+    let selection_present = resolved_text.is_some();
+    let text_empty = resolved_text.map(str::is_empty).unwrap_or(true);
+    let targets = selection_publish_targets(selection_present, copy_on_select, text_empty);
+    (anchor, targets)
+}
+
+/// task0001 (focus-loss-drag-cleanup-test, Shared Components,
+/// "Selection-write sink"): the publish path's two possible write
+/// destinations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SelectionDestination {
+    Primary,
+    Clipboard,
+}
+
+/// task0001 (focus-loss-drag-cleanup-test, Shared Components,
+/// "Selection-write sink"): performs one selection write on behalf of the
+/// local-drag terminator's publish half. The production implementation
+/// (`mod.rs`, on `WindowHost`) delegates to the host's existing
+/// `set_primary` / `set_clipboard` primitives with today's arguments; the
+/// recording double (`tests.rs`) captures destination + payload per call
+/// instead of touching the OS clipboard. D4 (IMPLEMENTATION.md): a
+/// recorded call is evidence of a write REQUEST, not of an OS-level
+/// selection/clipboard update.
+pub(super) trait SelectionWriteSink {
+    fn write_selection(&mut self, destination: SelectionDestination, text: &str);
+}
+
+/// task0001 (focus-loss-drag-cleanup-test): issues one sink call per
+/// destination `targets` selected, PRIMARY before CLIPBOARD when both are
+/// selected — the single place that owns write ORDER, shared by the
+/// production call site ([`publish_local_drag`]) and by tests driving a
+/// [`SelectionWriteSink`] double directly.
+pub(super) fn publish_to_targets<S: SelectionWriteSink>(
+    sink: &mut S,
+    targets: SelectionPublishTargets,
+    text: &str,
+) {
+    if targets.primary {
+        sink.write_selection(SelectionDestination::Primary, text);
+    }
+    if targets.clipboard {
+        sink.write_selection(SelectionDestination::Clipboard, text);
+    }
+}
+
 /// task0001 (Shared Components, D4): the local drag terminator's publish
 /// half — clears the drag flag, consumes the pending selection anchor, and
 /// publishes a materialized selection to PRIMARY (and additionally to
@@ -388,27 +489,40 @@ pub(super) fn local_drag_in_flight(host: &WindowHost, app: &App) -> bool {
 /// arm calls this alone. Returns the consumed pending anchor so a caller
 /// composing the fold-click branch on top (the release path) can tell
 /// whether one was present.
+///
+/// task0001 (focus-loss-drag-cleanup-test): the adapter layer over the
+/// window-free [`consume_drag_termination`] state core, the
+/// [`selection_publish_targets`] destination predicate, and the
+/// [`SelectionWriteSink`] effect seam. This function is the only one in
+/// the chain that names `WindowHost` — it gathers plain values from the
+/// host and the app, hands them down, and performs the sink calls the
+/// decision names. Behaviourally identical to the pre-refactor body
+/// (NFR3): the empty-text PRIMARY write and the no-selection /
+/// active-tab-lookup-failure no-write cases are preserved verbatim.
 pub(super) fn publish_local_drag(host: &mut WindowHost, app: &mut App) -> Option<Pos> {
-    host.dragging = false;
-    let pending = app.pending_selection_anchor.take();
-    if let Some(sel) = app.selection {
-        if let Some(tab) = app.tabs.get(app.active) {
+    // Gather: resolve the selection to text now — `None` when there is no
+    // selection, or when the active-tab lookup fails, exactly as before.
+    let resolved_text = if let Some(sel) = app.selection {
+        app.tabs.get(app.active).map(|tab| {
             let core = tab.core.lock();
-            let text = sel.resolve(&core, app.fold_layout());
-            drop(core);
-            host.set_primary(&text);
-            // `copy_on_select` opts into mirroring the
-            // selection to the system CLIPBOARD as
-            // well, matching the WebView build's
-            // toggle. PRIMARY is always updated above
-            // so the middle-click flow keeps working
-            // regardless.
-            if app.settings.copy_on_select && !text.is_empty() {
-                host.set_clipboard(&text);
-            }
-        }
+            sel.resolve(&core, app.fold_layout())
+        })
+    } else {
+        None
+    };
+    // Decide + state effect: the window-free core clears the drag flag,
+    // consumes the pending anchor, and names the destinations.
+    let (anchor, targets) = consume_drag_termination(
+        &mut host.dragging,
+        &mut app.pending_selection_anchor,
+        resolved_text.as_deref(),
+        app.settings.copy_on_select,
+    );
+    // Perform: one sink call per selected destination, PRIMARY first.
+    if let Some(text) = resolved_text.as_deref() {
+        publish_to_targets(host, targets, text);
     }
-    pending
+    anchor
 }
 
 /// Perform [`mouse_report::LocalArm::CompleteSelectionAndPublishToPrimary`]:
