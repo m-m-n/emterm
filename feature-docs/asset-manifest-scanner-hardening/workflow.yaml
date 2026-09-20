@@ -1,0 +1,260 @@
+schema_version: 1
+feature: asset-manifest-scanner-hardening
+created: '2026-09-21'
+base_branch: main
+goal: |
+  asset_manifest.rs のスキャナに 2 件の堅牢性ギャップ（target プレフィックス除外 / include_bytes! のマクロ境界）
+
+  ## 現象 (必須)
+  `src-tauri/tests/asset_manifest.rs`（PR #77 で追加したフォントアセットの
+  リグレッションガード）に、ガード自体を弱める堅牢性ギャップが 2 件ある。
+  どちらも現状のツリーでは誤検出も見逃しも起きていないが、将来のパス追加で
+  静かに壊れる。
+  1. `asset_manifest.rs:179` — ビルド成果物の除外が `target` プレフィックス規則を
+  ディレクトリだけでなくパス構成要素すべてに適用している。`target` で始まる
+  名前の通常ファイル（例: `target_resolver.rs`）がスキャン対象から落ちる。
+  1. `asset_manifest.rs:87` — `include_bytes!` のスキャナが固定部分文字列に
+  マッチした後、マクロの境界を見ずに次の `"` を探す。マクロ呼び出しの外まで
+  走って別の文字列リテラルを拾いうる。同じ形の実例が
+  `src-tauri/build.rs:160` にある。
+  ## 再現手順 (必須)
+  1. `src-tauri/` 配下に `target` で始まる名前の `.rs` ファイルを置き、その中で
+  `include_bytes!("../assets/fonts/<未取得のフォント>.ttf")` を書く
+  1. `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test asset_manifest` を実行する
+  2. ガードが検出しないまま通る（1 の経路）
+  ## 期待する挙動 (必須)
+  - `target` プレフィックスによる除外はディレクトリ構成要素だけに適用する
+  - `include_bytes!` の引数抽出をマクロ呼び出しの括弧内に限定する
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  ## 該当箇所 (任意)
+  - `src-tauri/tests/asset_manifest.rs:179`
+  - `src-tauri/tests/asset_manifest.rs:87`
+  - `src-tauri/build.rs:160`（2 の同型の実例）
+  ## 実害・発生条件 (任意)
+  現状のツリーでは発現しない。フォント埋め込みパスが増えたとき、または
+  `target` で始まる名前のソースが増えたときに、ガードが静かに素通りする。
+  ## 由来
+  em-workflow フィーチャー `fetch-fonts-noto-color-emoji`（PR #77）の
+  レビューラウンド 1。comprehensive レビュアーが検出し、評価者が独立に裏取り
+  したうえで severity を low に降格したため、severity ゲートで落ちて
+  auto-fix ループに乗らなかった。評価者の `recommended_action` は `auto_fix`
+  だった。記録は
+  `feature-docs/fetch-fonts-noto-color-emoji/reviews/round1.yaml` の
+  `findings_dropped_by_severity_gate`。
+parent_branch: em-workflow/asset-manifest-scanner-hardening/integration
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/web-shared/components/md3-select.css
+    - src-tauri/web-shared/components/md3-select.ts
+    - src-tauri/web-shared/settings/ui-theme-presets.ts
+    - src-tauri/web-shared/settings/markdown-theme-presets.ts
+  components:
+    main:
+      language: Rust
+      build_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 0ca0ae8e04426bab87c639e0524318de71cb288b
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'No user-visible UI/UX surface: the change is confined to the text-scanning logic of one existing integration test file (src-tauri/tests/asset_manifest.rs). No new screen, component or design token, and no contact with the design system. Gate create-spec.design-step resolved to decide_autonomously, adopting requirements-analyst''s skip recommendation.'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: 9ed0be46e76fd307674e6449db35d822009df704
+- id: implement
+  status: completed
+  base_commit: 61c61133
+  completed_at_commit: 3212ea88c867e6030af13998b31136f882635a1f
+- id: review
+  status: completed
+  completed_at_commit: 30c74748984c99acb0982bbd67c476f7b1d70379
+- id: verify
+  status: completed
+  completed_at_commit: 202b8df68b5dd94bd73a3642a26f568e0bf41586
+  result: pass
+  failed_items: []
+- id: retrospect
+  status: completed
+  completed_at_commit: 7159e16a09d50819928877cbf9ccb4dbd0e3ae62
+tasks:
+  task0001:
+    title: Directory-only build-output exclusion and parenthesis-bounded macro-argument
+      extraction
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/tests/asset_manifest.rs
+    skills: []
+    domains:
+    - input-handling
+    - external-io
+    complexity: medium
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    status: merged
+    notes: null
+    branch: em-workflow/asset-manifest-scanner-hardening/task0001
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - spec
+    discretionary: []
+    cross_validation: true
+  perspectives:
+    comprehensive: {source: codex, status: completed, findings: 0}
+    security: {source: codex, status: completed, findings: 0}
+    performance: {source: 'litellm:muse-spark', status: completed, findings: 0}
+    spec: {source: 'litellm:muse-spark', status: completed, findings: 0}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Apply the `target` prefix exclusion to directory components only
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS1
+    - TS2
+    - TS3
+  FR2:
+    title: Confine `include_bytes!` argument extraction to the call's parentheses
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS4
+    - TS5
+  FR3:
+    title: Keep the scan result on the current tree unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS6
+  FR4:
+    title: Parenthesis delimiter form only
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests: []
+  FR5:
+    title: A call with no string literal inside the parentheses extracts nothing and moves on
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS4
+    - TS5
+  FR6:
+    title: A recurrence-detecting test for each of the two gaps
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS7
+  NFR1:
+    title: Structure - analysis functions stay pure, filesystem access confined to the repository-binding section
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests: []
+  NFR2:
+    title: Dependencies - no new dependency; std and the existing `tempfile = "3"` only
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests: []
+  NFR3:
+    title: Build-output exclusion - `target` / `target-host` / `target-win` directories stay out of the scan
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS2
+  NFR4:
+    title: Performance - scan cost stays roughly linear in source text length (single pass)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests: []
+  NFR5:
+    title: Change containment - changes confined to `src-tauri/tests/asset_manifest.rs`
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests: []
+  NFR6:
+    title: Conventions - existing test naming and construction style
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
