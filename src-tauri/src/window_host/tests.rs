@@ -5203,3 +5203,1573 @@ fn focus_loss_with_left_not_held_terminates_and_publishes_the_drag() {
         "focus-loss-gate-inversion: the publish seam must record a PRIMARY write"
     );
 }
+
+// ── task0001 (mouse-report-held-callsite-test): call-site fixation for
+// the held-button pass-through at the button and wheel report call
+// sites (D2/D3, IMPLEMENTATION.md — a narrowly-scoped, token-level
+// source-scan exception; never a whole-file substring needle). Pins
+// FR1-FR3 at exactly the two call connections FR1/FR2/FR3 name, and
+// nothing wider (Out of Scope). AC-1..AC-7.
+// ────────────────────────────────────────────────────────────────────
+
+/// E1-E4 scan elements (task0001.md "Element responsibilities and
+/// contracts"). Reusable against both the embedded production source
+/// (TS-1, TS-2, TS-3, TS-5, TS-6) and in-memory inputs (TS-4, TS-5's
+/// benign-edit sub-case) — that reuse is what lets TS-4/TS-5 demonstrate
+/// the red conditions without ever mutating the real file. Names this
+/// module couples to (NFR8 closed set): the two enclosing function names,
+/// the three callee names, and the one held-field name — all listed as
+/// constants just below the module.
+mod call_site_scan {
+    use std::collections::HashSet;
+
+    /// E1 — a single lexical token. `Literal` covers every string / byte
+    /// string / raw string (any hash count) / C string / character
+    /// literal / lifetime marker / numeric literal: their contents are
+    /// never inspected past tokenization, and each collapses to exactly
+    /// one opaque token regardless of what it contains.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) enum Tok {
+        Ident(String),
+        Punct(String),
+        Literal,
+    }
+
+    fn match_str(chars: &[char], pos: usize, s: &str) -> bool {
+        let mut i = pos;
+        for c in s.chars() {
+            if i >= chars.len() || chars[i] != c {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    /// Tries to scan a string-like literal starting at `chars[i]`:
+    /// plain / byte / C strings, and their raw counterparts with any
+    /// number of `#` delimiters. Returns the consumed length on success.
+    fn try_scan_string_like(chars: &[char], i: usize) -> Option<usize> {
+        let n = chars.len();
+        let mut j = i;
+        let is_raw;
+        if match_str(chars, j, "br") {
+            j += 2;
+            is_raw = true;
+        } else if match_str(chars, j, "cr") {
+            j += 2;
+            is_raw = true;
+        } else if match_str(chars, j, "r") {
+            j += 1;
+            is_raw = true;
+        } else if match_str(chars, j, "b") {
+            j += 1;
+            is_raw = false;
+        } else if match_str(chars, j, "c") {
+            j += 1;
+            is_raw = false;
+        } else {
+            is_raw = false;
+        }
+        let mut hash_count = 0usize;
+        if is_raw {
+            while j < n && chars[j] == '#' {
+                hash_count += 1;
+                j += 1;
+            }
+        }
+        if j >= n || chars[j] != '"' {
+            return None;
+        }
+        j += 1;
+        if is_raw {
+            loop {
+                if j >= n {
+                    return None;
+                }
+                if chars[j] == '"' {
+                    let mut k = j + 1;
+                    let mut cnt = 0usize;
+                    while k < n && cnt < hash_count && chars[k] == '#' {
+                        k += 1;
+                        cnt += 1;
+                    }
+                    if cnt == hash_count {
+                        j = k;
+                        break;
+                    }
+                }
+                j += 1;
+            }
+        } else {
+            loop {
+                if j >= n {
+                    return None;
+                }
+                if chars[j] == '\\' {
+                    if j + 1 >= n {
+                        return None;
+                    }
+                    j += 2;
+                    continue;
+                }
+                if chars[j] == '"' {
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+        }
+        Some(j - i)
+    }
+
+    /// Tries to scan a character literal starting at `chars[i] == '\''`.
+    /// Returns `None` when the input is instead a lifetime marker (the
+    /// caller falls back to lifetime scanning in that case) — the
+    /// standard heuristic: probe for a closing `'` after exactly one
+    /// (possibly escaped) scalar; a lifetime never closes.
+    fn try_scan_char_literal(chars: &[char], i: usize) -> Option<usize> {
+        let n = chars.len();
+        let mut j = i + 1;
+        if j >= n {
+            return None;
+        }
+        if chars[j] == '\\' {
+            j += 1;
+            if j >= n {
+                return None;
+            }
+            if chars[j] == 'u' && j + 1 < n && chars[j + 1] == '{' {
+                j += 2;
+                while j < n && chars[j] != '}' {
+                    j += 1;
+                }
+                if j >= n {
+                    return None;
+                }
+                j += 1;
+            } else if chars[j] == 'x' {
+                j += 1;
+                for _ in 0..2 {
+                    if j >= n {
+                        return None;
+                    }
+                    j += 1;
+                }
+            } else {
+                j += 1;
+            }
+        } else {
+            j += 1;
+        }
+        if j < n && chars[j] == '\'' {
+            j += 1;
+            Some(j - i)
+        } else {
+            None
+        }
+    }
+
+    /// E1 — tokenizes `src`, stripping whitespace and comments (line and
+    /// nested block), and collapsing every literal form to a single
+    /// opaque [`Tok::Literal`]. Punctuation relevant to later elements
+    /// (path separator `::`, field-access `.`, parens, comma, braces,
+    /// brackets, `|`, `=`, `;`, `=>`) is individually addressable as
+    /// [`Tok::Punct`]; everything else the two target bodies use
+    /// (operators, numeric literals) is tokenized too so nothing is ever
+    /// silently dropped, but this scan needs no more than what E2-E4
+    /// consume (Out of Scope: "building a general-purpose Rust parser").
+    pub(super) fn tokenize(src: &str) -> Vec<Tok> {
+        const MULTI: &[&str] = &[
+            "<<=", ">>=", "...", "..=", "->", "=>", "::", "==", "!=", "<=", ">=", "&&", "||", "+=",
+            "-=", "*=", "/=", "%=", "^=", "&=", "|=", "<<", ">>", "..",
+        ];
+        let chars: Vec<char> = src.chars().collect();
+        let n = chars.len();
+        let mut toks = Vec::new();
+        let mut i = 0usize;
+        while i < n {
+            let c = chars[i];
+            if c.is_whitespace() {
+                i += 1;
+                continue;
+            }
+            if c == '/' && i + 1 < n && chars[i + 1] == '/' {
+                i += 2;
+                while i < n && chars[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if c == '/' && i + 1 < n && chars[i + 1] == '*' {
+                i += 2;
+                let mut depth = 1i32;
+                while i < n && depth > 0 {
+                    if chars[i] == '/' && i + 1 < n && chars[i + 1] == '*' {
+                        depth += 1;
+                        i += 2;
+                    } else if chars[i] == '*' && i + 1 < n && chars[i + 1] == '/' {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            if let Some(consumed) = try_scan_string_like(&chars, i) {
+                i += consumed;
+                toks.push(Tok::Literal);
+                continue;
+            }
+            if c == '\'' {
+                if let Some(consumed) = try_scan_char_literal(&chars, i) {
+                    i += consumed;
+                    toks.push(Tok::Literal);
+                } else {
+                    i += 1; // consume the opening `'`
+                    while i < n && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                        i += 1;
+                    }
+                    toks.push(Tok::Literal); // lifetime marker: opaque, never an identifier
+                }
+                continue;
+            }
+            if c.is_alphabetic() || c == '_' {
+                let start = i;
+                i += 1;
+                while i < n && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                    i += 1;
+                }
+                let word: String = chars[start..i].iter().collect();
+                if word == "r"
+                    && i < n
+                    && chars[i] == '#'
+                    && i + 1 < n
+                    && (chars[i + 1].is_alphabetic() || chars[i + 1] == '_')
+                {
+                    i += 1;
+                    while i < n && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                        i += 1;
+                    }
+                    let full: String = chars[start..i].iter().collect();
+                    toks.push(Tok::Ident(full));
+                } else {
+                    toks.push(Tok::Ident(word));
+                }
+                continue;
+            }
+            if c.is_ascii_digit() {
+                i += 1;
+                while i < n {
+                    let d = chars[i];
+                    if d.is_alphanumeric() || d == '_' {
+                        i += 1;
+                    } else if d == '.' && i + 1 < n && chars[i + 1].is_ascii_digit() {
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                toks.push(Tok::Literal);
+                continue;
+            }
+            let mut matched: Option<&str> = None;
+            for op in MULTI {
+                let oplen = op.chars().count();
+                if i + oplen <= n && match_str(&chars, i, op) {
+                    matched = Some(op);
+                    break;
+                }
+            }
+            if let Some(op) = matched {
+                toks.push(Tok::Punct(op.to_string()));
+                i += op.chars().count();
+            } else {
+                toks.push(Tok::Punct(c.to_string()));
+                i += 1;
+            }
+        }
+        toks
+    }
+
+    /// E2 output: the token subsequence forming a function's body, plus
+    /// the set of that function's own parameter identifiers.
+    pub(super) struct FunctionBody {
+        pub tokens: Vec<Tok>,
+        pub params: HashSet<String>,
+    }
+
+    fn extract_param_names(tokens: &[Tok]) -> HashSet<String> {
+        let mut names = HashSet::new();
+        let mut depth = 0i32;
+        let mut current: Vec<Tok> = Vec::new();
+        let mut segments: Vec<Vec<Tok>> = Vec::new();
+        for t in tokens {
+            match t {
+                Tok::Punct(p) if p == "(" || p == "[" => {
+                    depth += 1;
+                    current.push(t.clone());
+                }
+                Tok::Punct(p) if p == ")" || p == "]" => {
+                    depth -= 1;
+                    current.push(t.clone());
+                }
+                Tok::Punct(p) if p == "," && depth == 0 => {
+                    segments.push(std::mem::take(&mut current));
+                }
+                _ => current.push(t.clone()),
+            }
+        }
+        if !current.is_empty() {
+            segments.push(current);
+        }
+        for seg in &segments {
+            for t in seg {
+                match t {
+                    Tok::Punct(p) if p == "&" => continue,
+                    Tok::Ident(id) if id == "mut" => continue,
+                    Tok::Ident(id) => {
+                        names.insert(id.clone());
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        names
+    }
+
+    fn extract_function_at(
+        tokens: &[Tok],
+        fn_index: usize,
+        name: &str,
+    ) -> Result<FunctionBody, String> {
+        let n = tokens.len();
+        let mut j = fn_index + 2;
+        while j < n && !matches!(&tokens[j], Tok::Punct(p) if p == "(") {
+            j += 1;
+        }
+        if j >= n {
+            return Err(format!("`fn {name}`: parameter list `(` not found"));
+        }
+        let param_start = j + 1;
+        let mut depth = 1i32;
+        let mut k = j + 1;
+        while k < n && depth > 0 {
+            match &tokens[k] {
+                Tok::Punct(p) if p == "(" => depth += 1,
+                Tok::Punct(p) if p == ")" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            k += 1;
+        }
+        if depth != 0 {
+            return Err(format!("`fn {name}`: unmatched parameter-list parenthesis"));
+        }
+        let param_end = k;
+        let params = extract_param_names(&tokens[param_start..param_end]);
+
+        let mut m = k + 1;
+        while m < n && !matches!(&tokens[m], Tok::Punct(p) if p == "{") {
+            m += 1;
+        }
+        if m >= n {
+            return Err(format!("`fn {name}`: body opening `{{` not found"));
+        }
+        let body_start = m + 1;
+        let mut bdepth = 1i32;
+        let mut e = m + 1;
+        while e < n && bdepth > 0 {
+            match &tokens[e] {
+                Tok::Punct(p) if p == "{" => bdepth += 1,
+                Tok::Punct(p) if p == "}" => {
+                    bdepth -= 1;
+                    if bdepth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            e += 1;
+        }
+        if bdepth != 0 {
+            return Err(format!("`fn {name}`: unmatched body brace"));
+        }
+        let body_end = e;
+        Ok(FunctionBody {
+            tokens: tokens[body_start..body_end].to_vec(),
+            params,
+        })
+    }
+
+    /// E2 — locates `name` declared as a top-level (module-level, brace
+    /// depth zero — so never inside an `impl` block or another function)
+    /// function and returns its body tokens plus its parameter set. A
+    /// name that cannot be located at depth zero yields an explicit `Err`
+    /// — never a vacuously empty body.
+    pub(super) fn extract_function(tokens: &[Tok], name: &str) -> Result<FunctionBody, String> {
+        let mut depth = 0i32;
+        let mut i = 0usize;
+        while i < tokens.len() {
+            match &tokens[i] {
+                Tok::Punct(p) if p == "{" => {
+                    depth += 1;
+                    i += 1;
+                }
+                Tok::Punct(p) if p == "}" => {
+                    depth -= 1;
+                    i += 1;
+                }
+                Tok::Ident(id) if id == "fn" && depth == 0 => {
+                    if let Some(Tok::Ident(fname)) = tokens.get(i + 1) {
+                        if fname == name {
+                            return extract_function_at(tokens, i, name);
+                        }
+                    }
+                    i += 1;
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        }
+        Err(format!(
+            "function `{name}` not found at the top level of the embedded source \
+             (explicit failure, distinguishable from an empty body)"
+        ))
+    }
+
+    fn build_path_pattern(path: &[&str]) -> Vec<Tok> {
+        let mut pat = Vec::new();
+        for (idx, seg) in path.iter().enumerate() {
+            if idx > 0 {
+                pat.push(Tok::Punct("::".to_string()));
+            }
+            pat.push(Tok::Ident((*seg).to_string()));
+        }
+        pat
+    }
+
+    /// One located call: `call_start` is the index of the callee path's
+    /// first token; `args_start`/`args_end` bound the argument-list
+    /// tokens between the call's own matching parentheses.
+    pub(super) struct CallSite {
+        pub call_start: usize,
+        pub args_start: usize,
+        pub args_end: usize,
+    }
+
+    /// E3 (call-location half) — every occurrence of `path` in `body`
+    /// that is immediately followed by `(`, with `args_start`/`args_end`
+    /// bounding that call's own argument-list tokens (matched by paren
+    /// depth). Zero, one, or many occurrences are all representable via
+    /// the returned `Vec`'s length.
+    pub(super) fn find_calls(body: &[Tok], path: &[&str]) -> Vec<CallSite> {
+        let pattern = build_path_pattern(path);
+        let plen = pattern.len();
+        let n = body.len();
+        let mut out = Vec::new();
+        if plen == 0 || plen > n {
+            return out;
+        }
+        let mut i = 0usize;
+        while i + plen <= n {
+            if body[i..i + plen] == pattern[..] {
+                if let Some(Tok::Punct(p)) = body.get(i + plen) {
+                    if p == "(" {
+                        let open = i + plen;
+                        let mut depth = 1i32;
+                        let mut k = open + 1;
+                        while k < n && depth > 0 {
+                            match &body[k] {
+                                Tok::Punct(p2) if p2 == "(" => depth += 1,
+                                Tok::Punct(p2) if p2 == ")" => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
+                            k += 1;
+                        }
+                        out.push(CallSite {
+                            call_start: i,
+                            args_start: open + 1,
+                            args_end: k,
+                        });
+                        i = k + 1;
+                        continue;
+                    }
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
+    /// Whether `path` occurs anywhere in `body` as a whole-token
+    /// sequence, regardless of what follows — the check E4 rule 4 uses
+    /// for "the held-unaware apply path does not occur anywhere in the
+    /// body" (deliberately not call-shaped-only, so even a bare
+    /// reference would be caught).
+    pub(super) fn contains_token_sequence(body: &[Tok], path: &[&str]) -> bool {
+        let pattern = build_path_pattern(path);
+        let plen = pattern.len();
+        let n = body.len();
+        if plen == 0 || plen > n {
+            return false;
+        }
+        (0..=n - plen).any(|i| body[i..i + plen] == pattern[..])
+    }
+
+    /// E3 (splitting half) — the `(start, end)` token-index span of each
+    /// top-level argument between `start` and `end` (which must bound a
+    /// call's own parentheses' interior). Splits occur only at commas at
+    /// nesting depth zero relative to `(`/`[`/`{`; a trailing comma
+    /// before the end never produces an extra, empty final span.
+    pub(super) fn split_arg_spans(body: &[Tok], start: usize, end: usize) -> Vec<(usize, usize)> {
+        let mut spans = Vec::new();
+        let mut seg_start = start;
+        let mut depth = 0i32;
+        let mut i = start;
+        while i < end {
+            match &body[i] {
+                Tok::Punct(p) if p == "(" || p == "[" || p == "{" => depth += 1,
+                Tok::Punct(p) if p == ")" || p == "]" || p == "}" => depth -= 1,
+                Tok::Punct(p) if p == "," && depth == 0 => {
+                    spans.push((seg_start, i));
+                    seg_start = i + 1;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        if seg_start < end {
+            spans.push((seg_start, end));
+        }
+        spans
+    }
+
+    /// Convenience wrapper over [`split_arg_spans`] that clones out each
+    /// argument's own token slice.
+    pub(super) fn split_args(body: &[Tok], start: usize, end: usize) -> Vec<Vec<Tok>> {
+        split_arg_spans(body, start, end)
+            .into_iter()
+            .map(|(s, e)| body[s..e].to_vec())
+            .collect()
+    }
+
+    /// E4 rule 3b — conservative, syntactic re-binding check: `true` when
+    /// `name` is re-bound by a `let` (which also covers `if let` /
+    /// `while let` / `let else`, all of which contain a bare `let`
+    /// token), a closure parameter between a pair of `|` tokens, or a
+    /// `match` arm pattern, anywhere in `body[..before]`. Over-rejecting
+    /// is the safe direction (a conservative rejection is a red, never a
+    /// silent pass) — this performs no real Rust name resolution.
+    fn is_rebound_before(body: &[Tok], name: &str, before: usize) -> bool {
+        let prefix = &body[..before];
+
+        // `let` bindings (and, transitively, `if let` / `while let` /
+        // `let else`): scan from `let` to the pattern's own `=` or `;`.
+        let mut i = 0usize;
+        while i < prefix.len() {
+            if matches!(&prefix[i], Tok::Ident(id) if id == "let") {
+                let mut j = i + 1;
+                while j < prefix.len() {
+                    match &prefix[j] {
+                        Tok::Punct(p) if p == "=" || p == ";" => break,
+                        Tok::Ident(pid) if pid == name => return true,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
+
+        // Closure parameter lists: `|...|`.
+        let mut i = 0usize;
+        while i < prefix.len() {
+            if matches!(&prefix[i], Tok::Punct(p) if p == "|") {
+                let mut j = i + 1;
+                let mut close = None;
+                while j < prefix.len() {
+                    match &prefix[j] {
+                        Tok::Punct(p) if p == "|" => {
+                            close = Some(j);
+                            break;
+                        }
+                        Tok::Punct(p) if p == ";" || p == "{" => break,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if let Some(close) = close {
+                    if prefix[i + 1..close]
+                        .iter()
+                        .any(|t| matches!(t, Tok::Ident(pid) if pid == name))
+                    {
+                        return true;
+                    }
+                    i = close;
+                }
+            }
+            i += 1;
+        }
+
+        // `match` arm patterns (the span before each arm's own top-level
+        // `=>`; arm bodies between `=>` and the next top-level `,` are
+        // skipped so a shadow-named value used in one arm's expression
+        // never falsely triggers the next arm's pattern check).
+        let mut i = 0usize;
+        while i < prefix.len() {
+            if matches!(&prefix[i], Tok::Ident(id) if id == "match") {
+                let mut j = i + 1;
+                while j < prefix.len() && !matches!(&prefix[j], Tok::Punct(p) if p == "{") {
+                    j += 1;
+                }
+                if j < prefix.len() {
+                    let arms_start = j + 1;
+                    let mut depth = 1i32;
+                    let mut k = arms_start;
+                    while k < prefix.len() && depth > 0 {
+                        match &prefix[k] {
+                            Tok::Punct(p) if p == "{" => depth += 1,
+                            Tok::Punct(p) if p == "}" => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        k += 1;
+                    }
+                    let arms_end = k;
+                    let mut in_pattern = true;
+                    let mut seg_start = arms_start;
+                    let mut nest = 0i32;
+                    let mut m = arms_start;
+                    while m < arms_end {
+                        match &prefix[m] {
+                            Tok::Punct(p) if p == "{" || p == "(" || p == "[" => nest += 1,
+                            Tok::Punct(p) if p == "}" || p == ")" || p == "]" => nest -= 1,
+                            Tok::Punct(p) if p == "=>" && nest == 0 && in_pattern => {
+                                if prefix[seg_start..m]
+                                    .iter()
+                                    .any(|t| matches!(t, Tok::Ident(pid) if pid == name))
+                                {
+                                    return true;
+                                }
+                                in_pattern = false;
+                                seg_start = m + 1;
+                            }
+                            Tok::Punct(p) if p == "," && nest == 0 && !in_pattern => {
+                                in_pattern = true;
+                                seg_start = m + 1;
+                            }
+                            _ => {}
+                        }
+                        m += 1;
+                    }
+                }
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// E4 — the judgment function: `Ok(())` only when every rule holds;
+    /// otherwise `Err` carrying the reason (rule number implicit in the
+    /// message, per IMPLEMENTATION.md's assertion-message convention:
+    /// names the requirement, the call site, and the expected-vs-found
+    /// token shape).
+    pub(super) fn judge_call(
+        body: &[Tok],
+        params: &HashSet<String>,
+        callee: &[&str],
+        expected_arg_count: usize,
+        held_position_1indexed: usize,
+        held_field: &str,
+        forbidden: &[&str],
+    ) -> Result<(), String> {
+        let calls = find_calls(body, callee);
+        if calls.len() != 1 {
+            return Err(format!(
+                "expected exactly one call to `{}` but found {} — restore the missing \
+                 call, or if `{}` was legitimately renamed, update this scan's search \
+                 name in the same change (NFR8)",
+                callee.join("::"),
+                calls.len(),
+                callee.join("::"),
+            ));
+        }
+        let call = &calls[0];
+        let args = split_args(body, call.args_start, call.args_end);
+        if args.len() != expected_arg_count {
+            return Err(format!(
+                "`{}`: expected {expected_arg_count} arguments, found {}",
+                callee.join("::"),
+                args.len()
+            ));
+        }
+        let held_arg = &args[held_position_1indexed - 1];
+        let receiver = match held_arg.as_slice() {
+            [Tok::Ident(recv), Tok::Punct(dot), Tok::Ident(field)]
+                if dot == "." && field == held_field && params.contains(recv) =>
+            {
+                recv.clone()
+            }
+            _ => {
+                return Err(format!(
+                    "`{}`: argument {held_position_1indexed} must be exactly \
+                     `<param>.{held_field}` where `<param>` is one of the enclosing \
+                     function's own parameters — found a different token shape (restore \
+                     the argument, or the held pass-through was dropped)",
+                    callee.join("::"),
+                ));
+            }
+        };
+        if is_rebound_before(body, &receiver, call.call_start) {
+            return Err(format!(
+                "`{}`: the receiver `{receiver}` is re-bound (let / closure parameter / \
+                 match|if let|while let pattern) before the call, so it no longer denotes \
+                 the live parameter",
+                callee.join("::")
+            ));
+        }
+        if !forbidden.is_empty() && contains_token_sequence(body, forbidden) {
+            return Err(format!(
+                "the held-unaware path `{}` must not appear in this body",
+                forbidden.join("::")
+            ));
+        }
+        Ok(())
+    }
+
+    /// Test-only mutation tool for TS-5: replaces `body[start..end]` with
+    /// `replacement`, used to build the mutated inputs AC-6 requires to be
+    /// rewrites of the real extracted bodies rather than hand-written
+    /// stand-ins.
+    pub(super) fn splice_tokens(
+        body: &[Tok],
+        start: usize,
+        end: usize,
+        replacement: Vec<Tok>,
+    ) -> Vec<Tok> {
+        let mut out = Vec::with_capacity(body.len() - (end - start) + replacement.len());
+        out.extend_from_slice(&body[..start]);
+        out.extend(replacement);
+        out.extend_from_slice(&body[end..]);
+        out
+    }
+}
+
+// Names this scan couples to (NFR8 closed set): the two enclosing
+// function names, the three callee names, and the one held-field name.
+const BUTTON_PATH_FN: &str = "run_button_decision";
+const WHEEL_PATH_FN: &str = "handle_mouse_wheel";
+const HELD_AWARE_BUTTON_CALLEE: [&str; 2] = ["mouse_report", "apply_outcome_with_held"];
+const WHEEL_STEP_CALLEE: [&str; 2] = ["mouse_report", "apply_wheel_report_step"];
+const HELD_UNAWARE_CALLEE: [&str; 2] = ["mouse_report", "apply_outcome"];
+const HELD_FIELD: &str = "mouse_report_held";
+
+fn pointer_routing_src() -> &'static str {
+    include_str!("pointer_routing.rs")
+}
+
+fn button_path_body() -> call_site_scan::FunctionBody {
+    let tokens = call_site_scan::tokenize(pointer_routing_src());
+    call_site_scan::extract_function(&tokens, BUTTON_PATH_FN)
+        .expect("run_button_decision must be found at the top level of pointer_routing.rs")
+}
+
+fn wheel_path_body() -> call_site_scan::FunctionBody {
+    let tokens = call_site_scan::tokenize(pointer_routing_src());
+    call_site_scan::extract_function(&tokens, WHEEL_PATH_FN)
+        .expect("handle_mouse_wheel must be found at the top level of pointer_routing.rs")
+}
+
+// ── AC-3/TS-1: button call site ─────────────────────────────────────
+
+/// AC-3/TS-1: `run_button_decision`'s body calls the held-aware apply
+/// entry point exactly once, with four arguments whose fourth is the
+/// three-token `host.mouse_report_held` sequence — pinning FR1's held
+/// pass-through at the button call site.
+#[test]
+fn run_button_decision_calls_apply_outcome_with_held_once_with_live_held_as_fourth_arg() {
+    let body = button_path_body();
+    call_site_scan::judge_call(
+        &body.tokens,
+        &body.params,
+        &HELD_AWARE_BUTTON_CALLEE,
+        4,
+        4,
+        HELD_FIELD,
+        &HELD_UNAWARE_CALLEE,
+    )
+    .expect(
+        "AC-3: run_button_decision must call mouse_report::apply_outcome_with_held \
+         exactly once, passing <param>.mouse_report_held as its 4th argument",
+    );
+}
+
+// ── AC-4/TS-2: wheel call site ──────────────────────────────────────
+
+/// AC-4/TS-2: `handle_mouse_wheel`'s body calls the wheel report step
+/// entry point exactly once, with five arguments whose fifth is the same
+/// three-token held sequence — pinning FR2's held pass-through at the
+/// wheel call site.
+#[test]
+fn handle_mouse_wheel_calls_apply_wheel_report_step_once_with_live_held_as_fifth_arg() {
+    let body = wheel_path_body();
+    call_site_scan::judge_call(
+        &body.tokens,
+        &body.params,
+        &WHEEL_STEP_CALLEE,
+        5,
+        5,
+        HELD_FIELD,
+        &HELD_UNAWARE_CALLEE,
+    )
+    .expect(
+        "AC-4: handle_mouse_wheel must call mouse_report::apply_wheel_report_step \
+         exactly once, passing <param>.mouse_report_held as its 5th argument",
+    );
+}
+
+// ── AC-5/TS-3: held-unaware path absent from both bodies ────────────
+
+/// AC-5/TS-3: neither extracted body contains the held-unaware
+/// `mouse_report::apply_outcome` as a whole-token sequence, and the
+/// held-aware name is NOT caught by the same check — proving the two
+/// identifiers are distinguished as whole tokens (D3), not by a
+/// substring/prefix accident.
+#[test]
+fn neither_call_site_body_contains_the_held_unaware_apply_path() {
+    let button = button_path_body();
+    let wheel = wheel_path_body();
+    for (label, body) in [
+        ("run_button_decision", &button),
+        ("handle_mouse_wheel", &wheel),
+    ] {
+        assert!(
+            !call_site_scan::contains_token_sequence(&body.tokens, &HELD_UNAWARE_CALLEE),
+            "AC-5: {label} must not call the held-unaware mouse_report::apply_outcome"
+        );
+    }
+    assert!(
+        call_site_scan::contains_token_sequence(&button.tokens, &HELD_AWARE_BUTTON_CALLEE),
+        "sanity: apply_outcome_with_held must still be found by its own, distinct \
+         pattern — otherwise the negative checks above prove nothing"
+    );
+}
+
+// ── AC-2/TS-6: body extraction excludes the motion path ─────────────
+
+/// AC-2/TS-6: the body extractor returns exactly the two named top-level
+/// bodies, the motion path's own copy of the held-aware call is excluded
+/// from both, and a name that cannot be located fails explicitly rather
+/// than yielding an empty body.
+#[test]
+fn body_extractor_returns_exactly_the_two_named_bodies_excluding_the_motion_path() {
+    let tokens = call_site_scan::tokenize(pointer_routing_src());
+
+    // Sanity: the whole file contains the held-aware call TWICE (motion
+    // path + button path) — or this exclusion proof measures nothing.
+    let whole_file_hits = call_site_scan::find_calls(&tokens, &HELD_AWARE_BUTTON_CALLEE);
+    assert_eq!(
+        whole_file_hits.len(),
+        2,
+        "sanity: the whole file must contain exactly two occurrences of the held-aware \
+         call — motion path and button path"
+    );
+
+    let button = call_site_scan::extract_function(&tokens, BUTTON_PATH_FN)
+        .expect("AC-2: run_button_decision must be found");
+    let wheel = call_site_scan::extract_function(&tokens, WHEEL_PATH_FN)
+        .expect("AC-2: handle_mouse_wheel must be found");
+
+    assert_eq!(
+        call_site_scan::find_calls(&button.tokens, &HELD_AWARE_BUTTON_CALLEE).len(),
+        1,
+        "AC-2: the button body must contain exactly its OWN call, not the motion \
+         path's — the extractor must not leak tokens across function boundaries"
+    );
+    assert!(
+        call_site_scan::find_calls(&wheel.tokens, &HELD_AWARE_BUTTON_CALLEE).is_empty(),
+        "AC-2: the wheel body must not contain the motion path's held-aware call either"
+    );
+
+    let missing = call_site_scan::extract_function(&tokens, "definitely_not_a_real_function_xyz");
+    assert!(
+        missing.is_err(),
+        "AC-2: an unresolvable name must yield an explicit failure, not an empty body"
+    );
+}
+
+// ── AC-1/TS-4: in-memory scanner edge cases ──────────────────────────
+//
+// These exercise the scan elements directly against small, hand-built,
+// in-memory inputs (Test Notes: "Unit, in-memory input") rather than the
+// embedded production source — that is what lets the red-first
+// discipline apply to a scanner whose real-file call sites are already
+// correct (SPEC A1). A synthetic callee/held-field pair distinct from
+// the real production names keeps these cases self-contained.
+
+fn fake_params() -> std::collections::HashSet<String> {
+    std::collections::HashSet::from(["ctx".to_string()])
+}
+
+const FAKE_CALLEE: [&str; 2] = ["svc", "apply_with_held"];
+const FAKE_FORBIDDEN: [&str; 2] = ["svc", "apply"];
+const FAKE_HELD_FIELD: &str = "held_flag";
+
+fn judge_fake(body_src: &str) -> Result<(), String> {
+    let tokens = call_site_scan::tokenize(body_src);
+    call_site_scan::judge_call(
+        &tokens,
+        &fake_params(),
+        &FAKE_CALLEE,
+        2,
+        2,
+        FAKE_HELD_FIELD,
+        &FAKE_FORBIDDEN,
+    )
+}
+
+/// Sanity backing every negative case below: the fake callee pattern
+/// really does match the same text when it appears unquoted/uncommented.
+#[test]
+fn sanity_the_fake_callee_pattern_matches_a_real_unquoted_call() {
+    let real = "svc::apply_with_held(a, ctx.held_flag);";
+    let calls = call_site_scan::find_calls(&call_site_scan::tokenize(real), &FAKE_CALLEE);
+    assert_eq!(
+        calls.len(),
+        1,
+        "the fake callee pattern must match its own unquoted text"
+    );
+}
+
+/// AC-1/TS-4: a correct call spelled only inside a `//` line comment must
+/// not satisfy the judgment function.
+#[test]
+fn scanner_treats_a_correct_call_written_inside_a_line_comment_as_absent() {
+    let body = "// svc::apply_with_held(a, ctx.held_flag)\nlet _x = 1;";
+    assert!(
+        judge_fake(body).is_err(),
+        "a call spelled only inside a line comment must not satisfy the judgment function"
+    );
+}
+
+/// AC-1/TS-4: a correct call spelled only inside a string literal must
+/// not satisfy the judgment function.
+#[test]
+fn scanner_treats_a_correct_call_written_inside_a_string_literal_as_absent() {
+    let body = r#"let _s = "svc::apply_with_held(a, ctx.held_flag)";"#;
+    assert!(
+        judge_fake(body).is_err(),
+        "a call spelled only inside a string literal must not satisfy the judgment function"
+    );
+}
+
+/// A nested block comment contributes nothing at all — the call-shaped
+/// text inside it must not be found, and the real call following it
+/// (outside the comment) must still be found exactly once.
+#[test]
+fn scanner_ignores_call_shaped_text_inside_nested_block_comments() {
+    let src = "/* outer /* svc::apply_with_held(a, ctx.held_flag) */ still comment */\n\
+               svc::apply_with_held(a, ctx.held_flag);";
+    let tokens = call_site_scan::tokenize(src);
+    let calls = call_site_scan::find_calls(&tokens, &FAKE_CALLEE);
+    assert_eq!(
+        calls.len(),
+        1,
+        "a nested block comment must contribute zero tokens; only the real call \
+         outside it counts; got {calls_len} matches",
+        calls_len = calls.len()
+    );
+}
+
+/// Raw strings with differing hash counts must each swallow their
+/// call-shaped contents as one opaque literal, regardless of hash count.
+#[test]
+fn scanner_ignores_call_shaped_text_inside_a_raw_string_with_differing_hash_counts() {
+    for src in [
+        r###"r"svc::apply_with_held(a, ctx.held_flag)";"###,
+        r###"r#"svc::apply_with_held(a, ctx.held_flag)"#;"###,
+        r###"r##"svc::apply_with_held(a, ctx.held_flag)"##;"###,
+    ] {
+        let tokens = call_site_scan::tokenize(src);
+        let calls = call_site_scan::find_calls(&tokens, &FAKE_CALLEE);
+        assert!(
+            calls.is_empty(),
+            "call-shaped text inside a raw string (any hash count) must not be found \
+             as a call: {src:?}"
+        );
+    }
+}
+
+/// Byte, C, raw-byte, and raw-C string contents must all be opaque.
+#[test]
+fn scanner_tokenizes_byte_and_c_string_literals_as_opaque_literals() {
+    for src in [
+        r#"b"svc::apply_with_held(a, ctx.held_flag)";"#,
+        r#"c"svc::apply_with_held(a, ctx.held_flag)";"#,
+        r###"br"svc::apply_with_held(a, ctx.held_flag)";"###,
+        r###"cr#"svc::apply_with_held(a, ctx.held_flag)"#;"###,
+    ] {
+        let tokens = call_site_scan::tokenize(src);
+        let calls = call_site_scan::find_calls(&tokens, &FAKE_CALLEE);
+        assert!(
+            calls.is_empty(),
+            "byte / C / raw-byte / raw-C string contents must be opaque: {src:?}"
+        );
+    }
+}
+
+/// A lifetime marker immediately adjacent to a character literal must
+/// not desync the scanner into (or out of) the wrong token boundaries.
+#[test]
+fn scanner_distinguishes_a_lifetime_marker_from_an_adjacent_character_literal() {
+    let src = "fn f<'a>(c: char) -> bool { c == 'x' }";
+    let tokens = call_site_scan::tokenize(src);
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, call_site_scan::Tok::Ident(id) if id == "bool")),
+        "`bool` must survive as its own identifier token — a lifetime/char desync \
+         would corrupt everything downstream; got {tokens:?}"
+    );
+    assert!(
+        matches!(tokens.last(), Some(call_site_scan::Tok::Punct(p)) if p == "}"),
+        "the function's closing `}}` must still be the last token; got {tokens:?}"
+    );
+    let literal_count = tokens
+        .iter()
+        .filter(|t| matches!(t, call_site_scan::Tok::Literal))
+        .count();
+    assert_eq!(
+        literal_count, 2,
+        "expected exactly 2 opaque literals ('a lifetime + 'x' char); got {tokens:?}"
+    );
+}
+
+/// An escaped quote inside a character literal must not terminate it
+/// early.
+#[test]
+fn scanner_does_not_terminate_a_character_literal_on_an_escaped_quote() {
+    let src = "let _c = '\\''; svc::apply_with_held(a, ctx.held_flag);";
+    let tokens = call_site_scan::tokenize(src);
+    let calls = call_site_scan::find_calls(&tokens, &FAKE_CALLEE);
+    assert_eq!(
+        calls.len(),
+        1,
+        "an escaped quote inside a char literal must not end it early; got {calls_len} \
+         matches",
+        calls_len = calls.len()
+    );
+}
+
+/// An escaped quote inside a string literal must not terminate it early.
+#[test]
+fn scanner_does_not_terminate_a_string_literal_on_an_escaped_quote() {
+    let src = "let _s = \"a\\\"b\"; svc::apply_with_held(a, ctx.held_flag);";
+    let tokens = call_site_scan::tokenize(src);
+    let calls = call_site_scan::find_calls(&tokens, &FAKE_CALLEE);
+    assert_eq!(
+        calls.len(),
+        1,
+        "an escaped quote inside a string literal must not end it early; got {calls_len} \
+         matches",
+        calls_len = calls.len()
+    );
+}
+
+/// Identifiers are whole tokens: a longer identifier sharing the callee
+/// name as a prefix must never match (D3).
+#[test]
+fn scanner_never_matches_an_identifier_as_a_prefix_of_a_longer_one() {
+    let src = "svc::apply_with_held_extra(a, ctx.held_flag);";
+    let tokens = call_site_scan::tokenize(src);
+    let calls = call_site_scan::find_calls(&tokens, &FAKE_CALLEE);
+    assert!(
+        calls.is_empty(),
+        "`apply_with_held` must not match as a prefix of `apply_with_held_extra`"
+    );
+}
+
+/// A trailing comma before the closing parenthesis must not produce an
+/// extra, empty argument.
+#[test]
+fn argument_splitter_ignores_a_trailing_comma() {
+    let src = "svc::apply_with_held(a, ctx.held_flag,);";
+    let tokens = call_site_scan::tokenize(src);
+    let calls = call_site_scan::find_calls(&tokens, &FAKE_CALLEE);
+    assert_eq!(calls.len(), 1);
+    let args = call_site_scan::split_args(&tokens, calls[0].args_start, calls[0].args_end);
+    assert_eq!(
+        args.len(),
+        2,
+        "a trailing comma before `)` must not produce a third, empty argument; got {args:?}"
+    );
+}
+
+/// Re-wrapping the argument list across different line boundaries must
+/// not change the token sequence the judgment function sees.
+#[test]
+fn judge_call_tolerates_the_argument_list_rewrapped_across_lines() {
+    let src = "svc::apply_with_held(\n    a,\n    ctx.held_flag,\n);";
+    assert!(
+        judge_fake(src).is_ok(),
+        "re-wrapping the argument list across lines must not turn this red"
+    );
+}
+
+/// A comment inserted between the callee and its opening parenthesis
+/// must not defeat the call-site match.
+#[test]
+fn judge_call_tolerates_a_comment_between_the_callee_and_its_opening_paren() {
+    let src = "svc::apply_with_held /* why the gap */ (a, ctx.held_flag);";
+    assert!(
+        judge_fake(src).is_ok(),
+        "a comment between the callee and its `(` must not defeat the call-site match"
+    );
+}
+
+/// E4 rule 3b: a `let` re-binding of the receiver ahead of the call must
+/// be rejected even though the argument shape still matches.
+#[test]
+fn judge_call_rejects_a_let_bound_shadow_of_the_receiver_before_the_call() {
+    let src = "let ctx = ctx; svc::apply_with_held(a, ctx.held_flag);";
+    assert!(
+        judge_fake(src).is_err(),
+        "a `let` re-binding of the receiver ahead of the call must be rejected"
+    );
+}
+
+/// E4 rule 3b: a closure parameter shadowing the receiver ahead of the
+/// call must be rejected.
+#[test]
+fn judge_call_rejects_a_closure_parameter_shadow_of_the_receiver_before_the_call() {
+    let src = "let _f = |ctx: &Ctx| ctx.held_flag; svc::apply_with_held(a, ctx.held_flag);";
+    assert!(
+        judge_fake(src).is_err(),
+        "a closure parameter named `ctx` ahead of the call must be rejected"
+    );
+}
+
+/// E4 rule 3b: a `match` arm pattern binding the receiver ahead of the
+/// call must be rejected.
+#[test]
+fn judge_call_rejects_a_match_arm_pattern_shadow_of_the_receiver_before_the_call() {
+    let src = "match owner { Some(ctx) => {} None => {} } svc::apply_with_held(a, ctx.held_flag);";
+    assert!(
+        judge_fake(src).is_err(),
+        "a `match` arm pattern binding `ctx` ahead of the call must be rejected"
+    );
+}
+
+/// E4 rule 3b: an `if let` pattern binding the receiver ahead of the
+/// call must be rejected.
+#[test]
+fn judge_call_rejects_an_if_let_pattern_shadow_of_the_receiver_before_the_call() {
+    let src = "if let Some(ctx) = maybe { } svc::apply_with_held(a, ctx.held_flag);";
+    assert!(
+        judge_fake(src).is_err(),
+        "an `if let` pattern binding `ctx` ahead of the call must be rejected"
+    );
+}
+
+/// E4 rule 4: the held-unaware path appearing anywhere else in the body
+/// must reject the call, even when the primary call site (rules 1-3b) is
+/// otherwise entirely well-formed — isolates rule 4 from rule 1, which
+/// the "revert to the held-unaware path" mutation (AC-6) cannot do on
+/// its own since renaming the primary callee always also trips rule 1.
+#[test]
+fn judge_call_rejects_when_the_held_unaware_path_also_appears_elsewhere_in_the_body() {
+    let src = "svc::apply_with_held(a, ctx.held_flag); if false { svc::apply(a, b); }";
+    assert!(
+        judge_fake(src).is_err(),
+        "the held-unaware path appearing anywhere in the body must reject the call, \
+         even when the primary call site is otherwise well-formed"
+    );
+}
+
+// ── AC-6/TS-5: mutations derived from the real extracted bodies ──────
+//
+// D6.1 / IMPLEMENTATION.md: these mutate the REAL extracted bodies in
+// memory (never a hand-written stand-in) so the file-backed TS-1/TS-2
+// passes are not vacuous — a hand-written input could prove the judgment
+// function correct while the body extractor's wiring to the real file
+// was wrong.
+
+fn default_held_value_tokens() -> Vec<call_site_scan::Tok> {
+    vec![
+        call_site_scan::Tok::Ident("HeldButtons".to_string()),
+        call_site_scan::Tok::Punct("::".to_string()),
+        call_site_scan::Tok::Ident("default".to_string()),
+        call_site_scan::Tok::Punct("(".to_string()),
+        call_site_scan::Tok::Punct(")".to_string()),
+    ]
+}
+
+fn shadow_host_prelude_tokens() -> Vec<call_site_scan::Tok> {
+    vec![
+        call_site_scan::Tok::Ident("let".to_string()),
+        call_site_scan::Tok::Ident("host".to_string()),
+        call_site_scan::Tok::Punct("=".to_string()),
+        call_site_scan::Tok::Ident("host".to_string()),
+        call_site_scan::Tok::Punct(";".to_string()),
+    ]
+}
+
+/// AC-6: the button path's real body — unmutated, and under each of the
+/// four required mutations (default value, deletion, revert to the
+/// held-unaware path, receiver shadowing). Each mutation asserts the
+/// rewrite touched exactly the intended site and nothing else, then that
+/// the mutated body is rejected.
+#[test]
+fn button_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted() {
+    let body = button_path_body();
+    let calls = call_site_scan::find_calls(&body.tokens, &HELD_AWARE_BUTTON_CALLEE);
+    assert_eq!(
+        calls.len(),
+        1,
+        "AC-6 precondition: exactly one real call site"
+    );
+    let call_start = calls[0].call_start;
+    let spans =
+        call_site_scan::split_arg_spans(&body.tokens, calls[0].args_start, calls[0].args_end);
+    assert_eq!(spans.len(), 4, "AC-6 precondition: four real arguments");
+    let (held_start, held_end) = spans[3];
+
+    call_site_scan::judge_call(
+        &body.tokens,
+        &body.params,
+        &HELD_AWARE_BUTTON_CALLEE,
+        4,
+        4,
+        HELD_FIELD,
+        &HELD_UNAWARE_CALLEE,
+    )
+    .expect("AC-6(a): the unmutated real body must pass");
+
+    // (1) Held argument replaced with a default value.
+    {
+        let replacement = default_held_value_tokens();
+        let mutated =
+            call_site_scan::splice_tokens(&body.tokens, held_start, held_end, replacement.clone());
+        assert_eq!(
+            &mutated[..held_start],
+            &body.tokens[..held_start],
+            "AC-6(b): only the held-argument site may change"
+        );
+        assert_eq!(
+            &mutated[held_start + replacement.len()..],
+            &body.tokens[held_end..],
+            "AC-6(b): only the held-argument site may change"
+        );
+        let result = call_site_scan::judge_call(
+            &mutated,
+            &body.params,
+            &HELD_AWARE_BUTTON_CALLEE,
+            4,
+            4,
+            HELD_FIELD,
+            &HELD_UNAWARE_CALLEE,
+        );
+        assert!(
+            result.is_err(),
+            "AC-6(c): a default-valued held argument must be rejected"
+        );
+    }
+
+    // (2) Held argument deleted (drop the preceding comma too).
+    {
+        let (_, prev_end) = spans[2];
+        let mutated = call_site_scan::splice_tokens(&body.tokens, prev_end, held_end, Vec::new());
+        assert_eq!(
+            &mutated[..prev_end],
+            &body.tokens[..prev_end],
+            "AC-6(b): prefix unchanged"
+        );
+        assert_eq!(
+            &mutated[prev_end..],
+            &body.tokens[held_end..],
+            "AC-6(b): suffix unchanged"
+        );
+        let result = call_site_scan::judge_call(
+            &mutated,
+            &body.params,
+            &HELD_AWARE_BUTTON_CALLEE,
+            4,
+            4,
+            HELD_FIELD,
+            &HELD_UNAWARE_CALLEE,
+        );
+        assert!(
+            result.is_err(),
+            "AC-6(c): deleting the held argument must be rejected"
+        );
+    }
+
+    // (3) Call reverted to the held-unaware path (callee's own last
+    // identifier segment only).
+    {
+        let callee_name_index = call_start + 2;
+        assert_eq!(
+            body.tokens[callee_name_index],
+            call_site_scan::Tok::Ident("apply_outcome_with_held".to_string()),
+            "precondition: callee's own name token located correctly"
+        );
+        let replacement = vec![call_site_scan::Tok::Ident("apply_outcome".to_string())];
+        let mutated = call_site_scan::splice_tokens(
+            &body.tokens,
+            callee_name_index,
+            callee_name_index + 1,
+            replacement,
+        );
+        assert_eq!(
+            &mutated[..callee_name_index],
+            &body.tokens[..callee_name_index]
+        );
+        assert_eq!(
+            &mutated[callee_name_index + 1..],
+            &body.tokens[callee_name_index + 1..]
+        );
+        assert_ne!(mutated[callee_name_index], body.tokens[callee_name_index]);
+        let result = call_site_scan::judge_call(
+            &mutated,
+            &body.params,
+            &HELD_AWARE_BUTTON_CALLEE,
+            4,
+            4,
+            HELD_FIELD,
+            &HELD_UNAWARE_CALLEE,
+        );
+        assert!(
+            result.is_err(),
+            "AC-6(c): reverting to the held-unaware path must be rejected"
+        );
+    }
+
+    // (4) Receiver identifier shadowed by a same-named local binding
+    // introduced before the call.
+    {
+        let prelude = shadow_host_prelude_tokens();
+        let mutated = call_site_scan::splice_tokens(&body.tokens, 0, 0, prelude.clone());
+        assert_eq!(
+            &mutated[prelude.len()..],
+            &body.tokens[..],
+            "AC-6(b): a pure insertion must leave everything else untouched"
+        );
+        let result = call_site_scan::judge_call(
+            &mutated,
+            &body.params,
+            &HELD_AWARE_BUTTON_CALLEE,
+            4,
+            4,
+            HELD_FIELD,
+            &HELD_UNAWARE_CALLEE,
+        );
+        assert!(
+            result.is_err(),
+            "AC-6(c): shadowing the receiver before the call must be rejected"
+        );
+    }
+}
+
+/// AC-6: the wheel path's real body under the same four mutations.
+#[test]
+fn wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted() {
+    let body = wheel_path_body();
+    let calls = call_site_scan::find_calls(&body.tokens, &WHEEL_STEP_CALLEE);
+    assert_eq!(
+        calls.len(),
+        1,
+        "AC-6 precondition: exactly one real call site"
+    );
+    let call_start = calls[0].call_start;
+    let spans =
+        call_site_scan::split_arg_spans(&body.tokens, calls[0].args_start, calls[0].args_end);
+    assert_eq!(spans.len(), 5, "AC-6 precondition: five real arguments");
+    let (held_start, held_end) = spans[4];
+
+    call_site_scan::judge_call(
+        &body.tokens,
+        &body.params,
+        &WHEEL_STEP_CALLEE,
+        5,
+        5,
+        HELD_FIELD,
+        &HELD_UNAWARE_CALLEE,
+    )
+    .expect("AC-6(a): the unmutated real body must pass");
+
+    // (1) Held argument replaced with a default value.
+    {
+        let replacement = default_held_value_tokens();
+        let mutated =
+            call_site_scan::splice_tokens(&body.tokens, held_start, held_end, replacement.clone());
+        assert_eq!(&mutated[..held_start], &body.tokens[..held_start]);
+        assert_eq!(
+            &mutated[held_start + replacement.len()..],
+            &body.tokens[held_end..]
+        );
+        let result = call_site_scan::judge_call(
+            &mutated,
+            &body.params,
+            &WHEEL_STEP_CALLEE,
+            5,
+            5,
+            HELD_FIELD,
+            &HELD_UNAWARE_CALLEE,
+        );
+        assert!(
+            result.is_err(),
+            "AC-6(c): a default-valued held argument must be rejected"
+        );
+    }
+
+    // (2) Held argument deleted.
+    {
+        let (_, prev_end) = spans[3];
+        let mutated = call_site_scan::splice_tokens(&body.tokens, prev_end, held_end, Vec::new());
+        let result = call_site_scan::judge_call(
+            &mutated,
+            &body.params,
+            &WHEEL_STEP_CALLEE,
+            5,
+            5,
+            HELD_FIELD,
+            &HELD_UNAWARE_CALLEE,
+        );
+        assert!(
+            result.is_err(),
+            "AC-6(c): deleting the held argument must be rejected"
+        );
+    }
+
+    // (3) Call reverted to the held-unaware path.
+    {
+        let callee_name_index = call_start + 2;
+        assert_eq!(
+            body.tokens[callee_name_index],
+            call_site_scan::Tok::Ident("apply_wheel_report_step".to_string()),
+            "precondition: callee's own name token located correctly"
+        );
+        let replacement = vec![call_site_scan::Tok::Ident("apply_outcome".to_string())];
+        let mutated = call_site_scan::splice_tokens(
+            &body.tokens,
+            callee_name_index,
+            callee_name_index + 1,
+            replacement,
+        );
+        let result = call_site_scan::judge_call(
+            &mutated,
+            &body.params,
+            &WHEEL_STEP_CALLEE,
+            5,
+            5,
+            HELD_FIELD,
+            &HELD_UNAWARE_CALLEE,
+        );
+        assert!(
+            result.is_err(),
+            "AC-6(c): reverting to the held-unaware path must be rejected"
+        );
+    }
+
+    // (4) Receiver identifier shadowed before the call.
+    {
+        let prelude = shadow_host_prelude_tokens();
+        let mutated = call_site_scan::splice_tokens(&body.tokens, 0, 0, prelude.clone());
+        assert_eq!(&mutated[prelude.len()..], &body.tokens[..]);
+        let result = call_site_scan::judge_call(
+            &mutated,
+            &body.params,
+            &WHEEL_STEP_CALLEE,
+            5,
+            5,
+            HELD_FIELD,
+            &HELD_UNAWARE_CALLEE,
+        );
+        assert!(
+            result.is_err(),
+            "AC-6(c): shadowing the receiver before the call must be rejected"
+        );
+    }
+}
+
+/// AC-6: benign edits applied directly to a COPY of the embedded
+/// production source — re-wrapping, an inserted comment, a trailing
+/// comma, and re-ordering two independent unrelated statements — must
+/// all still be accepted.
+#[test]
+fn button_path_benign_edits_to_the_real_source_are_still_accepted() {
+    let src = pointer_routing_src();
+    let real_call = "mouse_report::apply_outcome_with_held(outcome, &mut records, &mut dest, host.mouse_report_held);";
+    assert!(
+        src.contains(real_call),
+        "sanity: this must match the real call text verbatim or this test proves nothing"
+    );
+
+    let edited_call = "mouse_report::apply_outcome_with_held /* rewrapped */ (\n        outcome,\n        \
+                        &mut records,\n        &mut dest,\n        host.mouse_report_held,\n    );";
+    let edited_src = src.replacen(real_call, edited_call, 1);
+    assert_ne!(edited_src, src, "sanity: the edit must actually apply");
+
+    let tokens = call_site_scan::tokenize(&edited_src);
+    let body = call_site_scan::extract_function(&tokens, BUTTON_PATH_FN)
+        .expect("AC-6: the edited body must still be found");
+    call_site_scan::judge_call(
+        &body.tokens,
+        &body.params,
+        &HELD_AWARE_BUTTON_CALLEE,
+        4,
+        4,
+        HELD_FIELD,
+        &HELD_UNAWARE_CALLEE,
+    )
+    .expect("AC-6: re-wrapping, an inserted comment, and a trailing comma must not turn this red");
+
+    // Re-ordering two independent, unrelated statements earlier in the
+    // same body must also leave the call-site judgment unaffected.
+    let stmt_a = "let hovered_link = !host.hover.link_cells.is_empty();";
+    let stmt_b = "let middle_click_paste_enabled = app.settings.middle_click_paste;";
+    assert!(
+        src.contains(stmt_a) && src.contains(stmt_b),
+        "sanity: both statements must match verbatim"
+    );
+    let placeholder = "\u{0}PLACEHOLDER\u{0}";
+    let reordered_src = src
+        .replacen(stmt_a, placeholder, 1)
+        .replacen(stmt_b, stmt_a, 1)
+        .replacen(placeholder, stmt_b, 1);
+    assert_ne!(
+        reordered_src, src,
+        "sanity: the reorder must actually apply"
+    );
+
+    let tokens = call_site_scan::tokenize(&reordered_src);
+    let body = call_site_scan::extract_function(&tokens, BUTTON_PATH_FN)
+        .expect("AC-6: the reordered body must still be found");
+    call_site_scan::judge_call(
+        &body.tokens,
+        &body.params,
+        &HELD_AWARE_BUTTON_CALLEE,
+        4,
+        4,
+        HELD_FIELD,
+        &HELD_UNAWARE_CALLEE,
+    )
+    .expect("AC-6: re-ordering two independent unrelated statements must not turn this red");
+}
