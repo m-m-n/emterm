@@ -1,0 +1,89 @@
+schema_version: 1
+feature: focus-loss-drag-cleanup-test
+records:
+  - question_id: create-spec.command-approval
+    packet_id: null
+    answered_at: "2026-09-20T16:56:03+09:00"
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "auto_record"
+    normalized_answer: "auto_record"
+    resolution_note: >-
+      gate: create-spec.command-approval; references/batch-policies.yaml action auto_record,
+      refusal_patterns hard_fail (no refusal pattern matched). Two of the four declared
+      component command strings were unapproved and were auto-recorded into
+      ~/.claude/em-workflow/approvals.json:
+      'CARGO_TARGET_DIR=src-tauri/target cargo build --manifest-path src-tauri/Cargo.toml'
+      and 'make fmt'. The other two were already approved for this repository:
+      'CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml'
+      and
+      'CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features'.
+      No release build command is declared: main.build_command deliberately targets the
+      debug CARGO_TARGET_DIR=src-tauri/target tree so verify never relinks the
+      src-tauri/target-host release binary the user runs.
+  - question_id: publish-side.verification-depth
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T16:56:03+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [sink_seam]
+    freeform: null
+    normalized_answer: "sink_seam"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action codex_consultation;
+      codex_consulted: true (1 turn, harness entry 'codex', readonly sandbox);
+      opus_escalation: not run (suggestion mapped on turn 1).
+      Options not chosen: pure_predicate_only (worker's tentative position) and
+      predicate_plus_text_resolution. Codex's key point: with a pure predicate alone the
+      production write calls could be deleted and every test would still pass, so TS-4's
+      third assertion ("the selection is published") stays unverified as a behaviour;
+      predicate_plus_text_resolution asserts the payload but not that it reached the right
+      destination. Codex also required that the seam keep the existing write rule intact.
+      Orchestrator's own mapping judgement: sink_seam is a superset of pure_predicate_only,
+      so all three of the task's stated acceptance conditions are still met.
+  - question_id: scope.prior-feature-doc-backfill
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T16:56:03+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [backfill_prior_feature_docs]
+    freeform: null
+    normalized_answer: "backfill_prior_feature_docs"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action codex_consultation;
+      codex_consulted: true (same single batched turn); opus_escalation: not run.
+      Option not chosen: this_feature_only (worker's tentative position). Codex's key point:
+      the gap being closed IS the predecessor feature's TS-4, the edit is limited to two
+      documents with no production risk, and leaving the false "unit-verified" claim in
+      place keeps the verification record untraceable. Codex's caveat, carried into FR8 and
+      AC-6: a recorded sink call is evidence of the write REQUEST, not of an OS-level
+      PRIMARY/CLIPBOARD update, so the prior feature's AC-3 real-hardware confirmation stays
+      mapped to a manual scenario (TS-8).
+  - question_id: design-step.recommendation
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T16:56:03+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "decide_autonomously"
+    resolution_note: >-
+      gate: create-spec.design-step; references/batch-policies.yaml option_id
+      decide_autonomously; codex_consulted: false (listed gate with a select policy).
+      Design step set to skipped.
+  - question_id: create-spec.design-system
+    packet_id: null
+    answered_at: "2026-09-20T16:56:03+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [top_candidate_or_none]
+    freeform: null
+    normalized_answer: "project_native"
+    resolution_note: >-
+      gate: create-spec.design-system; references/batch-policies.yaml option_id
+      top_candidate_or_none; candidates were found, so kind resolves to project_native.
+      paths: doc/UI-DESIGN-GUIDELINES.yaml (normative tokens),
+      src-tauri/web-shared/styles.css (WebView mirror), src-tauri/src/ui/md3.rs (native
+      egui mirror). Confirmed even though the design step is skipped, per create-spec
+      section 11a. codex_consulted: false.
