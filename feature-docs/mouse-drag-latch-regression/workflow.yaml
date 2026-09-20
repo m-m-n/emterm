@@ -121,7 +121,8 @@ workflow:
     e2e: 'no e2e_test_command configured for either component'
     excluded_requirements: 'none (no requirement carries status: excluded)'
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: 8090828be78f05750051cd6c560582bfa099edcd
 tasks:
   task0001:
     title: "Pin the ghost-drag latch mechanisms and the focus-loss semantics with seam-level regression tests"
