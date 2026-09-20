@@ -194,3 +194,39 @@ records:
       than the external-task-system branch. With an empty finding set this changes nothing
       that was filed, but it is recorded here because the same degradation would matter on
       a round that did have vulnerability findings.
+  - question_id: verify.codex-consultation.spec-test-name-drift
+    packet_id: null
+    answered_at: "2026-09-21T04:10:00+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [verify_passes_carry_forward]
+    freeform: "NFR3 は命名パターンのみを規定し、TS ラベルとの完全一致は規範要件ではない。全 TS シナリオの挙動は網羅されている。"
+    normalized_answer: "Option C — verify は pass。名称ドリフトは failed_item にせず、人間の評価者への申し送りとして残す。"
+    resolution_note: >-
+      gate: user-directed Codex consultation on the only open verify question
+      (no gate_id; requested by the launch instruction "Consult Codex on any
+      unclear points").
+      context: SPEC.md lists literal test names TS-1..TS-6; the delivered tests
+      cover every scenario but use different names and split TS-4/TS-5 into ~16
+      finer tests. VERIFICATION.md's Code Quality inspection item demands a
+      character-for-character match, wording that appears only in
+      VERIFICATION.md and not in SPEC's normative NFR3 text (which requires the
+      <subject>_<scenario>_<expected> pattern only). The review phase's spec
+      reviewer already raised this and the severity gate dropped it as low.
+      options: (A) failed_item -> auto-rework renaming ~20 delivered tests to
+      SPEC's literal TS names; (B) failed_item -> auto-rework amending
+      SPEC.md/VERIFICATION.md to the delivered names; (C) verify passes, drift
+      carried forward to the human evaluator; (D) something else.
+      codex_consulted: true. opus_escalation: false. chosen: C.
+      codex reasoning: NFR3 の規範テキストは命名形式のみを要求しており、TS 名との
+      完全一致を求めていないため、規範要件違反として扱う根拠が弱い。全六シナリオの
+      挙動が網羅され、ビルド・テスト・変更範囲の検証も通っているため自動手直しを
+      起動する必要性は低い。(A) は動作上の不足を解消せず、細分化されたテストと
+      六つの TS 名が一対一に対応しないため成立しない。(B) はテスト追加のみという
+      変更範囲を広げ、検証の最中に検証基準そのものを書き換えることになる。
+      residual risk (codex): VERIFICATION.md の全検査項目を例外なく合格必須と
+      する運用があれば C はそれと衝突する。名前の不整合は残るため、申し送りに
+      対応関係と合格判断を明記すること。
+      mitigation adopted: the TS -> delivered-name mapping and this pass
+      judgment are stated in the run report, and a separate Notion follow-up
+      task is filed to align SPEC.md / VERIFICATION.md with the delivered names.
