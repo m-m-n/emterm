@@ -447,8 +447,8 @@ pub(super) fn winit_button_to_report_identity(button: MouseButton) -> Option<Mou
 
 /// Upper bound on the notch count a single wheel event's mouse report can
 /// carry. This is a security property, not a feel-tuning knob: it bounds
-/// both [`wheel_report_notches`]'s output (this file) and the duplication
-/// step that turns notches into a PTY write
+/// both [`accumulate_wheel_report_lines`]'s output (this file) and the
+/// duplication step that turns notches into a PTY write
 /// (`pointer_routing::bounded_wheel_report_duplicate`) — two independent
 /// clamp layers referencing the SAME constant (task0001 D2), so removing
 /// either layer individually still leaves the overall bound intact. It is
@@ -489,6 +489,10 @@ pub(super) const MAX_WHEEL_REPORT_NOTCHES: u32 = 100;
 /// handler runs. No dead-code allowance remains here: this function has
 /// no production caller (only its own tests), and that absence is itself
 /// AC-9's regression evidence, not something to suppress the lint for.
+/// Being test-only is instead stated directly: `#[cfg(test)]` keeps the
+/// function out of non-test builds entirely, so the release build carries
+/// no `dead_code` warning about it without any allowance silencing one.
+#[cfg(test)]
 pub(super) fn wheel_report_notches(lines: f32) -> i32 {
     accumulate_wheel_report_lines(0.0, lines).0
 }
@@ -513,10 +517,11 @@ pub(super) fn wheel_report_notches(lines: f32) -> i32 {
 ///   non-negative, round up when it is negative — the same rule
 ///   [`accumulate_alt_scroll_lines`] already uses).
 /// - (c) the notch magnitude is saturated at [`MAX_WHEEL_REPORT_NOTCHES`]
-///   while still an `f32`, ahead of any conversion to `i32` — mirrors
-///   [`wheel_report_notches`]'s float-domain-first clamp, for the same
-///   reason (a raw cast of an unclamped magnitude would itself saturate at
-///   `i32::MAX`, making the cap postcondition momentarily false).
+///   while still an `f32`, ahead of any conversion to `i32` — a raw cast of
+///   an unclamped magnitude would itself saturate at `i32::MAX`, making the
+///   cap postcondition momentarily false. This is the conversion-side clamp
+///   layer [`MAX_WHEEL_REPORT_NOTCHES`]'s own doc refers to; the test-only
+///   `wheel_report_notches` wrapper inherits it by delegating here.
 /// - (d) magnitude clipped away by the saturation is discarded: the
 ///   returned fraction is exactly `0.0` whenever saturation fires, never a
 ///   leftover sliver of the clipped delta (D4) — the excess is neither
