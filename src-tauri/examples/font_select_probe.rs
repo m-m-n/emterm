@@ -3,8 +3,8 @@
 //! select. Used to debug bold-face selection against families that ship
 //! many width variants (Google's Inconsolata installs 81 static faces).
 //!
-//! Run: CARGO_TARGET_DIR=native-poc/target cargo run --manifest-path \
-//!      native-poc/Cargo.toml --example font_select_probe -- Inconsolata
+//! Run: CARGO_TARGET_DIR=src-tauri/target cargo run --manifest-path \
+//!      src-tauri/Cargo.toml --example font_select_probe -- Inconsolata
 
 fn face_match_penalty(
     weight: u16,
