@@ -64,26 +64,32 @@ acceptance_tests:
     red_reason: >-
       Same stash-and-check verification as AC-1/AC-2/AC-3 (this test
       depends on the same new symbols): E0432 unresolved imports before
-      the implementation was restored. Corrected by task0003
-      (focus-loss-drag-cleanup-test, round 1 rework): the no-selection
-      test, focus_loss_cleanup_with_no_selection_publishes_nothing,
-      previously routed its publish call through
-      `if let Some(text) = None::<&str> { ... }`, a branch whose
-      condition is a compile-time-decidable literal, so the publish never
-      ran and the closing sink-emptiness assertion held regardless of
-      what the destination decision actually was. It now asserts the
-      destination decision returned for the no-selection termination
-      directly — `assert_eq!(targets, SelectionPublishTargets { primary:
-      false, clipboard: false }, ...)`, the value FR6's preserved write
-      rule requires for that case — before ever attempting the publish
-      step, and that publish step is now driven by `resolved_text`, a
-      value-carrying `Option<&str>` binding, not by the literal. task0003
-      demonstrated the corrected assertion has force with a deliberate
-      mutation (altering `selection_publish_targets`'s no-selection arm
-      to select PRIMARY, observing the test fail, reverting, observing it
-      pass; never committed) — see
-      test-docs/focus-loss-drag-cleanup-test/task0003.tests.yaml AC-3 for
-      the transcript. No test name here has assertions that cannot fail.
+      the implementation was restored. Corrected twice since, at the same
+      site: task0003 (round 1 rework) replaced the no-selection test's
+      `if let Some(text) = None::<&str> { ... }` publish guard with a
+      direct assertion of the destination decision against
+      `SelectionPublishTargets { primary: false, clipboard: false }`,
+      the value FR6's preserved write rule requires for that case — but
+      still gated the publish call behind
+      `if let Some(text) = resolved_text { ... }`, so `publish_to_targets`
+      was never actually called and its no-PRIMARY path stayed untested
+      by any test in the suite (verify TS-10 / review finding
+      2a1ad49b9263cb95). task0005 removed that remaining guard: the
+      publish call is now unconditional —
+      `publish_to_targets(&mut sink, targets, "unused")`, no branch of
+      any kind — so the closing sink-emptiness assertion constrains
+      `publish_to_targets`'s actual behaviour instead of restating a
+      fact the compiler already established. Two mutations back this
+      test: (1) deleting the `if targets.primary` guard inside
+      `publish_to_targets` makes the test fail on the sink-emptiness
+      assertion (task0005 AC-3); (2) altering
+      `selection_publish_targets`'s no-selection arm to select PRIMARY
+      makes the test fail on the destination assertion (task0003 AC-3,
+      reconfirmed by task0005 AC-4). Both mutations were reverted and
+      never committed — see
+      test-docs/focus-loss-drag-cleanup-test/task0005.tests.yaml AC-3 and
+      AC-4 for the transcripts. No test name here has assertions that
+      cannot fail.
   AC-5:
     tests:
       - window_host::tests::focus_loss_arm_never_calls_the_fold_click_toggle
