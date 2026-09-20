@@ -1,0 +1,202 @@
+task_id: task0005
+# Origin (AC-6): this task closes verify's failed item TS-10 (category
+# `comprehensive`) and unresolved review finding `2a1ad49b9263cb95`
+# (review round 2, MEDIUM, src-tauri/src/window_host/tests.rs), both
+# pointing at focus_loss_cleanup_with_no_selection_publishes_nothing's
+# publish call being gated by a dead branch so `publish_to_targets`'s
+# no-PRIMARY path had no test anywhere in the suite. This task closes
+# that one defect at that one site by making the publish call
+# unconditional and proving it with two mutations (AC-3, AC-4). It does
+# NOT close any other item TS-10 or the round-2 review might reference
+# elsewhere; no other test, no other file, and no production behaviour
+# is in scope (see the task plan's Out of Scope).
+#
+# baseline_failures/final_failures reflect
+# `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+# src-tauri/Cargo.toml` (project_commands.test, verbatim), run in this
+# worktree BEFORE any edit and again AFTER. Both runs fail to compile at
+# examples/swash_emoji.rs (missing src-tauri/assets/fonts/NotoColorEmoji.ttf)
+# — the same pre-existing, unrelated environment gap
+# test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml,
+# task0002.tests.yaml and task0003.tests.yaml already record; out of this
+# task's scope (see Out of Scope). Note on this worktree specifically:
+# the very first run of this command (before that font gap was even
+# reached) failed earlier, at the build script, because this worktree's
+# assets/fonts/ directory had none of the seven fonts
+# scripts/fetch-fonts.sh normally provides (a fresh worktree that had
+# never had `make setup` / `fetch-fonts` run in it). `bash
+# scripts/fetch-fonts.sh` was run once to fetch those seven pinned,
+# gitignored, HTTPS+SHA256-verified fonts — the same idempotent step
+# `make setup` performs — before any baseline was recorded; this is
+# project-standard environment setup, not a source or doc change, and
+# NotoColorEmoji.ttf (the one font this feature's Out of Scope forbids
+# fetching) is not among the seven `fetch-fonts.sh` provides. The
+# library test target (`--lib -- --test-threads=1`, the command AC-7
+# names) ran to completion both before and after this task's edit: 3486
+# passed, 0 failed, 3 ignored in both runs (the corrected test body
+# replaces the prior one in place, so the count is unchanged; see AC-7).
+baseline_failures:
+  - "BUILD: cargo test (default features) fails to compile — examples/swash_emoji.rs: couldn't read src-tauri/examples/../assets/fonts/NotoColorEmoji.ttf: No such file or directory (pre-existing, unrelated to this task; same blocker task0001/task0002/task0003.tests.yaml record; verified present before any edit)"
+final_failures:
+  - "BUILD: cargo test (default features) fails to compile — examples/swash_emoji.rs: couldn't read src-tauri/examples/../assets/fonts/NotoColorEmoji.ttf: No such file or directory (unchanged after this task's edit; re-run reproduced the identical error)"
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing
+    red_confirmed: false
+    red_reason: >-
+      Structural criterion (the direct destination assertion is
+      unchanged): confirmed by reading the diff
+      (`git diff -- src-tauri/src/window_host/tests.rs`), which shows
+      `assert_eq!(targets, SelectionPublishTargets { primary: false,
+      clipboard: false }, "AC-2: ...")` untouched byte-for-byte from the
+      pre-task0005 version. This assertion is not new behaviour this
+      task introduces, so there is no fresh red to observe on it in
+      isolation; its force is what AC-4's mutation below demonstrates
+      (altering `selection_publish_targets`'s no-selection arm to select
+      PRIMARY makes this exact assertion fail).
+  AC-2:
+    tests:
+      - window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing
+    red_confirmed: true
+    red_reason: >-
+      Confirmed by an explicit before/after pair, not just inspection.
+      BEFORE this task's edit (test body still wrapped the publish call
+      in `if let Some(text) = resolved_text { ... }`): temporarily
+      stashed this task's tests.rs change
+      (`git stash push -- src-tauri/src/window_host/tests.rs`), deleted
+      the `if targets.primary` guard in `publish_to_targets`
+      (src-tauri/src/window_host/pointer_routing.rs), ran
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib -- --test-threads=1
+      window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing`
+      — observed `test ... ok` (1 passed): the pre-task0005 test could
+      NOT detect the mutation, exactly the TS-10 gap. Reverted the
+      pointer_routing.rs mutation, `git diff --stat` confirmed clean,
+      then `git stash pop` restored this task's tests.rs change. AFTER
+      this task's edit (publish call unconditional, no branch), the
+      identical mutation-and-run sequence FAILS on the sink-emptiness
+      assertion instead — see AC-3 for that transcript. This before/after
+      pair is the direct evidence that removing the wrapper (AC-2) is
+      what gives the closing assertion force, not the resolved_text
+      binding by itself.
+  AC-3:
+    tests:
+      - window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing
+    red_confirmed: true
+    red_reason: >-
+      Deliberate mutation per Test Notes; never committed. Deleted the
+      `if targets.primary` guard in `publish_to_targets`
+      (src-tauri/src/window_host/pointer_routing.rs), changing
+      `if targets.primary { sink.write_selection(SelectionDestination::Primary, text); }`
+      to an unconditional `sink.write_selection(SelectionDestination::Primary, text);`.
+      Ran `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib -- --test-threads=1
+      window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing`
+      — observed FAILED (1 failed), panic message: "thread
+      'window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing'
+      panicked at src-tauri/src/window_host/tests.rs:4708:5: no selection
+      must publish to neither destination" — i.e. the closing
+      sink-emptiness assertion, NOT the destination assertion (which sits
+      earlier in the same test and did not fire). Reverted the mutation
+      (restored the `if targets.primary` guard), re-ran the identical
+      command — observed `ok` (1 passed).
+      `git diff --stat -- src-tauri/src/window_host/pointer_routing.rs`
+      after the revert showed no changes, confirming the mutation was
+      never committed.
+  AC-4:
+    tests:
+      - window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing
+    red_confirmed: true
+    red_reason: >-
+      Deliberate mutation per Test Notes; never committed (reconfirms
+      task0003 AC-3's finding against the corrected test body). Altered
+      `selection_publish_targets`'s early-return arm in
+      src-tauri/src/window_host/pointer_routing.rs from
+      `SelectionPublishTargets { primary: false, clipboard: false }` to
+      `SelectionPublishTargets { primary: true, clipboard: false }`. Ran
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib -- --test-threads=1
+      window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing`
+      — observed FAILED (1 failed), panic message: "thread
+      '...' panicked at src-tauri/src/window_host/tests.rs:4697:5:
+      assertion `left == right` failed: AC-2: a no-selection termination
+      selects neither destination (FR6)\n  left:
+      SelectionPublishTargets { primary: true, clipboard: false }\n
+      right: SelectionPublishTargets { primary: false, clipboard: false
+      }" — the direct destination assertion, not the sink-emptiness
+      assertion. Reverted the mutation (restored the original arm),
+      re-ran the identical command — observed `ok` (1 passed).
+      `git diff --stat -- src-tauri/src/window_host/pointer_routing.rs`
+      after the revert showed no changes, confirming the mutation was
+      never committed.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Inspection criterion over the three prose sites. (a) The test's own
+      doc comment in src-tauri/src/window_host/tests.rs now describes the
+      unconditional `publish_to_targets` call and names the AC-3 mutation
+      that backs the closing assertion's force (confirmed by reading the
+      diff — the prior "value-carrying Option<&str> binding, not by a
+      literal" phrasing is gone). (b) The AC-4 red_reason in
+      test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml now
+      describes the unconditional call and both mutations (this task's
+      AC-3 and AC-4), and explicitly states the task0003 binding change
+      alone left `publish_to_targets`'s no-PRIMARY path untested.
+      (c) The AC-1 red_reason in
+      test-docs/focus-loss-drag-cleanup-test/task0003.tests.yaml now
+      states plainly that changing the guard from a literal to a
+      `resolved_text` binding did NOT remove the dead branch's effect
+      (the branch still never executed, since `resolved_text` is always
+      `None` in that test), and that task0005 is what actually removed
+      the branch. Grepped all three sites for "binding" phrasing after
+      the edit to confirm none claims the binding change alone removed
+      the dead branch or gave the assertion force.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      This record's own top-of-file comment names the origin (verify
+      failed item TS-10, category `comprehensive`; unresolved review
+      finding `2a1ad49b9263cb95`, round 2, MEDIUM) and states explicitly
+      that this task closes only the one defect at this one site — the
+      dead publish-guard branch in
+      focus_loss_cleanup_with_no_selection_publishes_nothing — not any
+      other TS-10 item or round-2 finding.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib -- --test-threads=1` ran to completion
+      both before this task's edit (3486 passed, 0 failed, 3 ignored)
+      and after (3486 passed, 0 failed, 3 ignored) — identical counts,
+      as expected since the corrected test replaces the prior test body
+      1:1 by name rather than adding or removing a test. No existing
+      test's assertion was weakened, relaxed or deleted — confirmed by
+      reading the full diff of
+      src-tauri/src/window_host/tests.rs, which shows exactly one test's
+      doc comment and body rewritten and no other test touched.
+      `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+      src-tauri/Cargo.toml --no-default-features` succeeded (`Finished
+      \`dev\` profile ...`) both before and after this task's edit.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      `git diff --stat` after this task's edit shows exactly three
+      changed files: src-tauri/src/window_host/tests.rs,
+      test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml and
+      test-docs/focus-loss-drag-cleanup-test/task0003.tests.yaml, plus
+      this new test-docs/focus-loss-drag-cleanup-test/task0005.tests.yaml
+      — matching the task plan's Scope exactly.
+      `git diff --stat -- src-tauri/src/window_host/pointer_routing.rs`
+      shows no changes (both mutations in AC-3/AC-4 were reverted before
+      this commit); no other production source file was touched.
+      Formatting was applied scoped to the touched Rust file only —
+      `cargo fmt --manifest-path src-tauri/Cargo.toml --
+      src-tauri/src/window_host/tests.rs` — and the resulting diff was
+      read to confirm it touched only the lines this task's own edit
+      introduced, with no unrelated reformatting elsewhere in the file
+      and no other file touched by the format step.
