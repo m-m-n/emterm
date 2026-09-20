@@ -149,3 +149,44 @@ records:
       Notion task at run end (notion-batch-develop's residual-task rule).
       opus_escalation: not run (Codex's final recommendation mapped onto an offered
       option).
+  - question_id: verify.manual-item-unexecutable
+    packet_id: null
+    answered_at: "2026-09-21T01:20:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [pass_on_automated_record_manual_as_not_executed]
+    freeform: "pass_on_automated_record_manual_as_not_executed"
+    normalized_answer: >-
+      Record verify as pass on the automated criteria, and record TS-M1 explicitly as
+      "not executed — requires a human at a physical display", carrying it in the run
+      report and filing it as a separate follow-up task.
+    resolution_note: >-
+      gate: orchestrator-opened verify-phase question. VERIFICATION.md's TS-M1 sits
+      under "Manual Testing (E2E Not Possible)" and requires a human to launch a
+      release build and drive the pointer on a physical display. This run is headless
+      and unattended, and the project has no E2E harness for the wgpu-rendered native
+      terminal surface, so TS-M1 cannot be executed by any means available to the run.
+      The gate carries no gate_id at its originating site, so it resolves per
+      references/batch-mode.md's unlisted-gate fallback: Codex consultation first,
+      minimum-side-effect option if no decision is reached.
+      Options presented to Codex: A record_ts_m1_as_failed_item (verify.status =
+      failed, triggering an auto-rework round) / B
+      pass_on_automated_record_manual_as_not_executed / C omit_ts_m1_as_out_of_scope.
+      codex_consulted: true (harness entry `codex`, readonly sandbox,
+      run_codex_exec.sh, working dir = integration worktree, one turn).
+      Codex recommended B, reasoning that every executable check passed so recording
+      verify as pass on those is the honest reading; that TS-M1 must be judged neither
+      pass nor fail but recorded as not executed, which fabricates no verification;
+      that FR4 is independently verified by TS-6's diff inspection so no requirement
+      loses its coverage; and that carrying the item in both the run report and a
+      tracked follow-up keeps the human evaluator informed. Codex named the residual
+      risk: the real-hardware behaviour TS-M1 checks stays unverified until a human
+      runs it.
+      Chosen: B — adopted per the launch instruction to take the option judged
+      comparatively better; it is also the minimum-side-effect option. Not chosen:
+      A — treats an unexecutable item as a failure and burns a rework round on
+      something no code change can fix, since the feature is test-only and the
+      production repair it would exercise predates this feature (assumption A3);
+      C — hides an unexecuted item from the evaluator and damages the transparency of
+      the verification record.
+      opus_escalation: not run (Codex's recommendation mapped onto an offered option).
