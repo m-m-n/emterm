@@ -1,11 +1,11 @@
 schema_version: 1
 feature: focus-loss-drag-termination
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
-base_revision: 90b597fa
-last_input_digest: sha256:ab529bcfee8845a5d70c39c61e75b1b49ec5a50ac00d7db44dc725d66f850616
-active_request_id: create-spec-run-0001
+base_revision: d02a776826687b9e9188ff4f3127ece84aa972a6
+last_input_digest: sha256:10215bb0b816b3117d8b306b37742cbcd8d2454fcd2e2d41963ac9b3efd00182
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -28,14 +28,8 @@ answers:
     selected_option_ids:
     - narrow_fr3_skip_when_held
     freeform: null
-    normalized_answer: Narrow FR3 to apply only when the left button is not physically
-      held; while held, publish nothing and keep host.dragging + the pending anchor,
-      delegating termination to the release path's drag_in_flight no-owner fallback.
-      This SPEC supersedes the prior feature's FR3 / AC-3 / state-table row.
-    resolution_note: 'Codex consultation (2 turns, harness entry `codex`) mapped to
-      narrow_fr3_skip_when_held. Recorded as assumption per batch-policies.yaml record_as_assumption:
-      true. Codex caveat carried forward: mouse_report_held is an event-derived record,
-      not a physical-state query.'
+    normalized_answer: Narrow FR3 to apply only when the left button is not physically held; while held, publish nothing and keep host.dragging + the pending anchor, delegating termination to the release path's drag_in_flight no-owner fallback. This SPEC supersedes the prior feature's FR3 / AC-3 / state-table row.
+    resolution_note: 'Codex consultation (2 turns, harness entry `codex`) mapped to narrow_fr3_skip_when_held. Recorded as assumption per batch-policies.yaml record_as_assumption: true. Codex caveat carried forward: mouse_report_held is an event-derived record, not a physical-state query.'
   edge-case.release-never-arrives:
     packet_id: create-spec-q0001
     answered_at: '2026-09-20T16:51:52+09:00'
@@ -44,14 +38,8 @@ answers:
     selected_option_ids:
     - rely_on_release_only
     freeform: null
-    normalized_answer: Add no extra terminator. The release path's no-owner drag_in_flight
-      fallback is the guaranteed terminator. The residual lost-release leak is filed
-      as a separate follow-up task rather than closed by an event-derived check.
-    resolution_note: Codex returned NO_MAPPING; the single per-packet Opus escalation
-      decided rely_on_release_only. Both terminate_on_* options would read a mouse_report_held
-      record that clear_all has already zeroed, degrading to unconditional termination
-      and reintroducing the bug. Follow-up task to be filed for a non-event-derived
-      terminator.
+    normalized_answer: Add no extra terminator. The release path's no-owner drag_in_flight fallback is the guaranteed terminator. The residual lost-release leak is filed as a separate follow-up task rather than closed by an event-derived check.
+    resolution_note: Codex returned NO_MAPPING; the single per-packet Opus escalation decided rely_on_release_only. Both terminate_on_* options would read a mouse_report_held record that clear_all has already zeroed, degrading to unconditional termination and reintroducing the bug. Follow-up task to be filed for a non-event-derived terminator.
   testing.window-free-termination-predicate:
     packet_id: create-spec-q0001
     answered_at: '2026-09-20T16:51:52+09:00'
@@ -60,9 +48,7 @@ answers:
     selected_option_ids:
     - extract_pure_predicate
     freeform: null
-    normalized_answer: 'Extract the termination decision as a pure, winit-free predicate
-      over plain bools; cover its truth table with bare #[test]; extend the existing
-      source-text structural assertion to the new composed form.'
+    normalized_answer: 'Extract the termination decision as a pure, winit-free predicate over plain bools; cover its truth table with bare #[test]; extend the existing source-text structural assertion to the new composed form.'
     resolution_note: Codex consultation (2 turns) mapped to extract_pure_predicate.
   design.design-step-decision:
     packet_id: create-spec-q0001
@@ -72,18 +58,30 @@ answers:
     selected_option_ids:
     - decide_autonomously
     freeform: null
-    normalized_answer: 'Accept requirements-analyst''s recommendation: skip the design
-      step.'
-    resolution_note: 'gate create-spec.design-step resolved by batch-policies.yaml
-      (option_id: decide_autonomously).'
+    normalized_answer: 'Accept requirements-analyst''s recommendation: skip the design step.'
+    resolution_note: 'gate create-spec.design-step resolved by batch-policies.yaml (option_id: decide_autonomously).'
 worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:ab529bcfee8845a5d70c39c61e75b1b49ec5a50ac00d7db44dc725d66f850616
   output_digest: null
-artifacts: []
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:e2a240d24cacc9fbeb9adad80b26809bbaf157efea0b10ee75a170012f227722
+  output_digest: null
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:10215bb0b816b3117d8b306b37742cbcd8d2454fcd2e2d41963ac9b3efd00182
+  output_digest: null
+artifacts:
+- path: feature-docs/focus-loss-drag-termination/REQUIREMENTS.md
+  sha256: sha256:b46bd4facf2eb4812a9fd1908994acf75355e1efceec3def059a249399a78062
+  produced_by: create-spec-run-0003
+- path: feature-docs/focus-loss-drag-termination/SPEC.md
+  sha256: sha256:2eec84117ed96a2f87127ea699491b06689c6f6e397c0b0893a896657c589db5
+  produced_by: create-spec-run-0003
 patches: []
-progress_fingerprint: null
+progress_fingerprint: sha256:62f9769a4befc898d04d29a764d93357b45edf39bab8687bf1002627811b2e5e
 stale_redispatch_count: 0
 resolved_input_cache:
   design_system_candidates:

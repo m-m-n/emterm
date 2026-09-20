@@ -1,0 +1,217 @@
+schema_version: 1
+feature: focus-loss-drag-termination
+created: '2026-09-20'
+base_branch: main
+parent_branch: em-workflow/focus-loss-drag-termination/integration
+goal: |
+  マウスレポート: フォーカス喪失がまだ生きている左ドラッグを途中で打ち切る
+
+  ## 現象 (必須)
+  キーボードフォーカスを失っただけで、まだ物理的に続いている左ドラッグが途中で打ち切られる。
+  winit の `WindowEvent::Focused(false)` は「キーボードフォーカス喪失」であって、ポインタの implicit grab は維持される。左ボタンが押されたままなら `PointerMoved` も `PointerButton(Released)` もこのウィンドウに届き続ける。
+  にもかかわらず `src-tauri/src/window_host/event_loop.rs:253-255` の arm は `local_drag_in_flight` が真なら無条件で `publish_local_drag` を実行し、`host.dragging = false` にして pending anchor を取り上げる。結果:
+  1. その時点までの**部分選択**が PRIMARY に書き込まれる（`copy_on_select` が有効なら CLIPBOARD にも）
+  2. `handle_pointer_moved` の `if host.dragging` ガードにより、フォーカスが戻ってボタンを押したままでも選択が伸びなくなる
+  3. 後から届く release は gesture slot が `mouse_report::clear_all` で消され `drag_in_flight` も偽になっているため `Disposition::Nothing` になり、ドラッグが静かに切り捨てられる
+  本アプリでは PTY 出力由来の OSC で子 WebView（markdown / data viewer）が非同期に開いてフォーカスを奪うため、ドラッグ中のフォーカス喪失は現実に到達しうる経路。
+
+  ## 再現手順 (必須)
+  1. PR #72 マージ後の eMterm を起動する
+  2. グリッド上で左ボタンを押したままドラッグして選択を始める
+  3. ボタンを離さないまま、別ウィンドウにフォーカスを移す（または PTY 出力で子 WebView を開かせる）
+  4. 元のウィンドウへフォーカスを戻し、押したままのポインタを動かす
+  選択が伸びない。PRIMARY にはフォーカス喪失時点の部分選択だけが入っている。
+
+  ## 期待する挙動 (必須)
+  release がもう来ないケースだけを、この arm が終端する。release が届くケースは、今回同時に入った `decide_release` の no-owner フォールバック（`drag_in_flight` が真なら `CompleteSelectionAndPublishToPrimary`）が既にカバーしている。
+
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある（フォーカス喪失時に左が押下中なら終端しないこと、押下中でなければ従来どおり終端すること）
+  - [ ] FR3 が無条件終端を意図していたのかを SPEC 側で確認し、意図どおりなら仕様の側を明示する
+
+  ## 該当箇所 (任意)
+  - `src-tauri/src/window_host/event_loop.rs:253` — `Focused(false)` の arm
+  - `src-tauri/src/window_host/pointer_routing.rs:392` — `publish_local_drag`
+
+  ## 対応案
+  `mouse_report::clear_all` より前（held 記録がまだ生きているうち）に左ボタンの物理状態を見て、押されたままなら release 経路の `drag_in_flight` フォールバックへ終端を任せる。例:
+  `if !host.mouse_report_held.left && local_drag_in_flight(host, &self.app)`
+  `host.mouse_report_held` は同 arm の 264 行目で既に触っているのでアクセス可能。
+  代案として、publish はするが `host.dragging` は落とさずフォーカス復帰後もドラッグを継続させる形もある。その場合は release 時に完全な選択で再 publish される点を許容する設計判断が要る。
+
+  ## 実害・発生条件 (任意)
+  レビュー round 1 の未解決 medium `f8102391ba47175c`（comprehensive 観点、confidence 60）。auto-fix ゲートが critical / high 限定のためスキップされた。
+  FR3 がこの無条件終端を明示要求している可能性が残るため、修正前に仕様側の意図確認が要る。
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/src/ui/md3.rs
+    - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: Rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
+      format_command: make fmt-check
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: d02a776826687b9e9188ff4f3127ece84aa972a6
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: No user-visible surface change. The feature narrows one boolean condition in the winit Focused(false) arm and extracts a pure predicate in three GUI-internal Rust modules (event_loop.rs, pointer_routing.rs, tests.rs). No new UI element, design token, layout, copy, colour or interaction-affordance change; doc/UI-DESIGN-GUIDELINES.yaml and both of its mirrors are untouched. Gate create-spec.design-step resolved with decide_autonomously.
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: null
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Focus-loss termination is gated on the left button not being held
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-4
+    - TS-7
+  FR2:
+    title: The held-button state is read before clear_all zeroes it
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-4
+  FR3:
+    title: While the left button is held, focus loss preserves the drag intact
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-3
+    - TS-7
+  FR4:
+    title: The termination decision is a pure, winit-free predicate
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+  FR5:
+    title: The structural source-text assertion is extended to the new composed form
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+  FR6:
+    title: This SPEC supersedes the prior feature's FR3, AC-3 and its focus-loss state-table row
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: Everything else in the Focused(false) arm is unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-5
+  FR8:
+    title: No additional terminator is introduced for the lost-release paths
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-3
+  NFR1:
+    title: Maintainability — the decision layer stays window-free
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+  NFR2:
+    title: Maintainability — decision functions stay pure
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+  NFR3:
+    title: Maintainability — test style matches the project convention
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Compatibility — build surface invariance
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-6
+  NFR5:
+    title: Security — no new PTY bytes and no relaxation of existing caps
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: Performance — no hot-path cost
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
