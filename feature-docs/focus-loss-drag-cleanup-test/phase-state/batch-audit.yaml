@@ -126,3 +126,27 @@ records:
       orchestrator by direct inspection rather than deferred to implementation time:
       feature-docs/mouse-report-reset-active-gesture/VERIFICATION.md lines 43 / 73 / 86 and
       SPEC.md line 346 carry the rows task0002 targets.
+- gate_id: implement.deviation-review
+  phase: implement
+  task_id: task0001
+  decision: declined
+  resolution_note: |
+    Two deviations reported by the task0001 implementer were reviewed against the
+    Deviation auto-addition rule (implement-phase.md Step I.2.b step 3) and BOTH
+    were DECLINED — neither is auto-added to tasks.task0001.files.
+    (1) Fetched gitignored build assets (src-tauri/assets/fonts/*, incl. a manually
+        downloaded NotoColorEmoji.ttf) so the approved test command could compile at
+        all. Missing evidence part: no acceptance-criterion / requirement identifier
+        named, and no tracked path is being added (the paths are gitignored build
+        assets, outside the declared change set model entirely).
+    (2) Ran scoped `cargo fmt -- <3 touched files>` instead of the workflow's
+        crate-wide `make fmt`, citing the task plan's own Out-of-Scope clause and the
+        project rule against crate-wide formatting. Missing evidence part: no path is
+        being added at all, and no AC/requirement identifier is named — this is a
+        command-substitution deviation, not a change-set expansion.
+    Neither decline changes the containment check: the observed change set
+    (pointer_routing.rs, mod.rs, tests.rs) is a subset of the declared change set.
+    Follow-up worth a human's attention: `examples/swash_emoji.rs` include_bytes!'s
+    `assets/fonts/NotoColorEmoji.ttf`, which `scripts/fetch-fonts.sh` does not fetch,
+    so `cargo test` with default features cannot compile on a clean checkout. Both
+    implementers hit this independently. Pre-existing, unrelated to this feature.
