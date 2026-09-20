@@ -3,9 +3,9 @@ feature: focus-loss-drag-cleanup-test
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: 2fa6b6a7cf9606123421c3ecbabd25388b19f095
+base_revision: 6a8c7e4887c04fd5d47912827d705698842e5e54
 last_input_digest: sha256:fdb08ac0f95e08b147dc94d648a55f1727143cc8bfa4704a8592202ee7eb7435
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -75,7 +75,17 @@ worker_runs:
   status: completed
   input_digest: sha256:fdb08ac0f95e08b147dc94d648a55f1727143cc8bfa4704a8592202ee7eb7435
   output_digest: null
-artifacts: []
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:fdb08ac0f95e08b147dc94d648a55f1727143cc8bfa4704a8592202ee7eb7435
+  output_digest: null
+artifacts:
+- path: feature-docs/focus-loss-drag-cleanup-test/REQUIREMENTS.md
+  sha256: sha256:0b9be9d4467e0262d6a8b5bd7376c546625cb6b07469caf03a53ec5b9267f0d2
+  produced_by: create-spec-run-0003
+- path: feature-docs/focus-loss-drag-cleanup-test/SPEC.md
+  sha256: sha256:6a810bf642316beef9ef0682c91bae9e0a3cf78a8135fec4d6b08ed783f4337b
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
