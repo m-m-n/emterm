@@ -1,0 +1,10 @@
+schema_version: 1
+feature: focus-loss-drag-termination
+phase: create-plan
+status: in_progress
+generation: 1
+base_revision: 36bf948501e898297551d94b0798df3a64f67e19
+last_input_digest: sha256:a882bf2a0c177f9ee8126ea4b8db61816cdd1aab487bee20292199cf98efb209
+active_request_id: create-plan-r0001
+packets: {}
+answers: {}
