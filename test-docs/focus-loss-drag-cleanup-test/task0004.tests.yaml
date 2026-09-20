@@ -1,0 +1,90 @@
+task_id: task0004
+baseline_failures:
+  - "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml: build failure in build.rs (assets/fonts/Noto-COLRv1.ttf missing from this worktree's gitignored assets/fonts/ directory) — pre-existing environment blocker, present before any file in this task was touched, and unrelated to the two markdown documents this task edits. No Rust source, test, or build file was read or changed by this task, so this failure cannot be attributed to it."
+final_failures:
+  - "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml: same build.rs failure, re-run after the document edits, unchanged — expected, since this task touches zero files under src-tauri/."
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before editing, SPEC.md's TS-4 row said the cited test "exercises the
+      focus-loss cleanup entry point"; VERIFICATION.md's TS-4 row said it was
+      "exercising the focus-loss path with a live drag and a materialized
+      selection" — both confirmed present by reading the original rows prior
+      to any edit. After the rewrite, neither row (nor SC-C) makes any of
+      the forbidden claims; confirmed by grep for "entry point",
+      "materialized", and "exercis.*focus-loss" against both files.
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before editing, none of the three rows stated that the cited test
+      composes the window-free state core and the recording sink the way
+      the adapter composes them, or that it constructs no window host and
+      resolves no selection — confirmed absent by reading the originals.
+      Read `src-tauri/src/window_host/tests.rs:4632-4668`
+      (`focus_loss_cleanup_publishes_selection_without_a_window`) directly
+      to confirm the test itself matches this description (plain
+      `resolved_text` value, no `WindowHost` constructed) before writing the
+      corrected wording.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before editing, none of the three rows mentioned that
+      `publish_local_drag`'s own gather-and-adapt wiring is covered only by
+      the source-scanning test's call-site literals — confirmed absent by
+      reading the originals. Read
+      `src-tauri/src/window_host/tests.rs:1935-1953`
+      (`focus_loss_arm_never_calls_the_fold_click_toggle`) directly and
+      confirmed it checks `event_loop_src.contains("publish_local_drag(host,
+      &mut self.app)")` and
+      `event_loop_src.contains("local_drag_in_flight(host, &self.app)")` —
+      exactly the pair of call-site literals now cited in all three rows.
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before editing, the SPEC.md TS-4 row carried `- [ ]` with no reason
+      sentence for that state, violating the requirement that the row state
+      which was chosen and why. After editing, the row carries `- [x]` with
+      a one-line reason ("the reworded claim below is met by the tests as
+      they stand, confirmed by reading
+      src-tauri/src/window_host/tests.rs directly"), decided because direct
+      reading of the cited tests (see AC-2/AC-3 above) confirms the
+      reworded claim holds against the tests as they stand today.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The write-request-versus-OS-update caveat was already present,
+      unchanged in meaning, in all three original rows before this task's
+      edit (SPEC.md TS-4, VERIFICATION.md TS-4, VERIFICATION.md SC-C) — this
+      criterion pre-existed and required no correction, only preservation.
+      Confirmed by reading the pre-edit text and by grep for
+      "unit-verified" (and equivalents) finding no match in either document
+      after the edit, and confirming TS-9's manual mapping for the prior
+      feature's AC-3 real-hardware confirmation survives unchanged.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The cited identifiers were already correct in the pre-edit rows (this
+      task's wording problem was about what the tests were claimed to
+      prove, not about which identifiers were cited), so there was no red
+      state to observe for this criterion. Confirmed by `grep -n` against
+      `src-tauri/src/window_host/tests.rs`:
+      `focus_loss_cleanup_publishes_selection_without_a_window` resolves to
+      the test at line 4632, and the `selection_publish_targets_` prefix
+      resolves to the eight truth-table tests at lines 4448-4548.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Scope constraint, not a before/after behavioural claim — there is no
+      red state to observe. Verified by `git diff --stat`: exactly
+      `feature-docs/mouse-report-reset-active-gesture/SPEC.md` and
+      `feature-docs/mouse-report-reset-active-gesture/VERIFICATION.md`
+      changed; no source file, test, workflow file, test-evidence record,
+      or file under this feature's own directory was touched.

@@ -343,15 +343,24 @@ path that never materializes is not a violation.
       FR2): `decide_release(Left)` against a `MouseReportRecords` whose Left slot
       is `None` and whose records indicate a local drag is live yields the
       completion arm rather than `Disposition::Nothing`.
-- [ ] **TS-4 — Focus loss terminates the drag** (AC-3, AC-9; FR3, NFR1):
-      Driven by the window-free test
+- [x] **TS-4 — Focus loss terminates the drag** (AC-3, AC-9; FR3, NFR1):
+      Ticked: the reworded claim below is met by the tests as they stand,
+      confirmed by reading `src-tauri/src/window_host/tests.rs` directly.
+      The window-free test
       `focus_loss_cleanup_publishes_selection_without_a_window` in
-      `src-tauri/src/window_host/tests.rs`, which exercises the focus-loss
-      cleanup entry point with a live left drag and asserts `dragging` is
-      cleared, the pending anchor is consumed, and the selection is published
-      (NFR1), together with the destination-predicate truth-table tests
-      prefixed `selection_publish_targets_` in the same module, which cover
-      the destination rule this scenario depends on. A recorded sink call in
+      `src-tauri/src/window_host/tests.rs` composes the window-free state
+      core and the recording sink the way the focus-loss adapter composes
+      them, over plain values, with no window host constructed and no
+      selection resolved, and asserts `dragging` is cleared, the pending
+      anchor is consumed and returned, and the publish is requested with the
+      expected destinations and payload (NFR1), together with the
+      destination-predicate truth-table tests prefixed
+      `selection_publish_targets_` in the same module, which cover the
+      destination rule this scenario depends on. The adapter's own
+      gather-and-adapt wiring (`publish_local_drag`) is covered only by the
+      call-site literals the source-scanning test in
+      `src-tauri/src/window_host/tests.rs` compares against the event-loop
+      file's text, not by these behavioural tests. A recorded sink call in
       these tests is evidence that the publish path requested the write, not
       evidence of an OS-level PRIMARY selection or CLIPBOARD update.
 - [ ] **TS-5 — Reset still resets the cell cache during a held gesture** (AC-6;
