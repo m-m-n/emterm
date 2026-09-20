@@ -198,7 +198,7 @@ status: draft
 - [ ] AC3: `embedded_font_names` は `build.rs:160` と同形のテキスト（`include_bytes!({abs_str:?})` を含む format 文字列）に対して空集合を返し、後続の無関係な文字列リテラルを拾わない。
 - [ ] AC4: 非リテラル引数の呼び出しの後ろに本物のフォント埋め込みがある場合、本物の 1 件だけが抽出される（走査が打ち切られない）。
 - [ ] AC5: 無変更のツリーに対し `scan_embedded_fonts(crate_root())` が `documented_embedded_fonts()` の 7 件と厳密一致し続ける。
-- [ ] AC6: `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test asset_manifest` が緑。既存 12 テストは無改変で通る。
+- [ ] AC6: `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test asset_manifest` が緑。既存 14 テストは無改変で通る。
 - [ ] AC7: `Cargo.toml` の依存関係に差分が無い。
 
 ### 11.2 KPI
