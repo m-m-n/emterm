@@ -1,0 +1,19 @@
+feature: example-font-absolute-path
+collected_at: "2026-09-21T01:05:00+09:00"
+session_ids: ["01a0bf82-d3cd-7453-9038-b48d9b594791"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - test-docs/example-font-absolute-path/task0001.tests.yaml
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - "review round1: evaluator 発の low finding (examples_source_hygiene.rs の collect_example_sources が read_dir 1 階層のみで examples/<name>/main.rs 形式を走査しない) を R3b の severity ゲートで機械 drop した。現行のフラットな examples/ では実害無し。"
+  - "task0001 の files 予測に test-docs/{feature}/task0001.tests.yaml が入っていなかった。テスト計画成果物は implementer が必ず書くため、planner の files 予測に定型で含める余地がある。"
+  - "review R2 の muse-spark tier 読み替え (contributor vs Standard) で registry / review-phase / harness SSOT の文言が衝突し、Codex 相談と分類器の拒否を経て Standard に落ち着いた。SSOT 間の優先関係を明文化する価値がある。"
+  - "implementation-planner が Bash を持たないため written_artifacts[].sha256 を返せず、orchestrator が補完した。digest 照合が自己申告になる構造的な穴。"
