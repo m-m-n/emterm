@@ -79,9 +79,25 @@ workflow:
   status: completed
   completed_at_commit: 552acf60de3aba5b5e919248a03a948bc85e083c
 - id: verify
-  status: in_progress
-  result: null
-  failed_items: []
+  status: failed
+  result: fail
+  failed_items:
+  - id: TS-10
+    category: comprehensive
+    note: >-
+      TS-10 requires the no-selection focus-loss test to reach its closing
+      sink-emptiness assertion with no compile-time-decidable branch. In
+      focus_loss_cleanup_with_no_selection_publishes_nothing
+      (src-tauri/src/window_host/tests.rs:4680) resolved_text is bound to a
+      statically-known None, so the `if let Some(text) = resolved_text` arm is
+      dead, publish_to_targets is never invoked and the emptiness assertion is
+      a tautology; the `if targets.primary` false arm at
+      pointer_routing.rs:472 is exercised by no test. The direct destination
+      assertion and its mutation proof DO hold, so TS-10 is partially met.
+      Same site as unresolved review finding 2a1ad49b9263cb95 (round 2) and
+      the partially-applied round-1 rework task0003. The test doc comment
+      (tests.rs:4674-4678), task0001.tests.yaml AC-4 and task0003.tests.yaml
+      AC-1 all assert the opposite and are inaccurate as written.
 - id: retrospect
   status: pending
 tasks:
@@ -291,8 +307,9 @@ requirements:
 batch:
   review_rework_count: 1
   verify_rework:
-    rounds: 0
-    failed_id_counts: {}
+    rounds: 1
+    failed_id_counts:
+      TS-10: 1
   infra_resume:
     rounds: 0
     cap: 2
