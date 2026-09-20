@@ -1167,7 +1167,6 @@ dependencies = [
  "once_cell",
  "opener",
  "parking_lot",
- "png 0.17.16",
  "pollster",
  "portable-pty",
  "raw-window-handle",
