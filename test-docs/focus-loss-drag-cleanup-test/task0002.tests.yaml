@@ -1,0 +1,73 @@
+task_id: task0002
+# This task has no source or test changes (document-correction task; see
+# task plan's Test Notes: "There is no automated test for this task: both
+# deliverables are document corrections, so verification is by inspection
+# of the two files"). baseline_failures reflects the state of
+# `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+# src-tauri/Cargo.toml` in this worktree BEFORE any edit: the whole command
+# fails to compile because `src-tauri/examples/swash_emoji.rs` (required-
+# features = ["gui"], built by a plain `cargo test`) include_bytes!'s
+# `assets/fonts/NotoColorEmoji.ttf`, which is absent from this worktree and
+# from the main tree alike (it is not one of the fonts scripts/fetch-fonts.sh
+# fetches). This is a pre-existing, unrelated environment/repo gap: no
+# individual test name can be extracted because the compile step never
+# reaches the test binary. Since this task touches zero Rust source, the
+# post-implementation run reproduces byte-for-byte the same compile error
+# (final_failures == baseline_failures), so no regression was introduced.
+baseline_failures:
+  - "BUILD: cargo test (default features) fails to compile — examples/swash_emoji.rs: couldn't read src-tauri/examples/../assets/fonts/NotoColorEmoji.ttf: No such file or directory (pre-existing, unrelated to this task; verified present before any edit)"
+final_failures:
+  - "BUILD: cargo test (default features) fails to compile — examples/swash_emoji.rs: couldn't read src-tauri/examples/../assets/fonts/NotoColorEmoji.ttf: No such file or directory (unchanged after this task's doc-only edits; re-run reproduced the identical error)"
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Document-correction criterion, not a code behavior; verified by
+      inspection/grep rather than a test. Before the edit,
+      feature-docs/mouse-report-reset-active-gesture/SPEC.md's TS-4 checkbox
+      row did not contain `focus_loss_cleanup_publishes_selection_without_a_window`
+      or `src-tauri/src/window_host/tests.rs` (grep for both strings matched
+      nothing in the row). After the edit, `grep -n
+      'focus_loss_cleanup_publishes_selection_without_a_window\|src-tauri/src/window_host/tests.rs'
+      feature-docs/mouse-report-reset-active-gesture/SPEC.md` matches only
+      inside the TS-4 row (lines 346-356), and `git diff --stat` confirms
+      no other row/section of SPEC.md changed.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Document-correction criterion. Before the edit, VERIFICATION.md's TS-4
+      row and SC-C row cited neither the window-free test name nor the
+      `selection_publish_targets_` prefix. After the edit, both rows contain
+      `focus_loss_cleanup_publishes_selection_without_a_window`,
+      `src-tauri/src/window_host/tests.rs`, and `selection_publish_targets_`
+      (confirmed by grep and by reading the two rows).
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Document-correction criterion. All three corrected rows (SPEC.md TS-4
+      checkbox, VERIFICATION.md TS-4 row, VERIFICATION.md SC-C row) now state
+      that a recorded sink call is evidence of the requested write, not of an
+      OS-level PRIMARY or CLIPBOARD update (verified by reading each row
+      after the edit; the phrasing was absent before).
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Document-correction criterion. VERIFICATION.md's SC-C row keeps AC-3's
+      real-hardware PRIMARY confirmation mapped to TS-9 (manual) alongside
+      the corrected TS-4 citation, and `grep -i 'unit-verified'` over both
+      documents after the edit returns no match, so no equivalent claim was
+      introduced.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      `git status --porcelain` / `git diff --stat` after the edit show
+      exactly two changed files:
+      feature-docs/mouse-report-reset-active-gesture/SPEC.md and
+      feature-docs/mouse-report-reset-active-gesture/VERIFICATION.md. No
+      source file, test, workflow file, or file under this feature's own
+      directory was touched.
