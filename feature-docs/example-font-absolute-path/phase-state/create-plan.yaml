@@ -1,20 +1,33 @@
 schema_version: 1
 feature: example-font-absolute-path
 phase: create-plan
-status: dispatching
+status: applying_patch
 generation: 1
-base_revision: c7574c12d4e241bb0f6df5d53ee453e48839e2a2
+base_revision: e567d97edb06a00b0073767afd29f67a978012eb
 last_input_digest: sha256:f5d1fa783108298028e030cf843aab1180f6dd88fee2d674f7d254aaee35b757
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-plan-run-0001
-    status: dispatched
+    status: completed
     input_digest: sha256:f5d1fa783108298028e030cf843aab1180f6dd88fee2d674f7d254aaee35b757
-    output_digest: null
-artifacts: []
-patches: []
+    output_digest: sha256:264459ad0d1fba242680aa3b3c5d9be16dd59ae9b7e1ad7102406edbbeff385f
+artifacts:
+  - path: feature-docs/example-font-absolute-path/IMPLEMENTATION.md
+    sha256: sha256:a94d11c5571ecc589cd8da69a41d17fec6b8647e0643dfacfd540566b5ec1fcc
+    produced_by: create-plan-run-0001
+  - path: feature-docs/example-font-absolute-path/VERIFICATION.md
+    sha256: sha256:0b57a6416da09a44ccf4789c5cc95071b3d4fc159080df34c9f179f1b4071d74
+    produced_by: create-plan-run-0001
+  - path: feature-docs/example-font-absolute-path/tasks/task0001.md
+    sha256: sha256:9e65fa1e9e410bb1fd0156c6cfcaa9a292f3be4769c3f8fcaf76f0756bf08b8e
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: example-font-absolute-path-p0001
+    status: validated
+    base_input_digest: sha256:f5d1fa783108298028e030cf843aab1180f6dd88fee2d674f7d254aaee35b757
+    base_workflow_blob: e9ae337ecf3697b9b7fafbdf7d4d09fd11e41851
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
