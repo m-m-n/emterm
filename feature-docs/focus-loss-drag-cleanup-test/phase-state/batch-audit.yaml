@@ -87,3 +87,42 @@ records:
       src-tauri/web-shared/styles.css (WebView mirror), src-tauri/src/ui/md3.rs (native
       egui mirror). Confirmed even though the design step is skipped, per create-spec
       section 11a. codex_consulted: false.
+  - question_id: create-plan.task-decomposition
+    packet_id: null
+    answered_at: "2026-09-20T17:05:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [keep_single_seam_task]
+    freeform: null
+    normalized_answer: "keep_single_seam_task"
+    resolution_note: >-
+      gate: unlisted orchestrator decision point (no gate_id); raised by the orchestrator
+      on the user's standing instruction to consult Codex on unclear points and adopt the
+      comparatively better option. codex_consulted: true (1 turn, run_codex_exec.sh readonly,
+      model_reasoning_effort=xhigh); opus_escalation: not run (verdict was unambiguous).
+      Question: keep FR1-FR7 (window-free state core + pure destination predicate + sink
+      seam + recording double + all five window-free tests) as one high-complexity task0001
+      (option A, the planner's proposal), or split it into parallel tasks such as
+      B1 = state core + predicate and B2 = sink seam + end-to-end test (option B), or some
+      other split (option C).
+      Codex verdict: A. Key points: (1) B2's end-to-end test could not compile in its own
+      worktree because B1's core would not exist there, and duplicating a stub to make it
+      compile would not exercise the real path; (2) the same-file overlap in
+      pointer_routing.rs and tests.rs would force the later worktree to re-implement on top
+      of the parent after a merge conflict, a cost a shared contract cannot remove;
+      (3) "complexity: high" alone is not a split criterion - the criterion is whether each
+      task can be implemented, verified and integrated independently; (4) the task0002 split
+      (FR8, the prior-feature document backfill) IS sound, since it needs no new Rust code,
+      touches disjoint files, and is coupled only through two test identifiers the plan pins.
+      Residual risk Codex named: one agent carries the whole change set and may miss a
+      requirement; its cheapest mitigation is to TDD in the order core -> predicate -> sink
+      -> end-to-end test within the single task, then cross-check the pinned names, the
+      frozen call-site text, the preserved write rule, the must-not-change file and the
+      document citations at the end. Adopted verbatim: the plan is unchanged.
+      Options not chosen: B (parallel split of FR1-FR7) and C (any other split).
+    orchestrator_note: >-
+      The planner's open question - whether the prior feature's SPEC.md TS-4 row and
+      VERIFICATION.md SC-C row have the shape SPEC.md describes - was resolved by the
+      orchestrator by direct inspection rather than deferred to implementation time:
+      feature-docs/mouse-report-reset-active-gesture/VERIFICATION.md lines 43 / 73 / 86 and
+      SPEC.md line 346 carry the rows task0002 targets.

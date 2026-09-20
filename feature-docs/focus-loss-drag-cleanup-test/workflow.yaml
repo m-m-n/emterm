@@ -69,7 +69,8 @@ workflow:
   - IMPLEMENTATION.md
   - VERIFICATION.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: 1d9c0bd53e787e6c868c49e429feb309748c4e0f
 - id: implement
   status: pending
   base_commit: d2e39b1fae5aa120b826dfa71097b78091bd7564
@@ -81,7 +82,35 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Window-free seam and window-free tests for the focus-loss local-drag cleanup path
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/window_host/pointer_routing.rs
+    - src-tauri/src/window_host/mod.rs
+    - src-tauri/src/window_host/tests.rs
+    - src-tauri/src/window_host/event_loop.rs
+    skills: [backend-impl]
+    domains: [external-io, api-contract]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    branch: null
+    notes: null
+  task0002:
+    title: Backfill the prior feature's test-mapping rows
+    plan: tasks/task0002.md
+    files:
+    - feature-docs/mouse-report-reset-active-gesture/SPEC.md
+    - feature-docs/mouse-report-reset-active-gesture/VERIFICATION.md
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR8]
+    status: pending
+    branch: null
+    notes: null
 review:
   status: pending
   rounds_completed: 0
@@ -93,7 +122,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-2
     - TS-4
@@ -102,7 +132,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-6
   FR3:
@@ -110,7 +141,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-1
     - TS-5
@@ -119,7 +151,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-3
     - TS-4
@@ -129,7 +162,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-4
   FR6:
@@ -137,7 +171,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-1
     - TS-3
@@ -147,7 +182,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-6
   FR8:
@@ -155,7 +191,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0002
     tests:
     - TS-8
   NFR1:
@@ -163,7 +200,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-1
     - TS-2
@@ -175,7 +213,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-1
     - TS-2
@@ -184,7 +223,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-6
     - TS-7
@@ -193,7 +233,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-6
 batch:
