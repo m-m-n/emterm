@@ -1,7 +1,7 @@
 schema_version: 1
 feature: wheel-report-tests-yaml-name-drift
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: 98de9e5ce42ed70ebbe6099c99ab350166a829cc
 last_input_digest: sha256:cd5115bd596facb24b8f5a78fec5552528c95e476d41f7b119b67abb85818a91
@@ -121,7 +121,33 @@ worker_runs:
     status: needs_user_input
     input_digest: sha256:cd5115bd596facb24b8f5a78fec5552528c95e476d41f7b119b67abb85818a91
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:f6d15354a226d425f440997c90264d7597cb709f612b354a924082d4658ecd5e
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:f6d15354a226d425f440997c90264d7597cb709f612b354a924082d4658ecd5e
+    output_digest: null
+  - request_id: create-spec-run-0004
+    status: completed
+    input_digest: sha256:f6d15354a226d425f440997c90264d7597cb709f612b354a924082d4658ecd5e
+    output_digest: null
+    note: >-
+      Correction dispatch. create-spec-run-0003 was told by the orchestrator's
+      dispatch note to render REQUIREMENTS.md in English; the repository
+      convention, confirmed against feature-docs/ac7-red-reason-scope, is a
+      Japanese REQUIREMENTS.md with an English SPEC.md. This run re-rendered
+      REQUIREMENTS.md in Japanese under action replace_own and left SPEC.md
+      untouched under action preserve (digest re-verified unchanged by the
+      orchestrator after the dispatch).
+artifacts:
+  - path: feature-docs/wheel-report-tests-yaml-name-drift/REQUIREMENTS.md
+    sha256: sha256:7090d002cac7ad5f49ffdd3e6fcdb1e001fb96bcc91d9da84a0394afba2a065c
+    produced_by: create-spec-run-0004
+  - path: feature-docs/wheel-report-tests-yaml-name-drift/SPEC.md
+    sha256: sha256:4178a1441364a56b4c1fe39d670aea15dda353923473cabe2f5b62218c0ce5dd
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
