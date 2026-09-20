@@ -1,11 +1,11 @@
 schema_version: 1
 feature: asset-manifest-scanner-hardening
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: 49004162a89d7c4ab179d14342bb16ce353fab65
-last_input_digest: "sha256:61bc19f722b82f4b422af39ec600628eac7960bb16346942834057b596a88709"
-active_request_id: create-spec-run-0001
+last_input_digest: "sha256:bdf39670470d3fb39daeec4cdfdd4dc05ad7f52d95041a1b413e59b4226920d9"
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -72,7 +72,21 @@ worker_runs:
     status: needs_user_input
     input_digest: "sha256:61bc19f722b82f4b422af39ec600628eac7960bb16346942834057b596a88709"
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:67d353ae51f1a4f7284243c9abea72847293d40b2af86803c06559854e1bb7ef"
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: "sha256:bdf39670470d3fb39daeec4cdfdd4dc05ad7f52d95041a1b413e59b4226920d9"
+    output_digest: null
+artifacts:
+  - path: feature-docs/asset-manifest-scanner-hardening/REQUIREMENTS.md
+    sha256: "sha256:f5bffa4b9974abc5c0ac7730cbe0c905900873416017ddc4741be8f70ae09408"
+    produced_by: create-spec-run-0003
+  - path: feature-docs/asset-manifest-scanner-hardening/SPEC.md
+    sha256: "sha256:a149a610714c7a04112e6a41b526a3330178dd96fe1d36a343f3586f4d6563dd"
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
