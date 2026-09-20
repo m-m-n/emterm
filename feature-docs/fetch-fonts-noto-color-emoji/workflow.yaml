@@ -168,7 +168,7 @@ tasks:
     - NFR2
     - NFR3
     - NFR5
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/fetch-fonts-noto-color-emoji/task0001
 review:

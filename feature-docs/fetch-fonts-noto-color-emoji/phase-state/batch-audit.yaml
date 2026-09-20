@@ -1,0 +1,25 @@
+schema_version: 1
+feature: fetch-fonts-noto-color-emoji
+records:
+  - question_id: implement.wake-decline
+    packet_id: null
+    answered_at: "2026-09-20T23:02:00+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "decline"
+    normalized_answer: "decline"
+    resolution_note: >-
+      task_id: task0001; declined files deviation adding project-relative path
+      `Cargo.lock` (workspace-root lockfile) to the declared change set.
+      Evidence part 1 (the path being added) was supplied. Evidence part 2 (the
+      identifier of an existing acceptance criterion or registered requirement
+      that would otherwise be dropped) was MISSING -- the report gave a
+      repository-layout explanation (the crate is a workspace member, so cargo
+      maintains a single root lockfile and never reads/writes the declared
+      stale `src-tauri/Cargo.lock`) rather than naming an AC-n of task0001's
+      plan or a requirement id registered in workflow.yaml. Evidence part 3
+      (how an acceptance criterion fails without the path, stated as a named
+      test that cannot be written or cannot pass) was MISSING -- no observable
+      outcome was stated. Not auto-added; surfaced as an ordinary deviation for
+      the containment check.
