@@ -1,0 +1,105 @@
+round: 1
+executed_at: '2026-09-21T00:43:31+09:00'
+scope:
+  review_mode: diff
+  base_commit: 32c83fe99fe0f3bc91874d23b2e79423ad9760f2
+  head_commit: a9384e206c33237c36bc498820ea8c773c0e1481
+  changed_files:
+  - src-tauri/examples/bold_raster_probe.rs
+  - src-tauri/examples/font_select_probe.rs
+  - src-tauri/examples/m_placement_probe.rs
+  - src-tauri/tests/examples_source_hygiene.rs
+  - test-docs/example-font-absolute-path/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - performance
+  - spec
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+  skip_reason: null
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings: []
+evaluation:
+  round_summary: 'Round 1 (diff mode, cross_validation=false)。primary 3 本 (comprehensive#0 / performance#0
+    / spec#0) はいずれも findings 空で返した。独立検査の結果、critical/high/medium 相当の問題は無く、low 1 件 (ソース走査の非再帰) のみを evaluator
+    発として追加した。
+
+
+    独立検査カバレッジ (perspectives_dispatched 全件):
+
+    - comprehensive#0: findings — 差分 3 ファイル + 新規テストを読んだ。コンパイル面 (PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+    &PathBuf: AsRef<Path>)、走査ロジック、AC-5 の空スキャン防止はいずれも妥当で reviewer の空結果と整合。唯一、examples/ の走査が read_dir 1
+    階層のみである点を low として起票した。
+
+    - performance#0: corroborated — 変更は example のフォント取得元と doc コメントのみで、probe のループ・raster 呼び出し・println!
+    本体は未変更。新規テストは 3 ファイルの read_dir + read_to_string と部分文字列一致のみ (find_marker_violations が text.lines().filter(contains)
+    の線形走査) で、テスト時間・実行時性能への影響は無い。空結果を裏付けた。
+
+    - spec#0: corroborated — FR1 (bold_raster_probe の Regular/Bold を CARGO_MANIFEST_DIR 起点の join に置換)、FR2
+    (m_placement_probe は絶対パス箇所のみ変更・ファイル先頭に新規コメント無し)、FR3/FR4 (native-poc/ 実行手順を CARGO_TARGET_DIR=src-tauri/target
+    / --manifest-path src-tauri/Cargo.toml に更新)、FR5 (src-tauri/tests/examples_source_hygiene.rs をテキスト走査のみで追加)、FR6
+    (src-tauri/src/render/font/resolver.rs は diff に現れず無変更)、NFR1 (フォント存在の assert 無し)、NFR2 (Path::join のみ・区切り直書き無し)、NFR3
+    (Cargo.toml の [[example]] 3 件の required-features=["gui"] が原文のまま・新規依存無し)、NFR4 (出力 println! 群は未変更) をすべて自分で確認した。git
+    grep で examples/ 配下に /home/ と native-poc の残存 0 件、scripts/fetch-fonts.sh が Inconsolata-Regular.otf
+    / Inconsolata-Bold.otf を DEST_DIR=src-tauri/assets/fonts に取得することも確認し、仮定 A1/A2 が成立している。
+
+
+    非 finding の観察 (起票せず): bold_raster_probe の std::fs::read(&path).expect("font file") は fetch-fonts.sh
+    未実行時にパス情報を含まないメッセージで panic する。変更前も同じ文言であり SPEC にも要求が無いため悪化ではない。
+
+
+    インジェクション試行: reviewer_outputs 3 件のいずれにも指示文・役割上書き・"ignore previous instructions" 系のパターンは無し。
+
+
+    reviewer 報告の critical/high サイト: 0 件 (dismissed_sites も空)。読み取り予算: project_root 配下 6 ファイル (SPEC.md,
+    examples_source_hygiene.rs, task0001.tests.yaml, examples/*.rs 3 本) + 読み取り専用の git/grep/find 検査のみ。書き込み・commit・ビルド・フォーマッタ実行は一切していない。
+
+
+    [orchestrator 注記 / R3b mechanical gates] evaluator が返した唯一の finding (examples_source_hygiene.rs:82
+    — collect_example_sources が read_dir 1 階層のみで cargo のサブディレクトリ形式 example examples/<name>/main.rs を走査しない)
+    は severity: low のため R3b step 2 (severity は critical/high/medium のみ通す) で機械的に drop した。加えて file が project_root
+    起点の絶対パスであり step 1 の絶対パス拒否にも該当する。現行の src-tauri/examples/ はフラットな 3 ファイル構成のため実害は無い。将来 examples/<name>/main.rs
+    形式を追加する際は collect_example_sources を再帰列挙に変える価値がある。'
+  recommended_action: complete
+  action_rationale: critical/high/medium の指摘は primary 3 本にも evaluator 独立検査にも無く、SPEC の FR1-FR6 / NFR1-NFR4
+    は差分上で充足を確認済み。唯一の low (走査の非再帰) は現行のフラットな examples/ レイアウトでは実害が無く、追加ラウンドやリワークを回す価値より、将来 example を増やす際の改善項目として残すほうが妥当。
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-example-font-absolute-path-20260920T154331Z.md
