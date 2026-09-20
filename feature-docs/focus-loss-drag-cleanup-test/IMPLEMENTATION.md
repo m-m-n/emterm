@@ -54,7 +54,7 @@ deliberately absent from this chain and stays on the release-path composition
 | Window-free drag-termination state core | Performs the two state effects and reports the decision | Pre: receives only owned state and plain values (drag flag, pending anchor, resolved selection text, copy-on-select flag); never receives or names a window type. Post: the drag flag reads false, the pending anchor slot is emptied, and the returned value is the anchor exactly as it stood before the call (empty when there was none) | task0001 |
 | Destination predicate | Maps (selection present, copy-on-select, text empty) to the destination set | Pre: three plain boolean-shaped values. Post: total over all eight inputs, result exactly as the preserved write rule (FR6) states; no mutation, no I/O, no global access | task0001 |
 | Selection-write sink | Performs the two selection writes on behalf of the publish path | Pre: called once per destination the predicate selected. Post: PRIMARY is written before CLIPBOARD when both are selected; each call carries the resolved selection text verbatim; the production implementation delegates to the host's existing primary and clipboard write primitives with today's arguments | task0001 |
-| Pinned test identifiers | The test names the prior-feature documents cite | The end-to-end window-free test is named `focus_loss_cleanup_publishes_selection_without_a_window` and lives in `src-tauri/src/window_host/tests.rs`; every destination-predicate truth-table test name begins with `selection_publish_targets_`. task0001 creates identifiers matching this contract; task0002 cites them without reading task0001's plan | task0001, task0002 |
+| Pinned test identifiers | The test names the prior-feature documents cite | The end-to-end window-free test is named `focus_loss_cleanup_publishes_selection_without_a_window` and lives in `src-tauri/src/window_host/tests.rs`; every destination-predicate truth-table test name begins with `selection_publish_targets_`. task0001 creates identifiers matching this contract; task0002 cites them without reading task0001's plan; after round 1 rework the same contract binds task0003 (renames none of them) and task0004 (cites them unchanged), per D6 | task0001, task0002, task0003, task0004 |
 
 ## Conventions
 
@@ -124,6 +124,36 @@ No new library is introduced, so no license compatibility question arises and
 `project.license` stays `MIT`. Any implementer finding they want a new crate
 must stop and report a plan deviation instead of adding one. Affected tasks:
 task0001, task0002.
+
+### D6: One shared claim-accuracy contract for the rework tasks
+
+Added by round 1 rework. task0003 rewrites this feature's test-evidence record
+and task0004 rewrites the prior feature's test-mapping rows. Both describe the
+same tests, so both are bound by one contract, and neither reads the other's
+plan:
+
+1. **What the window-free tests verify.** They drive the state core, the
+   destination predicate and the recording sink, composed as the adapter
+   composes them, over plain values. They construct no window host, do not call
+   the adapter, do not run the focus-loss event-loop arm and resolve no
+   selection. What pins the adapter's own gather-and-adapt wiring is the pair of
+   call-site literals the source-scanning test compares against the event-loop
+   file's text — verification at the seam and at the call site, not through the
+   production entry point. No record and no row may claim more than this, and
+   both must state the source-scan bound explicitly. D4 stands unchanged
+   alongside it: a recorded sink call is evidence of a write request only.
+2. **What a quoted command means.** Any command a record or a row quotes as
+   evidence is a command that runs to completion in this worktree, and any count
+   attributed to a command is a count that command produced. The default-feature
+   full-suite command does not satisfy this here — a pre-existing, unrelated
+   missing font asset makes the `gui`-gated `swash_emoji` example fail to
+   compile — so it is recorded as a pre-existing blocker and never recorded as
+   passed. Removing the blocker is outside this feature's declared change set.
+3. **Pinned identifiers survive the rework.** The Shared Components row's
+   identifier contract continues to hold: task0003 renames no test the prior
+   feature's rows cite, and task0004 cites those identifiers unchanged.
+
+Affected tasks: task0003, task0004.
 
 ## Risk Assessment
 
