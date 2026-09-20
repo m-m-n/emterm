@@ -1,0 +1,170 @@
+task_id: task0003
+# baseline_failures/final_failures reflect
+# `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+# src-tauri/Cargo.toml` (project_commands.test, verbatim), run in this
+# worktree BEFORE any edit and again AFTER. Both runs fail to compile at
+# examples/swash_emoji.rs (missing src-tauri/assets/fonts/NotoColorEmoji.ttf)
+# — a pre-existing, unrelated environment gap out of this task's scope (see
+# Out of Scope). No individual test name can be extracted because the
+# compile step never reaches a test binary; this is the same blocker
+# test-docs/focus-loss-drag-cleanup-test/task0002.tests.yaml records. This
+# task touches only tests.rs (no production source), so the post-
+# implementation run reproduces byte-for-byte the same compile error
+# (final_failures == baseline_failures) — no regression introduced. The
+# library test target (`--lib`, the command NFR1 names) ran to completion
+# both before and after this task's edit: 3486 passed, 0 failed, 3 ignored
+# in both runs (the corrected test replaces an existing one 1:1, so the
+# count is unchanged).
+baseline_failures:
+  - "BUILD: cargo test (default features) fails to compile — examples/swash_emoji.rs: couldn't read src-tauri/examples/../assets/fonts/NotoColorEmoji.ttf: No such file or directory (pre-existing, unrelated to this task; verified present before any edit)"
+final_failures:
+  - "BUILD: cargo test (default features) fails to compile — examples/swash_emoji.rs: couldn't read src-tauri/examples/../assets/fonts/NotoColorEmoji.ttf: No such file or directory (unchanged after this task's edit; re-run reproduced the identical error)"
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing
+    red_confirmed: false
+    red_reason: >-
+      Structural criterion (absence of a compile-time-decidable-literal
+      branch condition), verified by inspection rather than a discrete red
+      observation: the rewritten test's publish step now scrutinizes
+      `resolved_text`, a `let resolved_text: Option<&str> = None;` local
+      binding, instead of the inline literal `None::<&str>` the prior
+      version matched directly. Confirmed by reading the diff
+      (`git diff -- src-tauri/src/window_host/tests.rs`) and by grepping
+      the test body for `None::<&str>` (no match after the edit). AC-3's
+      mutation below is the closest analogue to a red observation for a
+      criterion shaped like this, and demonstrates the rewritten branch's
+      assertions have force.
+  AC-2:
+    tests:
+      - window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing
+    red_confirmed: true
+    red_reason: >-
+      Confirmed via AC-3's mutation (same test, same run): with
+      `selection_publish_targets`'s no-selection early-return arm
+      temporarily altered to `SelectionPublishTargets { primary: true,
+      clipboard: false }`, this test's
+      `assert_eq!(targets, SelectionPublishTargets { primary: false,
+      clipboard: false }, "AC-2: ...")` failed with "assertion `left ==
+      right` failed: AC-2: a no-selection termination selects neither
+      destination (FR6)\n  left: SelectionPublishTargets { primary: true,
+      clipboard: false }\n right: SelectionPublishTargets { primary:
+      false, clipboard: false }". Reverted the mutation, re-ran, passed.
+      See AC-3 for the full command transcript.
+  AC-3:
+    tests:
+      - window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing
+    red_confirmed: true
+    red_reason: >-
+      Deliberate mutation check per Test Notes; never committed. Altered
+      `selection_publish_targets`'s early-return arm in
+      src-tauri/src/window_host/pointer_routing.rs from
+      `SelectionPublishTargets { primary: false, clipboard: false }` to
+      `SelectionPublishTargets { primary: true, clipboard: false }`. Ran
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib -- window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing`
+      — observed FAILED (1 failed) with the assertion-mismatch message
+      quoted under AC-2. Reverted the mutation
+      (restored the original arm), re-ran the identical command —
+      observed ok (1 passed). `git diff --stat -- src-tauri/src/window_host/pointer_routing.rs`
+      after the revert showed no changes, confirming the mutation was
+      never committed.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Inspection criterion over
+      test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml. Before
+      this task's edit, that file's baseline_failures and final_failures
+      were both `[]` — no entry named the swash_emoji /
+      NotoColorEmoji.ttf compile blocker. After the edit, both lists carry
+      an entry naming it, worded to match
+      test-docs/focus-loss-drag-cleanup-test/task0002.tests.yaml's terms
+      ("examples/swash_emoji.rs: couldn't read
+      src-tauri/examples/../assets/fonts/NotoColorEmoji.ttf: No such file
+      or directory"), confirmed by reading the corrected file. Per the
+      task plan's orchestrator correction, the entries are worded as a
+      clean-checkout fact (not "this run failed") since task0001's actual
+      recorded run avoided the blocker via a documented manual font fetch
+      — see AC-6.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Every command quoted in a red_reason in the corrected
+      task0001.tests.yaml was run to completion in this worktree during
+      this task, with one documented exception carried over verbatim from
+      the orchestrator correction: the AC-6 entry's 3470/3486 full-suite
+      counts are task0001's own recorded counts, produced in task0001's
+      worktree under a manual NotoColorEmoji.ttf fetch that this task's
+      Out of Scope explicitly forbids repeating here
+      ("Supplying, fetching or committing the missing font asset"). This
+      task did not re-derive those two numbers by running the identical
+      full command to completion in this worktree; it independently
+      verified two things this worktree CAN produce without that
+      forbidden fetch: (1) the unqualified command
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml` fails to compile at
+      examples/swash_emoji.rs on the identical NotoColorEmoji.ttf error,
+      run once before this task's edit and once after, byte-identical
+      both times (see this file's baseline_failures/final_failures); and
+      (2) the library test target
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib` (the command NFR1 names, also quoted
+      by task0001.tests.yaml's AC-1/AC-2/AC-3 red_reasons) ran to
+      completion both before and after this task's edit, 3486 passed / 0
+      failed / 3 ignored both times — a number matching task0001's
+      recorded post-implementation full-suite count, which is consistent
+      with (not proof of) that count's accuracy. The trust basis for the
+      3470/3486 full-suite counts themselves is the orchestrator
+      correction's own citation of
+      feature-docs/focus-loss-drag-cleanup-test/phase-state/batch-audit.yaml
+      (implement.deviation-review, implement.codex-consultation), not a
+      re-run performed by this task.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Inspection criterion. task0001.tests.yaml's AC-6 entry, after this
+      task's edit, states plainly that
+      `cargo test --manifest-path src-tauri/Cargo.toml` compiles and
+      passes only under the manual-NotoColorEmoji.ttf-fetch precondition,
+      and that on a clean checkout of this worktree it does not reach a
+      test binary — confirmed by reading the entry. It nowhere states or
+      implies the unqualified command passed unconditionally on a bare
+      checkout.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Inspection criterion. task0001.tests.yaml's AC-4 entry, after this
+      task's edit, describes the corrected
+      focus_loss_cleanup_with_no_selection_publishes_nothing test's
+      actual assertions (direct destination-decision comparison against
+      SelectionPublishTargets { primary: false, clipboard: false }, plus
+      the value-carrying-binding-driven publish step) and cross-references
+      this task's own AC-3 mutation evidence that those assertions can
+      fail — confirmed by reading the entry. No test named anywhere in
+      task0001.tests.yaml is left described as having assertions that
+      cannot fail.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/inspection criterion. `CARGO_TARGET_DIR=src-tauri/target cargo
+      test --manifest-path src-tauri/Cargo.toml --lib` passed both before
+      and after this task's edit: 3486 passed, 0 failed, 3 ignored in both
+      runs (the corrected test replaces an existing test 1:1 by name, so
+      the count is unchanged and no existing test's assertion was
+      weakened, relaxed or deleted — confirmed by reading the full diff of
+      src-tauri/src/window_host/tests.rs, which shows exactly one test
+      body rewritten and no other test touched). `git diff --stat` after
+      this task's edit shows exactly two changed files:
+      src-tauri/src/window_host/tests.rs and
+      test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml, plus
+      this new test-docs/focus-loss-drag-cleanup-test/task0003.tests.yaml
+      — no production source file changed
+      (src-tauri/src/window_host/pointer_routing.rs was touched only by
+      AC-3's mutation, which was reverted and confirmed clean by
+      `git diff --stat` before this task's commit).
