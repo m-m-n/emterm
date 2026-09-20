@@ -103,3 +103,49 @@ records:
       No other artifact was written; IMPLEMENTATION.md and VERIFICATION.md are
       unchanged.
       opus_escalation: not run (Codex's recommendation mapped onto an offered option).
+  - question_id: develop.scope-reconfirm-implement-entry
+    packet_id: null
+    answered_at: "2026-09-21T09:20:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [keep_current_spec_tests_only]
+    freeform: "keep_current_spec_tests_only"
+    normalized_answer: >-
+      Keep the current SPEC (production code unchanged, regression tests only) and
+      file the residual focus-loss ghost-drag concern as a separate Notion task.
+    resolution_note: >-
+      gate: orchestrator-opened scope re-confirmation raised at the implement-phase
+      entry of this run, because the launch instruction requires consulting Codex on
+      any unclear point and adopting the option judged comparatively better. The
+      unclear point: the Notion ticket's stated expectation ("drop host.dragging and
+      the pending anchor on focus loss") contradicts SPEC FR3, which pins the
+      opposite semantics. Options: A keep_current_spec_tests_only / B
+      overturn_spec_and_change_production_code.
+      codex_consulted: true (harness entry `codex`, readonly sandbox,
+      run_codex_exec.sh, working dir = integration worktree, two turns).
+      Turn 1: Codex recommended B, arguing the focus-loss arm still leaves a
+      reachable ghost drag when the matching release never arrives while unfocused,
+      and that the current SPEC inverts the ticket's expectation without an explicit
+      product decision.
+      Turn 2: the orchestrator supplied three pieces of decisive evidence Codex had
+      not seen - (1) feature-docs/focus-loss-drag-termination/SPEC.md's Supersession
+      section, which names and replaces the prior FR3/AC-3 with the !left_held gate
+      as a deliberate product decision; (2) the event_loop.rs Focused(false) arm's
+      own D2-D5 comments, which acknowledge the never-arriving release and
+      deliberately leave host.dragging / the pending anchor untouched; (3) the
+      ticket's provenance as a deferred review finding (mouse-reporting review round
+      3, stable_id 1ac64f41111531a6) authored before that supersession landed.
+      Codex then reversed to A, reasoning that the later SPEC is the current formal
+      product decision, that B would retract a settled specification rather than fix
+      a defect, that the residual ghost drag self-heals on the next left click and is
+      a known trade-off of "a focus steal must not destroy a live drag", and that an
+      unattended batch run has no basis to presume human approval for a product
+      decision reversal.
+      Chosen: A (keep_current_spec_tests_only) - adopted per the launch instruction.
+      Not chosen: B - would require a specification-change transition (create-spec
+      back to needs_update) and a human product decision that batch mode cannot
+      grant.
+      follow_up: the residual focus-loss ghost-drag concern is filed as a separate
+      Notion task at run end (notion-batch-develop's residual-task rule).
+      opus_escalation: not run (Codex's final recommendation mapped onto an offered
+      option).
