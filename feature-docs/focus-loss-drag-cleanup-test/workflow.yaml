@@ -72,14 +72,14 @@ workflow:
   status: completed
   completed_at_commit: 1d9c0bd53e787e6c868c49e429feb309748c4e0f
 - id: implement
-  status: completed
+  status: pending
   completed_at_commit: 6fdb3e3e38cc507c374fa910f5f4ca7005760ade
   base_commit: d2e39b1fae5aa120b826dfa71097b78091bd7564
 - id: review
   status: completed
   completed_at_commit: 552acf60de3aba5b5e919248a03a948bc85e083c
 - id: verify
-  status: failed
+  status: pending
   result: fail
   failed_items:
   - id: TS-10
@@ -163,6 +163,24 @@ tasks:
       source: review
       source_ids: [de41ddfa4f021530]
       review_round: 1
+  task0005:
+    title: Give the no-selection focus-loss test's emptiness assertion force
+    plan: tasks/task0005.md
+    files:
+    - src-tauri/src/window_host/tests.rs
+    - test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml
+    - test-docs/focus-loss-drag-cleanup-test/task0003.tests.yaml
+    skills: [backend-impl]
+    domains: [external-io, config-infra]
+    complexity: low
+    requirements: [FR3, FR6, NFR1, NFR3]
+    status: pending
+    branch: null
+    notes: null
+    provenance:
+      source: verify
+      source_ids: [TS-10]
+      review_round: null
 review:
   status: completed
   rounds_completed: 2
@@ -201,6 +219,7 @@ requirements:
     tasks:
     - task0001
     - task0003
+    - task0005
     tests:
     - TS-1
     - TS-5
@@ -233,6 +252,7 @@ requirements:
     tasks:
     - task0001
     - task0003
+    - task0005
     tests:
     - TS-1
     - TS-3
@@ -266,6 +286,7 @@ requirements:
     tasks:
     - task0001
     - task0003
+    - task0005
     tests:
     - TS-1
     - TS-2
@@ -291,10 +312,12 @@ requirements:
     tasks:
     - task0001
     - task0003
+    - task0005
     tests:
     - TS-6
     - TS-7
     - TS-9
+    - TS-12
   NFR4:
     title: Identifier-collision avoidance
     status: ok
