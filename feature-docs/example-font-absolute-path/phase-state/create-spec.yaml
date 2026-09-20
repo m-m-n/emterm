@@ -1,12 +1,24 @@
 schema_version: 1
 feature: example-font-absolute-path
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: 8c3b4cce8fc15692cdd859d1fdfec09ec796b2c2
 last_input_digest: sha256:e3f370a3301fd49d4a31941e878258d5bfe40be5d966269ac70f98c3df64d015
 active_request_id: create-spec-run-0001
-packets: {}
+packets:
+  example-font-absolute-path-q0001:
+    status: answered
+    issued_at: "2026-09-21T00:12:38+09:00"
+    questions:
+      - question_id: requirement.regression-test-shape
+        status: answered
+      - question_id: requirement.font-path-mechanism
+        status: answered
+      - question_id: requirement.m-placement-run-comment
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
 answers:
   create-spec.feature-identity:
     packet_id: null
@@ -16,7 +28,46 @@ answers:
     selected_option_ids: [derive_from_task_description]
     freeform: null
     normalized_answer: example-font-absolute-path
-worker_runs: []
+  requirement.regression-test-shape:
+    packet_id: example-font-absolute-path-q0001
+    answered_at: "2026-09-21T00:12:38+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [source_scan_test]
+    freeform: null
+    normalized_answer: "src-tauri/tests/ にソース走査の統合テストを追加し、src-tauri/examples/ の各ソースに /home/ 始まりの絶対パス literal と native-poc/ 文字列が無いことを assert する"
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; codex_consulted: true (1 turn, harness entry: codex); Codex は source_scan_test を選択 — フォント取得や example 実行に依存せず、/home/ 絶対パスと native-poc/ の再混入を直接検出でき、小さな修正のために共有ヘルパー抽出を強いない。worker の推奨とも一致。Codex は補足として、gui 既定有効ゆえフォント未取得時は本体側 include_bytes! がビルドを巻き込むため、取得前検証では --no-default-features での実行を設計に織り込むよう指摘した"
+  requirement.font-path-mechanism:
+    packet_id: example-font-absolute-path-q0001
+    answered_at: "2026-09-21T00:12:38+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [runtime_manifest_dir]
+    freeform: null
+    normalized_answer: "Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"assets/fonts/...\") で実行時に読む"
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; codex_consulted: true (1 turn, harness entry: codex); Codex は runtime_manifest_dir を選択 — 取得スクリプトの保存先と一致し実行時 cwd に依存せず、example に新たなコンパイル時フォント依存を足さない。本体の読み込み方式や公開 API を変えずに修正範囲を小さく保てる。ただし本体側 include_bytes! 由来のビルド失敗までは解消しない（姉妹フィーチャーの範囲）。worker の推奨とも一致"
+  requirement.m-placement-run-comment:
+    packet_id: example-font-absolute-path-q0001
+    answered_at: "2026-09-21T00:12:38+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [leave_as_is]
+    freeform: null
+    normalized_answer: "m_placement_probe.rs は絶対パス修正のみに留め、実行手順コメントは新設しない"
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; codex_consulted: true (1 turn, harness entry: codex); Codex は leave_as_is を選択し worker の推奨 add_header_comment と割れた。理由: m_placement_probe.rs は実際に fn main() から始まり更新対象の既存実行コメントが無く、タスク記述の要求は「古いコメントの更新」であって新設まで含める根拠が無い。orchestrator は副作用が最小である点も踏まえ Codex 案を採用した"
+  design-step.recommendation:
+    packet_id: example-font-absolute-path-q0001
+    answered_at: "2026-09-21T00:12:38+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "design ステップは skip（requirements-analyst の推奨に従う）"
+    resolution_note: "gate: create-spec.design-step; references/batch-policies.yaml の select/decide_autonomously を適用"
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: sha256:e3f370a3301fd49d4a31941e878258d5bfe40be5d966269ac70f98c3df64d015
 artifacts: []
 patches: []
 progress_fingerprint: null
