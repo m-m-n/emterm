@@ -200,9 +200,6 @@ vt100 = "0.16"
 winresource = "0.1"
 
 [dev-dependencies]
-# PNG encoder used by examples/swash_emoji.rs (PoC PNG dump, FR1).
-png = "0.17"
-
 # Temporary files for ported CLI subcommand unit tests.
 tempfile = "3"
 
@@ -265,10 +262,6 @@ windows-sys = { version = "0.59", features = [
 # NOTE: dev/release profiles are managed at the workspace root Cargo.toml
 # (see top-level Cargo.toml). Per-package profile sections produce
 # warnings and are ignored by Cargo when a workspace root profile exists.
-
-[[example]]
-name = "swash_emoji"
-required-features = ["gui"]
 
 [[example]]
 name = "bold_raster_probe"
