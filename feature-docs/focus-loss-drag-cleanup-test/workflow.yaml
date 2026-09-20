@@ -95,8 +95,8 @@ tasks:
     domains: [external-io, api-contract]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3, NFR4]
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/focus-loss-drag-cleanup-test/task0001
     notes: null
   task0002:
     title: Backfill the prior feature's test-mapping rows
@@ -108,8 +108,8 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR8]
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/focus-loss-drag-cleanup-test/task0002
     notes: null
 review:
   status: pending
