@@ -1,0 +1,115 @@
+round: 1
+executed_at: "2026-09-20T23:09:25+09:00"
+scope:
+  review_mode: diff
+  base_commit: 74c5206427fd0cafa716f74bc4cde14cc9972b27
+  head_commit: 4444d6ee3bd25834da86f5cfb9ca1388d0aea7c2
+  changed_files:
+  - Cargo.lock
+  - src-tauri/Cargo.toml
+  - src-tauri/examples/swash_emoji.rs
+  - src-tauri/tests/asset_manifest.rs
+  - test-docs/fetch-fonts-noto-color-emoji/task0001.tests.yaml
+  changed_files_read_excluded:
+  - path: src-tauri/examples/swash_emoji.rs
+    reason: >-
+      Deleted by this diff (git-confirmed via `git diff --diff-filter=D`), so it
+      does not exist at HEAD and cannot satisfy Phase R0 step 3's regular-file
+      requirement. Per the Codex-consulted resolution recorded in
+      phase-state/batch-audit.yaml (question_id review.deleted-path-in-changed-files),
+      the path stays in the diff command so the deletion remains reviewable, and is
+      withheld only from the reviewers' Read list. Disclosed here as that resolution
+      requires.
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - spec
+  discretionary:
+  - perspective: license
+    reason: >-
+      The diff touches dependency manifests/lockfiles (src-tauri/Cargo.toml removes
+      the png dev-dependency, Cargo.lock drops its edge), which is R1 Layer 2's
+      mandatory license trigger.
+  - perspective: vulnerability
+    reason: >-
+      Same manifest/lockfile trigger as license; served deterministically by axis 2
+      (scan-dependencies.py), not by a Task-dispatched reviewer.
+  cross_validation: true
+perspective_runs:
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+- {run_id: "license#0", perspective: license, role: primary, source: codex, status: completed}
+- {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "vulnerability#tool", perspective: vulnerability, role: tool, source: tool, status: skipped, skip_reason: "cargo_tool_not_found"}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+findings_dropped_by_severity_gate:
+  # Phase R3b step 2 keeps only critical/high/medium. The evaluator demoted both
+  # surviving comprehensive findings to `low` after independently corroborating
+  # them, so both were dropped from `findings`. Recorded here for disclosure --
+  # the full reasoning is preserved verbatim in `evaluation.round_summary` below.
+  - severity: low
+    category: comprehensive
+    file: src-tauri/tests/asset_manifest.rs
+    line: 179
+    title: "Build-output exclusion applies the `target` prefix to every path component, including ordinary files"
+    sources: ["comprehensive#0"]
+    confidence: 90
+  - severity: low
+    category: comprehensive
+    file: src-tauri/tests/asset_manifest.rs
+    line: 87
+    title: "`include_bytes!` scanner matches a fixed substring and then searches for the next quote without a macro boundary"
+    sources: ["comprehensive#0"]
+    confidence: 90
+evaluation:
+  round_summary: |-
+    Round 1, diff mode, cross_validation=true. Change set verified as CONTAINED IN the SPEC's declared set: swash_emoji.rs deleted, its `[[example]]` block and the `png = "0.17"` dev-dependency removed (the unrelated `image` `png` FEATURE at Cargo.toml:91 correctly survives, per FR3), root Cargo.lock regenerated with one dependency edge removed, new `src-tauri/tests/asset_manifest.rs`, plus feature-docs/** and test-docs/** workflow artifacts. `.github/` is untouched (FR7 confirmed by `git diff --name-only -- .github/`), and the three remaining examples are intact. No injection attempts, role overrides, or embedded instruction patterns were observed in any reviewer_outputs entry or in the inspected diff.
+
+    Coverage statement, per dispatched perspective (independent inspection of the round's changed_files, plus `src-tauri/build.rs`, `scripts/fetch-fonts.sh`, and `src-tauri/assets/fonts/README.md` as the files the new test reads):
+    - comprehensive#0: FINDINGS (my own inspection corroborated both reported gaps and added a live instance of the second one at `src-tauri/build.rs:160`; both carried forward, demoted to low).
+    - security#0: CORROBORATED (empty result upheld). The new test performs no network access, spawns no process, and resolves every path from the compile-time `env!("CARGO_MANIFEST_DIR")` rather than the process cwd or an absolute developer path. Removing a dev-dependency only shrinks the dependency surface; the Cargo.lock delta is a single removed dependency edge with no version or source change. No symlinks exist under `src-tauri/` outside the build dirs, so the recursive walk cannot cycle.
+    - license#0: CORROBORATED (empty result upheld). No dependency added, no license metadata changed, no third-party code vendored; `src-tauri/assets/fonts/README.md` and its OFL 1.1 statement are untouched, and `asset_manifest.rs` is original code.
+    - performance#0: CORROBORATED (empty result upheld). The walk is test-time only, bounded to `.rs` files under `src-tauri/` with `target*` pruned, and touches no hot path; the two repository-facing tests each re-walk, which is negligible.
+    - spec#0: CORROBORATED, with the run's first hand-back dismissed. I checked FR1-FR9 and NFR1-NFR5 against the tree: FR1/FR2/FR3 done, FR4/FR5/FR6 implemented as a one-directional textual check under `src-tauri/tests/` with a `.ttf`/`.otf` predicate, FR7 confirmed, FR9 confirmed (no production source touched), NFR2 satisfied (the test uses only `std` plus the unconditional `tempfile` dev-dependency and never references the crate, so it builds features-off), NFR3 satisfied (text-only reads; no font binary required), NFR5 satisfied. The scanner, replayed verbatim over the tree, yields exactly the seven documented fonts, so the new test passes unmodified as US2/TS1 require.
+    - vulnerability#tool: not applicable -- the run was `skipped` (`cargo_tool_not_found`), never `completed`, so there is no reviewer output to corroborate and the Independent Inspection Duty does not attach to it.
+
+    The spec#0 run returned two contradicting hand-backs. The first is not supportable against the source: it attributes the defect to a function `parse_macro_invocations` containing `if bytes[idx] != b'"' { continue; }`, and neither that function nor that expression exists anywhere in `src-tauri/tests/asset_manifest.rs`; it also attributes an `include_str!` requirement to FR6, which names only `include_bytes!`. Its substantive claim is additionally false on the real code: because `embedded_font_names()` searches for the next `"` after the needle, `include_bytes!(r"../assets/fonts/X.ttf")` and `include_bytes!(r#"..."#)` both extract the correct path. The second hand-back's empty result matches my own reading. Dismissed as a false positive and recorded in `dismissed_sites`.
+  recommended_action: "auto_fix"
+  action_rationale: |-
+    No critical or high findings, and nothing blocks completion: the SPEC's objectives are met, the declared change set holds, and the new guard passes on the current tree with the seven documented fonts. The two surviving findings are low-severity robustness gaps confined to `src-tauri/tests/asset_manifest.rs`, with no production impact and no effect on the current result. They are worth fixing now rather than deferring because they weaken the very regression guard this feature was created to add, and both fixes are small, mechanical, and local to one test file (restrict the prefix rule to directories; bound the macro-argument extraction). If the auto-fix cap is already consumed, `complete` is an acceptable alternative -- neither finding justifies another round.
+dismissed_sites:
+- file: src-tauri/tests/asset_manifest.rs
+  line: 96
+  run_id: "spec#0"
+  reason: "false positive"
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: >-
+    No candidate reached Phase R4. The candidate gate requires severity in
+    {critical, high}; after Phase R3b's severity gate the round held zero
+    findings, so zero loops ran. The evaluator's `recommended_action: auto_fix`
+    is advice only and never overrides the candidate gate (Phase R3b,
+    "`recommended_action` is advice, never a decision").
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-fetch-fonts-noto-color-emoji-20260920T140925Z.md
+  note: >-
+    Ran once, immediately before this round's R5, because the closing disposition
+    was `complete` rather than `another-round`. Axis 2 produced zero vulnerability
+    findings (its scan skipped with `cargo_tool_not_found`), so nothing was filed.
+    The tool reported `degraded: true` with `degraded_reason: listing_exit_nonzero`
+    and took the report branch.
