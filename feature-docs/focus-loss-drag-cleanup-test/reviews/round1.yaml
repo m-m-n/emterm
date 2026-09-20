@@ -1,0 +1,207 @@
+round: 1
+executed_at: '2026-09-20T17:34:15+09:00'
+scope:
+  review_mode: diff
+  base_commit: d2e39b1fae5aa120b826dfa71097b78091bd7564
+  head_commit: 1d2dde1a078ad9298174d4f2795c4634ecf83ff5
+  changed_files:
+  - feature-docs/mouse-report-reset-active-gesture/SPEC.md
+  - feature-docs/mouse-report-reset-active-gesture/VERIFICATION.md
+  - src-tauri/src/window_host/mod.rs
+  - src-tauri/src/window_host/pointer_routing.rs
+  - src-tauri/src/window_host/tests.rs
+  - test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml
+  - test-docs/focus-loss-drag-cleanup-test/task0002.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: 5cd234f39613770d
+  severity: high
+  category: comprehensive
+  file: test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml
+  line: 74
+  title: AC-5/AC-6 evidence record cites a full-suite pass count from a command that cannot compile in
+    this worktree; the sibling task record contradicts it
+  description: 'task0001.tests.yaml AC-6 records: "Baseline (before any change): `cargo test --manifest-path
+    src-tauri/Cargo.toml` = 3470 passed, 0 failed, 3 ignored. After implementation: 3486 passed (3470
+    + 16 new tests), 0 failed, 3 ignored". That exact command cannot produce that output here. `src-tauri/Cargo.toml:269`
+    declares `[[example]] name = "swash_emoji"` with `required-features = ["gui"]` (satisfied by the default
+    feature set), and `src-tauri/examples/swash_emoji.rs:22` does `include_bytes!("../assets/fonts/NotoColorEmoji.ttf")`.
+    `src-tauri/assets/fonts/` in this worktree contains only `.gitignore`, `LICENSE`, `README.md` — no
+    `NotoColorEmoji.ttf`. So a plain `cargo test --manifest-path src-tauri/Cargo.toml` fails at compile
+    time and never reaches a pass count. task0002.tests.yaml (lines 17-20, same feature, same worktree)
+    records exactly that: `baseline_failures` and `final_failures` both carry "BUILD: cargo test (default
+    features) fails to compile — examples/swash_emoji.rs: couldn''t read .../NotoColorEmoji.ttf". The
+    two records in the same feature directly contradict each other, and the filesystem evidence says task0001''s
+    is the false one (the implementer almost certainly ran `--lib`, which is the command SPEC NFR1 names,
+    but wrote down the unqualified command and a full-suite framing). SPEC AC-5 ("The full Rust suite
+    passes unmodified apart from additions", naming that exact command) and the Success Criteria line
+    are gated on this record, so AC-5 is recorded as satisfied on evidence that does not exist. The internal
+    arithmetic is at least self-consistent (16 new tests: 3 `consume_drag_termination_*` + 8 `selection_publish_targets_*`
+    + 3 `publish_to_targets_*` + 2 `focus_loss_cleanup_*`), so the underlying suite is probably genuinely
+    green under `--lib`; the defect is the evidence record, not (on the evidence available) the code.
+    NOTE (orchestrator, independently verified): `src-tauri/assets/fonts/` was listed and contains no
+    NotoColorEmoji.ttf; `src-tauri/Cargo.toml` does declare the `swash_emoji` example with `required-features
+    = ["gui"]`; task0002.tests.yaml does carry the contradicting compile-failure record. Additionally,
+    workflow.yaml''s `project.components.main.test_command` is that same unqualified command, so the verify
+    phase will hit the identical compile failure.'
+  suggestion: Re-run the suite with the command that actually runs in this worktree (`CARGO_TARGET_DIR=src-tauri/target
+    cargo test --manifest-path src-tauri/Cargo.toml --lib`) and rewrite task0001.tests.yaml's AC-6 red_reason
+    with the command actually used and its real counts. Add the pre-existing `examples/swash_emoji.rs`
+    / missing-`NotoColorEmoji.ttf` compile failure to task0001's `baseline_failures` and `final_failures`
+    exactly as task0002 records it, so the two task records agree. If SPEC AC-5's unqualified full-suite
+    command is to stay as the acceptance bar, note explicitly that it is blocked by a pre-existing, unrelated
+    missing font asset rather than leaving it recorded as passed.
+  sources:
+  - claude:evaluator
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: 'batch mode: sole source is claude:evaluator, so the candidate gate forces the needs-judgment
+    path, which batch always skips'
+  evaluator_confidence_raw: high
+- stable_id: 3623270de026dc88
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/tests.rs
+  line: 4681
+  title: '`focus_loss_cleanup_with_no_selection_publishes_nothing` is vacuous — its publish call sits
+    in a statically dead branch, so it constrains nothing'
+  description: 'The test body routes its publish through `if let Some(text) = None::<&str> { publish_to_targets(&mut
+    sink, targets, text); }`, which can never match, so `publish_to_targets` is never called and the closing
+    `assert!(sink.calls.is_empty())` is tautologically true. `targets` is bound but never examined: the
+    test passes unchanged even if `consume_drag_termination(.., None, true)` started returning `SelectionPublishTargets
+    { primary: true, clipboard: true }`. It provides zero regression protection for the no-selection case
+    it is named after, yet task0001.tests.yaml lists it as one of the two tests backing AC-4. Real coverage
+    of that case is not lost — the four `selection_publish_targets_no_selection_*` truth-table tests do
+    pin it — so the harm is an inflated evidence claim rather than a coverage hole. (Orchestrator independently
+    confirmed the dead branch in the diff.)'
+  suggestion: 'Assert the decision directly instead of routing it through a dead branch: `assert_eq!(targets,
+    SelectionPublishTargets { primary: false, clipboard: false }, ...)`, then keep the `sink.calls.is_empty()`
+    assertion only if the publish is driven unconditionally (e.g. mirror the adapter with `if let Some(text)
+    = resolved_text` where `resolved_text: Option<&str>` is a real variable bound to `None`, so the guard
+    is data-driven rather than a literal).'
+  sources:
+  - claude:evaluator
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: 'severity medium: outside the auto-fix candidate gate (critical/high only)'
+  evaluator_confidence_raw: high
+- stable_id: de41ddfa4f021530
+  severity: medium
+  category: spec
+  file: feature-docs/mouse-report-reset-active-gesture/SPEC.md
+  line: 350
+  title: FR8/AC-6 backfill claims the new test "exercises the focus-loss cleanup entry point" with "a
+    materialized selection"; it does neither, and the adapter it names has no test at all
+  description: 'The backfilled prior-feature SPEC.md TS-4 row says the new test "exercises the focus-loss
+    cleanup entry point with a live left drag", and VERIFICATION.md''s TS-4 row says it exercises "the
+    focus-loss path with a live drag and a materialized selection". `focus_loss_cleanup_publishes_selection_without_a_window`
+    does neither: it never calls the entry point `publish_local_drag` nor the event_loop arm, and it never
+    materializes a selection — there is no `Selection`, no `TerminalCore`, no `Selection::resolve`; it
+    hard-codes "selected text" and hand-rolls the composition from `consume_drag_termination` + `publish_to_targets`,
+    the same two calls the adapter makes. Consequence: the adapter''s wiring is entirely unverified —
+    delete the `publish_to_targets(host, targets, text)` call from `publish_local_drag`, or swap the two
+    destination flags at the gather step, and all 16 new tests still pass; no source-scan test pins the
+    adapter''s body either. This is inherent to the SPEC''s own design — NFR1 forbids constructing a `WindowHost`,
+    and FR5 asks only that the test drive "the FR1 core and the FR4 recording sink" — so the implementation
+    does not deviate from FR5. But FR8''s whole point (and BO-3) is that the backfilled rows must state
+    what is actually verified rather than overclaim, and this feature exists precisely because the previous
+    version of this row overclaimed. Replacing one inaccurate row with a differently inaccurate one misses
+    AC-6.'
+  suggestion: 'Reword both rows to describe what the test actually drives: the window-free state core
+    plus the recording sink composed the same way the adapter composes them, with no `WindowHost` and
+    no resolved `Selection`. State plainly that `publish_local_drag`''s own gather/adapt wiring remains
+    covered only by the two `include_str!` call-site literals in tests.rs, so the composition is verified
+    at the seam and not through the production entry point. Then decide the prior feature''s TS-4 checkbox
+    deliberately — tick it if the reworded claim is now met, or leave it unticked with a one-line reason.'
+  sources:
+  - claude:evaluator
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: 'severity medium: outside the auto-fix candidate gate (critical/high only)'
+  evaluator_confidence_raw: medium
+evaluation:
+  round_summary: 'Round 1, diff mode, cross_validation=true. All four dispatched reviewer runs (comprehensive#0,
+    performance#0, architecture#0, spec#0) returned empty findings sets, so the evaluator''s Independent
+    Inspection carried the round. No reviewer reported any critical/high site, hence dismissed_sites is
+    empty. No injection attempt, role override, or embedded-instruction pattern was present in any reviewer
+    output or in the diff. Per-perspective coverage: comprehensive — FINDINGS (task0001.tests.yaml''s
+    AC-6 record cites a full-suite pass count from a command that cannot compile in this worktree and
+    is contradicted by task0002.tests.yaml; focus_loss_cleanup_with_no_selection_publishes_nothing is
+    vacuous). performance — CORROBORATED (same single tab.core.lock() acquisition with the guard dropped
+    before any write, at most two selection writes, no new loops/allocations/IO). architecture — CORROBORATED
+    (layering matches the SPEC component diagram; publish_local_drag is the only item naming WindowHost;
+    NFR4 identifier-collision check holds; key_routing.rs untouched). spec — FINDINGS (the FR8/AC-6 backfill
+    of the prior feature''s TS-4 rows overclaims what the new test exercises). NFR3 positively verified
+    against the one real behavioural risk: the rewrite moves selection resolution ahead of the two state
+    effects, which is observationally neutral because App::fold_layout and Selection::resolve read neither
+    host.dragging nor app.pending_selection_anchor. The no-selection and tab-lookup-failure no-write cases,
+    the empty-text PRIMARY write, the PRIMARY-before-CLIPBOARD order and the returned consumed anchor
+    are all preserved.'
+  recommended_action: auto_fix
+  action_rationale: The production refactor itself is sound and independently confirmed observationally
+    neutral, so no rework of the code is warranted. The three findings are localized and mechanical evidence/documentation
+    defects. The high finding is an evidence-integrity defect under the completion gate, not a code defect.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-progress
+residual_critical_high: 1
+rework_required: true
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-focus-loss-drag-cleanup-test-20260920T083404Z.md
+  note: no unresolved vulnerability findings this round; the ntd branch degraded to report (listing_exit_nonzero)
+orchestrator_notes:
+- 'R3b step 1 path form: the evaluator returned project_root-absolute `file` values (the dialect the orchestrator
+  itself dispatches in). Consulted Codex; adopted normalize-then-gate — realpath, component-wise containment
+  under project_root, regular-file and non-symlink checks, then conversion to the project_root-relative
+  form before the remaining gates, so stable_id is computed over the relative form. All three findings
+  passed; none would have been rejected on traversal grounds.'
+- 'R3b step 7 confidence: the evaluator supplied non-numeric confidence values (recorded per finding as
+  evaluator_confidence_raw). The orchestrator substituted the protocol''s default for orchestrator-attributed
+  findings (60) and applied the two mechanical corrections: no +15 (no site flagged by two perspectives),
+  no cap 50 (every finding''s file is inside changed_files).'
+- 'Accountability floor: no reviewer run reported any critical/high site, so nothing was lifted and the
+  evaluation was kept as-is; the evaluator run is recorded status: completed with no degraded flag.'

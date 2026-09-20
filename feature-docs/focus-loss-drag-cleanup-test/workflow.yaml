@@ -76,7 +76,7 @@ workflow:
   completed_at_commit: 49870b2f0b463148dd70cb7eb934e94c56b23ef7
   base_commit: d2e39b1fae5aa120b826dfa71097b78091bd7564
 - id: review
-  status: in_progress
+  status: pending
 - id: verify
   status: pending
   result: null
@@ -113,10 +113,11 @@ tasks:
     branch: em-workflow/focus-loss-drag-cleanup-test/task0002
     notes: null
 review:
-  status: in_progress
-  rounds_completed: 0
-  residual_critical_high: 0
-  needs_rework: false
+  status: pending
+  rounds_completed: 1
+  residual_critical_high: 1
+  needs_rework: true
+  perspectives: [comprehensive, performance, architecture, spec]
   plan:
     floor: [comprehensive, performance, architecture, spec]
     discretionary: []
