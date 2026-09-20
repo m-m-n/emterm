@@ -93,9 +93,33 @@ workflow:
   status: completed
   completed_at_commit: 8ddefa0cd30079523ae467a45b58ef79f006f754
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  completed_at_commit: 1a7e799b1b7f9a998c72e908dde8cc4f6281a424
+  result: pass
   failed_items: []
+  not_executed_items:
+  - id: TS-M1
+    kind: manual
+    reason: >-
+      Requires a human at a physical display to drive a release build's pointer.
+      This run is headless and unattended, and the project has no E2E harness for
+      the wgpu-rendered native terminal surface. Resolved per batch-audit.yaml
+      record `verify.manual-item-unexecutable` (Codex-consulted): recorded as not
+      executed rather than pass or fail. FR4, the only requirement TS-M1 covers,
+      is independently verified by TS-6's change-set inspection.
+  evidence:
+    build: 'cargo check (gui): exit 0'
+    test: 'cargo test --lib -- --test-threads=1: 3492 passed, 0 failed, 3 ignored'
+    ts_1_to_5: 'all five new regression scenarios present and passing'
+    ts_6: 'change-set inspection: only src-tauri/src/window_host/tests.rs under src-tauri/src/ (+421 lines, test module only); no dependency manifest changed'
+    ts_7: 'both pre-existing focus-loss pins unmodified (no deletions in the diff) and passing'
+    ts_8: 'cargo check --no-default-features: exit 0'
+    ts_9: 'the five scenarios pass 3x by name filter without --test-threads=1, 0.00s each'
+    ts_10: 'each new test carries a doc comment naming one of the four mechanism labels; no forbidden type named; no new file, compile unit or dependency'
+    format: 'make fmt-check (cargo fmt --all --check + bunx biome check .): exit 0'
+    webview_ts: 'bun test 349 passed 0 failed; bunx biome check . clean; bun run build:viewer && build:settings: exit 0'
+    e2e: 'no e2e_test_command configured for either component'
+    excluded_requirements: 'none (no requirement carries status: excluded)'
 - id: retrospect
   status: pending
 tasks:
