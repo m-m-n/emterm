@@ -1,0 +1,36 @@
+schema_version: 1
+feature: focus-loss-drag-termination
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 90b597fa
+last_input_digest: sha256:ab529bcfee8845a5d70c39c61e75b1b49ec5a50ac00d7db44dc725d66f850616
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:ab529bcfee8845a5d70c39c61e75b1b49ec5a50ac00d7db44dc725d66f850616
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+    truncated: false
+  e2e:
+    resolved_at_generation: 1
+    paths: []
+    truncated: false
+  reference_scan_targets:
+    resolved_at_generation: 1
+    paths: []
+    truncated: false
+last_error: null
