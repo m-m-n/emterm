@@ -282,3 +282,37 @@ records:
       are now completed (design skipped), so the next launch does nothing but Step C.
       side effects of this run: none outward-facing. No git push, no gh pr create, no
       remote branch, no PR.
+  - question_id: develop.codex-consultation.step-c-worktree-removal
+    packet_id: null
+    answered_at: "2026-09-21T13:05:00+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [remove_worktree_keep_branch]
+    freeform: "\"keep the branch locally\" means the branch ref survives; it does not mean the worktree directory survives."
+    normalized_answer: "Option A — remove the integration worktree per the Step C contract, keep the branch locally and on the remote."
+    resolution_note: >-
+      gate: user-directed Codex consultation on the only open Step C point (no gate_id;
+      requested by the launch instruction "Consult Codex on any unclear points").
+      ambiguity: the launch prose says "Keep the integration branch both locally and on
+      the remote (do not auto-merge it into base_branch)", while Step C's contract says to
+      run `git worktree remove` on the integration worktree in EVERY completion mode and to
+      delete the branch only in the merge mode. Does "keep locally" also cover the worktree
+      working copy?
+      options: (A) remove the worktree per the contract, keep the branch ref local + remote;
+      (B) leave the worktree in place in case "keep locally" meant the working copy too.
+      codex_consulted: true (codex CLI, read-only sandbox, exit 0). opus_escalation: false.
+      chosen: A.
+      codex reasoning: "keep the branch locally" means not deleting the local branch ref;
+      it does not extend to retaining the working tree. The integration branch survives
+      `git worktree remove` intact, which matches the Step C contract, and removing the
+      worktree is in fact what releases git's checkout lock so the branch can be checked
+      out from the main working tree at all.
+      residual risk (codex): the user could conceivably have meant the worktree directory
+      too; the contract is explicit here, so removal is the sounder reading. Recovery is
+      trivial and non-destructive — `git worktree add <path> em-workflow/mouse-report-held-callsite-test/integration`
+      re-materializes it.
+      options not chosen and why: (B) contradicts an explicit, on-point contract clause on
+      the strength of an ambiguous reading, and would leave the branch locked out of the
+      main working tree.
+      side effects: outward-facing actions of this run are the intended ones only —
+      `git push` of the integration branch and `gh pr create` against main. No merge.
