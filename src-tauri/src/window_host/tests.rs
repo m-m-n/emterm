@@ -16,10 +16,14 @@ use super::input_translate::{
 };
 use super::link_hover::{detect_osc8_link_at, hover_link_cells_changed};
 use super::mouse_report::MouseButtonId;
-use super::pointer_routing::{bounded_wheel_report_duplicate, drag_in_flight};
+use super::pointer_routing::{
+    SelectionDestination, SelectionPublishTargets, SelectionWriteSink,
+    bounded_wheel_report_duplicate, consume_drag_termination, drag_in_flight, publish_to_targets,
+    selection_publish_targets,
+};
 use super::resize_layout::resolve_grid_bot_inset;
 use super::*;
-use crate::selection::SelectionMode;
+use crate::selection::{Pos, SelectionMode};
 use crate::settings::ShiftEnterBehavior;
 use crate::ui::chrome::build_egui_fonts;
 use std::time::Duration;
@@ -4391,4 +4395,312 @@ fn tab_change_and_tracking_release_observed_by_the_same_event_discard_cleanly_on
         "both triggers firing on the same event must still leave a clean, single-discard zero"
     );
     assert!(records.report_accum.is_finite() && records.report_accum == 0.0);
+}
+
+// ── focus-loss-drag-cleanup-test task0001: window-free state core,
+// destination predicate, and injectable selection-write sink for the
+// local-drag terminator's publish half ──────────────────────────────────
+
+/// AC-1: the window-free state core, driven with no window, clears the
+/// drag flag, empties the pending anchor slot, and returns the anchor
+/// that was pending.
+#[test]
+fn consume_drag_termination_clears_flag_and_returns_the_pending_anchor() {
+    let mut dragging = true;
+    let mut pending_anchor = Some(Pos { row: 2, col: 3 });
+
+    let (anchor, _targets) =
+        consume_drag_termination(&mut dragging, &mut pending_anchor, None, false);
+
+    assert!(!dragging, "AC-1: the drag flag must read false");
+    assert_eq!(
+        pending_anchor, None,
+        "AC-1: the pending anchor slot must be emptied"
+    );
+    assert_eq!(
+        anchor,
+        Some(Pos { row: 2, col: 3 }),
+        "AC-1: the returned anchor must be the one that was pending"
+    );
+}
+
+/// AC-1: with no drag and no pending anchor, the core returns the empty
+/// anchor and leaves the state clean.
+#[test]
+fn consume_drag_termination_with_nothing_pending_stays_clean() {
+    let mut dragging = false;
+    let mut pending_anchor = None;
+
+    let (anchor, _targets) =
+        consume_drag_termination(&mut dragging, &mut pending_anchor, None, false);
+
+    assert!(!dragging);
+    assert_eq!(pending_anchor, None);
+    assert_eq!(
+        anchor, None,
+        "AC-1: no pending anchor must return the empty anchor"
+    );
+}
+
+/// AC-2 (row 1/8): no selection, copy-on-select off -> no destinations,
+/// regardless of the (irrelevant) text-empty input.
+#[test]
+fn selection_publish_targets_no_selection_no_copy_on_select_text_present() {
+    assert_eq!(
+        selection_publish_targets(false, false, false),
+        SelectionPublishTargets {
+            primary: false,
+            clipboard: false
+        }
+    );
+}
+
+/// AC-2 (row 2/8): no selection, copy-on-select off, text empty -> still
+/// no destinations.
+#[test]
+fn selection_publish_targets_no_selection_no_copy_on_select_text_empty() {
+    assert_eq!(
+        selection_publish_targets(false, false, true),
+        SelectionPublishTargets {
+            primary: false,
+            clipboard: false
+        }
+    );
+}
+
+/// AC-2 (row 3/8): no selection, copy-on-select on, text present -> no
+/// destinations — copy-on-select cannot manufacture a selection.
+#[test]
+fn selection_publish_targets_no_selection_copy_on_select_on_text_present() {
+    assert_eq!(
+        selection_publish_targets(false, true, false),
+        SelectionPublishTargets {
+            primary: false,
+            clipboard: false
+        }
+    );
+}
+
+/// AC-2 (row 4/8): no selection, copy-on-select on, text empty -> no
+/// destinations.
+#[test]
+fn selection_publish_targets_no_selection_copy_on_select_on_text_empty() {
+    assert_eq!(
+        selection_publish_targets(false, true, true),
+        SelectionPublishTargets {
+            primary: false,
+            clipboard: false
+        }
+    );
+}
+
+/// AC-2 (row 5/8): selection present, copy-on-select off, text present ->
+/// PRIMARY only.
+#[test]
+fn selection_publish_targets_selection_present_no_copy_on_select_text_present() {
+    assert_eq!(
+        selection_publish_targets(true, false, false),
+        SelectionPublishTargets {
+            primary: true,
+            clipboard: false
+        }
+    );
+}
+
+/// AC-2 (row 6/8): selection present, copy-on-select off, text empty ->
+/// PRIMARY only — the empty-text PRIMARY write is current behaviour,
+/// pinned here rather than corrected (task plan "Preserved write rule").
+#[test]
+fn selection_publish_targets_selection_present_no_copy_on_select_text_empty() {
+    assert_eq!(
+        selection_publish_targets(true, false, true),
+        SelectionPublishTargets {
+            primary: true,
+            clipboard: false
+        }
+    );
+}
+
+/// AC-2 (row 7/8): selection present, copy-on-select on, text present ->
+/// PRIMARY then CLIPBOARD.
+#[test]
+fn selection_publish_targets_selection_present_copy_on_select_on_text_present() {
+    assert_eq!(
+        selection_publish_targets(true, true, false),
+        SelectionPublishTargets {
+            primary: true,
+            clipboard: true
+        }
+    );
+}
+
+/// AC-2 (row 8/8): selection present, copy-on-select on, text empty ->
+/// PRIMARY only — CLIPBOARD is gated on non-empty text even when
+/// copy-on-select is on.
+#[test]
+fn selection_publish_targets_selection_present_copy_on_select_on_text_empty() {
+    assert_eq!(
+        selection_publish_targets(true, true, true),
+        SelectionPublishTargets {
+            primary: true,
+            clipboard: false
+        }
+    );
+}
+
+/// task0001 (focus-loss-drag-cleanup-test): the recording double for
+/// [`SelectionWriteSink`] — appends one record per call, holding the
+/// destination and the payload text, so a test can distinguish "PRIMARY
+/// only" from "PRIMARY and CLIPBOARD", read back the exact text written
+/// to each, and assert call count and call order. D4 (IMPLEMENTATION.md):
+/// a recorded call is evidence of a write REQUEST, not of an OS-level
+/// selection/clipboard update.
+#[derive(Debug, Default)]
+struct RecordingSelectionSink {
+    calls: Vec<(SelectionDestination, String)>,
+}
+
+impl SelectionWriteSink for RecordingSelectionSink {
+    fn write_selection(&mut self, destination: SelectionDestination, text: &str) {
+        self.calls.push((destination, text.to_string()));
+    }
+}
+
+/// AC-3: with copy-on-select on and non-empty text, the publish path (via
+/// the sink) records exactly two calls, PRIMARY then CLIPBOARD, with
+/// identical text.
+#[test]
+fn publish_to_targets_writes_primary_then_clipboard_when_copy_on_select_is_on() {
+    let mut sink = RecordingSelectionSink::default();
+    let targets = selection_publish_targets(true, true, false);
+
+    publish_to_targets(&mut sink, targets, "hello");
+
+    assert_eq!(
+        sink.calls,
+        vec![
+            (SelectionDestination::Primary, "hello".to_string()),
+            (SelectionDestination::Clipboard, "hello".to_string()),
+        ],
+        "AC-3: exactly two recorded calls, PRIMARY then CLIPBOARD, identical text"
+    );
+}
+
+/// AC-3: with copy-on-select off, the publish path records exactly one
+/// PRIMARY call.
+#[test]
+fn publish_to_targets_writes_primary_only_when_copy_on_select_is_off() {
+    let mut sink = RecordingSelectionSink::default();
+    let targets = selection_publish_targets(true, false, false);
+
+    publish_to_targets(&mut sink, targets, "hello");
+
+    assert_eq!(
+        sink.calls,
+        vec![(SelectionDestination::Primary, "hello".to_string())],
+        "AC-3: exactly one PRIMARY call when copy-on-select is off"
+    );
+}
+
+/// Edge case (Test Notes): empty resolved text with copy-on-select on ->
+/// PRIMARY recorded, CLIPBOARD not recorded.
+#[test]
+fn publish_to_targets_omits_clipboard_for_empty_text_even_with_copy_on_select_on() {
+    let mut sink = RecordingSelectionSink::default();
+    let targets = selection_publish_targets(true, true, true);
+
+    publish_to_targets(&mut sink, targets, "");
+
+    assert_eq!(
+        sink.calls,
+        vec![(SelectionDestination::Primary, String::new())],
+        "empty text must still record PRIMARY (pinned current behaviour) \
+         but never CLIPBOARD"
+    );
+}
+
+/// AC-4: drives the drag-in-flight guard and the terminator's publish
+/// half end to end with no window, asserting all three effects in one
+/// test — the drag flag is cleared, the pending anchor is consumed and
+/// returned, and the selection is published to PRIMARY (and to CLIPBOARD,
+/// since copy-on-select is on and the text is non-empty here) with the
+/// recorded payload equal to the resolved selection text. Mirrors the
+/// production shape (`if local_drag_in_flight(host, &self.app) {
+/// publish_local_drag(host, &mut self.app) }`) without constructing a
+/// `WindowHost`.
+#[test]
+fn focus_loss_cleanup_publishes_selection_without_a_window() {
+    let mut dragging = true;
+    let mut pending_anchor = Some(Pos { row: 5, col: 2 });
+
+    assert!(
+        drag_in_flight(dragging, pending_anchor.is_some()),
+        "precondition: a local drag is in flight"
+    );
+
+    let resolved_text = "selected text".to_string();
+    let copy_on_select = true;
+    let (anchor, targets) = consume_drag_termination(
+        &mut dragging,
+        &mut pending_anchor,
+        Some(resolved_text.as_str()),
+        copy_on_select,
+    );
+
+    let mut sink = RecordingSelectionSink::default();
+    publish_to_targets(&mut sink, targets, &resolved_text);
+
+    assert!(!dragging, "AC-4: the drag flag must be cleared");
+    assert_eq!(
+        anchor,
+        Some(Pos { row: 5, col: 2 }),
+        "AC-4: the pending anchor must be consumed and returned"
+    );
+    assert_eq!(
+        sink.calls,
+        vec![
+            (SelectionDestination::Primary, resolved_text.clone()),
+            (SelectionDestination::Clipboard, resolved_text.clone()),
+        ],
+        "AC-4: the selection must publish to PRIMARY with the resolved text, \
+         and to CLIPBOARD too since copy-on-select is on with non-empty text"
+    );
+}
+
+/// AC-4 edge case (Test Notes): no selection at all -> nothing recorded,
+/// empty anchor returned.
+#[test]
+fn focus_loss_cleanup_with_no_selection_publishes_nothing() {
+    let mut dragging = true;
+    let mut pending_anchor: Option<Pos> = None;
+
+    let (anchor, targets) =
+        consume_drag_termination(&mut dragging, &mut pending_anchor, None, true);
+
+    let mut sink = RecordingSelectionSink::default();
+    if let Some(text) = None::<&str> {
+        publish_to_targets(&mut sink, targets, text);
+    }
+
+    assert!(!dragging);
+    assert_eq!(anchor, None, "no pending anchor present");
+    assert!(
+        sink.calls.is_empty(),
+        "no selection must publish to neither destination"
+    );
+}
+
+/// AC-1 edge case (Test Notes): a pending anchor present while the drag
+/// flag is already false is still consumed and returned.
+#[test]
+fn consume_drag_termination_consumes_anchor_even_when_drag_flag_already_false() {
+    let mut dragging = false;
+    let mut pending_anchor = Some(Pos { row: 0, col: 0 });
+
+    let (anchor, _targets) =
+        consume_drag_termination(&mut dragging, &mut pending_anchor, None, false);
+
+    assert!(!dragging);
+    assert_eq!(pending_anchor, None);
+    assert_eq!(anchor, Some(Pos { row: 0, col: 0 }));
 }
