@@ -168,9 +168,9 @@ tasks:
     - NFR2
     - NFR3
     - NFR5
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/fetch-fonts-noto-color-emoji/task0001
 review:
   status: pending
   rounds_completed: 0
