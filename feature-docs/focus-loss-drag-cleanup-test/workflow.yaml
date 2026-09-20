@@ -139,7 +139,7 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR8]
-    status: in_progress
+    status: merged
     branch: em-workflow/focus-loss-drag-cleanup-test/task0004
     notes: null
     provenance:
