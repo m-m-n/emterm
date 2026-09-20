@@ -30,6 +30,20 @@ acceptance criteria live in `feature-docs/focus-loss-drag-cleanup-test/tasks/`.
   feature is requirement coverage instead — every FR and NFR below must map to
   at least one passing scenario.
 
+**Pre-existing blocker on the full-suite command (recorded, not repaired).**
+The full-suite command above does not reach a test binary in this worktree: the
+`gui`-gated `swash_emoji` example embeds a font asset that is absent from this
+tree and from the main tree alike, so the command fails at compile time before
+any test runs. The gap pre-dates this feature and is unrelated to it. The
+effective suite command for this feature is therefore the library-test-target
+form listed above, which is also the command NFR1 names; every pass count
+recorded for this feature must come from a command that actually runs here.
+Verification records this blocker as a pre-existing failure rather than
+treating it as a regression of this feature, and never records the unqualified
+full-suite command as passed. Removing the blocker — supplying the asset or
+changing the manifest entry that needs it — is outside this feature's declared
+change set.
+
 ### Test Scenarios from SPEC.md
 
 | ID | Scenario | Expected Result | Test Type |
@@ -42,6 +56,9 @@ acceptance criteria live in `feature-docs/focus-loss-drag-cleanup-test/tasks/`.
 | TS-6 | The three existing source-scanning tests pass unmodified | The fold-toggle exclusion test, the forwarded-branch clear test and the copy-chord clipboard adjacency test all pass with no edit to their assertions | Regression |
 | TS-7 | CLI-only feature check | The no-default-features check still succeeds, confirming no window-only type leaked into CLI-shared code | Build |
 | TS-8 | Real-hardware PRIMARY / CLIPBOARD confirmation for the prior feature's AC-3 | Selecting text, removing focus and middle-click pasting elsewhere pastes the selection; a recorded sink call is not a substitute for this | Manual |
+| TS-9 | Per-task test-evidence records quote runnable commands and agree with each other (added by round 1 rework) | Every command quoted in a `red_reason` under `test-docs/focus-loss-drag-cleanup-test/` runs to completion in this worktree; task0001's and task0002's records state the pre-existing full-suite compile blocker in the same terms; no record presents the unqualified full-suite command as passed, and every recorded count comes from the command it is attributed to | Manual (inspection) |
+| TS-10 | No-selection focus-loss termination is asserted, not assumed (added by round 1 rework) | The no-selection test asserts the destination decision returned by the state core directly — neither destination selected — with no compile-time-decidable branch; inverting the decision's no-selection arm makes it fail | Unit |
+| TS-11 | The prior feature's backfilled rows state only what the cited tests drive (added by round 1 rework) | The TS-4 and SC-C rows in `feature-docs/mouse-report-reset-active-gesture/` describe the window-free composition of the state core and the recording sink, claim no execution of the adapter, the focus-loss event-loop arm or a resolved selection, state that the adapter's own wiring is covered only by the source-scanned call-site literals, and keep that feature's AC-3 on its manual scenario | Manual (inspection) |
 
 ## Code Quality Verification
 
@@ -72,15 +89,15 @@ acceptance criteria live in `feature-docs/focus-loss-drag-cleanup-test/tasks/`.
 |-------------|-------|--------------|
 | FR1 | task0001 | TS-2, TS-4 |
 | FR2 | task0001 | TS-6 |
-| FR3 | task0001 | TS-1, TS-5 |
+| FR3 | task0001, task0003 | TS-1, TS-5, TS-10 |
 | FR4 | task0001 | TS-3, TS-4, TS-7 |
 | FR5 | task0001 | TS-4 |
-| FR6 | task0001 | TS-1, TS-3, TS-5 |
+| FR6 | task0001, task0003 | TS-1, TS-3, TS-5, TS-10 |
 | FR7 | task0001 | TS-6 |
-| FR8 | task0002 | TS-8, plus the SC-6 and SC-7 document inspections |
-| NFR1 | task0001 | TS-1, TS-2, TS-3, TS-4, TS-5 |
+| FR8 | task0002, task0004 | TS-8, TS-11, plus the SC-6 and SC-7 document inspections |
+| NFR1 | task0001, task0003 | TS-1, TS-2, TS-3, TS-4, TS-5, TS-10 |
 | NFR2 | task0001 | TS-1, TS-2 |
-| NFR3 | task0001 | TS-6, TS-7 |
+| NFR3 | task0001, task0003 | TS-6, TS-7, TS-9 |
 | NFR4 | task0001 | TS-6 |
 
 ### Verification Index
@@ -95,6 +112,9 @@ verification_index:
   TS-6: [FR2, FR7, NFR3, NFR4]
   TS-7: [FR4, NFR3]
   TS-8: [FR8]
+  TS-9: [NFR3]
+  TS-10: [FR3, FR6, NFR1]
+  TS-11: [FR8]
 ```
 
 ## E2E Testing
@@ -114,6 +134,16 @@ Not applicable. The repository has no E2E infrastructure and the workflow's
       that feature's AC-3 mapped to a manual scenario.
 - [ ] SC-6 citation check: every test identifier cited by those rows exists in
       `src-tauri/src/window_host/tests.rs`.
+- [ ] TS-9: read every `red_reason` under
+      `test-docs/focus-loss-drag-cleanup-test/`, run each command it quotes, and
+      confirm the command completes here and produced the counts attributed to
+      it; confirm task0001's and task0002's records state the pre-existing
+      full-suite compile blocker in the same terms.
+- [ ] TS-11: read the prior feature's corrected TS-4 and SC-C rows and confirm
+      each claim they make is one the cited tests actually make good on, that
+      the adapter's own wiring is stated as covered only by the source-scanned
+      call-site literals, and that the prior feature's AC-3 is still mapped to
+      its manual scenario.
 
 ## Performance / Security Verification
 
@@ -126,8 +156,8 @@ handled by the sink is the same data the current publish path handles.
 
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
-| Unit scenarios | 5 (TS-1..TS-5) | 5 | 0 | 0 |
+| Unit scenarios | 6 (TS-1..TS-5, TS-10) | 6 | 0 | 0 |
 | Regression scenarios | 1 (TS-6) | 1 | 0 | 0 |
 | Build scenarios | 1 (TS-7) | 1 | 0 | 0 |
-| Manual scenarios | 1 (TS-8) | 0 | 0 | 1 |
+| Manual scenarios | 3 (TS-8, TS-9, TS-11) | 0 | 0 | 3 |
 | Success criteria | 8 (SC-1..SC-8) | 5 | 0 | 3 |
