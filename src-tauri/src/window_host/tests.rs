@@ -16,7 +16,9 @@ use super::input_translate::{
 };
 use super::link_hover::{detect_osc8_link_at, hover_link_cells_changed};
 use super::mouse_report::MouseButtonId;
-use super::pointer_routing::{bounded_wheel_report_duplicate, drag_in_flight};
+use super::pointer_routing::{
+    bounded_wheel_report_duplicate, drag_in_flight, should_terminate_drag,
+};
 use super::resize_layout::resolve_grid_bot_inset;
 use super::*;
 use crate::selection::SelectionMode;
@@ -1920,14 +1922,53 @@ fn drag_in_flight_is_true_whenever_either_input_is_true() {
     assert!(drag_in_flight(true, true));
 }
 
+// ── task0001 (focus-loss-drag-termination): the focus-loss termination
+// predicate's truth table (AC-1, AC-2) ──────────────────────────────────
+
+/// AC-1/AC-2: `should_terminate_drag` (Shared Components — "Focus-loss
+/// termination predicate") is a pure function of two plain bools with no
+/// window, winit, GPU, PTY or terminal-mode type in reach — a bare unit
+/// test drives its full truth table. It answers "terminate" exactly for
+/// the in-flight-and-not-held combination; every other combination
+/// (including in-flight-and-held, the drag this task stops from being
+/// destroyed) answers "do not terminate".
+#[test]
+fn should_terminate_drag_terminates_only_when_in_flight_and_left_not_held() {
+    assert!(
+        !should_terminate_drag(true, true),
+        "in flight + held must NOT terminate — this is the bug being fixed"
+    );
+    assert!(
+        should_terminate_drag(true, false),
+        "in flight + not held must terminate"
+    );
+    assert!(
+        !should_terminate_drag(false, true),
+        "not in flight + held must not terminate"
+    );
+    assert!(
+        !should_terminate_drag(false, false),
+        "not in flight + not held must not terminate"
+    );
+}
+
 /// AC-5: the focus-loss arm never reaches the fold-click toggle — folding
 /// is a click gesture, and making a focus change toggle a fold would be
 /// new behaviour, not a repair (D4). `handle_fold_click` stays exclusive
 /// to `pointer_routing.rs`'s release-path composition; `event_loop.rs`
-/// must never call it. This also pins that the focus-loss arm actually
-/// composes the drag-in-flight guard with the terminator's publish half,
-/// by name, since neither call site can be driven end-to-end without a
-/// winit window (Test Notes).
+/// must never call it.
+///
+/// AC-3/AC-4 (focus-loss-drag-termination): the positive needle set below
+/// REPLACES the pre-task needles (which pinned only `local_drag_in_flight
+/// (host, &self.app)` gating `publish_local_drag(host, &mut self.app)`
+/// directly) — the arm's composed form changed, so those needles are no
+/// longer literals of the rewritten arm and would pass vacuously if kept.
+/// Together the needles below pin: the held-button read, and the call to
+/// the new predicate composed over the drag-in-flight signal and that
+/// read — neither the read nor the composed call is a substring the
+/// pre-change arm could have satisfied, since the pre-change arm never
+/// named `mouse_report_held` outside the `clear_all` call and never named
+/// `should_terminate_drag` at all.
 #[test]
 fn focus_loss_arm_never_calls_the_fold_click_toggle() {
     let event_loop_src = include_str!("event_loop.rs");
@@ -1936,15 +1977,33 @@ fn focus_loss_arm_never_calls_the_fold_click_toggle() {
         "the fold-click toggle must stay exclusive to the release path (D4); \
          event_loop.rs must never call it"
     );
-    assert!(
-        event_loop_src.contains("local_drag_in_flight(host, &self.app)"),
-        "the focus-loss arm must consult the drag-in-flight signal before terminating a live \
-         drag (AC-5)"
-    );
+    let left_held_read = "let left_held = host.mouse_report_held.left;";
+    let predicate_call =
+        "if should_terminate_drag(local_drag_in_flight(host, &self.app), left_held) {";
+    for needle in [left_held_read, predicate_call] {
+        assert!(
+            event_loop_src.contains(needle),
+            "expected needle `{needle}` not found in event_loop.rs (AC-4)"
+        );
+    }
     assert!(
         event_loop_src.contains("publish_local_drag(host, &mut self.app)"),
-        "the focus-loss arm must run the terminator's publish half, guarded by the \
-         drag-in-flight signal (AC-5, D4)"
+        "the focus-loss arm must still run the terminator's publish half when the \
+         predicate says terminate (AC-3, D4)"
+    );
+    // D3/AC-3: the held-button read must precede the decision layer's
+    // clear routine — a read placed after `clear_all` would observe
+    // "not held" unconditionally and silently degrade back to today's
+    // unconditional termination, the exact bug this task fixes.
+    let left_held_pos = event_loop_src
+        .find(left_held_read)
+        .expect("left_held read not found in event_loop.rs");
+    let clear_all_pos = event_loop_src
+        .find("mouse_report::clear_all(")
+        .expect("clear_all call not found in event_loop.rs");
+    assert!(
+        left_held_pos < clear_all_pos,
+        "the left-held read must occur before the decision layer's clear routine runs (D3, AC-3)"
     );
 }
 
