@@ -1,0 +1,41 @@
+feature: asset-manifest-scanner-hardening
+collected_at: "2026-09-21T02:50:00+09:00"
+session_ids:
+  - 01a0bff0-5710-7249-92c9-c5a8d979679d
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - >-
+    review round 1: all four floor perspectives (comprehensive/codex,
+    security/codex, performance and spec via litellm:muse-spark) returned zero
+    findings, and the evaluator's independent inspection corroborated each of
+    them rather than surfacing anything of its own. The evaluator verified FR3
+    empirically by re-implementing both the pre- and post-change scanner over
+    the real tree: both walk 287 .rs files and yield the same 7 fonts.
+  - >-
+    The spec reviewer reported an inaccuracy OUTSIDE its JSON findings channel
+    (SPEC.md / REQUIREMENTS.md AC6 said "12 existing tests" where the baseline
+    at 61c61133 is 14). It therefore bypassed the severity gate and the
+    auto-fix loop entirely. Raw note: out-of-band reviewer prose can carry
+    actionable defects that no structured channel records.
+  - >-
+    This feature itself originated from a finding dropped by the review
+    severity gate in fetch-fonts-noto-color-emoji (PR #77), where the
+    evaluator's recommended_action was auto_fix but the low severity kept it
+    off the loop. Second instance of the same shape as the note above.
+  - >-
+    implement phase: one task, no merge conflicts, no file-prediction
+    deviations, no retries. The plan's single-task split matched the actual
+    change (one test file).
+  - >-
+    An unlisted non-packet gate appeared because the task plan's focused
+    iteration command was not declared in workflow.yaml, so it would have
+    fallen through to the non-deterministic permission classifier. Raw note:
+    a task plan's focused command is a foreseeable approval-store gap that the
+    planning step could close up front.
