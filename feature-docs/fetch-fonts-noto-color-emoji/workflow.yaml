@@ -135,9 +135,47 @@ workflow:
   status: completed
   completed_at_commit: 4444d6ee3bd25834da86f5cfb9ca1388d0aea7c2
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  completed_at_commit: 7a68256041503f423140c1d2e88f1b590f523b0b
+  result: pass
   failed_items: []
+  summary: |
+    All build, test, quality and success-criteria checks passed on the
+    integration worktree. Started from a worktree with no font binaries and
+    no webview bundles, then ran the documented setup (fetch-fonts.sh,
+    bun install, build:viewer, build:settings).
+
+    Build: main component build OK; webview bundles OK; all three remaining
+    example targets build (SC4); feature-off check passes (SC7).
+
+    Test: the reported bug is fixed -- the documented command
+    `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+    src-tauri/Cargo.toml` now compiles and runs (exit 0): 3487 lib + 14
+    asset_manifest + 26 cli_subcommands + 10 mux_hot_upgrade passed, 0
+    failed, no unreadable-font compile error (SC1, TS8, TS1). Feature-off
+    test run also passes with asset_manifest 14/14 (SC8, NFR2). bun test:
+    349 passed, 0 failed. None of the two known-flaky suites failed.
+
+    Quality: make fmt-check OK; bunx biome check . OK (84 files).
+
+    Manual items: M1 PASS (removing the NotoSansSymbols2-Regular.ttf
+    fetch_one entry makes the check fail with "missing scripts/fetch-fonts.sh
+    entry" naming the font; reverted). M2 PASS (removing its README inventory
+    row makes the check fail with "missing assets/fonts/README.md inventory
+    row"; reverted). M3 PASS (no swash_emoji reference in Cargo.toml,
+    Makefile, scripts/, .github/, .claude/rules/ or doc/ outside the excluded
+    historical doc/tasks/). M4 PASS (.github/ absent from the branch diff vs
+    main, SC10). M5 PASS (SPEC.md carries both "Accepted Limitation (NFR4)"
+    and "Known Follow-ups (Out of Scope)"). M6 PASS (discharged by this run's
+    clean-start fetch-then-test sequence; see batch-audit.yaml
+    verify.m6-sc1-discharge-reading for the Codex-consulted reading).
+
+    SC2/SC3 PASS: src-tauri/examples/swash_emoji.rs absent, its [[example]]
+    block and the png dev-dependency removed, and the image crate's own png
+    feature unchanged. No requirement carries status: excluded, so no
+    scenario was excluded from evaluation.
+    Coverage gap carried from planning: FR7 has no automated scenario and is
+    verified by SC10 alone.
 - id: retrospect
   status: pending
 tasks:
