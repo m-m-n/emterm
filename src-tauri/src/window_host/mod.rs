@@ -49,6 +49,7 @@ mod render_surface;
 mod resize_layout;
 
 use link_hover::{ClickTracker, HoverState};
+use pointer_routing::{SelectionDestination, SelectionWriteSink};
 
 use frame_pacing::{FrameCounter, ResizeSettler, RowsRebuiltCounter};
 
@@ -832,6 +833,20 @@ impl WindowHost {
         app.mark_full_redraw();
         self.window.request_redraw();
         crate::wakeup::wake();
+    }
+}
+
+/// task0001 (focus-loss-drag-cleanup-test, Shared Components,
+/// "Selection-write sink" production implementation): delegates to the
+/// host's existing `set_primary` / `set_clipboard` write primitives with
+/// today's arguments — no new behaviour, just an injectable seam over the
+/// same two calls `publish_local_drag` used to make directly.
+impl SelectionWriteSink for WindowHost {
+    fn write_selection(&mut self, destination: SelectionDestination, text: &str) {
+        match destination {
+            SelectionDestination::Primary => self.set_primary(text),
+            SelectionDestination::Clipboard => self.set_clipboard(text),
+        }
     }
 }
 

@@ -1,0 +1,93 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::consume_drag_termination_clears_flag_and_returns_the_pending_anchor
+      - window_host::tests::consume_drag_termination_with_nothing_pending_stays_clean
+      - window_host::tests::consume_drag_termination_consumes_anchor_even_when_drag_flag_already_false
+    red_confirmed: true
+    red_reason: >-
+      Before consume_drag_termination existed, tests.rs failed to compile
+      with E0432 (unresolved imports: consume_drag_termination and sibling
+      new items not found in window_host::pointer_routing). Verified by
+      stashing pointer_routing.rs/mod.rs, running `cargo check --lib
+      --tests`, observing the compile error, then restoring and confirming
+      green.
+  AC-2:
+    tests:
+      - window_host::tests::selection_publish_targets_no_selection_no_copy_on_select_text_present
+      - window_host::tests::selection_publish_targets_no_selection_no_copy_on_select_text_empty
+      - window_host::tests::selection_publish_targets_no_selection_copy_on_select_on_text_present
+      - window_host::tests::selection_publish_targets_no_selection_copy_on_select_on_text_empty
+      - window_host::tests::selection_publish_targets_selection_present_no_copy_on_select_text_present
+      - window_host::tests::selection_publish_targets_selection_present_no_copy_on_select_text_empty
+      - window_host::tests::selection_publish_targets_selection_present_copy_on_select_on_text_present
+      - window_host::tests::selection_publish_targets_selection_present_copy_on_select_on_text_empty
+    red_confirmed: true
+    red_reason: >-
+      Same stash-and-check verification as AC-1: selection_publish_targets
+      and SelectionPublishTargets did not exist, producing E0432 at
+      compile time before the implementation was restored.
+  AC-3:
+    tests:
+      - window_host::tests::publish_to_targets_writes_primary_then_clipboard_when_copy_on_select_is_on
+      - window_host::tests::publish_to_targets_writes_primary_only_when_copy_on_select_is_off
+      - window_host::tests::publish_to_targets_omits_clipboard_for_empty_text_even_with_copy_on_select_on
+    red_confirmed: true
+    red_reason: >-
+      Same stash-and-check verification: publish_to_targets,
+      SelectionWriteSink and SelectionDestination did not exist, producing
+      E0432 at compile time before the implementation was restored.
+  AC-4:
+    tests:
+      - window_host::tests::focus_loss_cleanup_publishes_selection_without_a_window
+      - window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing
+    red_confirmed: true
+    red_reason: >-
+      Same stash-and-check verification as AC-1/AC-2/AC-3 (this test
+      depends on the same new symbols): E0432 unresolved imports before
+      the implementation was restored.
+  AC-5:
+    tests:
+      - window_host::tests::focus_loss_arm_never_calls_the_fold_click_toggle
+      - window_host::tests::copy_chord_clears_selection_immediately_after_clipboard_write
+      - window_host::tests::pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam
+    red_confirmed: false
+    red_reason: >-
+      These are pre-existing regression tests from prior tasks, unmodified
+      by this task (event_loop.rs was not edited; publish_local_drag kept
+      its name/visibility/signature/return type). They were already
+      green before this task's changes and are expected to stay green
+      throughout — there is no new behavior here to observe red on. Ran
+      them explicitly by name after implementation to confirm they still
+      pass unmodified (`cargo test --lib -- <names>`), and confirmed
+      event_loop.rs and key_routing.rs were not touched by this task's
+      diff (`git diff --stat`).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verifiable outcome is the full suite passing with additions only,
+      plus the CLI-only feature check compiling. Baseline (before any
+      change): `cargo test --manifest-path src-tauri/Cargo.toml` = 3470
+      passed, 0 failed, 3 ignored. After implementation: 3486 passed
+      (3470 + 16 new tests), 0 failed, 3 ignored — no existing test
+      weakened or deleted. CLI-only check:
+      `cargo check --manifest-path src-tauri/Cargo.toml
+      --no-default-features` compiles clean with no window-only type
+      leaking into CLI-shared code (this task's additions are entirely
+      inside the gui-gated window_host module).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Structural/scope constraints, verified by inspection rather than a
+      dedicated test: no new test constructs WindowHost or needs a GPU
+      surface/event loop/display server (all new tests operate on plain
+      bool/Option<Pos>/&str values and the RecordingSelectionSink double);
+      grep confirms no new identifier is spelled `drag_in_flight` (the
+      existing free function of that name is untouched) and none of the
+      new bindings shadow it; key_routing.rs was not modified
+      (`git diff --stat` shows only mod.rs, pointer_routing.rs, tests.rs).
