@@ -122,7 +122,8 @@ tasks:
     domains: [external-io, config-infra]
     complexity: low
     requirements: [FR3, FR6, NFR1, NFR3]
-    status: pending
+    status: in_progress
+    branch: em-workflow/focus-loss-drag-cleanup-test/task0003
     notes: null
     provenance:
       source: review
@@ -138,7 +139,8 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR8]
-    status: pending
+    status: in_progress
+    branch: em-workflow/focus-loss-drag-cleanup-test/task0004
     notes: null
     provenance:
       source: review
