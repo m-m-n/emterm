@@ -122,7 +122,7 @@ tasks:
     domains: [external-io, config-infra]
     complexity: low
     requirements: [FR3, FR6, NFR1, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/focus-loss-drag-cleanup-test/task0003
     notes: null
     provenance:
