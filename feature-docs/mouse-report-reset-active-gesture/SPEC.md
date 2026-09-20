@@ -344,11 +344,16 @@ path that never materializes is not a violation.
       is `None` and whose records indicate a local drag is live yields the
       completion arm rather than `Disposition::Nothing`.
 - [ ] **TS-4 — Focus loss terminates the drag** (AC-3, AC-9; FR3, NFR1):
-      Exercise the focus-loss cleanup entry point with a live left drag and
-      assert `dragging` is cleared, the pending anchor is consumed, and the
-      selection is published. Structure the cleanup so this is reachable without
-      a winit window (NFR1); if it can only be expressed at the `event_loop.rs`
-      arm, factor the state mutation into a window-free helper and test that.
+      Driven by the window-free test
+      `focus_loss_cleanup_publishes_selection_without_a_window` in
+      `src-tauri/src/window_host/tests.rs`, which exercises the focus-loss
+      cleanup entry point with a live left drag and asserts `dragging` is
+      cleared, the pending anchor is consumed, and the selection is published
+      (NFR1), together with the destination-predicate truth-table tests
+      prefixed `selection_publish_targets_` in the same module, which cover
+      the destination rule this scenario depends on. A recorded sink call in
+      these tests is evidence that the publish path requested the write, not
+      evidence of an OS-level PRIMARY selection or CLIPBOARD update.
 - [ ] **TS-5 — Reset still resets the cell cache during a held gesture** (AC-6;
       FR1, FR6): With Left held and its slot recorded, apply an outcome carrying
       `reset: true` and assert `records.cell_cache.would_report(c, r)` is true
