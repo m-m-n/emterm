@@ -1,0 +1,37 @@
+task_id: task0001
+baseline_failures: []          # 4a: cargo test --lib (--test-threads=1) was fully
+                                # green before any change: 3470 passed, 0 failed,
+                                # 3 ignored.
+final_failures: []             # After implementation: 3471 passed (one new test
+                                # added), 0 failed, 3 ignored — no regressions.
+acceptance_tests:
+  AC-1:
+    tests: [window_host::tests::should_terminate_drag_terminates_only_when_in_flight_and_left_not_held]
+    red_confirmed: true
+    red_reason: "Adding `should_terminate_drag` to the test module's use-list before the function existed made the whole lib-test binary fail to compile (E0432: unresolved import `super::pointer_routing::should_terminate_drag`). This is the right-reason failure for a not-yet-existing pure predicate (tdd-testing: a compile error you understand, not one you don't) — task0001 is a one-task feature (D1) whose predicate and arm rewrite must compile together, so a finer-grained intermediate red state was never a reachable checkpoint by design."
+  AC-2:
+    tests: [window_host::tests::should_terminate_drag_terminates_only_when_in_flight_and_left_not_held]
+    red_confirmed: true
+    red_reason: "Same test as AC-1; it drives all four state shapes (in-flight×held, in-flight×not-held, not-in-flight×held, not-in-flight×not-held) in one function. Same compile-error red observation as AC-1."
+  AC-3:
+    tests: [window_host::tests::focus_loss_arm_never_calls_the_fold_click_toggle]
+    red_confirmed: true
+    red_reason: "Same compile-error red as AC-1 (the test module's shared `use` line references `should_terminate_drag`, so the whole binary failed to build before the predicate and the arm rewrite landed). D1: this feature is deliberately one task so the predicate, the arm and the structural assertion land together; there is no intended intermediate checkpoint where the needles alone are red against a compiling tree."
+  AC-4:
+    tests: [window_host::tests::focus_loss_arm_never_calls_the_fold_click_toggle]
+    red_confirmed: true
+    red_reason: "Same test/observation as AC-3. The needle set was replaced (not extended): the two new needles (`let left_held = host.mouse_report_held.left;` and the `if should_terminate_drag(local_drag_in_flight(host, &self.app), left_held) {` composed call) are substrings that could not occur in the pre-change arm — the pre-change arm never named `mouse_report_held` outside the `clear_all` call and never named `should_terminate_drag` at all. The fold-click negative assertion (`!contains(\"handle_fold_click\")`) is preserved verbatim."
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: "This criterion asserts the ABSENCE of change elsewhere in the arm (focus flag assignment, IME notifications, modifier reset, pointer-buttons-down reset, clear routine, link-cursor update, focus-regained blink reset, trailing redraws; no new/typed-changed field; unchanged helper signatures) — a negative/no-op property, not a red-then-green behavior. Verified by the minimal diff (only the held-button read + predicate-gated `if` were added/changed in the arm; nothing else in event_loop.rs touched) and by the full default-feature suite passing with zero regressions (AC-6)."
+  AC-6:
+    tests:
+      - mouse_report::tests::no_owner_left_release_completes_selection_only_when_drag_in_flight
+      - window_host::tests::focus_loss_clear_all_empties_gesture_and_held_records_so_the_next_decision_starts_fresh
+    red_confirmed: false
+    red_reason: "Both tests already passed before this task (their covered behavior — the no-owner release fallback and clear_all's record-emptying — is unchanged by this task; AC-6 requires them to keep passing with only an explanatory comment added to the first). AC-6's full claim (whole suite passes, structural assertion is the only pre-existing test whose body changed) is verified by the complete `cargo test --lib -- --test-threads=1` run: 3471 passed, 0 failed, 3 ignored, identical to the 4a baseline plus exactly one new test."
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "Build/format outcome, not a test. Verified by running all four declared commands and observing exit 0: `cargo check --manifest-path src-tauri/Cargo.toml` (default features), `cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1`, `cargo check --manifest-path src-tauri/Cargo.toml --no-default-features` (CLI-only), and `make fmt-check`. The new predicate's signature (`fn should_terminate_drag(bool, bool) -> bool`) and the arm's added `let left_held: bool` mention no windowing/GPU/PTY/terminal-mode type, confirmed by reading the diff."

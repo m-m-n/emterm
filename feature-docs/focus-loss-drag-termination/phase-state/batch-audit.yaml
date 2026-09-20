@@ -1,0 +1,54 @@
+schema_version: 1
+feature: focus-loss-drag-termination
+records:
+- question_id: requirement.fr3-termination-scope
+  packet_id: create-spec-q0001
+  answered_at: '2026-09-20T16:51:45+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - narrow_fr3_skip_when_held
+  freeform: null
+  normalized_answer: Narrow FR3 to apply only when the left button is not physically held; while held, publish nothing and keep host.dragging + the pending anchor, delegating termination to the release path's drag_in_flight no-owner fallback. This SPEC supersedes the prior FR3 / AC-3 / state-table row.
+  resolution_note: 'gate: create-spec.requirement-clarification (policy action codex_consultation); chosen: narrow_fr3_skip_when_held; not chosen: publish_but_keep_dragging, keep_unconditional; codex_consulted: true (harness entry , 2 turns); opus_escalation: no; key points: Focused(false) is keyboard-focus loss only and is not a valid basis for ending a drag; option A preserves the in-flight selection and anchor so only the completed selection is published at release; publish_but_keep_dragging''s intermediate PRIMARY/CLIPBOARD write is observable by paste targets and clipboard history and cannot be retracted by a later overwrite, and it does not solve state retention when the release never arrives. Codex additionally warned that mouse_report_held is an event-derived record, not a physical-state query, so a stale true causes missed termination and a false one causes premature termination; it recommended keeping the selection-side press record separate from the report-side held record that clear_all zeroes.'
+- question_id: edge-case.release-never-arrives
+  packet_id: create-spec-q0001
+  answered_at: '2026-09-20T16:51:45+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - rely_on_release_only
+  freeform: null
+  normalized_answer: Add no extra terminator; the release path's no-owner drag_in_flight fallback is the terminator. The residual lost-release leak is recorded as a follow-up task rather than closed by an event-derived check.
+  resolution_note: 'gate: create-spec.requirement-clarification (policy action codex_consultation); chosen: rely_on_release_only; not chosen: terminate_on_focus_regain, terminate_on_unheld_motion; codex_consulted: true (harness entry , 2 turns) -> Codex returned NO_MAPPING; opus_escalation: yes (one dispatch for this packet); escalation reasoning: mouse_report::clear_all zeroes mouse_report_held inside the same Focused(false) arm and winit synthesizes no press on focus regain or motion, so "left observed NOT held" reads false regardless of physical state -- both terminate_on_focus_regain and terminate_on_unheld_motion would degrade to unconditional termination and reintroduce the original bug, merely deferred. A separate selection-side press record makes the guard meaningful but vacuous on the target path, because a missed release leaves it held forever. The blast radius of relying on the release path is bounded and self-healing: decide_release''s no-owner fallback fires on the next complete left click, so the degradation (no resize-hint / link-hover refresh, sticky selection extension) recovers with one click. Zero new state, smallest diff, strictly reversible. SPEC Objective 2 is satisfied in the sense the narrowing assumes: the release path IS the terminator; the residual is a platform-level guarantee gap. follow_up: file a separate task for a non-event-derived terminator that probes the real physical button state on Focused(true) (X11 XQueryPointer / Wayland equivalent) and clears host.dragging when the left button is genuinely up.'
+- question_id: testing.window-free-termination-predicate
+  packet_id: create-spec-q0001
+  answered_at: '2026-09-20T16:51:45+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - extract_pure_predicate
+  freeform: null
+  normalized_answer: 'Extract the termination decision as a pure, winit-free predicate over plain bools, cover its truth table with bare #[test], and extend the existing source-text structural assertion to the new composed form.'
+  resolution_note: 'gate: create-spec.requirement-clarification (policy action codex_consultation); chosen: extract_pure_predicate; not chosen: structural_source_test_only; codex_consulted: true (harness entry , 2 turns); opus_escalation: no; key points: a pure-predicate truth table pins the held x drag_in_flight decision behaviourally, which the source-text assertion alone cannot do (the existing structural test does not detect whether the arm is conditional); the structural test is still updated so it confirms the predicate is the thing the Focused(false) arm uses.'
+- question_id: create-spec.command-approval
+  packet_id: null
+  answered_at: '2026-09-20T16:56:56+09:00'
+  source: batch-decision-table
+  answer_mode: multi_select
+  selected_option_ids:
+  - make fmt-check
+  freeform: null
+  normalized_answer: 'Auto-approved 1 previously-unapproved workflow.yaml command string: `make fmt-check`.'
+  resolution_note: 'gate: create-spec.command-approval; resolved via references/batch-policies.yaml (action: auto_record, refusal_patterns: hard_fail). Auto-approved command string (verbatim): `make fmt-check` (source field: project.components.main.format_command; resolves to the Makefile `fmt-check` target = `cargo fmt --all --check` + `bunx biome check .`, both of which were already individually approved for this project). Already approved, not re-recorded: `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml` (build_command); `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1` (test_command). e2e_test_command is empty and was skipped. No command matched a refusal pattern.'
+- question_id: verify.manual-scenario-unexecutable
+  packet_id: null
+  answered_at: '2026-09-20T17:45:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - pass_with_ts7_recorded_as_not_executed
+  freeform: null
+  normalized_answer: Record verify as pass over the automatable verification surface, and state explicitly that TS-7 is NOT passed but NOT EXECUTED (no GUI in the unattended batch environment). SC-4 therefore remains pending the human's manual confirmation against a release build. No failed_items entry is added, because a manual-only scenario is not a failure an implement rework can resolve.
+  resolution_note: 'gate: verify.manual-scenario-unexecutable (unlisted gate; no gate_id at its originating site, resolved via the batch-mode unlisted-gate fallback procedure); chosen: pass_with_ts7_recorded_as_not_executed (option A plus the stronger annotation requirement Codex added); not chosen: fail_and_rework (option B), pass_with_ts7_in_failed_items (option C); codex_consulted: true (codex-harness second-opinion-agent, readonly sandbox, default provider); opus_escalation: no; key points: TS-7 did not fail, it was not executed - the unattended batch environment has no GUI and no E2E automation exists in this project (SPEC assumption A6); routing it to rework is unresolvable by construction, so any number of rework rounds would leave it unchanged and the verdict would lose meaning; explicitly distinguishing "not executed" from "passed" satisfies the constraint of never recording something as verified that was not verified, without collapsing the whole automated verification surface into a failure; Codex additionally required that the word pass be scoped in prose to the automatable surface rather than presented as an unqualified SC-4 pass, and that the human be asked to run TS-7a/b/c against a release build. Codex also reviewed the production diff and reported no defect and no spec divergence: reading the held record before clear_all, narrowing termination behind a pure predicate, and delegating the held drag termination to the existing release path are all consistent with the SPEC and its acceptance criteria.'
+  follow_up: TS-7a/b/c stay unchecked in VERIFICATION.md's Manual Testing section; the human runs them against a release build before merging the PR.

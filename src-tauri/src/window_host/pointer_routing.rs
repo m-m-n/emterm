@@ -477,6 +477,22 @@ pub(super) fn publish_to_targets<S: SelectionWriteSink>(
     }
 }
 
+/// task0001 (focus-loss-drag-termination, Shared Components, D2, D3, D4):
+/// decide whether losing window focus terminates a live local left
+/// selection drag. Returns "terminate" (`true`) exactly for the
+/// combination "a local left drag is in flight AND the left button is not
+/// held"; every other combination — including a held-and-in-flight drag,
+/// the case this task stops from being destroyed — returns "do not
+/// terminate" (`false`). Preserving a drag whose button is still held
+/// defers its termination to the release path's existing no-owner
+/// fallback (D4): this predicate introduces no second terminator. Pure:
+/// mutates nothing, performs no I/O; both inputs are plain bools, so it
+/// is bare-testable with no window, winit, GPU, PTY or terminal-mode
+/// type in reach.
+pub(super) fn should_terminate_drag(drag_in_flight: bool, left_held: bool) -> bool {
+    drag_in_flight && !left_held
+}
+
 /// task0001 (Shared Components, D4): the local drag terminator's publish
 /// half — clears the drag flag, consumes the pending selection anchor, and
 /// publishes a materialized selection to PRIMARY (and additionally to
