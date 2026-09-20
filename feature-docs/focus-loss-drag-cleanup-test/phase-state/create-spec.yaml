@@ -1,14 +1,76 @@
 schema_version: 1
 feature: focus-loss-drag-cleanup-test
 phase: create-spec
-status: initialized
+status: awaiting_answers
 generation: 1
-base_revision: 90b597fab6d92f86955df2012359ca77e0911955
-last_input_digest: null
-active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+base_revision: 45a7819348cf7cb9b9472f46591383c53b9440ef
+last_input_digest: sha256:2072299ab229484b3e27a986a903e73de3296ea69b224a78f07565af68e0becb
+active_request_id: create-spec-run-0001
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-09-20T16:51:11+09:00'
+    questions:
+    - question_id: publish-side.verification-depth
+      status: answered
+    - question_id: scope.prior-feature-doc-backfill
+      status: answered
+    - question_id: design-step.recommendation
+      status: answered
+answers:
+  publish-side.verification-depth:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-20T16:51:11+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - sink_seam
+    freeform: null
+    normalized_answer: Route the PRIMARY / CLIPBOARD writes through a small injectable sink seam so a
+      window-free test double records the actual calls and payloads, in addition to the pure destination
+      predicate.
+    resolution_note: 'gate: create-spec.requirement-clarification; policy action codex_consultation; codex_consulted:
+      true (1 turn, harness entry `codex`); Codex chose sink_seam over the worker''s tentative pure_predicate_only,
+      reasoning that with a predicate alone the write calls could be deleted and the tests would still
+      pass, so TS-4''s third assertion (''the selection is published'') would stay unverified as a behaviour;
+      predicate_plus_text_resolution asserts the payload but not that it reached the right destination.
+      Orchestrator mapped the suggestion onto the declared option_id sink_seam; it is a superset of the
+      task''s three acceptance conditions (the pure predicate is still extracted). Recorded as an assumption
+      per batch-policies.yaml record_as_assumption: true.'
+  scope.prior-feature-doc-backfill:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-20T16:51:11+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - backfill_prior_feature_docs
+    freeform: null
+    normalized_answer: Also correct feature-docs/mouse-report-reset-active-gesture/SPEC.md's TS-4 checkbox
+      and VERIFICATION.md's TS-4 / SC-C rows to point at the new tests, once those tests land and pass.
+    resolution_note: 'gate: create-spec.requirement-clarification; policy action codex_consultation; codex_consulted:
+      true (same single batched turn); Codex chose backfill_prior_feature_docs over the worker''s tentative
+      this_feature_only, reasoning that the gap being closed IS the predecessor feature''s TS-4, that
+      the edit is limited to two documents with no production risk, and that leaving the false ''unit-verified''
+      claim in place keeps the verification record untraceable. Codex added a caveat the SPEC must honour:
+      a recorded sink call is not evidence of an actual OS-level PRIMARY/CLIPBOARD update, so AC-3''s
+      real-hardware confirmation stays mapped to the manual scenario. Orchestrator mapped the suggestion
+      onto the declared option_id backfill_prior_feature_docs.'
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-20T16:51:11+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: 'Accept requirements-analyst''s recommendation: skip the design step.'
+    resolution_note: 'gate: create-spec.design-step; references/batch-policies.yaml option_id decide_autonomously;
+      no Codex consultation (listed gate with a select policy).'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:2072299ab229484b3e27a986a903e73de3296ea69b224a78f07565af68e0becb
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
