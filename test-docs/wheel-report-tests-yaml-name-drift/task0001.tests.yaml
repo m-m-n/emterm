@@ -1,0 +1,140 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-based (Test Notes method: text search of the single repaired
+      file). Before editing, `grep -n
+      decide_wheel_event_detects_reactivation_observed_only_by_an_owner_recorded_release
+      test-docs/wheel-report-fraction-accum/task0001.tests.yaml` matched the
+      second AC-7 `tests` entry. After the repair, the same search returns no
+      match, and the second AC-7 `tests` entry now reads
+      `window_host::tests::decide_wheel_event_reactivation_after_an_owner_recorded_release_accumulates_from_zero`.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-based (Test Notes method: text search + read-through). Before
+      editing, `grep -n last_tracking_active` on the target file matched two
+      lines (inside AC-6 and AC-7 `red_reason`). After the repair, the same
+      search returns no match. A read-through of the repaired AC-6 body
+      ("...has no field named `report_accum`` (the fields...") and AC-7 body
+      ("...no field `report_accum`/`tracking_active`"..." and "...RecordUpdates.
+      tracking_active field existed, this scenario...") found no dangling
+      separator, no unbalanced quote, and no orphaned conjunction.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-based (Test Notes method: diff review). `git diff --
+      test-docs/wheel-report-fraction-accum/task0001.tests.yaml` against the
+      base shows `report_accum`, `tracking_active`, the parenthesised
+      "(6 occurrences of the report_accum error alone across these three
+      tests)" line, and all ten `red_confirmed` lines are absent from every
+      hunk of the diff, i.e. unchanged from the pre-change file.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-based (Test Notes method: diff review). `git diff --
+      test-docs/wheel-report-fraction-accum/task0001.tests.yaml` against the
+      base produces exactly two hunks: one inside AC-6's `red_reason` (the
+      `named \`report_accum\`` line) and one spanning AC-7's `tests` list
+      (the re-pointed name) plus AC-7's `red_reason` (the field-list line and
+      the closing-clause lines). No `red_confirmed` line, no acceptance key
+      line, no AC-9 line, and no line outside those locations appears in the
+      diff.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-based (Test Notes method: YAML parse + key-set comparison).
+      `python3 -c "import yaml; yaml.safe_load(open(...))"` parses the
+      repaired file without error. Its top-level keys are task_id,
+      baseline_failures, final_failures, acceptance_tests, notes, and
+      acceptance_tests' keys are exactly AC-1..AC-10 — identical in shape to
+      the pre-change file.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-based (Test Notes method: manual evidence). See
+      `name_resolution_evidence` below for the file and line of all 13
+      distinct names cited across the repaired file's AC-1..AC-10, and
+      `filtered_test_run` below for the name-filtered run of the re-pointed
+      AC-7 name, which reports a non-zero test count (1 passed; 0 filtered
+      matches would have been 0 passed).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-based (Test Notes method: change-set listing + full suite
+      run). `git status --porcelain` for the whole worktree shows exactly one
+      file modified,
+      test-docs/wheel-report-fraction-accum/task0001.tests.yaml; no file
+      under src-tauri/ or crates/ appears in the change set. The `main`
+      component's test command (`CARGO_TARGET_DIR=src-tauri/target cargo test
+      --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1`) was run
+      twice: once with this task's edit stashed (the pre-change base state),
+      reporting "3487 passed; 0 failed; 3 ignored", and once after restoring
+      the edit, reporting the identical "3487 passed; 0 failed; 3 ignored".
+name_resolution_evidence:
+  - name: window_host::tests::accumulate_wheel_report_lines_collects_sub_notch_deltas_same_direction
+    file: src-tauri/src/window_host/tests.rs
+    line: 3018
+  - name: window_host::tests::accumulate_wheel_report_lines_nets_opposite_direction_delta_against_the_remainder
+    file: src-tauri/src/window_host/tests.rs
+    line: 3043
+  - name: window_host::tests::accumulate_wheel_report_lines_non_finite_deltas_are_rejected_without_mutation
+    file: src-tauri/src/window_host/tests.rs
+    line: 3079
+  - name: window_host::tests::accumulate_wheel_report_lines_never_exceeds_the_cap_across_a_sweep_of_extremes
+    file: src-tauri/src/window_host/tests.rs
+    line: 3148
+  - name: window_host::tests::accumulate_wheel_report_lines_saturation_discards_excess_instead_of_banking_it
+    file: src-tauri/src/window_host/tests.rs
+    line: 3188
+  - name: window_host::tests::bounded_wheel_report_duplicate_above_cap_still_caps_at_exactly_cap
+    file: src-tauri/src/window_host/tests.rs
+    line: 1650
+  - name: window_host::tests::bounded_wheel_report_duplicate_length_never_exceeds_payload_len_times_cap
+    file: src-tauri/src/window_host/tests.rs
+    line: 1668
+  - name: window_host::tests::decide_wheel_event_active_tab_change_discards_the_carried_remainder
+    file: src-tauri/src/window_host/tests.rs
+    line: 3258
+  - name: window_host::tests::decide_wheel_event_observing_tracking_inactive_discards_the_carried_remainder
+    file: src-tauri/src/window_host/tests.rs
+    line: 3315
+  - name: window_host::tests::decide_wheel_event_reactivation_after_an_owner_recorded_release_accumulates_from_zero
+    file: src-tauri/src/window_host/tests.rs
+    line: 3372
+  - name: window_host::tests::decide_motion_event_owner_established_local_branch_surfaces_tracking_observation_only
+    file: src-tauri/src/window_host/tests.rs
+    line: 3511
+  - name: window_host::tests::decide_wheel_event_rejected_by_grid_leaves_the_whole_record_value_unchanged
+    file: src-tauri/src/window_host/tests.rs
+    line: 3460
+  - name: window_host::tests::wheel_report_and_alt_scroll_accumulators_reference_only_their_own_cap_constant
+    file: src-tauri/src/window_host/tests.rs
+    line: 3216
+filtered_test_run:
+  command: >-
+    CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+    src-tauri/Cargo.toml --lib
+    decide_wheel_event_reactivation_after_an_owner_recorded_release_accumulates_from_zero
+  result: "1 passed; 0 failed; 0 ignored; 0 measured; 3489 filtered out"
+notes: >-
+  This task repairs four drifted references inside
+  test-docs/wheel-report-fraction-accum/task0001.tests.yaml (a different
+  feature's task evidence record) and adds no test of its own, per NFR1/FR6
+  and this task's own Test Notes — the usual test-first cycle does not apply.
+  Verification is manual throughout: text search, diff review, YAML parse,
+  and the name-resolution evidence plus filtered test run recorded above.
+  baseline_failures/final_failures above refer to the `main` component's Rust
+  test suite (src-tauri, --lib), run once with this task's edit stashed
+  (baseline) and once with it restored (final); both runs reported 3487
+  passed, 0 failed, 3 ignored — identical, so no regression was introduced.
