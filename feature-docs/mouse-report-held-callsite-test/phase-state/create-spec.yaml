@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mouse-report-held-callsite-test
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: 16549487ecf13119cd36cb0496533a7c7125edaa
-last_input_digest: sha256:88ee6a693e350829b09f8e3bee83a038f2dcfb1af486690a2f82e9bd74719898
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:2b3ec862b2af00fec47f3e4dd4489709914bbb2d6430b65f7db94e019c32ed8e
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -76,7 +76,21 @@ worker_runs:
     status: needs_user_input
     input_digest: sha256:88ee6a693e350829b09f8e3bee83a038f2dcfb1af486690a2f82e9bd74719898
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:3f98674d5c13233d3c3a2a9bd957e4aa92f7fff72a3c15dd9c51aad2bfb9c932
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:2b3ec862b2af00fec47f3e4dd4489709914bbb2d6430b65f7db94e019c32ed8e
+    output_digest: null
+artifacts:
+  - path: feature-docs/mouse-report-held-callsite-test/REQUIREMENTS.md
+    sha256: sha256:4386304b8a73bc8e8e455e2e3843d3d1c473992ee3e5d9e9d90bc35f115d1726
+    produced_by: create-spec-run-0003
+  - path: feature-docs/mouse-report-held-callsite-test/SPEC.md
+    sha256: sha256:b68045f9fff93b9262b545c978d15c2b6b9da46aa27cbff74bf7906cd5a7c9b5
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0

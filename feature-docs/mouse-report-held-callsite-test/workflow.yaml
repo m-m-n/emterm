@@ -1,0 +1,247 @@
+schema_version: 1
+feature: mouse-report-held-callsite-test
+created: 2026-09-21
+base_branch: main
+goal: |
+  # マウスレポート: ボタン/ホイール経路の呼び出し側が live held 値を渡すことを固定するテストが無い (AC-3 の半分が未達)
+
+  種別: バグ / 優先度: 中
+  Notion: https://www.notion.so/3e13509ec8ee81928356fd845068eb36
+
+  ## 現象
+  `mouse-drag-latch-regression` の review round 1 で comprehensive レビュアーが挙げた
+  指摘（stable_id `a3855d779d6ae931` / severity medium）。
+  task0001 が追加した TS-2 テスト
+  `second_button_press_mid_left_drag_preserves_held_gesture_slot_and_completes_selection`
+  は `apply_outcome_with_held` を直接呼び、`held` をテスト自身が組み立てて渡している。
+  そのため本番のボタン経路の呼び出し側 `run_button_decision`
+  （`src-tauri/src/window_host/pointer_routing.rs:850` 付近）が held 非対応の
+  `mouse_report::apply_outcome`（内部で `HeldButtons::default()` を渡す薄いラッパ）に
+  戻っても、このテストは緑のままになる。
+  既存の構造テスト `pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam`
+  （`tests.rs:1770` 付近）は `pointer_routing.rs` 全体に対する
+  `src.contains("mouse_report::apply_outcome_with_held(")` でしかなく、motion 経路の
+  呼び出しが残る限り緑のままなので、この退行を検出できない。
+  `test-docs/mouse-drag-latch-regression/task0001.tests.yaml` の mutation probe B も
+  呼ばれる側（`clear_unheld(held)`）を変異させており、呼び出し側の退行は一度も
+  検証されていない。probe 記録自身が「呼び出し側が値を渡さなかった場合と観測的に同等」と
+  明記している。
+  ホイール経路は probe W が `apply_wheel_report_step` 内部を変異させて検出成功を
+  実証しているため、SPEC の AC-3 のうちホイール半分は満たされているが、ボタン経路の
+  半分は満たされていない。
+
+  ## 期待する挙動
+  `run_button_decision` と `handle_mouse_wheel` の**呼び出し側**が
+  `host.mouse_report_held` を held 対応シームの実引数として渡し続けることを、
+  退行時に落ちる形で固定する。
+
+  ## 補足: なぜ mouse-drag-latch-regression の中で直さなかったか
+  review round 1 のループ 1 で一度修正を適用した（関数本文を波括弧深度で切り出し、
+  呼び出しの実引数リストに `host.mouse_report_held` が現れることをアサートする
+  source-scan テストを 1 本追加）。しかし同ラウンドの spec 再レビューで、その修正が
+  次の 2 点に反することが判明したため revert した（コミット `964be64d` →
+  revert `8ddefa0c`）。
+  1. `task0001.md` の Files to Modify が「add five regression tests to the existing
+  inline test module; nothing else in the file changes」と定めており、6 本目の
+  テスト追加はスコープ違反
+  2. SPEC の NFR5 が「アサーションは観測可能な契約（disposition の値、gesture slot の
+  `peek`、`dragging`、publish 先 / sink の呼び出し）に対して行う」と定めており、
+  `include_str!` したソース文字列へのアサートは NFR5 違反
+  したがって解消には SPEC 側の変更（NFR5 の例外、または呼び出し側を観測可能な契約で
+  固定する別のシーム設計）が必要で、既存タスクの枠内では扱えない。
+
+  ## 該当箇所
+  - `src-tauri/src/window_host/pointer_routing.rs:850` 付近 — `run_button_decision` の
+    `mouse_report::apply_outcome_with_held(outcome, &mut records, &mut dest, host.mouse_report_held)`
+  - `src-tauri/src/window_host/pointer_routing.rs:1129` 付近 — `handle_mouse_wheel` の
+    `apply_wheel_report_step` 呼び出し
+  - `src-tauri/src/window_host/mouse_report.rs` — `apply_outcome`（held 非対応ラッパ）/
+    `apply_outcome_with_held` / `apply_wheel_report_step`
+  - `src-tauri/src/window_host/tests.rs:1770` 付近 — 既存の構造テスト
+  - `feature-docs/mouse-drag-latch-regression/SPEC.md` — AC-3 / NFR5
+
+  ## 実害
+  本番コードは現時点では正しい（両呼び出し側とも `host.mouse_report_held` を渡している）。
+  このタスクは「今壊れている」ものではなく、「壊れても気づけない」ギャップの解消。
+  退行すると mouse-drag-latch-regression が対象としたゴーストドラッグのラッチが
+  そのまま再発する。
+parent_branch: em-workflow/mouse-report-held-callsite-test/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli_feature_gate:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: c030cb42e7513201e6aef2b63be00fac77a9ecda
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "UI 表面・デザイントークンに一切触れないテスト専用の変更であり、変更集合は src-tauri/src/window_host/tests.rs への追加のみに閉じる（FR4）。design ステップで決めるべき視覚的判断が存在しない。batch gate create-spec.design-step は decide_autonomously で解決。"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "ボタン経路の呼び出し側固定"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: ["TS-1"]
+  FR2:
+    title: "ホイール経路の呼び出し側固定"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: ["TS-2"]
+  FR3:
+    title: "held 非対応エントリポイントへの差し戻し禁止"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: ["TS-3"]
+  FR4:
+    title: "プロダクション挙動を変更しない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: ["TS-M1"]
+  FR5:
+    title: "固定メカニズム = トークン単位の source-scan と波括弧深度による本体抽出"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: ["TS-1", "TS-2", "TS-6"]
+  FR6:
+    title: "字句走査器の要件と自己検証"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: ["TS-4"]
+  FR7:
+    title: "良性編集への耐性と変異感度"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: ["TS-4", "TS-5"]
+  FR8:
+    title: "既存テストの無改変維持"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "素のユニットテストシームのみ"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "インラインテストモジュール、新規依存なし"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "リポジトリのテスト命名規約"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "決定的かつ並列安全"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: "観測可能な契約をアサートする（明示的な例外つき）"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: "実行コストが無視できる"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR7:
+    title: "フィーチャーゲートに影響しない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR8:
+    title: "false red の抑制"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: ["TS-6"]
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
