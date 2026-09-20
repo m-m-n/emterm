@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mouse-report-held-callsite-test
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: c28b7c89fd812fad8676f9da474a45c347080cdd
 last_input_digest: sha256:c6ee3c2d25923d96651928d147dfc64e7b509c6422b1557ec3bfe2c351d8bf49
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -25,7 +25,7 @@ artifacts:
     produced_by: create-plan-run-0001
 patches:
   - patch_id: mouse-report-held-callsite-test-p0001
-    status: validated
+    status: applied
     base_input_digest: sha256:c6ee3c2d25923d96651928d147dfc64e7b509c6422b1557ec3bfe2c351d8bf49
     base_workflow_blob: a0c71f5490746a8dd3db246e9564099ae2134d05
 progress_fingerprint: null
