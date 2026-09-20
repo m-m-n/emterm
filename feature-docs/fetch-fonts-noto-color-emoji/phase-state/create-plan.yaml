@@ -1,0 +1,21 @@
+schema_version: 1
+feature: fetch-fonts-noto-color-emoji
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 1f13ff7c966cb0d20beca314c414b33d6af31e48
+last_input_digest: sha256:fbde327a3dd8e27699eb32630e5277b86daffd66cbc8d5fa51299788a5d562f5
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:fbde327a3dd8e27699eb32630e5277b86daffd66cbc8d5fa51299788a5d562f5
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
