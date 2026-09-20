@@ -1,0 +1,168 @@
+schema_version: 1
+feature: wheel-report-tests-yaml-name-drift
+created: 2026-09-20
+base_branch: main
+goal: |
+  task0001.tests.yaml が存在しないテスト名を参照している (AC-7 の証跡切れ)
+
+  ## やりたいこと (必須)
+  `test-docs/wheel-report-fraction-accum/task0001.tests.yaml:62` が指す存在しないテスト名を、実在するテスト名に直す。
+
+  ## 背景・なぜ (必須)
+  task0001.tests.yaml が AC-7 の受け入れ証跡として挙げる `window_host::tests::decide_wheel_event_detects_reactivation_observed_only_by_an_owner_recorded_release` は HEAD に定義が無い。task0002 で同テストが `decide_wheel_event_reactivation_after_an_owner_recorded_release_accumulates_from_zero`（`src-tauri/src/window_host/tests.rs:3223`）に付け替えられたが、task0001 側の yaml が追随していない。
+  このため AC-7 の証跡を名前で再実行すると `0 tests run` になり、受け入れ条件の証明が黙って失われる。同ファイルの 57 / 67 / 74 行の red_reason 本文にも同種のドリフトがある。
+  PR #73（`em-workflow/wheel-report-fraction-accum/integration`）のレビュー round 2 で検出。stable_id `12606d425b38d819` / severity medium。
+
+  ## 受け入れ条件 / 完了の定義 (必須)
+  - [ ] task0001.tests.yaml が参照する全テスト名が `src-tauri/src` に実在する定義に解決する
+  - [ ] 57 / 67 / 74 行の red_reason 本文も現在の実装に合わせて更新されている
+
+  ## スコープ外 (任意)
+  テスト自体の追加・削除。
+
+  ## 制約・前提 (任意)
+  PR #73 がマージされた後に着手する。
+parent_branch: em-workflow/wheel-report-tests-yaml-name-drift/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli_only:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    typescript:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: "bunx biome format ."
+      e2e_test_command: ""
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: a5a148b62eb97616601d06a2d5f34b54cd0d7f24
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      Gate create-spec.design-step resolved in batch mode with option
+      decide_autonomously, accepting requirements-analyst's recommendation to
+      skip. The change is a text repair inside a single YAML evidence record —
+      four enumerated locations in
+      test-docs/wheel-report-fraction-accum/task0001.tests.yaml — with no
+      production code, no user-visible surface, no UI or visual element, no
+      data shape and no architectural choice involved. The project's native
+      design system (doc/UI-DESIGN-GUIDELINES.yaml and its two mirrors) is
+      untouched by it.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: Re-point the unresolvable AC-7 test name
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2, TS-3]
+  FR2:
+    title: Repair the AC-6 red_reason body (line 57)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-3]
+  FR3:
+    title: Repair the AC-7 red_reason error quotation (line 67)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-3]
+  FR4:
+    title: Repair the AC-7 red_reason sentence that depends on the removed field (lines 73-75)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-3]
+  FR5:
+    title: Preserve every red verdict and all still-accurate text
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-4]
+  FR6:
+    title: Record manual name-resolution evidence for AC-1
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2]
+  NFR1:
+    title: Maintainability (documentation-only change)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-5]
+  NFR2:
+    title: Maintainability (preserve the file's YAML form)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Compatibility (sequencing constraint)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
