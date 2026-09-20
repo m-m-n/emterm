@@ -100,7 +100,8 @@ workflow:
     skipped_reason: "UI 表面・デザイントークンに一切触れないテスト専用の変更であり、変更集合は src-tauri/src/window_host/tests.rs への追加のみに閉じる（FR4）。design ステップで決めるべき視覚的判断が存在しない。batch gate create-spec.design-step は decide_autonomously で解決。"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 92abab300bdf721f33bfc345a0e28aaeb7c28eb1
   - id: implement
     status: pending
     base_commit: null
@@ -113,7 +114,19 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "pin the held-argument pass-through at the button and wheel call sites"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/window_host/tests.rs
+    skills: []
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6, NFR7, NFR8]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -129,112 +142,112 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: ["TS-1"]
   FR2:
     title: "ホイール経路の呼び出し側固定"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: ["TS-2"]
   FR3:
     title: "held 非対応エントリポイントへの差し戻し禁止"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: ["TS-3"]
   FR4:
     title: "プロダクション挙動を変更しない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: ["TS-M1"]
   FR5:
     title: "固定メカニズム = トークン単位の source-scan と波括弧深度による本体抽出"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: ["TS-1", "TS-2", "TS-6"]
   FR6:
     title: "字句走査器の要件と自己検証"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: ["TS-4"]
   FR7:
     title: "良性編集への耐性と変異感度"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: ["TS-4", "TS-5"]
   FR8:
     title: "既存テストの無改変維持"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR1:
     title: "素のユニットテストシームのみ"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR2:
     title: "インラインテストモジュール、新規依存なし"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR3:
     title: "リポジトリのテスト命名規約"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR4:
     title: "決定的かつ並列安全"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR5:
     title: "観測可能な契約をアサートする（明示的な例外つき）"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR6:
     title: "実行コストが無視できる"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR7:
     title: "フィーチャーゲートに影響しない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR8:
     title: "false red の抑制"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: ["TS-6"]
 
 batch:
