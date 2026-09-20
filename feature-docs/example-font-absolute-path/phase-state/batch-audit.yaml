@@ -111,3 +111,31 @@ records:
       結果として harness SSOT の禁止規定と leaf の literal レジストリ値の双方に一致する。
       Opus エスカレーションは実施していない (Codex 相談 1 ターンで論点が出揃い、
       分類器の拒否が選択を機械的に確定させたため)。
+  - question_id: null
+    packet_id: null
+    answered_at: "2026-09-21T00:52:00+09:00"
+    source: unlisted-gate-fallback
+    answer_mode: single_select
+    selected_option_ids: [stop_at_once_boundary]
+    freeform: null
+    normalized_answer: "verify を completed にした時点で --once のフェーズ境界として終了し、retrospect と Step C (PR 作成) は次回起動に委ねる"
+    resolution_note: >-
+      gate: --once のフェーズ境界と、起動時の自由記述（「実装が終わったら integration ブランチを
+      push して gh pr create で PR を作る」）との緊張関係。gate_id なし。
+      references/batch-mode.md の unlisted-gate fallback（Codex 相談 → 最小副作用オプション）に従った。
+      選択肢: (A) verify completed のコミット時点で --once の停止条件 7 により終了し、
+      retrospect と Step C / PR 作成を後続起動に残す /
+      (B) --once を上書きして retrospect + Step C まで走り切り PR を作る。
+      Codex 相談 (codex-harness second-opinion, read-only, 1 ターン, harness: codex) の結論は (A)。
+      採用: (A)。Codex の理由: verify を completed にしてコミットした時点で --once の停止条件 7 が
+      成立するのでターンを終える。自由記述の依頼は --once を上書きするものではなく、
+      「最終的な完了処理をどう扱うか」の要望であって、起動ごとのフラグ意味論を飛ばす承認ではない。
+      --pr は Step C を実行する起動でのみ有効で起動間で継承されないため、
+      次に Step C へ到達する起動で改めて --pr を渡す必要がある。
+      不採用 (B) の最も強い根拠（Codex が明示）: 利用者は実装完了後の PR 作成を明示的かつ
+      一義的に要求しており、機械的な --once 境界より述べられた最終目的を優先するほうが
+      実際の意図に忠実だとも読める。
+      orchestrator の受け入れ: (A) は副作用が最小（push も PR 作成も行わない）であり、
+      skill SSOT の明文（「Step C に到達しない起動では --pr が付いていても PR は作られない」）と
+      一致する。PR は次回以降 `--batch --once --pr` を Step C に到達する起動で渡すことで作成される。
+      opus_escalation: false。
