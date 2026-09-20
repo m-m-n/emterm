@@ -902,8 +902,8 @@ fn scroll_by_wheel_notch(host: &mut WindowHost, app: &mut App, lines: f32) {
 /// its two arguments only. `requested_count` may be anywhere in the `u32`
 /// range; the effective count is capped at [`MAX_WHEEL_REPORT_NOTCHES`]
 /// (task0001 D2 — the duplication-side half of the report path's
-/// defense-in-depth cap; see `input_translate::wheel_report_notches` for
-/// the conversion-side half). That ONE capped value derives both the
+/// defense-in-depth cap; see `input_translate::accumulate_wheel_report_lines`
+/// for the conversion-side half). That ONE capped value derives both the
 /// preallocation size and the repetition bound (task0001 D5), so they can
 /// never diverge. Security property, not a feel-tuning knob.
 pub(super) fn bounded_wheel_report_duplicate(payload: &[u8], requested_count: u32) -> Vec<u8> {
