@@ -46,3 +46,25 @@ records:
       pending と同じ手順で確定した。候補あり → project_native。
       paths: doc/UI-DESIGN-GUIDELINES.yaml（トークン定義の正本）/ src-tauri/src/ui/md3.rs（ネイティブミラー）/
       src-tauri/web-shared/styles.css（WebView ミラー）。本フィーチャーはいずれにも触れない。
+  - question_id: create-plan.worker-digest-selffill
+    packet_id: null
+    answered_at: "2026-09-21T00:24:13+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [orchestrator_fills_digests]
+    freeform: null
+    normalized_answer: "orchestrator computes and fills written_artifacts[].sha256; proceed"
+    resolution_note: >-
+      gate: create-plan phase, no gate_id — orchestrator-raised process question.
+      implementation-planner が Bash を持たず written_artifacts[].sha256 を 3 件とも null で返した。
+      選択肢 A（orchestrator が declared path から sha256 を計算して補完し、警告を記録して続行）と
+      選択肢 B（契約違反として再ディスパッチ／フェーズ中断）を Codex に諮り、A を採用。
+      codex_consulted: true / harness: codex / opus_escalation: false。
+      Codex の理由: 変更範囲はレイヤー 4 で独立に確認済み（ディスパッチ前後の worktree 全ファイル一覧を
+      diff し、新規は宣言どおりの 3 件のみ・他の変更なし）。成果物は実行も配布もされない計画文書（Markdown）であり、
+      存在確認とハッシュ計算は orchestrator 側で実施できるため、計算主体を明記した例外として進めるのが妥当。
+      不採用の B: 純粋なツール制約に対する再ディスパッチ／中断はコストに見合わず、無人実行では停止の実害が大きい。
+      Codex が挙げた残存リスク: 補完したハッシュは検証時点の内容を示すだけで、ワーカーが書いた時点の内容との
+      一致は証明しない。文書内容の誤りもこの補完では検出できない。
+      orchestrator 側の受け入れ: レイヤー 5 の digest 照合はこの run では orchestrator の自己申告であり、
+      独立クロスチェックではない旨を planner-output.json の warnings にも記録した。
