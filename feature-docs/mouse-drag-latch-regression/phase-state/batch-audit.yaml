@@ -60,3 +60,46 @@ records:
       Consequence recorded as a feature assumption: the task's "期待する挙動" bullet asking
       for unconditional drag termination on focus loss is intentionally not adopted.
       opus_escalation: not run (Codex's suggestion mapped onto an offered option).
+  - question_id: create-plan.mutation-probe-revert-safety
+    packet_id: null
+    answered_at: "2026-09-21T00:22:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [verify_revert_inside_task]
+    freeform: "verify_revert_inside_task"
+    normalized_answer: >-
+      Keep the mutation probe, and make its revert mechanically verifiable inside
+      task0001: before committing, the implementer verifies the working tree against
+      the task's base revision, and any byte-level difference outside
+      src-tauri/src/window_host/tests.rs fails the task.
+    resolution_note: >-
+      gate: orchestrator-opened planning-quality question, raised after the planner
+      returned warning #2 — task0001 prescribes a mutation probe (inject the named
+      regression locally, observe the new test fail, revert) whose revert is
+      mandatory, and an unattended batch implementer that misses a revert would ship
+      a production mutation in violation of FR4. This gate carries no gate_id at its
+      originating site, so it resolves per references/batch-mode.md's unlisted-gate
+      fallback: Codex consultation first, minimum-side-effect option if no decision
+      is reached. Options presented to Codex: A keep_as_written (rely on AC-7 / TS-6 /
+      review to catch a missed revert) / B verify_revert_inside_task / C
+      drop_mutation_probe / D other.
+      codex_consulted: true (harness entry `codex`, readonly sandbox, run_codex_exec.sh,
+      working dir = integration worktree). Codex recommended B, reasoning that an
+      unattended run is safer failing inside the phase that created the change than
+      relying on a later phase to catch it; that the probe's evidential value — proof
+      each new test actually detects its named regression — is real and is lost under
+      C; and that A leaves an operational dependency on a later phase always catching
+      a missed revert. Codex noted D (a throwaway probe workspace) would isolate
+      further but costs more complexity than a single-file task warrants.
+      Chosen: B (verify_revert_inside_task) — adopted per the launch instruction to
+      take the option judged comparatively better. Not chosen: A — leaves the missed
+      revert to be caught only after it is committed; C — loses the mutation
+      evidence; D — disproportionate for a one-file change set.
+      applied_as: the planner (same run, create-plan-run-0001) amended
+      tasks/task0001.md only — the mutation-probe note now requires a pre-commit
+      working-tree comparison against the task's base revision, with any non-test-file
+      difference failing the task, and a new AC-8 asserts that the comparison ran,
+      reported no non-test-file difference, and is recorded in the task's test record.
+      No other artifact was written; IMPLEMENTATION.md and VERIFICATION.md are
+      unchanged.
+      opus_escalation: not run (Codex's recommendation mapped onto an offered option).
