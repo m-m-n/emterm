@@ -31,6 +31,7 @@ use super::key_routing::{
 use super::mouse_report;
 use super::pointer_routing::{
     handle_mouse_wheel, handle_pointer_button, handle_pointer_left, handle_pointer_moved,
+    local_drag_in_flight, publish_local_drag,
 };
 use super::{WindowHost, terminal_font_family};
 
@@ -240,6 +241,18 @@ impl ApplicationHandler for PocApp {
                     // gone, and a latched count would keep treating every
                     // hover motion as an actionable drag forever.
                     host.pointer_buttons_down = 0;
+                    // task0001 (FR3, D3, D4, D5): a live local selection
+                    // drag has no other terminator once focus is lost —
+                    // the matching release may never arrive either.
+                    // Evaluate the drag-in-flight signal (Shared
+                    // Components) before any terminator runs and, only
+                    // when it is true, run the publish half alone: never
+                    // the fold-click toggle (D4), which stays exclusive to
+                    // the release path. With the signal false this is a
+                    // no-op in every respect, matching today's behaviour.
+                    if local_drag_in_flight(host, &self.app) {
+                        publish_local_drag(host, &mut self.app);
+                    }
                     // Mouse-reporting (AC-3, D12): the matching release
                     // may never arrive once focus is gone either, so the
                     // gesture-ownership and held-button records are just

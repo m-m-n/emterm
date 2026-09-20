@@ -291,7 +291,12 @@ pub(super) fn handle_pointer_moved(
         // the tab the outcome names is all there is to do here.
         let mut records = host.mouse_report_records();
         let mut dest = Vec::new();
-        mouse_report::apply_outcome(outcome, &mut records, &mut dest);
+        mouse_report::apply_outcome_with_held(
+            outcome,
+            &mut records,
+            &mut dest,
+            host.mouse_report_held,
+        );
         host.set_mouse_report_records(records);
         for (tab_id, bytes) in dest {
             if let Some(tab) = app.tabs.get(tab_id) {
@@ -352,40 +357,41 @@ fn perform_open_hovered_link(host: &mut WindowHost, app: &mut App) {
     }
 }
 
-/// Perform [`mouse_report::LocalArm::CompleteSelectionAndPublishToPrimary`]:
-/// clear the drag flag, consume the pending single-click anchor (handling
-/// the fold-click toggle for a plain click), and publish a completed
-/// selection to PRIMARY (and CLIPBOARD when `copy_on_select` is on).
-/// Unchanged from the pre-task0006
-/// `(MouseButton::Left, ElementState::Released)` local arm.
-fn complete_selection_and_publish_to_primary(host: &mut WindowHost, app: &mut App) {
+/// task0001 (Shared Components): the pure core of "a local selection drag
+/// is currently live" — the drag flag is set OR the pending selection
+/// anchor is present. Bare-testable (no window): the one-line host/app-
+/// reading wrapper [`local_drag_in_flight`] is what both consumers call
+/// instead of re-deriving this condition.
+pub(super) fn drag_in_flight(dragging: bool, pending_anchor_present: bool) -> bool {
+    dragging || pending_anchor_present
+}
+
+/// task0001 (Shared Components, D3, D4): the single definition of "a local
+/// selection drag is currently live," read from the host's drag flag and
+/// the app's pending selection anchor. **Pre**: evaluated before any
+/// terminator runs for the event being handled. **Post**: read-only —
+/// evaluating it mutates nothing. Both L2 ([`run_button_decision`]'s
+/// gather step, D3) and L1 (`event_loop.rs`'s focus-loss arm, D4) call
+/// this one definition; neither re-derives it.
+pub(super) fn local_drag_in_flight(host: &WindowHost, app: &App) -> bool {
+    drag_in_flight(host.dragging, app.pending_selection_anchor.is_some())
+}
+
+/// task0001 (Shared Components, D4): the local drag terminator's publish
+/// half — clears the drag flag, consumes the pending selection anchor, and
+/// publishes a materialized selection to PRIMARY (and additionally to
+/// CLIPBOARD when `copy_on_select` is on and the resolved text is
+/// non-empty); writes neither destination when no selection exists.
+/// **Pre**: the caller has established that a local drag is in flight
+/// (typically via [`local_drag_in_flight`]). Deliberately excludes the
+/// fold-click toggle, which stays exclusive to the release path (D4) — the
+/// release path composes this with that branch itself, and the focus-loss
+/// arm calls this alone. Returns the consumed pending anchor so a caller
+/// composing the fold-click branch on top (the release path) can tell
+/// whether one was present.
+pub(super) fn publish_local_drag(host: &mut WindowHost, app: &mut App) -> Option<Pos> {
     host.dragging = false;
-    // A press with no motion in Character mode left
-    // selection == None (see `begin_selection_drag`);
-    // there is nothing to copy in that case. `pending`
-    // is `Some` exactly for that case: a single (not
-    // word/line) press whose motion never upgraded it to
-    // a drag-select. Capture it before the reset so the
-    // fold-click path below can detect a plain click.
     let pending = app.pending_selection_anchor.take();
-    // Plain left-click (no Ctrl; meta does not exist on
-    // Linux/Windows), no active selection, no drag: this
-    // is a candidate for a fold toggle. Mirrors the
-    // WebView `input-wiring.ts` routing (Ctrl/Meta →
-    // URL, else → handleFoldClick) plus
-    // `handleFoldClick`'s own "no text selection" guard.
-    // `handle_fold_click` is a no-op (returns false)
-    // when the click is not over a foldable region, so
-    // ordinary clicks-to-deselect fall through unchanged.
-    if pending.is_some() && app.selection.is_none() && !host.current_mods.ctrl {
-        if let Some((row, _col)) = host.pixel_to_grid_cell(host.cursor_pos, app) {
-            if app.handle_fold_click(row) {
-                host.invalidate_link_hover();
-                host.window().request_redraw();
-                return;
-            }
-        }
-    }
     if let Some(sel) = app.selection {
         if let Some(tab) = app.tabs.get(app.active) {
             let core = tab.core.lock();
@@ -400,6 +406,38 @@ fn complete_selection_and_publish_to_primary(host: &mut WindowHost, app: &mut Ap
             // regardless.
             if app.settings.copy_on_select && !text.is_empty() {
                 host.set_clipboard(&text);
+            }
+        }
+    }
+    pending
+}
+
+/// Perform [`mouse_report::LocalArm::CompleteSelectionAndPublishToPrimary`]:
+/// runs the publish half ([`publish_local_drag`]) then, for a plain click
+/// with no active selection and no Ctrl held, offers the fold-click toggle
+/// a chance to consume the click instead. Unchanged in every observable
+/// respect from the pre-task0001 `(MouseButton::Left,
+/// ElementState::Released)` local arm — the fold-click branch is only ever
+/// reached when `app.selection` was already `None`, so composing it after
+/// the publish half (rather than before, as the pre-extraction code did)
+/// cannot change which destinations get written or when the toggle wins
+/// (D4).
+fn complete_selection_and_publish_to_primary(host: &mut WindowHost, app: &mut App) {
+    // `pending` is `Some` exactly when a single (not word/line) press's
+    // motion never upgraded it to a drag-select — see
+    // `begin_selection_drag`. Plain left-click (no Ctrl; meta does not
+    // exist on Linux/Windows), no active selection, no drag: this is a
+    // candidate for a fold toggle. Mirrors the WebView `input-wiring.ts`
+    // routing (Ctrl/Meta → URL, else → handleFoldClick) plus
+    // `handleFoldClick`'s own "no text selection" guard. `handle_fold_click`
+    // is a no-op (returns false) when the click is not over a foldable
+    // region, so ordinary clicks-to-deselect fall through unchanged.
+    let pending = publish_local_drag(host, app);
+    if pending.is_some() && app.selection.is_none() && !host.current_mods.ctrl {
+        if let Some((row, _col)) = host.pixel_to_grid_cell(host.cursor_pos, app) {
+            if app.handle_fold_click(row) {
+                host.invalidate_link_hover();
+                host.window().request_redraw();
             }
         }
     }
@@ -648,6 +686,10 @@ fn run_button_decision(
     // (falling back to `BeginSelectionDrag`), never mis-open a link.
     let hovered_link = !host.hover.link_cells.is_empty();
     let middle_click_paste_enabled = app.settings.middle_click_paste;
+    // task0001 (D3): gathered once here for both press and release — the
+    // press half ignores it, the release half's no-owner branch consults
+    // it.
+    let drag_in_flight = local_drag_in_flight(host, app);
     let inputs = mouse_report::ButtonEventInputs {
         kind,
         button: identity,
@@ -662,6 +704,7 @@ fn run_button_decision(
         row: row1,
         hovered_link,
         middle_click_paste_enabled,
+        drag_in_flight,
         records: host.mouse_report_records(),
     };
     // Decide (SC-10).
@@ -675,7 +718,7 @@ fn run_button_decision(
     // targets the tab its press recorded, never necessarily `app.active`).
     let mut records = host.mouse_report_records();
     let mut dest = Vec::new();
-    mouse_report::apply_outcome(outcome, &mut records, &mut dest);
+    mouse_report::apply_outcome_with_held(outcome, &mut records, &mut dest, host.mouse_report_held);
     host.set_mouse_report_records(records);
     for (tab_id, bytes) in dest {
         if let Some(tab) = app.tabs.get(tab_id) {
@@ -954,7 +997,13 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
     // its own on this path any more.
     let mut records = host.mouse_report_records();
     let mut dest = Vec::new();
-    let notches = mouse_report::apply_wheel_report_step(outcome, &mut records, &mut dest, lines);
+    let notches = mouse_report::apply_wheel_report_step(
+        outcome,
+        &mut records,
+        &mut dest,
+        lines,
+        host.mouse_report_held,
+    );
     host.set_mouse_report_records(records);
     if notches != 0 {
         if let Some((tab_id, bytes)) = dest.into_iter().next() {
