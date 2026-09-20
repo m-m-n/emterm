@@ -98,7 +98,8 @@ workflow:
     skipped_reason: "変更対象は src-tauri/examples/ の診断用 probe のソース内文字列 (フォントパスと実行手順コメント) とソース走査テストの追加のみで、UI 表示面・画面遷移・デザイントークンに一切触れない。design ステップが生む成果物がない。"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 27d2a51ec507b1a5de2894a6d854654b02731280
   - id: implement
     status: pending
     base_commit: null
@@ -111,7 +112,22 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "examples のフォント解決と実行手順コメントの是正、再混入検出テストの追加"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/examples/bold_raster_probe.rs
+      - src-tauri/examples/m_placement_probe.rs
+      - src-tauri/examples/font_select_probe.rs
+      - src-tauri/tests/examples_source_hygiene.rs
+    skills: []
+    domains: [external-io, config-infra]
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -127,70 +143,70 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS4, TS5]
   FR2:
     title: "m_placement_probe のフォント読み込みを実行時解決にする"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS4, TS5]
   FR3:
     title: "bold_raster_probe の実行手順コメントを現行レイアウトに更新する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS2]
   FR4:
     title: "font_select_probe の実行手順コメントを現行レイアウトに更新する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS2]
   FR5:
     title: "ソース走査による回帰テストを追加する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2]
   FR6:
     title: "本体側のフォント埋め込みは変更しない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3]
   NFR1:
     title: "テストのフォント非依存"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
   NFR2:
     title: "プラットフォーム非依存のパス組み立て"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   NFR3:
     title: "既存のビルド構成を変えない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3, TS4]
   NFR4:
     title: "probe の出力内容を変えない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
 
 batch:
