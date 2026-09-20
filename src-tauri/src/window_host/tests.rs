@@ -4667,15 +4667,22 @@ fn focus_loss_cleanup_publishes_selection_without_a_window() {
     );
 }
 
-/// AC-4 edge case (Test Notes) / task0003 (focus-loss-drag-cleanup-test)
-/// AC-1, AC-2, AC-3: no selection at all -> nothing recorded, empty anchor
+/// AC-4 edge case (Test Notes) / task0005 (focus-loss-drag-cleanup-test)
+/// AC-1, AC-2: no selection at all -> nothing recorded, empty anchor
 /// returned, and the destination decision itself is asserted directly
 /// against FR6's write rule for this case (neither destination selected)
-/// before the test ever attempts a publish. The publish step is driven by
-/// `resolved_text`, a value-carrying `Option<&str>` binding, not by a
-/// literal the compiler can fold away, so the closing sink-emptiness
-/// assertion constrains the publish path instead of restating a
-/// tautology.
+/// before the test ever attempts a publish. `publish_to_targets` is then
+/// called UNCONDITIONALLY with the decision `consume_drag_termination`
+/// returned and a placeholder payload — no branch of any kind gates the
+/// call — so the closing sink-emptiness assertion constrains
+/// `publish_to_targets`'s actual behaviour for a both-destinations-false
+/// decision instead of restating a fact the compiler already
+/// established. Mutation-tested (task0005 AC-3): deleting the
+/// `if targets.primary` guard inside `publish_to_targets` makes this
+/// test fail on THIS closing assertion, not on the destination
+/// assertion above; reverting the guard restores green (see
+/// test-docs/focus-loss-drag-cleanup-test/task0005.tests.yaml AC-3 for
+/// the transcript).
 #[test]
 fn focus_loss_cleanup_with_no_selection_publishes_nothing() {
     let mut dragging = true;
@@ -4697,9 +4704,7 @@ fn focus_loss_cleanup_with_no_selection_publishes_nothing() {
     );
 
     let mut sink = RecordingSelectionSink::default();
-    if let Some(text) = resolved_text {
-        publish_to_targets(&mut sink, targets, text);
-    }
+    publish_to_targets(&mut sink, targets, "unused");
     assert!(
         sink.calls.is_empty(),
         "no selection must publish to neither destination"
