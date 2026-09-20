@@ -91,8 +91,28 @@ findings:
   confidence: 60
   resolution: unresolved
   resolution_reason: 'batch mode: sole source is claude:evaluator, so the candidate gate forces the needs-judgment
-    path, which batch always skips'
+    path, which batch always skips; see orchestrator_correction — the finding''s central factual claim
+    is corrected and its proper severity is medium'
   evaluator_confidence_raw: high
+  orchestrator_correction: 'ORCHESTRATOR CORRECTION (post-evaluation, after reading feature-docs/focus-loss-drag-cleanup-test/phase-state/batch-audit.yaml''s
+    implement.deviation-review and implement.codex-consultation records): the finding''s central claim
+    — that the quoted command ''cannot produce that output here'', i.e. that the recorded counts describe
+    a run that never happened — is WRONG on the facts. The task0001 implementer reported, and the implement
+    phase recorded, that it manually downloaded the missing NotoColorEmoji.ttf into the gitignored src-tauri/assets/fonts/
+    so the approved default-feature test command would compile; that deviation was reviewed and DECLINED
+    for change-set addition only (the paths are gitignored build assets), not disputed as untrue. So the
+    unqualified full-suite command did compile and run in task0001''s worktree, and 3470/3486 are most
+    likely counts it really produced. task0002 is a doc-only task whose worktree had no such manual fetch,
+    which is why its record carries the compile failure; the two records describe two different environment
+    states, not a fabrication. The font is absent from the integration worktree now because it is gitignored
+    and never committed. The REAL defect is therefore narrower than stated and is a disclosure defect,
+    not an integrity defect: task0001''s AC-6 entry quotes a command whose success depended on an untracked,
+    manually fetched asset and does not say so, which is exactly what makes it read as contradicting task0002.
+    On these corrected facts the severity is properly medium, not high. The finding is left at its recorded
+    severity rather than rewritten after the fact; this correction is the disclosure. The rework remains
+    warranted on the two medium findings and on this disclosure defect. task0003''s plan has been annotated
+    with the corrected prescription: record the manual-fetch precondition, do NOT rewrite the record as
+    though the command never ran.'
 - stable_id: 3623270de026dc88
   severity: medium
   category: comprehensive
@@ -205,3 +225,7 @@ orchestrator_notes:
   no cap 50 (every finding''s file is inside changed_files).'
 - 'Accountability floor: no reviewer run reported any critical/high site, so nothing was lifted and the
   evaluation was kept as-is; the evaluator run is recorded status: completed with no degraded flag.'
+- 'Post-evaluation correction: finding 5cd234f39613770d''s central factual claim was found wrong after
+  reading phase-state/batch-audit.yaml. See that finding''s orchestrator_correction field. Also repaired
+  phase-state/batch-audit.yaml, which a prior launch left unparseable (its last two records were written
+  at column 0 under a two-space-indented `records:` list).'

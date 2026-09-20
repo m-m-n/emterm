@@ -126,65 +126,65 @@ records:
       orchestrator by direct inspection rather than deferred to implementation time:
       feature-docs/mouse-report-reset-active-gesture/VERIFICATION.md lines 43 / 73 / 86 and
       SPEC.md line 346 carry the rows task0002 targets.
-- gate_id: implement.deviation-review
-  phase: implement
-  task_id: task0001
-  decision: declined
-  resolution_note: |
-    Two deviations reported by the task0001 implementer were reviewed against the
-    Deviation auto-addition rule (implement-phase.md Step I.2.b step 3) and BOTH
-    were DECLINED — neither is auto-added to tasks.task0001.files.
-    (1) Fetched gitignored build assets (src-tauri/assets/fonts/*, incl. a manually
-        downloaded NotoColorEmoji.ttf) so the approved test command could compile at
-        all. Missing evidence part: no acceptance-criterion / requirement identifier
-        named, and no tracked path is being added (the paths are gitignored build
-        assets, outside the declared change set model entirely).
-    (2) Ran scoped `cargo fmt -- <3 touched files>` instead of the workflow's
-        crate-wide `make fmt`, citing the task plan's own Out-of-Scope clause and the
-        project rule against crate-wide formatting. Missing evidence part: no path is
-        being added at all, and no AC/requirement identifier is named — this is a
-        command-substitution deviation, not a change-set expansion.
-    Neither decline changes the containment check: the observed change set
-    (pointer_routing.rs, mod.rs, tests.rs) is a subset of the declared change set.
-    Follow-up worth a human's attention: `examples/swash_emoji.rs` include_bytes!'s
-    `assets/fonts/NotoColorEmoji.ttf`, which `scripts/fetch-fonts.sh` does not fetch,
-    so `cargo test` with default features cannot compile on a clean checkout. Both
-    implementers hit this independently. Pre-existing, unrelated to this feature.
-- gate_id: implement.codex-consultation
-  phase: implement
-  decision: adopted
-  codex_consulted: true
-  resolution_note: |
-    User-requested Codex consultation on the two unresolved judgment points left by
-    the implement phase. Codex CLI (readonly sandbox) was asked to pick between the
-    enumerated options; both of its picks were adopted.
+  - gate_id: implement.deviation-review
+    phase: implement
+    task_id: task0001
+    decision: declined
+    resolution_note: |
+      Two deviations reported by the task0001 implementer were reviewed against the
+      Deviation auto-addition rule (implement-phase.md Step I.2.b step 3) and BOTH
+      were DECLINED — neither is auto-added to tasks.task0001.files.
+      (1) Fetched gitignored build assets (src-tauri/assets/fonts/*, incl. a manually
+          downloaded NotoColorEmoji.ttf) so the approved test command could compile at
+          all. Missing evidence part: no acceptance-criterion / requirement identifier
+          named, and no tracked path is being added (the paths are gitignored build
+          assets, outside the declared change set model entirely).
+      (2) Ran scoped `cargo fmt -- <3 touched files>` instead of the workflow's
+          crate-wide `make fmt`, citing the task plan's own Out-of-Scope clause and the
+          project rule against crate-wide formatting. Missing evidence part: no path is
+          being added at all, and no AC/requirement identifier is named — this is a
+          command-substitution deviation, not a change-set expansion.
+      Neither decline changes the containment check: the observed change set
+      (pointer_routing.rs, mod.rs, tests.rs) is a subset of the declared change set.
+      Follow-up worth a human's attention: `examples/swash_emoji.rs` include_bytes!'s
+      `assets/fonts/NotoColorEmoji.ttf`, which `scripts/fetch-fonts.sh` does not fetch,
+      so `cargo test` with default features cannot compile on a clean checkout. Both
+      implementers hit this independently. Pre-existing, unrelated to this feature.
+  - gate_id: implement.codex-consultation
+    phase: implement
+    decision: adopted
+    codex_consulted: true
+    resolution_note: |
+      User-requested Codex consultation on the two unresolved judgment points left by
+      the implement phase. Codex CLI (readonly sandbox) was asked to pick between the
+      enumerated options; both of its picks were adopted.
 
-    Point A — format-command substitution.
-      Context: workflow.yaml's approved format command is `make fmt` (crate-wide
-      `cargo fmt --all` + `bunx biome format --write .`). The task0001 implementer ran
-      `cargo fmt --manifest-path src-tauri/Cargo.toml -- <the 3 touched files>` instead,
-      citing the task plan's own Out-of-Scope clause forbidding a crate-wide run and the
-      matching project rule. `git status --short` confirmed no other file changed.
-      Options offered: A1 accept and read `make fmt` as diff-scoped `cargo fmt` in verify
-      too; A2 accept now but run the approved `make fmt` verbatim in verify and report
-      (not commit) unrelated diffs; A3 fail the implement phase and re-run `make fmt`.
-      Codex chose A1. Its reasoning: the task plan explicitly puts crate-wide formatting
-      out of scope, the touched files are already formatted, and the substitution produced
-      no unrelated diff — so treating it as diff-scoped in verify as well is consistent.
-      ADOPTED: A1. Options not chosen: A2, A3.
+      Point A — format-command substitution.
+        Context: workflow.yaml's approved format command is `make fmt` (crate-wide
+        `cargo fmt --all` + `bunx biome format --write .`). The task0001 implementer ran
+        `cargo fmt --manifest-path src-tauri/Cargo.toml -- <the 3 touched files>` instead,
+        citing the task plan's own Out-of-Scope clause forbidding a crate-wide run and the
+        matching project rule. `git status --short` confirmed no other file changed.
+        Options offered: A1 accept and read `make fmt` as diff-scoped `cargo fmt` in verify
+        too; A2 accept now but run the approved `make fmt` verbatim in verify and report
+        (not commit) unrelated diffs; A3 fail the implement phase and re-run `make fmt`.
+        Codex chose A1. Its reasoning: the task plan explicitly puts crate-wide formatting
+        out of scope, the touched files are already formatted, and the substitution produced
+        no unrelated diff — so treating it as diff-scoped in verify as well is consistent.
+        ADOPTED: A1. Options not chosen: A2, A3.
 
-    Point B — pre-existing build-blocking gap.
-      Context: `src-tauri/examples/swash_emoji.rs` does
-      `include_bytes!("../assets/fonts/NotoColorEmoji.ttf")`, but that file is gitignored
-      AND absent from `scripts/fetch-fonts.sh`'s manifest, so default-feature `cargo test`
-      cannot compile on a clean checkout. Both implementers hit this independently; the
-      task0001 implementer worked around it by downloading the font manually (gitignored
-      build asset only, no tracked file touched).
-      Options offered: B1 treat as out of scope and file a separate task; B2 fix inside
-      this feature by adding the font to fetch-fonts.sh; B3 do nothing.
-      Codex chose B1. Its reasoning: it is a pre-existing environment/repo gap unrelated
-      to this change, so it does not belong in this feature; record the repro and the
-      temporary workaround in a separate task instead.
-      ADOPTED: B1. Options not chosen: B2, B3.
+      Point B — pre-existing build-blocking gap.
+        Context: `src-tauri/examples/swash_emoji.rs` does
+        `include_bytes!("../assets/fonts/NotoColorEmoji.ttf")`, but that file is gitignored
+        AND absent from `scripts/fetch-fonts.sh`'s manifest, so default-feature `cargo test`
+        cannot compile on a clean checkout. Both implementers hit this independently; the
+        task0001 implementer worked around it by downloading the font manually (gitignored
+        build asset only, no tracked file touched).
+        Options offered: B1 treat as out of scope and file a separate task; B2 fix inside
+        this feature by adding the font to fetch-fonts.sh; B3 do nothing.
+        Codex chose B1. Its reasoning: it is a pre-existing environment/repo gap unrelated
+        to this change, so it does not belong in this feature; record the repro and the
+        temporary workaround in a separate task instead.
+        ADOPTED: B1. Options not chosen: B2, B3.
 
-    No Opus escalation was run: Codex returned a decision for both points.
+      No Opus escalation was run: Codex returned a decision for both points.
