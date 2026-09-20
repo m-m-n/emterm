@@ -1,0 +1,47 @@
+schema_version: 1
+feature: example-font-absolute-path
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 8c3b4cce8fc15692cdd859d1fdfec09ec796b2c2
+last_input_digest: sha256:e3f370a3301fd49d4a31941e878258d5bfe40be5d966269ac70f98c3df64d015
+active_request_id: create-spec-run-0001
+packets: {}
+answers:
+  create-spec.feature-identity:
+    packet_id: null
+    answered_at: "2026-09-21T00:09:05+09:00"
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids: [derive_from_task_description]
+    freeform: null
+    normalized_answer: example-font-absolute-path
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  e2e:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+  design_system_candidates:
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+    truncated: false
+  reference_scan_targets:
+    resolved_at_generation: 1
+    paths:
+      - src-tauri/examples/bold_raster_probe.rs
+      - src-tauri/examples/m_placement_probe.rs
+      - src-tauri/examples/font_select_probe.rs
+      - src-tauri/src/render/font/resolver.rs
+      - scripts/fetch-fonts.sh
+    truncated: false
+last_error: null
