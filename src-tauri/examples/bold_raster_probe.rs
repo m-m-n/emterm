@@ -2,9 +2,10 @@
 //! production SwashRasterizer and dump per-column coverage so the result
 //! can be compared against WebView screenshots pixel by pixel.
 //!
-//! Run: CARGO_TARGET_DIR=native-poc/target cargo run --manifest-path \
-//!      native-poc/Cargo.toml --example bold_raster_probe
+//! Run: CARGO_TARGET_DIR=src-tauri/target cargo run --manifest-path \
+//!      src-tauri/Cargo.toml --example bold_raster_probe
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 fn main() {
@@ -15,18 +16,14 @@ fn main() {
     use swash::scale::{Render, ScaleContext, Source, StrikeWith};
     use swash::zeno::{Format, Vector};
 
+    let fonts_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/fonts");
     let size_px = 17.333f32;
-    for (label, path) in [
-        (
-            "Regular",
-            "/home/sakura/workspace/Inconsolata/fonts/otf/Inconsolata-Regular.otf",
-        ),
-        (
-            "Bold",
-            "/home/sakura/workspace/Inconsolata/fonts/otf/Inconsolata-Bold.otf",
-        ),
+    for (label, file_name) in [
+        ("Regular", "Inconsolata-Regular.otf"),
+        ("Bold", "Inconsolata-Bold.otf"),
     ] {
-        let bytes = std::fs::read(path).expect("font file");
+        let path = fonts_dir.join(file_name);
+        let bytes = std::fs::read(&path).expect("font file");
         let bytes: Arc<[u8]> = Arc::from(bytes.as_slice());
         let face = FontRef::from_index(&bytes, 0).expect("parse font");
         let weight = face.attributes().weight().0;
