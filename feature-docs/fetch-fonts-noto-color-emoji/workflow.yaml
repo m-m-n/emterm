@@ -125,7 +125,8 @@ workflow:
   - IMPLEMENTATION.md
   - VERIFICATION.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: fce8b7fc1f2ccc32855167f9ce18c2ed0dedaca3
 - id: implement
   status: pending
   base_commit: 74c5206427fd0cafa716f74bc4cde14cc9972b27
@@ -137,7 +138,39 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Retire the swash_emoji example and add the asset-manifest consistency
+      test
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/examples/swash_emoji.rs
+    - src-tauri/Cargo.toml
+    - src-tauri/Cargo.lock
+    - src-tauri/tests/asset_manifest.rs
+    skills:
+    - infra-impl
+    domains:
+    - input-handling
+    - external-io
+    - config-infra
+    complexity: medium
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - FR9
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR5
+    status: pending
+    notes: null
+    branch: null
 review:
   status: pending
   rounds_completed: 0
@@ -150,7 +183,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS8
   FR2:
@@ -158,7 +192,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS8
   FR3:
@@ -166,7 +201,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS8
   FR4:
@@ -174,7 +210,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS1
     - TS2
@@ -185,7 +222,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS1
   FR6:
@@ -193,7 +231,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS1
     - TS2
@@ -205,7 +244,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests: []
   FR8:
     title: Record the out-of-scope probe defect
@@ -219,7 +259,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS8
   NFR1:
@@ -227,7 +268,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS1
   NFR2:
@@ -235,7 +277,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS1
   NFR3:
@@ -243,7 +286,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS4
   NFR4:
@@ -258,7 +302,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS6
 batch:
