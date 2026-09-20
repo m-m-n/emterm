@@ -83,7 +83,8 @@ workflow:
   base_commit: ac239c0d66d81c53a3b9ea0875b922e786f3916c
   completed_at_commit: a7b72d93237a7aa573442263e7c56b443f55c2a4
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 74891a71a3c4c0c8385a16451945c4252e0c11b9
 - id: verify
   status: pending
   result: null
@@ -107,13 +108,16 @@ tasks:
     notes: null
     branch: em-workflow/focus-loss-drag-termination/task0001
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, spec]
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    security: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 requirements:
