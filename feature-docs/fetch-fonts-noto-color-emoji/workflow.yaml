@@ -1,0 +1,271 @@
+schema_version: 1
+feature: fetch-fonts-noto-color-emoji
+created: '2026-09-20'
+base_branch: main
+goal: |
+  # fetch-fonts.sh が NotoColorEmoji.ttf を取得しないため素の cargo test がビルド失敗する
+
+  種別: バグ
+  Notion: https://www.notion.so/3db3509ec8ee81859c85ca94adb01dbc
+
+  ## 現象 (必須)
+  `cargo test` がコンパイル段階で失敗し、テストが 1 件も実行できない。`cargo test` は
+  `examples/` もビルドするため、`scripts/fetch-fonts.sh` を実行した直後のクリーンな
+  チェックアウトでも次のエラーで止まる。
+
+  ```
+  error: couldn't read `src-tauri/examples/../assets/fonts/NotoColorEmoji.ttf`: No such file or directory (os error 2)
+    --> src-tauri/examples/swash_emoji.rs:22:27
+     |
+  22 | const EMOJI_FONT: &[u8] = include_bytes!("../assets/fonts/NotoColorEmoji.ttf");
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  error: could not compile `emterm` (example "swash_emoji") due to 1 previous error
+  ```
+
+  `src-tauri/examples/swash_emoji.rs` が `assets/fonts/NotoColorEmoji.ttf` を
+  `include_bytes!` で埋め込んでいるが、`scripts/fetch-fonts.sh` はこのファイルを一切
+  ダウンロードしない。同スクリプトが取得するのは `Noto-COLRv1.ttf`・
+  `NotoEmoji-Regular.ttf`・`NotoSansCJKjp-{Regular,Bold}.otf`・
+  `Inconsolata-{Regular,Bold}.otf`・`NotoSansSymbols2-Regular.ttf` で、
+  `NotoColorEmoji.ttf` は含まれていない。`src-tauri/assets/fonts/.gitignore` が
+  `*.ttf` を無視しているため、このファイルは git 管理下にもない。
+  `.claude/rules/core-commands.md` が案内している
+  `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml`
+  がそのまま踏む経路。`--lib` や `--test <name>` を付けた実行は examples をビルドしない
+  ため影響を受けず、通る。
+
+  ## 再現手順 (必須)
+  1. クリーンなチェックアウト（または `src-tauri/assets/fonts/NotoColorEmoji.ttf` が存在しない状態）を用意する
+  2. `bash scripts/fetch-fonts.sh` を実行する（成功する）
+  3. プロジェクトルートで `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml` を実行する
+  4. 上記の `couldn't read ... NotoColorEmoji.ttf` でビルドが失敗し、テストが 1 件も走らない
+
+  ## 期待する挙動 (必須)
+  `bash scripts/fetch-fonts.sh` の後は、`.claude/rules/core-commands.md` が案内する
+  `cargo test` がそのまま通ること。examples が要求するフォントアセットは
+  `fetch-fonts.sh` が揃えるか、examples がスクリプトの取得するフォントだけで完結して
+  いるか、どちらかであること。
+
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+
+  検出手段の案: CI（`.github/workflows/`）に `fetch-fonts.sh` 直後の素の
+  `cargo test`（`--lib` を付けない形）を 1 本通す。examples のビルド前提が崩れた時点で
+  CI が落ちる。
+
+  ## 該当箇所 (任意)
+  - `src-tauri/examples/swash_emoji.rs:22` — `include_bytes!("../assets/fonts/NotoColorEmoji.ttf")`
+  - `scripts/fetch-fonts.sh:138` 付近 — 取得対象フォントの一覧。`NotoColorEmoji.ttf` が無い
+  - `src-tauri/assets/fonts/.gitignore:3` — `*.ttf`
+
+  修正方針の候補（どれを採るかは未決定）:
+  1. `fetch-fonts.sh` の取得対象に `NotoColorEmoji.ttf` を追加する
+  2. `swash_emoji.rs` の埋め込み先を、スクリプトが実際に取得する `Noto-COLRv1.ttf` あるいは
+     `NotoEmoji-Regular.ttf` に変更する。ただしこの example は CBDT/CBLC のビットマップ絵文字を
+     swash で描く検証が目的だった可能性があるため、差し替えると検証内容が変わらないか確認が要る
+  3. アセットが無いときは `include_bytes!` ではなく実行時読み込みにして、欠落時は example 側でスキップする
+
+  選定にあたっては、`project_native_poc_windows_emoji`（Windows の Noto Color Emoji が
+  COLRv1+SVG で swash が描けず、bundled CBDT を優先するようにした経緯）との関係を
+  確認すること。この example が CBDT 側の検証用なら候補 2 は不適切になる。
+
+  ## 実害・発生条件 (任意)
+  - ドキュメントに書かれたテストコマンドがそのままでは通らないため、新規の開発者や
+    自動実行（CI・無人のワークフロー）が入口でつまずく。
+  - 実質的な回避策（`--lib` を付ける）が知られているため、テストの実行そのものは止まらない。
+    本体のテストは `--lib` 配下にあり、examples は検証対象ではない。
+  - 発生条件は「`NotoColorEmoji.ttf` がローカルに置かれていないこと」。過去に手で配置した
+    開発者の環境では再現しない。
+
+  ## 由来
+  em-workflow の `notification-worker-thread` フィーチャーの verify フェーズ（無人バッチ実行）で
+  検出した。同フィーチャーとは無関係な既存の破綻で、同じ `include_bytes!` 行は `main` にも存在する。
+  verify 側は Codex 相談のうえ、承認済みの `--lib` / `--test cli_subcommands` を代替コマンドとして
+  採用し、この破綻を別件として切り出すことにした。判断の記録は
+  `feature-docs/notification-worker-thread/phase-state/batch-audit.yaml` の
+  `verify.test-command-substitution`。
+parent_branch: em-workflow/fetch-fonts-noto-color-emoji/integration
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/md3.rs
+  components:
+    main:
+      language: Rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo build --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+      format_command: make fmt-check
+      e2e_test_command: ''
+    webview:
+      language: TypeScript
+      build_command: bun run build:viewer && bun run build:settings
+      test_command: bun test
+      format_command: bunx biome check .
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 74c5206427fd0cafa716f74bc4cde14cc9972b27
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: Resolved via gate create-spec.design-step (batch-decision-table, option decide_autonomously) accepting requirements-analyst's recommendation. The change surface is one deleted example source, two Cargo manifest edits and one new integration test -- no user-visible UI, no rendering behavior change, no design-token surface, and none of the three project_native design-system files are touched.
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: 74c5206427fd0cafa716f74bc4cde14cc9972b27
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Delete the retired swash_emoji example
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS8
+  FR2:
+    title: Remove the swash_emoji [[example]] block
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS8
+  FR3:
+    title: Remove the png dev-dependency
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS8
+  FR4:
+    title: Asset-manifest consistency test
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS2
+    - TS3
+    - TS5
+  FR5:
+    title: 'Test placement: src-tauri/tests/'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  FR6:
+    title: Scan direction and font-path predicate
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS2
+    - TS3
+    - TS5
+    - TS7
+  FR7:
+    title: No new CI job
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: Record the out-of-scope probe defect
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR9:
+    title: No production behavior change
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS8
+  NFR1:
+    title: Runs in the existing test surface
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  NFR2:
+    title: Feature-agnostic
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  NFR3:
+    title: Passes in a clean checkout without font binaries
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS4
+  NFR4:
+    title: Accepted limitation, stated explicitly in the spec
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: Deterministic
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS6
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
