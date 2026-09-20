@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mouse-report-held-callsite-test
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 1e89ffbfa44cd9a5f976e03230d3e3d8a88c0c16
+last_input_digest: sha256:c6ee3c2d25923d96651928d147dfc64e7b509c6422b1557ec3bfe2c351d8bf49
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:c6ee3c2d25923d96651928d147dfc64e7b509c6422b1557ec3bfe2c351d8bf49
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
