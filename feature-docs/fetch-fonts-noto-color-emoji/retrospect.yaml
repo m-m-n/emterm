@@ -1,0 +1,57 @@
+feature: fetch-fonts-noto-color-emoji
+collected_at: "2026-09-20T23:52:00+09:00"
+session_ids:
+  - 01a0bf33-bc59-7269-8109-52f427d34abb.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - Cargo.lock
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: license
+      reason: >-
+        The diff touches dependency manifests/lockfiles (src-tauri/Cargo.toml
+        removes the png dev-dependency, Cargo.lock drops its entry), which is
+        R1 Layer 2's mandatory license trigger.
+    - perspective: vulnerability
+      reason: >-
+        Same manifest/lockfile trigger as license; served deterministically by
+        axis 2 (scan-dependencies.py), not by a Task-dispatched reviewer.
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - note: >-
+      Two comprehensive findings on src-tauri/tests/asset_manifest.rs were
+      demoted to `low` by the evaluator and therefore dropped by Phase R3b's
+      severity gate, so no auto-fix loop ran even though the evaluator's
+      `recommended_action` was `auto_fix` and its rationale argued for fixing
+      now. The gaps weaken the very regression guard this feature adds:
+      (1) line 179, the build-output exclusion applies the `target` prefix rule
+      to every path component including ordinary files; (2) line 87, the
+      `include_bytes!` scanner matches a fixed substring and then searches for
+      the next quote without a macro boundary, with a live instance of the same
+      shape at src-tauri/build.rs:160. Worth a look at whether the severity gate
+      should admit an evaluator recommendation of `auto_fix` on low findings
+      that sit inside the feature's own guard.
+  - note: >-
+      The vulnerability axis skipped with `cargo_tool_not_found`, so a
+      dependency-manifest diff went through with no dependency vulnerability
+      scan at all. Recurring on a Rust project; the tool prerequisite is not
+      provisioned in this environment.
+  - note: >-
+      task0001's declared change set named `src-tauri/Cargo.lock`, but the crate
+      is a workspace member so cargo maintains only the workspace-root
+      `Cargo.lock`. The deviation gate declined the addition for missing
+      evidence parts 2 and 3, yet the underlying cause was a stale path in the
+      plan rather than scope creep. Planning could check lockfile location
+      against workspace layout when it declares a lockfile path.
+  - note: >-
+      Verification manual item M6 was written in a form whose stricter reading
+      is unsatisfiable by construction (the production crate's seven
+      `include_bytes!` calls require the font binaries present at compile time),
+      needing a Codex consultation to settle. VERIFICATION.md wording for
+      "clean tree" checks should state whether a precondition describes the
+      starting state or an invariant held throughout.
