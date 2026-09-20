@@ -1,0 +1,72 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [no_absolute_home_path_literals_in_examples]
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, no_absolute_home_path_literals_in_examples failed with
+      "bold_raster_probe.rs:22: ... /home/sakura/workspace/Inconsolata/...
+      Regular.otf" and "bold_raster_probe.rs:26: ... Bold.otf" (observed via
+      cargo test --test examples_source_hygiene). The "crate-manifest-dir
+      resolution via join()" part of AC-1 is not independently testable by
+      the scan and was confirmed by code review of the diff.
+  AC-2:
+    tests: [no_absolute_home_path_literals_in_examples]
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, the same test failed with "m_placement_probe.rs:8:
+      std::fs::read(\"/home/sakura/workspace/Inconsolata/fonts/otf/
+      Inconsolata-Regular.otf\")". The "no file-header comment newly added"
+      half of AC-2 is not testable by the scan (per task plan Test Notes)
+      and was confirmed by diff review: m_placement_probe.rs's diff adds
+      only an import and path-resolution lines, no doc comment.
+  AC-3:
+    tests: [no_native_poc_references_in_examples]
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, no_native_poc_references_in_examples failed with
+      "bold_raster_probe.rs:5/6" and "font_select_probe.rs:6/7" both
+      containing "native-poc/". The exact new comment wording
+      (CARGO_TARGET_DIR=src-tauri/target / --manifest-path
+      src-tauri/Cargo.toml) is not asserted by the scan (it only asserts
+      absence of native-poc/) and was confirmed by diff review.
+  AC-4:
+    tests: [no_absolute_home_path_literals_in_examples, no_native_poc_references_in_examples]
+    red_confirmed: true
+    red_reason: >-
+      Both tests were run against the unmodified examples/ and failed for
+      the right reason (violations listed with file:line), then passed
+      after the probes were fixed.
+  AC-5:
+    tests: [empty_scan_scope_panics, no_absolute_home_path_literals_in_examples, no_native_poc_references_in_examples]
+    red_confirmed: true
+    red_reason: >-
+      empty_scan_scope_panics: require_non_empty_scan was temporarily
+      neutered (assert removed) and the should_panic test failed with "test
+      did not panic as expected"; reverted and confirmed green again. The
+      two repository-facing tests were also re-run with
+      --no-default-features (no gui feature, no font assets required) and
+      passed, confirming NFR1 non-dependency on fonts/execution/network.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not independently testable as a "red" case (it asserts absence of
+      change to files outside scope). Verified instead by: git diff shows
+      no changes to src-tauri/src/render/font/resolver.rs,
+      scripts/fetch-fonts.sh, or src-tauri/Cargo.toml; no new dependency
+      added; full test suite (cargo test) is green with 0 regressions
+      against the 4a baseline; `cargo build --manifest-path
+      src-tauri/Cargo.toml --examples` compiles cleanly with the default
+      (gui) feature.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Per task plan Test Notes, this is a manual VERIFICATION.md item
+      (TS5), not machine-tested. Sanity-checked manually in this task by
+      running bold_raster_probe and m_placement_probe after the fix (exit
+      0, coverage dump / placement dump printed in the same format as
+      before); no output-format code was touched.

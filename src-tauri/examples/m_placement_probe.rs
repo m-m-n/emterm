@@ -1,12 +1,14 @@
 fn main() {
+    use std::path::PathBuf;
     use swash::FontRef;
     use swash::scale::{Render, ScaleContext, Source};
     use swash::zeno::{Format, Vector};
 
+    let font_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/fonts")
+        .join("Inconsolata-Regular.otf");
     let size_px = 17.333f32;
-    let bytes =
-        std::fs::read("/home/sakura/workspace/Inconsolata/fonts/otf/Inconsolata-Regular.otf")
-            .unwrap();
+    let bytes = std::fs::read(&font_path).unwrap();
     let face = FontRef::from_index(&bytes, 0).unwrap();
     for ch in ['m', 'M', 'w', 'd', '/'] {
         let glyph_id = face.charmap().map(ch);
