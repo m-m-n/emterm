@@ -99,7 +99,10 @@ workflow:
     pre-existing gap outside this feature. TS-8 stays on the manual
     checklist (real hardware; not executable unattended).
 - id: retrospect
-  status: pending
+  artifacts:
+  - retrospect.yaml
+  status: completed
+  completed_at_commit: f3c772f1a2c2b6558751adcf9c453893ca607968
 tasks:
   task0001:
     title: Window-free seam and window-free tests for the focus-loss local-drag cleanup path

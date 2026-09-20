@@ -1,0 +1,65 @@
+feature: focus-loss-drag-cleanup-test
+collected_at: "2026-09-20T19:05:00+09:00"
+session_ids:
+  - 01a0be42-0a17-7335-a350-351340856d2d
+signals:
+  review_critical_high:
+    - stable_id: 5cd234f39613770d
+      category: comprehensive
+      file: test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml
+      title: >-
+        AC-5/AC-6 evidence record cites a full-suite pass count from a command
+        that cannot compile in this tree
+      resolution: unresolved
+      round: 1
+      note: >-
+        Routed to rework as task0003 (provenance.source: review, round 1).
+        Auto-fix skipped: sole source was claude:evaluator, so the candidate
+        gate forced the needs-judgment path that batch always skips.
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files: []
+      note: >-
+        Two implementer deviations, both DECLINED under the Step I.2.b
+        auto-addition rule, and neither expanded the tracked change set:
+        (1) fetching gitignored build assets (src-tauri/assets/fonts/*,
+        incl. a hand-downloaded NotoColorEmoji.ttf) so the approved test
+        command could compile; (2) running scoped
+        `cargo fmt -- <3 touched files>` instead of crate-wide `make fmt`,
+        citing the task plan's Out-of-Scope clause and the project rule
+        against crate-wide formatting. Observed change set stayed a subset
+        of the declared one.
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - >-
+    verify round 1 failed on TS-10 and consumed one auto-rework round
+    (batch.verify_rework.rounds: 1, failed_id_counts: {TS-10: 1}); round 2
+    passed after task0005 gave the no-selection test's emptiness assertion
+    force. The round-1 failed_items are not retained in workflow.yaml, so the
+    only surviving trace of that lineage is the batch counter plus the verify
+    notes.
+  - >-
+    review round 1 left residual_critical_high == 1 and consumed the single
+    batch review-rework round (batch.review_rework_count: 1). All three round-1
+    findings became rework tasks (task0003/task0004) rather than auto-fixes,
+    because medium severity sits outside the auto-fix candidate gate and the
+    one high finding had a single evaluator source.
+  - >-
+    review round 2 left one unresolved medium, 2a1ad49b9263cb95 (no test drives
+    publish_to_targets through the real WindowHost sink), carried as a
+    follow-up rather than reworked — residual_critical_high was 0 so the
+    completion gate was satisfied.
+  - >-
+    Pre-existing, unrelated to this feature and worth a human's attention:
+    `examples/swash_emoji.rs` include_bytes!'s `assets/fonts/NotoColorEmoji.ttf`,
+    which `scripts/fetch-fonts.sh` does not fetch, so an unqualified
+    `cargo test` with default features cannot compile on a clean checkout.
+    Two implementers hit this independently, and the verify phase had to use
+    `--lib` to get a green suite.
+  - >-
+    The sca-triage ntd branch degraded to `report` in both review rounds
+    (listing_exit_nonzero), so no findings were filed to the task service.
