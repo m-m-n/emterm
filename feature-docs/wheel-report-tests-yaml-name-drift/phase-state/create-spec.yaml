@@ -1,16 +1,124 @@
 schema_version: 1
 feature: wheel-report-tests-yaml-name-drift
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
-base_revision: fe52d7134f5b0cf784430847c8169d909481a658
+base_revision: 98de9e5ce42ed70ebbe6099c99ab350166a829cc
 last_input_digest: sha256:cd5115bd596facb24b8f5a78fec5552528c95e476d41f7b119b67abb85818a91
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-20T20:49:00+09:00"
+    questions:
+      - question_id: requirement.red-reason-update-style
+        status: answered
+      - question_id: requirement.stale-statement-scope
+        status: answered
+      - question_id: requirement.ac1-verification-method
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.red-reason-update-style:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T20:49:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [rewrite_minimal]
+    freeform: null
+    normalized_answer: >-
+      Repair only the parts of the AC-6 / AC-7 red_reason bodies that name
+      symbols absent at HEAD (the MouseReportRecords.last_tracking_active
+      references and the sentence at lines 73-75 that depends on it). Leave
+      the rest of the historical narrative, the still-accurate identifiers
+      (report_accum, RecordUpdates.tracking_active) and every red_confirmed
+      flag untouched.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action
+      codex_consultation (references/batch-policies.yaml); codex_consulted:
+      true; harness entry: codex (first chain entry, probe available); turns:
+      1; opus_escalation: not run. Codex chose rewrite_minimal, agreeing with
+      the worker's tentative position. Rationale adopted: red_reason is a
+      record of a failure state observed before the implementation existed, so
+      rewriting it to describe current green code changes what the evidence
+      means. The orchestrator made the mapping judgment itself and additionally
+      verified the same principle is already established in this repository by
+      the sibling feature feature-docs/ac7-red-reason-scope/SPEC.md, which
+      frames this class of correction as "a text fix rather than a
+      re-judgement" and leaves the red verdict untouched. Recorded as an
+      assumption per the policy's record_as_assumption.
+  requirement.stale-statement-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T20:49:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [enumerated_only]
+    freeform: null
+    normalized_answer: >-
+      Limit the change to the line 62 test name and the red_reason bodies at
+      lines 57, 67 and 74, exactly as the task description enumerates them.
+      Leave the AC-9 #[allow(dead_code)] statement at lines 95-97 as it is.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action
+      codex_consultation (references/batch-policies.yaml); codex_consulted:
+      true; harness entry: codex (first chain entry, probe available); turns:
+      1; opus_escalation: not run. Codex chose enumerated_only, DISAGREEING
+      with the worker's tentative position of all_stale_statements, and the
+      orchestrator adopted Codex's option as the comparatively better one.
+      Rationale adopted: the filed acceptance criteria enumerate exactly which
+      bodies to repair and the AC-9 statement is not among them; more
+      importantly, a later task changing the implementation does not make an
+      earlier historical record false. The AC-9 claim described what task0001
+      itself did at the time it was written, and task0002 removing the
+      allowance afterwards is ordinary history, not drift. This is the same
+      principle that decides requirement.red-reason-update-style, so the two
+      answers are consistent: only the broken executable evidence (the
+      unresolvable test name) and identifiers that were never accurate are
+      repaired. The orchestrator made the mapping judgment itself. Recorded as
+      an assumption per the policy's record_as_assumption.
+  requirement.ac1-verification-method:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T20:49:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [manual_evidence]
+    freeform: null
+    normalized_answer: >-
+      Prove AC-1 by recording, for each referenced test name, the file and
+      line of its definition, plus a cargo test run filtered by that name
+      reporting a non-zero test count. Add no new test and no automated drift
+      check.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action
+      codex_consultation (references/batch-policies.yaml); codex_consulted:
+      true; harness entry: codex (first chain entry, probe available); turns:
+      1; opus_escalation: not run. Codex chose manual_evidence, agreeing with
+      the worker's tentative position. Rationale adopted: adding an automated
+      drift check would require reinterpreting the task's explicit
+      "adding or removing tests is out of scope" boundary more narrowly than
+      it is written, and it exceeds the scope of a documentation repair. The
+      orchestrator made the mapping judgment itself. Recorded as an assumption
+      per the policy's record_as_assumption.
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T20:49:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: >-
+      Accept requirements-analyst's recommendation to skip the design step
+      without asking the user.
+    resolution_note: >-
+      gate: create-spec.design-step; policy action select / option_id
+      decide_autonomously (references/batch-policies.yaml). The option is
+      present among the question's own options[].option_id, so no protocol
+      error applies. codex_consulted: false — the gate has an explicit policy
+      entry, so the unlisted-gate fallback was never reached.
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:cd5115bd596facb24b8f5a78fec5552528c95e476d41f7b119b67abb85818a91
     output_digest: null
 artifacts: []
