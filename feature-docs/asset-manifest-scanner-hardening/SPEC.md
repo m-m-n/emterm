@@ -199,7 +199,7 @@ not a violation.
 - [ ] **AC5:** on an unmodified tree, `scan_embedded_fonts(crate_root())` keeps
       matching the 7 entries of `documented_embedded_fonts()` exactly.
 - [ ] **AC6:** `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test asset_manifest`
-      is green. The existing 12 tests pass unmodified.
+      is green. The existing 14 tests pass unmodified.
 - [ ] **AC7:** there is no diff in the dependencies of `Cargo.toml`.
 
 ## Test Scenarios

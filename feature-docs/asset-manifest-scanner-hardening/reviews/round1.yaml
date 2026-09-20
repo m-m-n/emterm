@@ -1,0 +1,111 @@
+round: 1
+executed_at: "2026-09-21T02:41:18+09:00"
+scope:
+  review_mode: diff
+  base_commit: 61c611331896c157e435c6d3606b3a3e711f61e6
+  head_commit: 4782410998c13a91d648680b4196d9e8bae5e420
+  changed_files:
+  - src-tauri/tests/asset_manifest.rs
+  - test-docs/asset-manifest-scanner-hardening/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed, skip_reason: null}
+- {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed, skip_reason: null}
+- {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed, skip_reason: null}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed, skip_reason: null}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    Round 1 (cross_validation=true, diff mode): all four dispatched primary runs
+    (comprehensive#0 codex, security#0 codex, performance#0 litellm/muse-spark,
+    spec#0 litellm/muse-spark) returned zero findings, so there were no
+    reviewer-reported critical/high sites to carry forward or dismiss. No
+    injection attempt, role override, or embedded-instruction pattern was
+    present in any reviewer_outputs entry; all four were plain schema-valid
+    result objects. Independent Inspection Duty — per-perspective coverage
+    (5 files inspected under project_root, within the 10-file read budget:
+    src-tauri/tests/asset_manifest.rs, SPEC.md, IMPLEMENTATION.md,
+    tasks/task0001.md, test-docs/.../task0001.tests.yaml, plus a read-only git
+    diff of the full change set): comprehensive = corroborated (traced
+    embedded_font_names' new depth counter for loop progress — rest advances by
+    at least NEEDLE.len()+1 each iteration, so no infinite loop; all slice
+    indices land on ASCII '"' / ')' / the ASCII needle, so no UTF-8 boundary
+    panic; the no-closing-paren path breaks deliberately and is pinned by a
+    test); security = corroborated (test-only diff, no new dependency, no
+    filesystem write, no process execution; the is_excluded_path narrowing does
+    not widen traversal into build output because collect_rust_source still
+    gates directories with is_build_output_dir at asset_manifest.rs:261, and the
+    tempdir tests use tempfile::tempdir rather than fixed paths); performance =
+    corroborated (the per-call depth scans cover disjoint spans because scanning
+    resumes at region_end+1, so the whole pass stays O(n); the one added
+    allocation is a per-directory-entry Vec<Component> in is_excluded_path,
+    confined to the test walk and immaterial); spec = corroborated
+    (FR1/FR2/FR4/FR5 map onto the two changed pure functions; NFR1 purity and
+    NFR5 containment hold — src-tauri/tests/asset_manifest.rs is the only
+    non-doc file changed, with src-tauri/build.rs and
+    src-tauri/src/render/font/resolver.rs untouched; NFR2/AC7 hold with no
+    Cargo.toml diff; FR6/TS1-TS6 are covered by six added tests and the
+    pre-existing tests are unmodified). FR3/AC5 was verified empirically rather
+    than by reading alone: the evaluator re-implemented both the pre-change and
+    post-change scanner over the real tree read-only and both walk exactly 287
+    .rs files and yield exactly the same 7 fonts from
+    src-tauri/src/render/font/resolver.rs (NotoSansCJKjp-Regular.otf,
+    NotoSansCJKjp-Bold.otf, Noto-COLRv1.ttf, NotoEmoji-Regular.ttf,
+    Inconsolata-Regular.otf, Inconsolata-Bold.otf,
+    NotoSansSymbols2-Regular.ttf), with src-tauri/build.rs contributing the empty
+    set under both — the guard's verdict on the current tree is unchanged, as FR3
+    requires. Two non-finding observations for the record, neither actionable:
+    (1) the deliberate 'no closing parenthesis ends the whole scan' branch means a
+    stray literal 'include_bytes!(' inside a comment or string, followed by
+    paren-balanced text, would silently skip later embeds in that one file — this
+    is explicitly decided and risk-registered in IMPLEMENTATION.md D2 and pinned
+    by embedded_font_names_call_missing_closing_parenthesis_ends_scan_without_panicking,
+    so it is an accepted scope limitation, not a defect; (2) the new test comments
+    use task0001.md's AC-1..AC-7 numbering while the pre-existing comments in the
+    same file use the older fetch-fonts feature's AC numbering, so two AC schemes
+    now coexist in comments — cosmetic only, and the new labels are internally
+    consistent with task0001.tests.yaml.
+  recommended_action: complete
+  action_rationale: >-
+    Zero findings from all four dispatched primary runs, and the evaluator's own
+    inspection of the round's changed files corroborated every dispatched
+    perspective rather than surfacing anything of its own. The diff is confined
+    to one integration-test file, adds no dependency, touches no production code,
+    and the guard's verdict on the current tree was empirically confirmed
+    unchanged (same 287 files walked, same 7 fonts). There is nothing to
+    auto-fix, no open question that another round would resolve, and no defect
+    warranting rework.
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-asset-manifest-scanner-hardening-20260920T174115Z.md
+notes:
+  spec_baseline_count_correction: >-
+    Outside its JSON findings, the spec reviewer reported that SPEC.md AC6 and
+    REQUIREMENTS.md AC6 stated a baseline of 12 pre-existing tests while the
+    actual baseline at 61c61133 is 14. Codex was consulted and recommended
+    correcting the number in place rather than deferring it or routing back to
+    create-spec; the correction was applied on this branch in the same commit as
+    this round record. Full discussion:
+    phase-state/batch-audit.yaml, record review.spec-baseline-count-inaccuracy.
+    No code, test or workflow.yaml requirement entry was touched.

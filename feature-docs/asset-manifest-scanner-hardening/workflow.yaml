@@ -87,7 +87,8 @@ workflow:
   base_commit: 61c61133
   completed_at_commit: 3212ea88c867e6030af13998b31136f882635a1f
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 30c74748984c99acb0982bbd67c476f7b1d70379
 - id: verify
   status: pending
   result: null
@@ -123,8 +124,8 @@ tasks:
     notes: null
     branch: em-workflow/asset-manifest-scanner-hardening/task0001
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor:
     - comprehensive
@@ -133,7 +134,11 @@ review:
     - spec
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: {source: codex, status: completed, findings: 0}
+    security: {source: codex, status: completed, findings: 0}
+    performance: {source: 'litellm:muse-spark', status: completed, findings: 0}
+    spec: {source: 'litellm:muse-spark', status: completed, findings: 0}
   residual_critical_high: 0
   needs_rework: false
 requirements:
