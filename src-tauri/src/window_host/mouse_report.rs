@@ -3140,6 +3140,15 @@ mod tests {
 
     // ── task0001 AC-4: a no-owner left release is gated on drag-in-flight ──
 
+    /// task0001 (focus-loss-drag-termination, D4): this is the delegated
+    /// terminator for a drag preserved across a focus steal. When the
+    /// focus-loss arm's new termination predicate answers "do not
+    /// terminate" (the left button was held), the gesture-ownership
+    /// record is still cleared, so the eventual left release finds no
+    /// recorded owner and lands exactly here — completing the drag via
+    /// the `drag_in_flight == true` branch this test already covers. No
+    /// second terminator is added for that path; this existing test is
+    /// its proof.
     #[test]
     fn no_owner_left_release_completes_selection_only_when_drag_in_flight() {
         for (drag_in_flight, expected) in [
