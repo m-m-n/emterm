@@ -1,0 +1,235 @@
+task_id: task0001
+# This task adds test-module content only (no production code changes, per
+# D1/FR4) — the tests ARE the deliverable. Since the four guarded mechanisms
+# are already repaired at the base revision, the usual red-green ordering is
+# replaced by the mutation-probe procedure the task plan's Test Notes
+# prescribe: for each AC, a named production mutation was applied LOCALLY
+# (never committed), the new test was observed to fail, and the mutation was
+# then reverted and the test observed to pass again. Every probe below cites
+# the exact code change made and the observed failure output.
+baseline_failures: []
+final_failures: []
+mutation_probes:
+  - id: R
+    mechanism: reset-clears-held-gesture-slot
+    target: window_host::mouse_report::apply_outcome_with_held
+    change: >-
+      Replaced the reset branch's
+      `if reset_tab_changed { clear_all() } else { clear_unheld(held) }`
+      with an unconditional `clear_all()`, so a tracking-inactive reset
+      clears every gesture slot regardless of `held`.
+    tests_broken:
+      - window_host::tests::wheel_notch_mid_left_drag_preserves_held_gesture_slot_and_completes_selection
+      - window_host::tests::second_button_press_mid_left_drag_preserves_held_gesture_slot_and_completes_selection
+    observed_failure: >-
+      Both tests failed on the gesture-slot assertion: `assertion `left ==
+      right` failed: ... left: None right: Some(Local)`. Reverted; both
+      tests pass again and `git diff --stat` on mouse_report.rs shows no
+      difference afterward.
+  - id: W
+    mechanism: held-unaware-apply-entry-point
+    target: window_host::mouse_report::apply_wheel_report_step
+    change: >-
+      Changed the forwarded held-button value in its call to
+      `apply_outcome_with_held` from the caller's `held` argument to
+      `HeldButtons::default()`, so the wheel path stops passing its live
+      held-button value to the held-aware apply entry point.
+    tests_broken:
+      - window_host::tests::wheel_notch_mid_left_drag_preserves_held_gesture_slot_and_completes_selection
+    tests_unaffected:
+      - window_host::tests::second_button_press_mid_left_drag_preserves_held_gesture_slot_and_completes_selection
+    observed_failure: >-
+      wheel_notch_mid_left_drag_preserves_held_gesture_slot_and_completes_selection
+      failed on the same gesture-slot assertion (left: None, right:
+      Some(Local)); second_button_press_mid_left_drag_preserves_held_gesture_slot_and_completes_selection
+      passed unaffected, as expected since it does not go through
+      apply_wheel_report_step. Reverted; both green again, diff clean.
+  - id: B
+    mechanism: held-unaware-apply-entry-point
+    target: window_host::mouse_report::apply_outcome_with_held
+    change: >-
+      Changed the reset branch's `clear_unheld(held)` call to
+      `clear_unheld(HeldButtons::default())`, so the held-aware apply
+      entry point ignores its own `held` parameter — the observable
+      equivalent, from the entry point's perspective, of a caller (the
+      button path) never having passed the live value.
+    tests_broken:
+      - window_host::tests::second_button_press_mid_left_drag_preserves_held_gesture_slot_and_completes_selection
+    observed_failure: >-
+      second_button_press_mid_left_drag_preserves_held_gesture_slot_and_completes_selection
+      failed on the gesture-slot assertion (left: None, right:
+      Some(Local)). Reverted; test green again, diff clean.
+  - id: N
+    mechanism: ungated-no-owner-left-release
+    target: window_host::mouse_report::decide_release (no-owner branch)
+    change: >-
+      Replaced
+      `if inputs.button == MouseButtonId::Left && inputs.drag_in_flight {
+      Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary) }
+      else { Disposition::Nothing }` with an unconditional
+      `Disposition::Nothing`.
+    tests_broken:
+      - window_host::tests::no_owner_left_release_matrix_gates_completion_on_drag_in_flight
+    observed_failure: >-
+      Failed on the first case (left release, drag_in_flight true):
+      `assertion `left == right` failed: ... left: Nothing right:
+      Local(CompleteSelectionAndPublishToPrimary)`. Reverted; test green
+      again, diff clean.
+  - id: F1
+    mechanism: focus-loss-gate-inversion
+    target: window_host::pointer_routing::should_terminate_drag
+    change: >-
+      Replaced `drag_in_flight && !left_held` with unconditional
+      `drag_in_flight` (ignoring `left_held`), so focus loss terminates a
+      still-held drag.
+    tests_broken:
+      - window_host::tests::focus_loss_with_left_held_preserves_drag_until_release_completes_it
+      - window_host::tests::should_terminate_drag_terminates_only_when_in_flight_and_left_not_held
+    observed_failure: >-
+      focus_loss_with_left_held_preserves_drag_until_release_completes_it
+      failed on `assert!(!should_terminate_drag(true, true), ...)`. The
+      pre-existing pinned test
+      should_terminate_drag_terminates_only_when_in_flight_and_left_not_held
+      also failed under this same mutation, as expected collateral since
+      both assert the identical contract — confirming the mutation is a
+      faithful probe of the mechanism, not an artifact of the new test.
+      Reverted; both green again, diff clean.
+  - id: F2
+    mechanism: focus-loss-gate-inversion
+    target: window_host::pointer_routing::should_terminate_drag
+    change: >-
+      Replaced `drag_in_flight && !left_held` with unconditional `false`
+      (ignoring both inputs), so focus loss never terminates an unheld
+      drag.
+    tests_broken:
+      - window_host::tests::focus_loss_with_left_not_held_terminates_and_publishes_the_drag
+    observed_failure: >-
+      Failed on `assert!(should_terminate_drag(true, false), ...)`.
+      Reverted; test green again, diff clean.
+change_set_verification:
+  when: after the F2 probe was restored, before any commit
+  command: git status --porcelain && git diff --stat && git diff --name-only HEAD
+  result: >-
+    Exactly one file differs from the task's base revision:
+    src-tauri/src/window_host/tests.rs (421 insertions, 0 deletions after
+    scoped `cargo fmt -- src-tauri/src/window_host/tests.rs`). No other
+    file under src-tauri/ or anywhere else in the tree shows a byte-level
+    difference — no mutation probe or incidental edit survived (AC-8).
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::wheel_notch_mid_left_drag_preserves_held_gesture_slot_and_completes_selection
+    red_confirmed: true
+    red_reason: >-
+      Confirmed red under both named mutations (see mutation_probes R and
+      W above): fails when the tracking-inactive reset is changed to
+      clear every gesture slot, and fails when the wheel path stops
+      passing the live held-button value to the held-aware apply entry
+      point. Passes at the base revision (production already correct;
+      D1/D2).
+  AC-2:
+    tests:
+      - window_host::tests::second_button_press_mid_left_drag_preserves_held_gesture_slot_and_completes_selection
+    red_confirmed: true
+    red_reason: >-
+      Confirmed red under both named mutations (see mutation_probes R and
+      B above): fails under the same reset mutation as AC-1, and fails
+      when the held-aware apply entry point stops honoring the live
+      held-button value the button path hands it (the entry point is
+      shared with the wheel path; no separate button-path forwarding
+      function exists at layer 2 to mutate independently — see D2). Passes
+      at the base revision.
+  AC-3:
+    tests:
+      - window_host::tests::no_owner_left_release_matrix_gates_completion_on_drag_in_flight
+    red_confirmed: true
+    red_reason: >-
+      Confirmed red under mutation_probe N: fails when the no-owner left
+      release stops consulting the drag-in-flight signal. Passes at the
+      base revision, pinning all four matrix cases (left/true,
+      left/false, middle/true, right/true).
+  AC-4:
+    tests:
+      - window_host::tests::focus_loss_with_left_held_preserves_drag_until_release_completes_it
+    red_confirmed: true
+    red_reason: >-
+      Confirmed red under mutation_probe F1: fails when
+      should_terminate_drag is changed to terminate unconditionally on
+      in-flight, ignoring left_held. Passes at the base revision; the doc
+      comment records the preserved arm as deliberate (A1, D4).
+  AC-5:
+    tests:
+      - window_host::tests::focus_loss_with_left_not_held_terminates_and_publishes_the_drag
+    red_confirmed: true
+    red_reason: >-
+      Confirmed red under mutation_probe F2: fails when
+      should_terminate_drag is changed to never terminate, ignoring both
+      inputs. Passes at the base revision.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not independently test-driven; verified by manual review of each of
+      the five new tests' doc comments and names (there is no automated
+      doc-comment/name-convention checker in this project to drive
+      red-green against). Each doc comment names exactly one of the four
+      mechanism labels as its headline (wheel_notch_mid_left_drag_...:
+      reset-clears-held-gesture-slot; second_button_press_mid_left_drag_...:
+      held-unaware-apply-entry-point; no_owner_left_release_matrix_...:
+      ungated-no-owner-left-release; focus_loss_with_left_held_...
+      / focus_loss_with_left_not_held_...: focus-loss-gate-inversion,
+      preserved and terminating arms respectively) and additionally
+      documents, in prose, the second mechanism the same assertion also
+      guards (per the task plan's Design section, which frames TS-1/TS-2
+      as guarding two mechanisms each) without literally citing that
+      second label's exact hyphenated string — this reading reconciles
+      the Design section's "guards X and Y" framing with the Shared
+      authoring rules' and AC-6's "exactly one" naming requirement, and is
+      recorded as an interpretation call in the implementer's final
+      report. Names follow subject_scenario_expected. No new file, compile
+      unit or test dependency was added (confirmed by
+      change_set_verification above). No window-host, winit, GPU-surface,
+      PTY or terminal-mode type is named in the new tests (confirmed by
+      inspection: only window_host::mouse_report and
+      window_host::pointer_routing pure types are used).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/test/format outcomes, not a single behavior to red-green.
+      Verified directly: `cargo test --manifest-path src-tauri/Cargo.toml
+      --lib -- --test-threads=1` passes (3492 passed, 0 failed, 3
+      ignored — the 3487-pass/0-fail/3-ignored baseline plus the 5 new
+      tests); `cargo check --manifest-path src-tauri/Cargo.toml
+      --no-default-features` passes; `make fmt-check` passes (after
+      scoped `cargo fmt -- src-tauri/src/window_host/tests.rs`, run
+      instead of crate-wide `cargo fmt --all` to avoid touching unrelated
+      files); the two existing focus-loss pins
+      (should_terminate_drag_terminates_only_when_in_flight_and_left_not_held,
+      focus_loss_arm_never_calls_the_fold_click_toggle) are byte-identical
+      to the base revision (see change_set_verification) and pass; the
+      whole diff under src-tauri/src/ is confined to
+      src-tauri/src/window_host/tests.rs.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      A procedural checkpoint, not a behavior. Verified directly: after
+      the F2 probe was restored, `git status --porcelain`, `git diff
+      --stat` and `git diff --name-only HEAD` were run against the task's
+      base revision (HEAD at task start, before any commit) — see
+      change_set_verification above for the exact command and result.
+      Outcome: recorded here as required, confirming exactly one file
+      differs.
+notes: >-
+  Baseline (Step 4a, before any edit): `cargo test --manifest-path
+  src-tauri/Cargo.toml --lib -- --test-threads=1` reported 3487 passed, 0
+  failed, 3 ignored. The worktree's gitignored
+  src-tauri/assets/fonts/*.ttf/*.otf assets were absent (a fresh worktree
+  does not inherit untracked files), which failed the build with
+  build_rs.font_missing before any test could run; `bash
+  scripts/fetch-fonts.sh` (documented in the build error message and in
+  Makefile's fetch-fonts target; HTTPS + SHA256-pinned, writes only inside
+  this worktree's gitignored src-tauri/assets/fonts/) was run first to
+  unblock the baseline measurement. This left no tracked-file change (the
+  directory is gitignored) and is not part of this task's diff.
