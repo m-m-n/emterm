@@ -1,16 +1,147 @@
 schema_version: 1
 feature: fetch-fonts-noto-color-emoji
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
-base_revision: af0ad485f62d1c0903aa2bb383afc6bab4103bd4
+base_revision: 4a603d0e8b77e44c5f3c202297251a4aa066cc7e
 last_input_digest: sha256:a5b08c16943d9c84aa861246c87313d6ebbafcb30210ee2872651ecbd9450d05
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-20T22:31:49+09:00"
+    questions:
+      - question_id: fix-approach
+        status: answered
+      - question_id: regression-check
+        status: answered
+      - question_id: other-examples-scope
+        status: answered
+      - question_id: design-step
+        status: answered
+answers:
+  fix-approach:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T22:31:49+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [remove_example]
+    freeform: null
+    normalized_answer: >-
+      Delete src-tauri/examples/swash_emoji.rs together with its [[example]]
+      block in src-tauri/Cargo.toml and the png dev-dependency that exists
+      solely for it.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action:
+      codex_consultation (references/batch-policies.yaml); harness entry:
+      codex (run_codex_exec.sh readonly, exit 0); turns: 1 of 5 for this
+      question (settled at turn 1, explicitly frozen at turn 2).
+      Options considered: fetch_notocoloremoji, repoint_colrv1,
+      runtime_load_skip, remove_example.
+      Codex chose remove_example and the orchestrator's independent mapping
+      judgement adopted it. Reasoning: the example is the FR1 gate of the
+      COMPLETED font-swash-migration and verifies CBDT bitmap strikes
+      (Source::ColorBitmap(StrikeWith::BestFit)); doc/SPECIFICATION.md:124-131
+      records that Noto-COLRv1.ttf replaced NotoColorEmoji.ttf outright and
+      that color emoji now rasterize through a skrifa+tiny-skia COLRv1 paint
+      graph, so the example's subject no longer exists in the product.
+      Rejected fetch_notocoloremoji: re-incurs the ~5 MiB the COLRv1 migration
+      deliberately shed (SPECIFICATION.md:131) on every developer machine and
+      CI run, purely to compile a retired PoC. Rejected repoint_colrv1: swash
+      cannot rasterize COLRv1, so the example would no longer demonstrate what
+      it exists to demonstrate. Rejected runtime_load_skip: leaves an example
+      that silently skips and therefore verifies nothing.
+      Recorded as an assumption per the policy's record_as_assumption: true.
+  regression-check:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T22:31:49+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [asset_manifest_test]
+    freeform: null
+    normalized_answer: >-
+      Add a consistency test asserting that every font path embedded via
+      include_bytes! under src-tauri/ is declared as a fetch_one entry in
+      scripts/fetch-fonts.sh and listed in src-tauri/assets/fonts/README.md's
+      inventory table. No new CI job.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action:
+      codex_consultation; harness entry: codex (exit 0); turns: 2 of 5.
+      Options considered: ci_full_cargo_test, ci_cargo_check_examples,
+      asset_manifest_test, fix_only_no_check.
+      Turn 1: Codex chose asset_manifest_test against requirements-analyst's
+      tentative ci_full_cargo_test. Turn 2: the orchestrator pushed back with
+      three arguments for CI (a regex scan can miss a computed or macro-built
+      path, the bug report itself proposes a CI cargo test, and the project has
+      zero Rust CI coverage today) and two against it; Codex held
+      asset_manifest_test. Converged, so the consultation stopped at turn 2.
+      Orchestrator's independent mapping judgement adopted it, grounded on new
+      evidence gathered between turns: src-tauri/src/render/font/resolver.rs
+      embeds exactly seven fonts via include_bytes! and they correspond 1:1 to
+      the seven scripts/fetch-fonts.sh fetches, so the invariant has seven live
+      subjects in PRODUCTION code even after swash_emoji.rs is deleted, and it
+      is precisely the invariant the COLRv1 migration violated. The test needs
+      no GTK3/WebKitGTK, no network and no new CI infrastructure, and runs
+      inside the existing cargo test surface.
+      Rejected ci_full_cargo_test and ci_cargo_check_examples: both require a
+      brand-new CI Rust job with GTK3/WebKitGTK dev packages plus cargo and
+      font caching -- large, slow, separately-maintained infrastructure whose
+      failure modes are unrelated to this bug. Standing Rust CI is worth doing
+      but belongs in its own task. Rejected fix_only_no_check: the definition
+      of done requires a recurrence-detecting test.
+      Accepted limitation, carried into the spec: the check verifies a textual
+      invariant, not an actual compile.
+      Recorded as an assumption per the policy's record_as_assumption: true.
+  other-examples-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T22:31:49+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [out_of_scope_record]
+    freeform: null
+    normalized_answer: >-
+      Out of scope for this feature. Record the hardcoded-absolute-path defect
+      in bold_raster_probe.rs and m_placement_probe.rs in the spec as a known
+      follow-up; do not change those files here.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action:
+      codex_consultation; harness entry: codex (exit 0); turns: 2 of 5.
+      Options considered: in_scope_repoint, out_of_scope_record,
+      out_of_scope_ignore.
+      Turn 1: Codex chose in_scope_repoint, diverging from
+      requirements-analyst's out_of_scope_record. Turn 2: the orchestrator
+      pushed back (the reported bug, its repro steps and its definition of done
+      are all strictly about the cargo test COMPILE failure; the hardcoded
+      Inconsolata paths are a runtime-only defect in two ad-hoc local probes
+      that compile fine; widening a bug fix beyond the report is the
+      requester's call and enlarges review surface and regression risk; and
+      out_of_scope_record loses nothing because the defect is still written
+      down) and Codex moved to out_of_scope_record. Converged at turn 2.
+      Orchestrator's independent mapping judgement adopted it.
+      Rejected out_of_scope_ignore: it would drop a real finding silently.
+      Follow-up to be filed separately: both probes read
+      /home/sakura/workspace/Inconsolata/fonts/otf/Inconsolata-{Regular,Bold}.otf
+      although both fonts are already fetched into src-tauri/assets/fonts/, and
+      their run instructions still reference the removed native-poc/ layout.
+      Recorded as an assumption per the policy's record_as_assumption: true.
+  design-step:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T22:31:49+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [skip]
+    freeform: null
+    normalized_answer: "Skip the design step."
+    resolution_note: >-
+      gate: create-spec.design-step; policy option_id decide_autonomously
+      (references/batch-policies.yaml), which accepts requirements-analyst's
+      design_step_recommendation without asking. Recommendation was skip:
+      the change surface is a fetch script, an example source file, a Cargo
+      manifest and a test -- no user-visible UI, no rendering behavior, no
+      design-token surface.
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:a5b08c16943d9c84aa861246c87313d6ebbafcb30210ee2872651ecbd9450d05
     output_digest: null
 artifacts: []
