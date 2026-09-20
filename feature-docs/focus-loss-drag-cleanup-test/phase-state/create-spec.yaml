@@ -1,11 +1,11 @@
 schema_version: 1
 feature: focus-loss-drag-cleanup-test
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
-base_revision: 45a7819348cf7cb9b9472f46591383c53b9440ef
-last_input_digest: sha256:2072299ab229484b3e27a986a903e73de3296ea69b224a78f07565af68e0becb
-active_request_id: create-spec-run-0001
+base_revision: 2fa6b6a7cf9606123421c3ecbabd25388b19f095
+last_input_digest: sha256:fdb08ac0f95e08b147dc94d648a55f1727143cc8bfa4704a8592202ee7eb7435
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -70,6 +70,10 @@ worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:2072299ab229484b3e27a986a903e73de3296ea69b224a78f07565af68e0becb
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:fdb08ac0f95e08b147dc94d648a55f1727143cc8bfa4704a8592202ee7eb7435
   output_digest: null
 artifacts: []
 patches: []
