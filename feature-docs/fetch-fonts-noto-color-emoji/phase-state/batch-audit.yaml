@@ -54,3 +54,69 @@ records:
       reviewers. Adopted B verbatim: the deleted path is git-confirmed, passes
       the lexical checks, is carried in diff_cmd_quoted, is absent from the
       reviewers' Read list, and is disclosed in reviews/round1.yaml.
+  - question_id: verify.additional-command-approval
+    packet_id: null
+    answered_at: "2026-09-20T23:20:00+09:00"
+    source: batch-safe-default
+    answer_mode: multi_select
+    selected_option_ids: ["approve_all"]
+    freeform: null
+    normalized_answer: "auto-record both commands"
+    resolution_note: >-
+      VERIFICATION.md's "Additional build commands required by the success
+      criteria" names two commands that are not workflow.yaml component
+      commands and were therefore absent from the approval store. Per
+      skills/develop/SKILL.md Step A.5's batch branch (gate_id
+      create-spec.command-approval -> auto `--record`, no presentation),
+      both were recorded to the user-owned approval store and then run.
+      Auto-approved command strings:
+      (1) `CARGO_TARGET_DIR=src-tauri/target cargo build --manifest-path src-tauri/Cargo.toml --examples` (SC4)
+      (2) `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --no-default-features` (SC8)
+      Neither matches a refusal pattern; both are ordinary local cargo
+      invocations with no network, privilege escalation or write outside the
+      target dir. The third additional command named by VERIFICATION.md
+      (`... cargo check ... --no-default-features`, SC7) was already approved
+      and needed no gate.
+  - question_id: verify.m6-sc1-discharge-reading
+    packet_id: null
+    answered_at: "2026-09-20T23:26:00+09:00"
+    source: codex-consultation
+    answer_mode: single_select
+    selected_option_ids: ["option_pass"]
+    freeform: null
+    normalized_answer: "PASS - discharged by the observed fetch-then-test sequence"
+    resolution_note: >-
+      Unlisted-gate fallback (no gate_id at the originating site; batch-mode.md
+      "Any other non-packet AskUserQuestion site"), raised because manual item
+      M6's literal wording ("with the bundled-font directory holding no font
+      binary, run the main test command") admits two readings and the stricter
+      one would be unsatisfiable. Options put to Codex: (PASS) M6/SC1 is
+      discharged by what this run actually observed -- the integration worktree
+      began with `src-tauri/assets/fonts/` holding no font binary at all (only
+      .gitignore, LICENSE, README.md), then `bash scripts/fetch-fonts.sh`
+      fetched exactly the seven declared production fonts (NotoColorEmoji.ttf
+      among them NOT fetched, and no longer needed), then
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml` compiled cleanly and passed everything with no
+      unreadable-font error; (FAIL) a separate run with the fonts deleted and
+      NOT re-fetched is genuinely required.
+      Codex (gpt-6-astra, readonly sandbox, no litellm routing) chose PASS.
+      Its key points: SC1's own wording fixes the order ("the fetch script
+      followed by the documented test command"), and M6 is labelled "(SC1, TS4
+      on a real tree)", so M6 is read inside SC1's sequence rather than as an
+      independent stricter requirement; "holding no font binary" describes the
+      STARTING state of the real-tree check, not a state that must still hold
+      while cargo test runs; the stricter reading is unsatisfiable by
+      construction because the production crate's seven `include_bytes!` calls
+      in `src-tauri/src/render/font/resolver.rs` require those files present
+      and readable at compile time, independent of anything this feature added,
+      and a verification item cannot legitimately demand an impossible
+      precondition; and TS4's automated scenario
+      (`scan_requires_no_font_binaries_present`, a synthetic tempdir fixture
+      with no `assets/fonts/` directory at all) already separately proves the
+      textual-scan logic needs zero real font binaries, leaving M6 as the
+      complementary end-to-end check that the documented developer workflow
+      produces no compile-stage unreadable-font error.
+      Adopted verbatim: M6 and SC1 are recorded as PASS on the evidence of this
+      run's own clean-start fetch-then-test sequence; no separate run was
+      attempted, and none is possible.
