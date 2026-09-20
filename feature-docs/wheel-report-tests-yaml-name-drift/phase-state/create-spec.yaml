@@ -1,11 +1,11 @@
 schema_version: 1
 feature: wheel-report-tests-yaml-name-drift
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 98de9e5ce42ed70ebbe6099c99ab350166a829cc
 last_input_digest: sha256:cd5115bd596facb24b8f5a78fec5552528c95e476d41f7b119b67abb85818a91
-active_request_id: create-spec-run-0001
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
