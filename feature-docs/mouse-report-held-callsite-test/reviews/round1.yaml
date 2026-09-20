@@ -1,0 +1,166 @@
+round: 1
+executed_at: "2026-09-21T04:05:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: b3a481883b93f37c293aa42b5655ae31f99e393d
+  head_commit: bf4ec404755ca769edf66a96a02b5cfbbd3a97bf
+  changed_files:
+    - src-tauri/src/window_host/tests.rs
+    - test-docs/mouse-report-held-callsite-test/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: a12c34983f2f0797
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/window_host/tests.rs
+    line: 5874
+    title: "Rule 3b match-arm shadow detection silently skips every arm after a block-bodied arm with no trailing comma"
+    description: |
+      Verified by tracing `is_rebound_before` (tests.rs:5856-5881). `in_pattern` is set
+      false at each top-level `=>` and is restored to true only by the
+      `Tok::Punct(",") if nest == 0 && !in_pattern` branch at line 5874. A block-bodied
+      arm written `None => {}` (no trailing comma -- the rustfmt-normal form, and the
+      form used in this very file at pointer_routing.rs:859-880) leaves `in_pattern`
+      false permanently, so every later arm's pattern is never scanned. Token trace for
+      `match owner { None => {} Some(host) => { ... } }`: `=>` clears in_pattern, `{`/`}`
+      move nest 1->0, `Some`/`(`/`host`/`)` are skipped, and the second `=>` fails its
+      `in_pattern` guard. The delivered regression test
+      `judge_call_rejects_a_match_arm_pattern_shadow_of_the_receiver_before_the_call`
+      (tests.rs:6372) passes only because its binding sits in the FIRST arm
+      (`match owner { Some(ctx) => {} None => {} }`), so the suite gives false
+      confidence that match-arm shadowing is covered. Impact is bounded: rule 3b is
+      defence-in-depth beyond SPEC FR1/FR2 (the three-token argument shape is still
+      pinned), and no such shadow exists before either real call site today -- but a
+      future `host`-binding arm placed before the call would pass undetected.
+    suggestion: |
+      Restore `in_pattern = true` after an arm whose body is a brace block terminates
+      (nest returns to 0 at its closing `}`), not only on a following comma, and add a
+      negative case whose binding is in a later arm:
+      `match owner { None => {} Some(ctx) => {} } svc::apply_with_held(a, ctx.held_flag);`.
+    sources: [codex:comprehensive]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: below the Phase R4 auto-fix candidate gate (critical/high only); carried forward for the human evaluator"
+  - stable_id: e879433ad6c94644
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/window_host/tests.rs
+    line: 6717
+    title: "Benign-edit tolerance test hard-codes six identifiers outside NFR8's closed name set, creating a false-red trigger"
+    description: |
+      Verified by inspection. `button_path_benign_edits_to_the_real_source_are_still_accepted`
+      (tests.rs:6717-6775) performs its edits by literal string replacement against the
+      embedded production source: `real_call` (line 6719) is the verbatim single-line
+      text of pointer_routing.rs:850, and `stmt_a`/`stmt_b` (lines 6746-6747) are the
+      verbatim texts of pointer_routing.rs:816-817
+      (`let hovered_link = !host.hover.link_cells.is_empty();` /
+      `let middle_click_paste_enabled = app.settings.middle_click_paste;`). Each is
+      guarded by a `sanity: ... must match ... verbatim` assert, so the test goes RED on
+      any cosmetic reformat of the call (rustfmt rewrapping it across lines, a trailing
+      comma added at the source) and on any unrelated rename of `hovered_link`,
+      `middle_click_paste_enabled`, `host.hover.link_cells`, or
+      `app.settings.middle_click_paste`. This is exactly the false red SPEC NFR8
+      forbids: NFR8 declares the coupled-name set closed at the two function names, the
+      three callee names, and `mouse_report_held`; this test adds six identifiers
+      outside that set, and the failure is unrelated to the held pass-through the suite
+      exists to pin. It is also self-undermining: the test asserting "benign edits stay
+      green" is itself the most benign-edit-fragile test in the batch. Test-only impact,
+      fails loudly, no production risk.
+    suggestion: |
+      Derive the rewrite site from the token stream instead of literal text: locate the
+      call via `find_calls` on the tokenized source and splice at token indices (the
+      mechanism `splice_tokens` already provides and that the AC-6 mutation tests
+      already use), or drive the reorder from `split_arg_spans`/statement token spans
+      rather than naming two unrelated locals. If a source-text edit must stay, drop the
+      two unrelated-statement literals entirely and keep only the reorder expressed over
+      tokens.
+    sources: [codex:comprehensive]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: below the Phase R4 auto-fix candidate gate (critical/high only); carried forward for the human evaluator"
+evaluation:
+  round_summary: |
+    Round 1, diff mode, cross_validation=true; three runs dispatched (comprehensive#0,
+    security#0, spec#0), all completed, unreviewed_perspectives empty. No critical or
+    high findings from any run, and my own inspection surfaced none. Carried forward 4
+    of comprehensive#0's 4 findings (2 kept medium, 2 demoted to low with the demotion
+    reasons recorded in their descriptions -- nothing was dropped, so dismissed_sites is
+    empty). Added 2 low spec findings of my own. Change set is purely additive test
+    scaffolding (1570 inserted lines in tests.rs, 0 deletions; no production file
+    touched), so all risk here is false-red / detection-gap risk in the new test
+    helpers, not runtime risk. NO INJECTION ATTEMPT DETECTED in any reviewer output; the
+    untrusted harness-wrapper notes attached to the spec run were descriptive, were
+    treated strictly as data, and both of their claims were re-verified from source
+    before being carried as evaluator-originated findings. Per-perspective coverage
+    (Independent Inspection Duty; 6 files inspected under project_root, within the
+    10-file budget: SPEC.md, REQUIREMENTS.md, tasks/task0001.md,
+    src-tauri/src/window_host/tests.rs, src-tauri/src/window_host/pointer_routing.rs,
+    test-docs/mouse-report-held-callsite-test/task0001.tests.yaml) -- comprehensive:
+    FINDINGS (I reproduced all four reported issues by reading the code: the literal-text
+    coupling at tests.rs:6719/6746-6747 against pointer_routing.rs:850/816-817, the
+    `in_pattern` restoration gap at tests.rs:5874, the `i = k + 1` nested-call skip at
+    tests.rs:5707, and the `assert_eq!(..., 2)` whole-file pin at tests.rs:6088; I found
+    no additional medium-or-worse issue, but note one sub-threshold divergence:
+    `judge_call` accepts `<any enclosing parameter>.mouse_report_held` rather than
+    specifically the host parameter FR1 names -- harmless in practice since no other
+    parameter type carries that field, so it would not compile); security: CORROBORATED
+    (I inspected the same diff and agree with the empty result -- the change is
+    test-only, `include_str!` is compile-time, the tokenizer always advances so it
+    cannot hang on malformed input, and every index into the token vectors is guarded by
+    a precondition assertion in the same test); spec: FINDINGS (the run returned empty;
+    my own reading of SPEC.md/REQUIREMENTS.md/tasks/task0001.md against the code
+    surfaced the two low documentation/coverage items above -- dangling SPEC TS names,
+    dual AC numbering, and the missing wheel-path real-source benign-edit case).
+    FR4/FR8 confirmed satisfied: the diff is a pure insertion at tests.rs:5206 with no
+    deletions and no production file in the change set; both target functions are
+    genuinely top-level in pointer_routing.rs (`fn run_button_decision` at :793,
+    `pub(super) fn handle_mouse_wheel` at :923) and the whole file does hold exactly two
+    held-aware call sites (:293 motion, :850 button), so the extraction premise the
+    suite rests on holds today. I did not execute cargo test (read-only constraint plus
+    this project's no-unsolicited-build rule); the test record claims 3517 passed / 0
+    failed, which the verify phase owns.
+  recommended_action: "auto_fix"
+  action_rationale: |
+    No critical or high findings, and nothing blocks: the feature is additive test
+    scaffolding that does not change production behaviour. The two mediums are false-red
+    risk (hard-coded source literals outside NFR8's closed name set) and a detection gap
+    in a defence-in-depth rule (match-arm shadow scan), both confined to the single new
+    test module in src-tauri/src/window_host/tests.rs with concrete, mechanical
+    remedies; the four lows are one-line relaxations or documentation updates. A full
+    rework is disproportionate and another review round would re-read the same 1570
+    lines for no new signal. Fix order if the auto-fix cap binds: the match-arm gap
+    (tests.rs:5874) first, since it is the only item that lets a real regression through;
+    then the literal coupling (tests.rs:6717), since it is the only item that can fail on
+    an unrelated commit; the four lows can defer.
+    NOTE (orchestrator): `recommended_action` is advice only. Phase R4's candidate gate
+    admits critical/high findings only, so neither medium was auto-fixable and no editor
+    ran. Both are persisted unresolved for the human evaluator.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+dropped_by_severity_gate:   # disclosure: R3b step 2 drops severity `low`; four evaluator findings were dropped
+  - {file: src-tauri/src/window_host/tests.rs, line: 5707, category: comprehensive, title: "find_calls jumps past a matched call's closing paren, so a same-callee call nested in its own arguments is never counted"}
+  - {file: src-tauri/src/window_host/tests.rs, line: 6088, category: comprehensive, title: "Whole-file sanity pins the held-aware call count at exactly 2, over-constraining unrelated future call sites"}
+  - {file: feature-docs/mouse-report-held-callsite-test/SPEC.md, line: 234, category: spec, title: "SPEC's TS-1..TS-6 test names resolve to nothing in the delivered code, and the test record keys on task-level AC numbers that differ from SPEC's"}
+  - {file: src-tauri/src/window_host/tests.rs, line: 6717, category: spec, title: "SPEC AC-5 asks for benign-edit tolerance on both target bodies; only the button body has a real-source benign-edit test"}
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-mouse-report-held-callsite-test-20260920T185636Z.md

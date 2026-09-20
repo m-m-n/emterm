@@ -107,7 +107,8 @@ workflow:
     completed_at_commit: 74b60f366087a94968203d04efe71419df78a8df
     base_commit: b3a481883b93f37c293aa42b5655ae31f99e393d
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: bf4ec404755ca769edf66a96a02b5cfbbd3a97bf
   - id: verify
     status: pending
     result: null
@@ -130,13 +131,16 @@ tasks:
     branch: em-workflow/mouse-report-held-callsite-test/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, spec]
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: {source: codex, status: completed, findings: 2}
+    security: {source: codex, status: completed, findings: 0}
+    spec: {source: "litellm:muse-spark", status: completed, findings: 0}
   residual_critical_high: 0
   needs_rework: false
 

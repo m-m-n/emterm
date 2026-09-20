@@ -115,3 +115,82 @@ records:
       have meant the implement step specifically.
       side effects of this run: none outward-facing. No git push, no gh pr create, no
       remote branch, no PR.
+  - question_id: review.evaluator-confidence-type
+    packet_id: null
+    answered_at: "2026-09-21T04:02:00+09:00"
+    source: codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "Option B - discard the malformed per-finding confidence and stamp the neutral value 60"
+    normalized_answer: "Option B - discard the malformed per-finding confidence and stamp the neutral value 60"
+    resolution_note: |
+      gate: none (orchestrator-initiated clarification, requested by the user's "consult
+      Codex on any unclear points" instruction). Not a protocol gate; no gate_id exists.
+      unclear point: the round-1 evaluator returned `confidence` inside each finding as
+      the STRINGS "high" / "medium", but Phase R3b step 7 performs integer arithmetic on
+      that field and the round record persists an integer 0-100.
+      options considered: (A) map high->90 / medium->60 / low->30 and proceed;
+      (B) treat the non-integer value as a malformed field, discard it, stamp the neutral
+      60 that the protocol's degradation paths already use; (C) treat the whole
+      evaluation object as structurally malformed and trigger Phase R3b's
+      evaluator-failure degradation (re-gate each reviewer's own findings at 60).
+      codex_consulted: true. Codex's first answer chose (C), reasoning that a type error
+      should fall back to the protocol's defined degradation path rather than invent a
+      conversion table. The orchestrator re-consulted with one protocol fact that had
+      been missing from the first prompt: Phase R3b's degradation clause is a CLOSED list
+      of "exactly two structural triggers" — the evaluator's Task failed, or the returned
+      object is missing a required ROOT field — and here the Task succeeded and every
+      required root field was present, the defect being confined to a per-finding field;
+      R3b moreover already mandates per-field repair of untrusted evaluator output
+      elsewhere (4096-byte caps, stable_id recomputation, unknown-`sources` dropping).
+      Codex switched to (B) on that basis.
+      chosen: (B). Adopted as the comparatively better option.
+      options not chosen and why: (A) has no basis in the protocol for its specific
+      numbers; (C) does not meet its own closed trigger list and would discard the
+      evaluator's verified triage, including two findings it demoted to `low` with
+      recorded reasons, re-admitting them at medium.
+      opus_escalation: not run (Codex reached a decision).
+      effect on this round: both surviving medium findings persist with confidence 60.
+      No severity, category, resolution or completion-gate outcome changed.
+  - question_id: review.triage-filing-empty-set
+    packet_id: null
+    answered_at: "2026-09-21T04:03:00+09:00"
+    source: codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "Option A - record triage_filing.executed: true with the branch and report_path the script returned"
+    normalized_answer: "Option A - record triage_filing.executed: true with the branch and report_path the script returned"
+    resolution_note: |
+      gate: none (orchestrator-initiated clarification, requested by the user's "consult
+      Codex on any unclear points" instruction). Not a protocol gate; no gate_id exists.
+      unclear point: the `vulnerability` perspective was never selected this round (the
+      diff touches no dependency manifest or lockfile), so the unresolved-vulnerability
+      finding set handed to the `file-tasks` subcommand was empty, yet the round's
+      closing disposition was `complete` (not `another-round`), which the review protocol
+      says makes triage filing run.
+      options considered: (A) run it and record `executed: true` with the returned
+      `branch` and `report_path`; (B) record `executed: false` with everything
+      empty/null, on the grounds that nothing was actually triaged.
+      codex_consulted: true. Codex chose (A): `executed` states the fact that the step was
+      invoked; the protocol conditions the empty receipt on the `another-round`
+      disposition only, never on an empty finding set; and keeping the result arrays empty
+      while recording the returned `branch` and `report_path` lets an auditor distinguish
+      "ran, produced nothing" from "did not run" — whereas (B) would hide both the
+      invocation and the degradation the run reported.
+      chosen: (A). Adopted as the comparatively better option.
+      options not chosen and why: (B) conceals a real invocation and its degradation
+      signal from the audit record.
+      opus_escalation: not run (Codex reached a decision).
+      command run: scan-dependencies.py file-tasks --project-root <integration worktree>
+      --feature mouse-report-held-callsite-test --findings <empty JSON array>
+      --entry-point <notion-task-dispatch 0.5.0 ntd.sh>
+      result: {"branch":"report","filed_packages":[],"appended_packages":[],
+      "suppressed":[],"report_path":"/home/sakura/src/my_projects/tauri/emterm/tmp/
+      sca-triage-mouse-report-held-callsite-test-20260920T185636Z.md","degraded":true,
+      "degraded_reason":"listing_exit_nonzero","malformed_findings":[],
+      "listing_dropped_count":0,"failed_package":null,"failure_reason":null}
+      note: the run reported degraded=true / listing_exit_nonzero (the notion-task-dispatch
+      listing probe exited non-zero), so the script took the local-report branch rather
+      than the external-task-system branch. With an empty finding set this changes nothing
+      that was filed, but it is recorded here because the same degradation would matter on
+      a round that did have vulnerability findings.
