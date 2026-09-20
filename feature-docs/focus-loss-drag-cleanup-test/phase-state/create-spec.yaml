@@ -1,9 +1,9 @@
 schema_version: 1
 feature: focus-loss-drag-cleanup-test
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: 6a8c7e4887c04fd5d47912827d705698842e5e54
+base_revision: d2e39b1fae5aa120b826dfa71097b78091bd7564
 last_input_digest: sha256:fdb08ac0f95e08b147dc94d648a55f1727143cc8bfa4704a8592202ee7eb7435
 active_request_id: null
 packets:
