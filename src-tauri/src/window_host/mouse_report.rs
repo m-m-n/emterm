@@ -391,6 +391,26 @@ impl GestureOwnership {
         self.middle = None;
         self.right = None;
     }
+
+    /// task0001 (D1, D2): clears only the slots of buttons `held` does NOT
+    /// report as currently held — the narrower exclusion a
+    /// tracking-inactive reset applies, unlike the tab-change reset, which
+    /// still uses [`clear_all`] above. The "no button" identity never
+    /// occupies a slot (there is no field for it here), so there is
+    /// nothing to exclude it from.
+    ///
+    /// [`clear_all`]: GestureOwnership::clear_all
+    pub(super) fn clear_unheld(&mut self, held: HeldButtons) {
+        if !held.left {
+            self.left = None;
+        }
+        if !held.middle {
+            self.middle = None;
+        }
+        if !held.right {
+            self.right = None;
+        }
+    }
 }
 
 // ── task0005: SC-10 pointer decision sequence, SC-11 outcome
@@ -524,13 +544,20 @@ pub(super) enum GestureUpdate {
 /// sequence unit can be a pure function of its plain inputs.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(super) struct RecordUpdates {
-    /// D7/D12 correction #3: true when either reset observation fired (no
-    /// tracking mode active, or the active tab differs from
-    /// [`MouseReportRecords::built_for_tab`]) — [`apply_outcome`] applies
-    /// this by resetting the cell-change cache and clearing every
-    /// gesture-ownership slot, exactly as the two existing reset call
-    /// sites already do.
-    pub(super) reset: bool,
+    /// task0001 (D1): true when no tracking mode is active. Distinguished
+    /// from [`reset_tab_changed`](Self::reset_tab_changed) because the two
+    /// triggers clear different gesture-slot scopes in
+    /// [`apply_outcome_with_held`] — this one clears only the slots of
+    /// buttons the held-button value does NOT report as held.
+    pub(super) reset_tracking_inactive: bool,
+    /// task0001 (D1): true when the active tab differs from
+    /// [`MouseReportRecords::built_for_tab`]. [`apply_outcome_with_held`]
+    /// clears every gesture slot, held or not, when this fires — and wins
+    /// over [`reset_tracking_inactive`](Self::reset_tracking_inactive) when
+    /// both fire for the same event. Either flag alone still resets the
+    /// cell-change cache unconditionally, exactly as the single pre-task0001
+    /// `reset` flag did.
+    pub(super) reset_tab_changed: bool,
     /// Set [`MouseReportRecords::built_for_tab`] to this tab — every
     /// sequence that SC-8 accepts re-establishes which tab its records are
     /// now valid against.
@@ -595,6 +622,11 @@ pub(super) struct ButtonEventInputs {
     pub(super) hovered_link: bool,
     /// Press-only: the middle-click-paste setting.
     pub(super) middle_click_paste_enabled: bool,
+    /// task0001 (D3, FR2, FR5): the local-drag-in-flight signal (Shared
+    /// Components), gathered once per event by the caller. Consulted only
+    /// by the release half's no-owner branch; the press half ignores it
+    /// entirely.
+    pub(super) drag_in_flight: bool,
     pub(super) records: MouseReportRecords,
 }
 
@@ -780,7 +812,6 @@ fn decide_press(inputs: &ButtonEventInputs) -> SequenceOutcome {
     }
     let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
     let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
-    let reset = !tracking_active || tab_changed;
 
     if tracking_active && !inputs.mods.shift {
         let code = compose_button_code(
@@ -800,7 +831,8 @@ fn decide_press(inputs: &ButtonEventInputs) -> SequenceOutcome {
         return SequenceOutcome {
             disposition,
             updates: RecordUpdates {
-                reset,
+                reset_tracking_inactive: !tracking_active,
+                reset_tab_changed: tab_changed,
                 built_for_tab: Some(inputs.active_tab),
                 gesture: Some(GestureUpdate::Record(inputs.button, GestureOwner::Report)),
                 tracking_active: Some(tracking_active),
@@ -818,7 +850,8 @@ fn decide_press(inputs: &ButtonEventInputs) -> SequenceOutcome {
     SequenceOutcome {
         disposition,
         updates: RecordUpdates {
-            reset,
+            reset_tracking_inactive: !tracking_active,
+            reset_tab_changed: tab_changed,
             built_for_tab: Some(inputs.active_tab),
             gesture: Some(GestureUpdate::Record(inputs.button, GestureOwner::Local)),
             tracking_active: Some(tracking_active),
@@ -887,13 +920,28 @@ fn decide_release(inputs: &ButtonEventInputs) -> SequenceOutcome {
     // this release at all): still carries the two reset observations
     // (D12 correction #3), so a click with no intervening motion is not
     // decided from stale records.
+    //
+    // task0001 (D3, FR2, FR5): a left release with no recorded owner is no
+    // longer unconditionally "nothing" — when the drag-in-flight signal
+    // (Shared Components) says a local drag is still live (its press
+    // recorded a gesture owner that a later tracking-inactive reset then
+    // excluded, or that a tab-change reset cleared mid-drag), this release
+    // is the drag's only remaining terminator, so it completes the
+    // selection exactly as an owned release would. A chrome press starts
+    // no drag, so its release reads drag-in-flight false and stays a
+    // no-op (FR5) — middle/right are unaffected in every case (FR4).
     let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
     let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
-    let reset = !tracking_active || tab_changed;
+    let disposition = if inputs.button == MouseButtonId::Left && inputs.drag_in_flight {
+        Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary)
+    } else {
+        Disposition::Nothing
+    };
     SequenceOutcome {
-        disposition: Disposition::Nothing,
+        disposition,
         updates: RecordUpdates {
-            reset,
+            reset_tracking_inactive: !tracking_active,
+            reset_tab_changed: tab_changed,
             tracking_active: Some(tracking_active),
             ..Default::default()
         },
@@ -992,25 +1040,27 @@ pub(super) fn decide_motion_event(inputs: MotionEventInputs) -> SequenceOutcome 
         }
         None => {
             let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
-            let reset = !tracking_active || tab_changed;
+            let reset_tracking_inactive = !tracking_active;
             if !tracking_active || inputs.mods.shift {
                 return SequenceOutcome {
                     disposition: Disposition::Nothing,
                     updates: RecordUpdates {
-                        reset,
+                        reset_tracking_inactive,
+                        reset_tab_changed: tab_changed,
                         built_for_tab: Some(inputs.active_tab),
                         tracking_active: Some(tracking_active),
                         ..Default::default()
                     },
                 };
             }
-            let effective_cache = if reset {
+            let effective_cache = if reset_tracking_inactive || tab_changed {
                 CellChangeFilter::default()
             } else {
                 inputs.records.cell_cache
             };
             let mut outcome = report_motion(&inputs, effective_cache);
-            outcome.updates.reset = reset;
+            outcome.updates.reset_tracking_inactive = reset_tracking_inactive;
+            outcome.updates.reset_tab_changed = tab_changed;
             outcome.updates.built_for_tab = Some(inputs.active_tab);
             outcome.updates.tracking_active = Some(tracking_active);
             outcome
@@ -1036,16 +1086,6 @@ pub(super) fn decide_wheel_event(inputs: &WheelEventInputs) -> SequenceOutcome {
     }
     let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
     let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
-    // task0002 (D10, refines D2): the shared reset expression carries
-    // exactly its two original observations again — no tracking mode
-    // active, or the active tab differs from the record's tab marker.
-    // The tracking-session discard of the report accumulator is a
-    // SEPARATE action, taken by `apply_outcome` the moment it records an
-    // observed tracking state of inactive (see that function) — it does
-    // not fold into this reset expression, which also drives the
-    // cell-change cache reset and the gesture-ownership clear (records
-    // this feature declared out of scope).
-    let reset = !tracking_active || tab_changed;
 
     let consumer = wheel_consumer(
         tracking_active,
@@ -1072,7 +1112,8 @@ pub(super) fn decide_wheel_event(inputs: &WheelEventInputs) -> SequenceOutcome {
     SequenceOutcome {
         disposition,
         updates: RecordUpdates {
-            reset,
+            reset_tracking_inactive: !tracking_active,
+            reset_tab_changed: tab_changed,
             built_for_tab: Some(inputs.active_tab),
             tracking_active: Some(tracking_active),
             ..Default::default()
@@ -1085,14 +1126,45 @@ pub(super) fn decide_wheel_event(inputs: &WheelEventInputs) -> SequenceOutcome {
 /// the outcome's record updates exactly once, appends nothing for a
 /// do-nothing or local disposition, and never performs the named local
 /// arm itself (that stays the caller's job — see [`LocalArm`]).
+///
+/// task0001 (Shared Components, D2): delegates to
+/// [`apply_outcome_with_held`] with an all-released held-button value,
+/// which reduces its gesture-slot reset exclusion (D1) to "clear every
+/// slot" — this entry point's unchanged behaviour for its ~30 existing
+/// call sites.
 pub(super) fn apply_outcome(
     outcome: SequenceOutcome,
     records: &mut MouseReportRecords,
     dest: &mut Vec<(TabId, Vec<u8>)>,
 ) {
-    if outcome.updates.reset {
+    apply_outcome_with_held(outcome, records, dest, HeldButtons::default());
+}
+
+/// task0001 (Shared Components, D1, D2): the held-button-aware companion of
+/// [`apply_outcome`], additionally taking the plain held-button value that
+/// was current at the moment the event now being applied was received.
+/// Identical to [`apply_outcome`] in every respect except the gesture-slot
+/// half of a reset:
+///
+/// - a tab-change reset ([`RecordUpdates::reset_tab_changed`]) clears every
+///   gesture slot, held or not — unchanged from before this task;
+/// - a tracking-inactive reset ([`RecordUpdates::reset_tracking_inactive`])
+///   clears only the slots of buttons `held` does NOT report as held;
+/// - when both fire for the same event, the tab-change rule wins;
+/// - either flag alone still resets the cell-change cache unconditionally.
+pub(super) fn apply_outcome_with_held(
+    outcome: SequenceOutcome,
+    records: &mut MouseReportRecords,
+    dest: &mut Vec<(TabId, Vec<u8>)>,
+    held: HeldButtons,
+) {
+    if outcome.updates.reset_tracking_inactive || outcome.updates.reset_tab_changed {
         records.cell_cache.reset();
-        records.gesture_owner.clear_all();
+        if outcome.updates.reset_tab_changed {
+            records.gesture_owner.clear_all();
+        } else {
+            records.gesture_owner.clear_unheld(held);
+        }
         // task0001 (D1): the report-path accumulator rides the same reset
         // seam as the cell-change cache and gesture ownership — one
         // mechanism, no second reset path to keep in sync.
@@ -1135,12 +1207,15 @@ pub(super) fn apply_outcome(
 /// task0002 (D9, IMPLEMENTATION.md Shared Components "Per-event report
 /// step"): performs one wheel event's whole report-path bookkeeping as a
 /// plain-value unit. Applies `outcome`'s record updates via
-/// [`apply_outcome`] first — exactly once, before anything else — then
+/// [`apply_outcome_with_held`] first — exactly once, before anything else,
+/// passing the caller's plain held-button value so a reset on the wheel
+/// path excludes still-held gesture slots exactly as the motion and button
+/// paths do (mouse-report-reset-active-gesture task0001, D1/D2) — then
 /// folds `lines` into the report accumulator and stores the returned
 /// fraction back **only** when the applied outcome's disposition is a
 /// report (D9). On every other disposition (a grid-rejected notch, or one
 /// consumed by a local arm) the record value this leaves is exactly what
-/// [`apply_outcome`]'s updates alone produce, and the returned notch count
+/// [`apply_outcome_with_held`]'s updates alone produce, and the returned notch count
 /// is zero — the report-ness is read directly off `outcome`, never
 /// re-derived from the modifiers, the tracking-mode bits or `lines`
 /// themselves. Needs no `WindowHost`, winit event loop or GPU surface
@@ -1151,9 +1226,10 @@ pub(super) fn apply_wheel_report_step(
     records: &mut MouseReportRecords,
     dest: &mut Vec<(TabId, Vec<u8>)>,
     lines: f32,
+    held: HeldButtons,
 ) -> i32 {
     let is_report = matches!(outcome.disposition, Disposition::Report { .. });
-    apply_outcome(outcome, records, dest);
+    apply_outcome_with_held(outcome, records, dest, held);
     if !is_report {
         return 0;
     }
@@ -1793,6 +1869,7 @@ mod tests {
             row: 5,
             hovered_link: false,
             middle_click_paste_enabled: true,
+            drag_in_flight: false,
             records: MouseReportRecords::default(),
         }
     }
@@ -1904,7 +1981,8 @@ mod tests {
                 tab: 7,
             },
             updates: RecordUpdates {
-                reset: false,
+                reset_tracking_inactive: false,
+                reset_tab_changed: false,
                 built_for_tab: Some(7),
                 cache_cell: Some((4, 5)),
                 gesture: Some(GestureUpdate::Record(
@@ -1955,6 +2033,114 @@ mod tests {
         assert_eq!(gesture.peek(MouseButtonId::Left), None);
         assert_eq!(gesture.peek(MouseButtonId::Right), None);
         assert_eq!(held, HeldButtons::default());
+    }
+
+    // ── task0001 (mouse-report-reset-active-gesture) AC-1: a
+    // tracking-inactive reset excludes held buttons' slots ─────────────
+
+    #[test]
+    fn apply_outcome_with_held_tracking_inactive_reset_preserves_the_held_left_slot() {
+        let mut records = MouseReportRecords::default();
+        records.cell_cache.commit(9, 9);
+        records
+            .gesture_owner
+            .record_press(MouseButtonId::Left, GestureOwner::Local);
+        let outcome = SequenceOutcome {
+            disposition: Disposition::Nothing,
+            updates: RecordUpdates {
+                reset_tracking_inactive: true,
+                ..Default::default()
+            },
+        };
+        let mut dest = Vec::new();
+        let held = HeldButtons {
+            left: true,
+            ..HeldButtons::default()
+        };
+        apply_outcome_with_held(outcome, &mut records, &mut dest, held);
+        assert!(
+            records.cell_cache.would_report(9, 9),
+            "a tracking-inactive reset always resets the cell-change cache"
+        );
+        assert_eq!(
+            records.gesture_owner.peek(MouseButtonId::Left),
+            Some(GestureOwner::Local),
+            "the held left button's slot must survive a tracking-inactive reset"
+        );
+    }
+
+    #[test]
+    fn apply_outcome_with_held_tracking_inactive_reset_clears_an_unheld_middle_slot() {
+        let mut records = MouseReportRecords::default();
+        records
+            .gesture_owner
+            .record_press(MouseButtonId::Middle, GestureOwner::Local);
+        let outcome = SequenceOutcome {
+            disposition: Disposition::Nothing,
+            updates: RecordUpdates {
+                reset_tracking_inactive: true,
+                ..Default::default()
+            },
+        };
+        let mut dest = Vec::new();
+        // Middle is recorded but NOT held — the exclusion must not spare
+        // a slot whose button is no longer physically down.
+        apply_outcome_with_held(outcome, &mut records, &mut dest, HeldButtons::default());
+        assert_eq!(records.gesture_owner.peek(MouseButtonId::Middle), None);
+    }
+
+    // ── task0001 AC-2: a tab-change reset still clears every slot ───────
+
+    #[test]
+    fn apply_outcome_with_held_tab_change_reset_clears_every_slot_including_a_held_one() {
+        let mut records = MouseReportRecords::default();
+        records
+            .gesture_owner
+            .record_press(MouseButtonId::Left, GestureOwner::Local);
+        records
+            .gesture_owner
+            .record_press(MouseButtonId::Right, GestureOwner::Report);
+        let outcome = SequenceOutcome {
+            disposition: Disposition::Nothing,
+            updates: RecordUpdates {
+                reset_tab_changed: true,
+                ..Default::default()
+            },
+        };
+        let mut dest = Vec::new();
+        let held = HeldButtons {
+            left: true,
+            right: true,
+            ..HeldButtons::default()
+        };
+        apply_outcome_with_held(outcome, &mut records, &mut dest, held);
+        assert_eq!(
+            records.gesture_owner.peek(MouseButtonId::Left),
+            None,
+            "a tab-change reset clears every slot, held or not"
+        );
+        assert_eq!(records.gesture_owner.peek(MouseButtonId::Right), None);
+    }
+
+    #[test]
+    fn apply_outcome_pre_existing_entry_point_still_clears_every_slot_with_no_held_buttons() {
+        // task0001 (D2): the pre-existing entry point delegates with an
+        // all-released held value, which reduces AC-1's exclusion to
+        // "clear every slot" — its unchanged behaviour.
+        let mut records = MouseReportRecords::default();
+        records
+            .gesture_owner
+            .record_press(MouseButtonId::Left, GestureOwner::Local);
+        let outcome = SequenceOutcome {
+            disposition: Disposition::Nothing,
+            updates: RecordUpdates {
+                reset_tracking_inactive: true,
+                ..Default::default()
+            },
+        };
+        let mut dest = Vec::new();
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert_eq!(records.gesture_owner.peek(MouseButtonId::Left), None);
     }
 
     // ── AC-3 (TS-19), AC-10 (TS-9): chrome-guarded regions × event kind ×
@@ -2811,5 +2997,268 @@ mod tests {
             None,
             "wheel path clears stale ownership on an active-tab change"
         );
+    }
+
+    // ── task0001 (mouse-report-reset-active-gesture) AC-3: a left drag
+    // survives a tracking-inactive reset raised mid-gesture ─────────────
+
+    /// AC-3 (regression evidence): one `records` value threaded through a
+    /// left press, an interleaving event that raises its own
+    /// tracking-inactive reset, and the matching left release — the bug
+    /// this task repairs only appears in this threaded form, never against
+    /// three independent decisions taken against fresh records each time.
+    /// Exercised with the interleaving event being a wheel notch, a middle
+    /// press, and a right press in turn; when the interleaving event is
+    /// itself a press, its own slot is recorded and later shown to survive
+    /// the left release independently of the left slot.
+    #[test]
+    fn left_drag_survives_a_tracking_inactive_reset_raised_by_an_interleaved_event() {
+        enum Interleaved {
+            Wheel,
+            Press(MouseButtonId),
+        }
+        for interleaved in [
+            Interleaved::Wheel,
+            Interleaved::Press(MouseButtonId::Middle),
+            Interleaved::Press(MouseButtonId::Right),
+        ] {
+            let mut records = MouseReportRecords::default();
+            let mut dest = Vec::new();
+            let mut held = HeldButtons {
+                left: true,
+                ..HeldButtons::default()
+            };
+
+            // Left press, no tracking mode active: locally owned.
+            let left_press = ButtonEventInputs {
+                mode_1000: false,
+                mode_1002: false,
+                mode_1003: false,
+                middle_click_paste_enabled: false,
+                records,
+                ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Left)
+            };
+            apply_outcome_with_held(decide_button_event(left_press), &mut records, &mut dest, held);
+            assert_eq!(
+                records.gesture_owner.peek(MouseButtonId::Left),
+                Some(GestureOwner::Local)
+            );
+
+            // The interleaving event, still with no tracking mode active:
+            // raises its own tracking-inactive reset.
+            match interleaved {
+                Interleaved::Wheel => {
+                    let wheel = WheelEventInputs {
+                        mode_1000: false,
+                        mode_1002: false,
+                        mode_1003: false,
+                        records,
+                        ..base_wheel_inputs(MouseEventKind::WheelUp)
+                    };
+                    apply_outcome_with_held(
+                        decide_wheel_event(&wheel),
+                        &mut records,
+                        &mut dest,
+                        held,
+                    );
+                }
+                Interleaved::Press(button) => {
+                    match button {
+                        MouseButtonId::Middle => held.middle = true,
+                        MouseButtonId::Right => held.right = true,
+                        _ => unreachable!("only Middle/Right are exercised here"),
+                    }
+                    let press = ButtonEventInputs {
+                        mode_1000: false,
+                        mode_1002: false,
+                        mode_1003: false,
+                        middle_click_paste_enabled: false,
+                        records,
+                        ..base_button_inputs(MouseEventKind::Press, button)
+                    };
+                    apply_outcome_with_held(
+                        decide_button_event(press),
+                        &mut records,
+                        &mut dest,
+                        held,
+                    );
+                    assert_eq!(
+                        records.gesture_owner.peek(button),
+                        Some(GestureOwner::Local),
+                        "the interleaving press records its own slot"
+                    );
+                }
+            }
+
+            assert_eq!(
+                records.gesture_owner.peek(MouseButtonId::Left),
+                Some(GestureOwner::Local),
+                "the left slot must survive the interleaved event's tracking-inactive reset \
+                 (this is the bug this task repairs)"
+            );
+
+            // The matching left release must still complete the drag.
+            let left_release = ButtonEventInputs {
+                mode_1000: false,
+                mode_1002: false,
+                mode_1003: false,
+                records,
+                ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
+            };
+            let outcome = decide_button_event(left_release);
+            assert_eq!(
+                outcome.disposition,
+                Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary),
+                "the left release must still complete the drag despite the interleaved reset"
+            );
+            apply_outcome_with_held(outcome, &mut records, &mut dest, held);
+            assert_eq!(records.gesture_owner.peek(MouseButtonId::Left), None);
+
+            if let Interleaved::Press(button) = interleaved {
+                assert_eq!(
+                    records.gesture_owner.peek(button),
+                    Some(GestureOwner::Local),
+                    "the interleaving button's slot survives the left release, independent of it"
+                );
+            }
+        }
+    }
+
+    // ── task0001 AC-4: a no-owner left release is gated on drag-in-flight ──
+
+    #[test]
+    fn no_owner_left_release_completes_selection_only_when_drag_in_flight() {
+        for (drag_in_flight, expected) in [
+            (true, Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary)),
+            (false, Disposition::Nothing),
+        ] {
+            let inputs = ButtonEventInputs {
+                drag_in_flight,
+                ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
+            };
+            let outcome = decide_button_event(inputs);
+            assert_eq!(outcome.disposition, expected, "drag_in_flight={drag_in_flight}");
+        }
+    }
+
+    #[test]
+    fn no_owner_middle_and_right_release_stay_nothing_regardless_of_drag_in_flight() {
+        // D3/FR4: the broadening is left-only — a chrome middle/right
+        // release must never be affected by the drag-in-flight input.
+        for button in [MouseButtonId::Middle, MouseButtonId::Right] {
+            for drag_in_flight in [false, true] {
+                let inputs = ButtonEventInputs {
+                    drag_in_flight,
+                    ..base_button_inputs(MouseEventKind::Release, button)
+                };
+                let outcome = decide_button_event(inputs);
+                assert_eq!(
+                    outcome.disposition,
+                    Disposition::Nothing,
+                    "{button:?} release, drag_in_flight={drag_in_flight}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chrome_press_then_release_causes_no_publish_and_no_fold_toggle() {
+        // AC-4: a press SC-8 rejects records no owner (D6) and starts no
+        // drag, so its release reads drag-in-flight false — the "nothing"
+        // disposition is itself the guarantee of no PRIMARY write, no
+        // CLIPBOARD write and no fold toggle, since `apply_outcome` never
+        // performs a local arm and the caller only runs one when the
+        // outcome names one.
+        let mut records = MouseReportRecords::default();
+        let mut dest = Vec::new();
+        let press = ButtonEventInputs {
+            grid: GridOwnershipInputs {
+                in_title_bar_band: true,
+                ..GridOwnershipInputs::default()
+            },
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Left)
+        };
+        apply_outcome(decide_button_event(press), &mut records, &mut dest);
+        assert_eq!(records.gesture_owner.peek(MouseButtonId::Left), None);
+
+        let release = ButtonEventInputs {
+            drag_in_flight: false,
+            records,
+            ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
+        };
+        let outcome = decide_button_event(release);
+        assert_eq!(outcome.disposition, Disposition::Nothing);
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(dest.is_empty());
+    }
+
+    // ── task0001: edge cases named in Test Notes ────────────────────────
+
+    #[test]
+    fn left_release_completes_drag_even_when_tracking_turned_on_mid_drag() {
+        // The left slot says locally owned while tracking is now active:
+        // the release must still complete the drag, not emit a report.
+        let mut records = MouseReportRecords::default();
+        records
+            .gesture_owner
+            .record_press(MouseButtonId::Left, GestureOwner::Local);
+        let release = ButtonEventInputs {
+            mode_1000: false,
+            mode_1002: true,
+            mode_1003: false,
+            records,
+            ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
+        };
+        let outcome = decide_button_event(release);
+        assert_eq!(
+            outcome.disposition,
+            Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary)
+        );
+    }
+
+    #[test]
+    fn report_owned_release_with_tracking_off_stays_nothing_not_a_spurious_report() {
+        let mut records = MouseReportRecords::default();
+        records
+            .gesture_owner
+            .record_press(MouseButtonId::Left, GestureOwner::Report);
+        let release = ButtonEventInputs {
+            mode_1000: false,
+            mode_1002: false,
+            mode_1003: false,
+            drag_in_flight: true,
+            records,
+            ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
+        };
+        let outcome = decide_button_event(release);
+        assert_eq!(
+            outcome.disposition,
+            Disposition::Nothing,
+            "an owned release is decided by the recorded owner, never the drag-in-flight input"
+        );
+    }
+
+    #[test]
+    fn decide_release_leaves_its_records_input_unmodified() {
+        // AC-8: every decision function is a pure function of its inputs —
+        // `records` is a plain `Copy` value, so `inputs.records` below is a
+        // snapshot the decision call cannot reach back and mutate; this
+        // asserts the caller's own `records` binding also still reads the
+        // same values afterward.
+        let mut records = MouseReportRecords::default();
+        records
+            .gesture_owner
+            .record_press(MouseButtonId::Left, GestureOwner::Local);
+        let inputs = ButtonEventInputs {
+            drag_in_flight: true,
+            records,
+            ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
+        };
+        let _ = decide_button_event(inputs);
+        assert_eq!(
+            records.gesture_owner.peek(MouseButtonId::Left),
+            Some(GestureOwner::Local)
+        );
+        assert_eq!(records.built_for_tab, None);
     }
 }

@@ -1,0 +1,236 @@
+schema_version: 1
+feature: mouse-report-reset-active-gesture
+records:
+  - record_id: batch-audit-0001
+    recorded_at: "2026-09-20T02:55:00+09:00"
+    gate_id: null
+    gate_kind: user-requested-consultation
+    phase: create-spec
+    question: >-
+      修正のスコープ判断: (Q1) reset のカーブアウト範囲、(Q2) 所有権非依存の左解放後始末を
+      追加すべきか、(Q3) 退行を捕捉する最小テスト構成。
+    options:
+      - "Q1-A: 押下中ボタンを reset の clear 対象から除外する"
+      - "Q1-B: tracking OFF の分岐で reset を立てるのをやめる"
+      - "Q1-C: 両方"
+      - "Q2: 無条件の左解放後始末を追加する / しない"
+    choice:
+      - "Q1-A（押下中ボタンを除外。押下元タブの保持を伴う）"
+      - "Q2-Yes（handle_pointer_button のボタン正規化直後に配置）"
+    codex_consulted: true
+    opus_escalation: false
+    source: batch-codex-consultation
+    resolution_note: >-
+      Codex (readonly, turn 1) を run_codex_exec.sh 経由で相談した。Codex は Q1=A を推奨。
+      理由: セルキャッシュと非押下の陳腐化スロットを消す既存の意味を保ちつつ進行中ジェスチャを
+      保護できる。B は tab_changed 経路の全消去が残るうえ、前回 tracking 状態の記録が
+      新たに必要になる。C は今回の修正に不要な変更を含む。
+      Codex は A の副作用として、Report 所有スロットをタブ跨ぎで残すと解放先タブが
+      共有 built_for_tab（wheel が現在タブへ更新する）に引きずられて変わる点を指摘し、
+      押下元タブをスロットごとに保持することを推奨した。
+      Q2 は Yes。所有者判定より前、handle_pointer_button のボタン正規化直後に
+      dragging クリアと pending anchor の take を置き、解放専用分岐の early return に
+      飛ばされないようにする。PRIMARY への publish は「実際にローカルドラッグが
+      進行中だった場合に 1 回だけ」に限定し、無関係な解放での再 publish を避ける。
+      Q3 は decide_* と apply_outcome の両方を通す単体テスト 2 件（wheel / 別ボタン）と
+      ホスト側フォーカス喪失 1 件、加えて所有者なし左解放と reset 境界のテストを推奨。
+      既存ヘルパー base_button_inputs / base_motion_inputs / base_wheel_inputs は
+      既定が tracking ON なので mode_1002=false が必要、という実装上の注意も得た。
+    outcome: adopted
+  - record_id: batch-audit-0002
+    recorded_at: "2026-09-20T03:00:00+09:00"
+    gate_id: null
+    gate_kind: user-requested-consultation
+    phase: create-spec
+    question: >-
+      Q4: 押下中ボタンのカーブアウトを reset の 2 つのトリガ両方に適用し、押下元タブを
+      スロットごとに持つ (A1) か、`!tracking_active` トリガだけに適用しタブ変更は今どおり
+      全消去のままにする (A2) か。
+      Q5: カーブアウトを decide_* の入力束 (B1) に置くか、apply_outcome (B2) に置くか。
+    options:
+      - "A1: 両トリガ + 押下元タブをスロットごとに保持"
+      - "A2: !tracking_active トリガのみ"
+      - "B1: ButtonEventInputs / WheelEventInputs に held フラグを追加"
+      - "B2: apply_outcome 側で除外（HeldButtons を受ける companion 関数）"
+    choice:
+      - "A2"
+      - "B2"
+    codex_consulted: true
+    opus_escalation: true
+    source: batch-opus-escalation
+    resolution_note: >-
+      ターン 2 の Codex 相談は run_codex_exec.sh が usage limit で失敗したため、
+      references/question-resolution.md の Codex consultation procedure step 1
+      (availability probe が unavailable なら Opus escalation が代役) に従い
+      Opus エスカレーションを 1 回実施した。
+      Q4 は A2 を採用。決め手は、A1 が守るべき制約そのものを破る点:
+      タブ変更中に Report 所有ボタンが押されたままだと、現状は解放が何も出さない
+      (mouse_report.rs:807 -> 852-861)。A1 はここでスロットを生かして押下元タブへ
+      解放レポートを出すため、「Report 所有の挙動はバイト単位で不変」という FR4 に
+      正面から反し、既存テスト
+      ac6_ts23_release_after_active_tab_change_targets_the_tab_the_press_recorded
+      (mouse_report.rs:2604-2630) を壊す。
+      さらに A1 は built_for_tab と重複する「どのタブの記録か」を二重に持つことになり、
+      motion は inputs.active_tab へ、release は押下元タブへ、と同一ジェスチャの前半と
+      後半が食い違う新たな不整合を生む。host.mouse_report_held は決定より前に更新される
+      (pointer_routing.rs:486-494) ため、新規押下が自分自身の古いスロットを温存する
+      自己参照の危険もある。
+      A2 の唯一の取りこぼしは「ジェスチャ中に本当にタブが変わった場合」だが、
+      これは今の挙動そのままで今回の退行ではなく、ローカルドラッグ側は FR2 の
+      所有権非依存の左解放後始末が受け止めるので、ユーザーから見えるゴーストドラッグは
+      残らない。再現手順はそもそもタブ変更を含まない
+      (左押下が built_for_tab = Some(active_tab) を立てるので tab_changed == false)。
+      Q5 は B2 を採用。B1 は RecordUpdates.reset が「セルキャッシュのリセット」と
+      「全スロット消去」の 2 つを兼ねているため分割が必須になり、記録のライフサイクル判断を
+      decide_* 側へ持ち込むので NFR2 の純粋性不変条件に反する。テスト側の完全リテラルも
+      button 約 11 件 / wheel 約 3 件の書き換えが要る。
+      B2 は decide_* と RecordUpdates を一切触らず、変更は production 3 箇所のみ。
+      HeldButtons は MouseReportRecords ではなくホスト側の別フィールド (mod.rs:263) なので
+      apply_outcome のシグネチャ変更は不可避だが、HeldButtons を受け取る companion 関数を
+      足して既存 apply_outcome を委譲ラッパとして残せば、インラインテスト約 30 箇所は
+      無編集で済む。
+      副産物として、tests.rs:1782-1791 が pointer_routing.rs のソースに
+      "mouse_report::apply_outcome(" というニードルが含まれることを構造テストとして
+      検査している事実が判明した。companion へ移行するとこのニードルに一致しなくなるため、
+      委譲先リストへ companion 名を足す 1 行のテスト修正が必要 (assumption A7)。
+    outcome: adopted
+  - record_id: batch-audit-0003
+    recorded_at: "2026-09-20T03:00:00+09:00"
+    gate_id: null
+    gate_kind: user-requested-consultation
+    phase: create-plan
+    question: >-
+      Q6: task0001 / task0002 の 2 タスク並列分割は妥当か、単一逐次タスクの方が
+      良いか。Q7: 前提 A6（リワーク前の無条件 (Left, Released) => dragging = false
+      が FR2 の目標セマンティクス）で進めてよいか。
+    options:
+      - "Q6-A: 2 タスク並列分割のまま進める"
+      - "Q6-B: 単一タスクに統合する"
+      - "Q7-A: A6 を未検証の前提として抱えたまま進める"
+      - "Q7-B: A6 を検証済みとして確定する"
+    choice:
+      - "Q6-B（単一タスクに統合）"
+      - "Q7-B（A6 を検証済みとして確定）"
+    codex_consulted: true
+    opus_escalation: true
+    source: batch-opus-escalation
+    resolution_note: >-
+      Codex (run_codex_exec.sh readonly) は usage limit で exit 1。
+      references/question-resolution.md の Codex consultation procedure step 1 に
+      従い Opus エスカレーションを 1 回実施した。
+
+      Q6 は B を採用。決め手は SPEC.md 自身が分割を否定していること
+      （"Implementation Phases": "Not applicable. The repair is a single coherent
+      change ... splitting it into phases would leave host.dragging unterminated in
+      an intermediate state."）。2 タスク並列分割は名前を変えたフェーズ分割であり、
+      実装する当の SPEC と矛盾する。加えて tests.rs の衝突確率が計画の見積もりより
+      高い: ButtonEventInputs は Default を derive しておらず
+      （mouse_report.rs:550）、local_drag_in_flight の追加で完全な構造体リテラル
+      （tests.rs:1844-1863）が壊れる。そのリテラルは task0002 が拡張する当の
+      フォーカス喪失テスト本体（tests.rs:1809-1872）の中にある。親側採用の
+      コンフリクト解決はテキストは直せるが、「テスト本体に新フィールドが要る」ことは
+      復元できない。並列で得られる利得も小さい（task0002 は約 45 行の抽出 +
+      event_loop.rs の 1 アームのみ）。
+
+      Q6 に付随して計画の実バグを 4 件検出し、再計画で是正する:
+      (1) IMPLEMENTATION.md の識別子固定の根拠が事実誤認 — 構造テスト
+      （tests.rs:1782-1792）が照合するのは mouse_report:: 接頭辞の名前だけで、
+      terminate_local_drag_and_publish / local_drag_in_flight は対象外。
+      (2) 確実に赤くなるテストの持ち主が居ない — tests.rs:1786 は
+      "mouse_report::apply_outcome(" を検査するので、呼び出しを
+      apply_outcome_with_held( に移すと末尾 "(" のせいで部分一致せず失敗する。
+      task0001.md は「delegate リストを extend」と書いているが、置換が必要。
+      (3) drag-in-flight シグナルの定義が 2 タスクに重複し、ドリフト検出が無い。
+      (4) 両タスクが宣言する src-tauri/src/app.rs は存在しない。実体は
+      src-tauri/src/app/mod.rs（当該フィールドは :91）。
+
+      Q7 は B を採用。A6 は前提ではなく事実として確定できる — リワーク前リビジョンは
+      本リポジトリ内に存在する。34774fab "task0006: reduce pointer handlers to
+      gather/decide/apply/perform" の親 34774fab^ の
+      src-tauri/src/window_host/pointer_routing.rs:621-622 が
+      "(MouseButton::Left, ElementState::Released) => { host.dragging = false;" を
+      無条件アームとして持つことを確認済み。同ファイル :406-438 の解放
+      ショートサーキットは GestureOwner::Report のみ return し、Local と
+      所有者なしは下の match アームに落ちる旨がソース内コメントで明記されている。
+      現在の木にも独立証拠がある: mod.rs:172-174 が dragging を
+      "Whether the left button is currently held" と定義しており、左が押されていない
+      間は false でなければならない。dragging の代入は crate 全体で
+      pointer_routing.rs:339 (true) と :362 (false) の 2 箇所のみで、
+      :227 / event_loop.rs:649 / link_hover.rs:178-179 の 3 消費者はいずれも
+      自己回復経路を持たない。D3 が所有者なし左解放を drag-in-flight で門番するのは
+      A6 の無条件アームからの意図的な狭め（FR5 由来）であり、A6 が担保する
+      「進行中ドラッグを伴う左解放は必ずフラグを落とす」は保たれる。
+    outcome: adopted
+  - record_id: batch-audit-0004
+    recorded_at: "2026-09-20T05:55:00+09:00"
+    gate_id: verify.manual-scenario-ts9
+    question_id: verify.manual-scenario-ts9
+    packet_id: null
+    gate_kind: orchestrator-opened
+    phase: verify
+    question: >-
+      verify フェーズの判断ゲート（verify.manual-scenario-ts9）。
+    options:
+      - "A (verify = pass; TS-9 を未実行の手動残件として明示報告)"
+      - "B: TS-9 を failed_item にして自動 rework を回す"
+      - "C: TS-9 の自動化プロキシ（headless winit を駆動する統合テスト）を今作る"
+    choice: "A (verify = pass; TS-9 を未実行の手動残件として明示報告)"
+    codex_consulted: false
+    opus_escalation: true
+    source: batch-codex-consultation
+    resolution_note: >-
+      TS-9 は VERIFICATION.md 上で type=Manual と宣言され、同文書の SC-B 自身が "TS-9 is user-executed" と書いている。TS-9a..TS-9f は実ウィンドウ上の PRIMARY 選択・middle-click 貼り付け・link hover・resize カーソルを人間が確かめる項目で、無人実行では 原理的に実行できない。B はどの実装タスクでも解消できない失敗を記録することになり、rework が既レビュー済みコードを非欠陥に対して書き換えて無人サイクルを浪費する。C はゲート時点でのスコープ拡大で、レビュー後に未レビューのテストコードを足すうえ、headless では PRIMARY vs CLIPBOARD の区別も hover も正直には代替できない。自動側の証拠（両 feature 構成の cargo check 緑、--test-threads=1 で 3446 件全通過、reset カーブアウト / 無条件左解放ターミネータ / focus-loss 真理値表 / decide_* 純粋性 / 構造 delegate アサーションを覆う新規テスト 13 件）は TS-1..TS-8 と TS-10..TS-14 を満たす。よって pass とし、TS-9a..TS-9f 全 6 項目を PR 本文と実行レポートに未実行残件として明記する。
+      なお Codex 本体は usage limit、LiteLLM フォールバックは全モデル 429 で
+      相談ターンを 1 度も実行できなかったため、question-resolution.md の
+      Codex consultation procedure に従い Opus エスカレーションが Codex の
+      代わりに 1 回だけ走り、この判断を返した。option_id へのマッピング判断は
+      オーケストレーター側で行っている。
+    outcome: adopted
+  - record_id: batch-audit-0005
+    recorded_at: "2026-09-20T05:55:00+09:00"
+    gate_id: verify.format-gate
+    question_id: verify.format-gate
+    packet_id: null
+    gate_kind: orchestrator-opened
+    phase: verify
+    question: >-
+      verify フェーズの判断ゲート（verify.format-gate）。
+    options:
+      - "A (format ゲートをスキップし、その旨をレポートに明記)"
+      - "B: クレート全体の cargo fmt --check を走らせ、ヒットを verify 失敗として扱う"
+    choice: "A (format ゲートをスキップし、その旨をレポートに明記)"
+    codex_consulted: false
+    opus_escalation: true
+    source: batch-codex-consultation
+    resolution_note: >-
+      実測による判断。この worktree で cargo fmt --manifest-path src-tauri/Cargo.toml --check は 57 hunk を報告するが、その大半は main と byte 単位で同一のファイルにある （render/theme.rs 22 件、tests/mux_hot_upgrade.rs 6 件、agent_status_exit_latch.rs、window_host/input_translate.rs — いずれも git diff main...HEAD で無変更を確認）。つまり main 自体がこのゲートを通らないので、B は既存のリポジトリ全体のドリフトを 本 feature に帰属する verify 失敗に変えてしまい、Q1 の失敗経路と合わさると本 feature が 一度も触っていないコードに対して rework を走らせる。workflow.yaml も format_command: "" と 宣言しており、このワークフローに format ゲートは構成されていない。なお相談時の前提「rustfmt 未インストール」は誤りで、rust-toolchain.toml が 1.96.0 を rustfmt component 付きでピンし cargo fmt --version は 1.9.0-stable を返す。ただしそれは測定結果を強めるだけ（ゲートは実行可能で、無関係ファイルで落ちる）。ユーザーのグローバルルールもクレート全体 fmt を禁じている。
+      なお Codex 本体は usage limit、LiteLLM フォールバックは全モデル 429 で
+      相談ターンを 1 度も実行できなかったため、question-resolution.md の
+      Codex consultation procedure に従い Opus エスカレーションが Codex の
+      代わりに 1 回だけ走り、この判断を返した。option_id へのマッピング判断は
+      オーケストレーター側で行っている。
+    outcome: adopted
+  - record_id: batch-audit-0006
+    recorded_at: "2026-09-20T05:55:00+09:00"
+    gate_id: verify.extra-evidence
+    question_id: verify.extra-evidence
+    packet_id: null
+    gate_kind: orchestrator-opened
+    phase: verify
+    question: >-
+      verify フェーズの判断ゲート（verify.extra-evidence）。
+    options:
+      - "NONE (追加の自動証拠は不要)"
+      - "MORE: 追加コマンドを最大 2 本要求する"
+    choice: "NONE (追加の自動証拠は不要)"
+    codex_consulted: false
+    opus_escalation: true
+    source: batch-codex-consultation
+    resolution_note: >-
+      workflow 自身の build_command が両 feature 構成で緑、ライブラリスイート全体が --test-threads=1 で通過済み（本プロジェクトの tabs.rs replay を決定的にするために必要な直列化）。diff は src-tauri/src/window_host/ 配下の Rust のみで TypeScript を含まないため bun test / bun run typecheck は新たな信号を生まない。触れたファイルに cfg(windows) / cfg(unix) / cfg(target_os) は 1 つも無く、Windows クロスビルドの 追加リスクは発生しない。src-tauri/tests/ の統合バイナリは CLI subcommand と mux hot-upgrade の経路を見るもので GUI 専用のポインタ決定層には届かず、うち 2 本は既知の flaky（tmux_sockets discover、並列時の replay）なので、要求すれば無人ゲートに flake リスクを持ち込むだけで証拠にならない。
+      なお Codex 本体は usage limit、LiteLLM フォールバックは全モデル 429 で
+      相談ターンを 1 度も実行できなかったため、question-resolution.md の
+      Codex consultation procedure に従い Opus エスカレーションが Codex の
+      代わりに 1 回だけ走り、この判断を返した。option_id へのマッピング判断は
+      オーケストレーター側で行っている。
+    outcome: adopted

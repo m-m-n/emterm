@@ -1,0 +1,228 @@
+schema_version: 1
+feature: mouse-report-reset-active-gesture
+created: 2026-09-20
+base_branch: main
+goal: |
+  --batch --once --pr https://www.notion.so/3e03509ec8ee81e88c3bf708727c41bf
+
+  Once the implementation is finished, push the integration branch to the remote and create a Pull Request against base_branch with gh pr create. Keep the integration branch both locally and on the remote (do not auto-merge it into base_branch).
+  Consult Codex on any unclear points and adopt the option judged to be comparatively better.
+  Record the content of that discussion in Notion.
+
+parent_branch: em-workflow/mouse-report-reset-active-gesture/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 0959c36ecec36857429f01c2e6bc22ae83099bc8
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      No user-visible surface changes. The repair is confined to pointer-state bookkeeping in three GU
+      I-internal Rust modules; it introduces no new UI element, no new design token, no layout, copy,
+      colour or interaction-affordance change. The only observable difference is the restoration of be
+      haviour the base code already had. doc/UI-DESIGN-GUIDELINES.yaml and its two mirrors are untouch
+      ed, so the design-system drift tests in ui::dialog::tests are unaffected.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 06aad77427961a20f247f1ecd1eb265178ebba66
+  - id: implement
+    status: completed
+    completed_at_commit: 6717a82ab8efa18a5c399411c508012257dc686b
+    base_commit: 12399fe965bd1f3e6ec31f6fb3f115959622ca04
+  - id: review
+    status: completed
+    completed_at_commit: d6caae053ce6e5556030ef5591a82c162426fb31
+  - id: verify
+    status: completed
+    completed_at_commit: 7bf085ebb770dddaad84461caf6a4a8fb99d5cfd
+    result: pass
+    failed_items: []
+    evidence:
+      build:
+        - command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+          result: pass
+          note: >-
+            The worktree had no bundled fonts, so build.rs aborted on the bare
+            command. Re-run through the pre-approved composite
+            "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer &&
+            bun run build:settings && <build_command>", which satisfies the
+            documented GUI-build prerequisites. Exit 0.
+        - command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+          result: pass
+          note: "TS-12 / NFR4 / SC-E. Exit 0."
+      test:
+        - command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+          result: pass
+          note: "3446 passed; 0 failed; 3 ignored."
+      format:
+        result: skipped
+        note: >-
+          workflow.yaml declares format_command: "" — no format gate is
+          configured for this workflow. Measured separately: the crate-wide
+          cargo fmt --check reports 57 hunks, most in files byte-identical to
+          main, so main itself does not pass that gate. Running it would
+          attribute pre-existing repo-wide drift to this feature. Recorded as
+          batch-audit-0005.
+      e2e:
+        result: not_applicable
+        note: "e2e_test_command is empty; no E2E automation exists in this project."
+    scenarios:
+      automated_pass: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6, TS-7, TS-8, TS-10, TS-11, TS-12, TS-13, TS-14]
+      manual_outstanding: [TS-9]
+    manual_residuals:
+      - id: TS-9
+        sub_items: [TS-9a, TS-9b, TS-9c, TS-9d, TS-9e, TS-9f]
+        reason: >-
+          Typed "Manual" in VERIFICATION.md; SC-B itself designates TS-9 as
+          user-executed. Requires a human at a real terminal window (PRIMARY
+          selection, middle-click paste, link hover, resize cursor). Carried to
+          the human reviewer in the PR body rather than recorded as a failure —
+          recorded as batch-audit-0004.
+    excluded_requirements: []
+    advisory:
+      - >-
+        Three rustfmt hunks (src-tauri/src/window_host/mouse_report.rs lines
+        2928, 3019, 3027) fall inside this feature's newly added block. A
+        touched-files-only rustfmt pass would clear them. Not a verify failure;
+        surfaced for the human reviewer.
+  - id: retrospect
+    status: completed
+    completed_at_commit: 53723135ba0fddf98a9fa2b9802939c7514dbe5b
+
+tasks:
+  task0001:
+    title: "Bound the local drag: reset preserves held gestures, left release and focus loss always terminate"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/window_host/mouse_report.rs
+      - src-tauri/src/window_host/pointer_routing.rs
+      - src-tauri/src/window_host/event_loop.rs
+      - src-tauri/src/window_host/mod.rs
+      - src-tauri/src/window_host/tests.rs
+      - src-tauri/src/app/mod.rs
+    skills: [frontend-impl]
+    domains: [input-handling, ui]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4, NFR5]
+    status: merged
+    branch: em-workflow/mouse-report-reset-active-gesture/task0001
+    notes: null
+
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, architecture, spec]
+  residual_critical_high: 0
+  needs_rework: false
+  plan:
+    floor: [comprehensive, security, architecture, spec]
+    discretionary: []
+    cross_validation: true
+
+requirements:
+  FR1:
+    title: "Reset preserves physically-held gestures"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-5, TS-6]
+  FR2:
+    title: "A left release always finishes the local drag"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3]
+  FR3:
+    title: "Focus loss terminates a live local drag"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-4, TS-9]
+  FR4:
+    title: "Report-owned behaviour is untouched"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-7]
+  FR5:
+    title: "No new side effect for a release with no drag in flight"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-8]
+  FR6:
+    title: "Stale gesture records are still cleared"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-5, TS-6]
+  NFR1:
+    title: "The decision layer stays window-free"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-10]
+  NFR2:
+    title: "Records are never mutated at decision time"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-11]
+  NFR3:
+    title: "Test style matches the project convention"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-14]
+  NFR4:
+    title: "Build-surface invariance"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-12]
+  NFR5:
+    title: "The wheel-report notch clamp is not weakened"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-13]
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2

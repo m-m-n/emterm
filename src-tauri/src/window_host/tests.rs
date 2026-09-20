@@ -16,7 +16,7 @@ use super::input_translate::{
 };
 use super::link_hover::{detect_osc8_link_at, hover_link_cells_changed};
 use super::mouse_report::MouseButtonId;
-use super::pointer_routing::bounded_wheel_report_duplicate;
+use super::pointer_routing::{bounded_wheel_report_duplicate, drag_in_flight};
 use super::resize_layout::resolve_grid_bot_inset;
 use super::*;
 use crate::selection::SelectionMode;
@@ -1784,7 +1784,13 @@ fn pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam() {
         "mouse_report::decide_button_event(",
         "mouse_report::decide_motion_event(",
         "mouse_report::decide_wheel_event(",
-        "mouse_report::apply_outcome(",
+        // task0001: the three production call sites moved onto the
+        // held-button-aware companion entry point (D2) — this entry
+        // REPLACES the pre-task0001 `mouse_report::apply_outcome(` list
+        // item rather than sitting beside it (IMPLEMENTATION.md
+        // Conventions: adding a second entry would leave the old,
+        // now-unmatched needle a guaranteed-red assertion with no owner).
+        "mouse_report::apply_outcome_with_held(",
     ] {
         assert!(
             src.contains(delegate),
@@ -1856,6 +1862,12 @@ fn focus_loss_clear_all_empties_gesture_and_held_records_so_the_next_decision_st
         row: 5,
         hovered_link: false,
         middle_click_paste_enabled: false,
+        // task0001: no drag is in flight for this scenario — the release
+        // is decided from post-clear (empty) records with nothing else
+        // live, so the no-owner branch's new drag-in-flight check must
+        // still land on "nothing" here (AC-3/AC-4 do not apply to this
+        // case).
+        drag_in_flight: false,
         records: MouseReportRecords {
             gesture_owner: gesture,
             built_for_tab: Some(0),
@@ -1869,6 +1881,51 @@ fn focus_loss_clear_all_empties_gesture_and_held_records_so_the_next_decision_st
         "a release decided from post-clear (empty) records must report nothing and take no \
          local arm (AC-3) — the gesture the focus-loss path stranded is gone, not silently \
          resumed"
+    );
+}
+
+// ── task0001 (mouse-report-reset-active-gesture): AC-5's drag-in-flight
+// guard, and the focus-loss arm's fold-toggle exclusion ──────────────────
+
+/// AC-5: the local-drag-in-flight guard (Shared Components) is a pure,
+/// bare-testable function of two plain booleans — the host's drag flag and
+/// whether the app's pending selection anchor is present — with its full
+/// truth table covered here. `local_drag_in_flight`, the one-line host/app
+/// -reading wrapper both L1 and L2 actually call, cannot be driven without
+/// a winit window (Test Notes) — this is the guard's testable core.
+#[test]
+fn drag_in_flight_is_true_whenever_either_input_is_true() {
+    assert!(!drag_in_flight(false, false));
+    assert!(drag_in_flight(true, false));
+    assert!(drag_in_flight(false, true));
+    assert!(drag_in_flight(true, true));
+}
+
+/// AC-5: the focus-loss arm never reaches the fold-click toggle — folding
+/// is a click gesture, and making a focus change toggle a fold would be
+/// new behaviour, not a repair (D4). `handle_fold_click` stays exclusive
+/// to `pointer_routing.rs`'s release-path composition; `event_loop.rs`
+/// must never call it. This also pins that the focus-loss arm actually
+/// composes the drag-in-flight guard with the terminator's publish half,
+/// by name, since neither call site can be driven end-to-end without a
+/// winit window (Test Notes).
+#[test]
+fn focus_loss_arm_never_calls_the_fold_click_toggle() {
+    let event_loop_src = include_str!("event_loop.rs");
+    assert!(
+        !event_loop_src.contains("handle_fold_click"),
+        "the fold-click toggle must stay exclusive to the release path (D4); \
+         event_loop.rs must never call it"
+    );
+    assert!(
+        event_loop_src.contains("local_drag_in_flight(host, &self.app)"),
+        "the focus-loss arm must consult the drag-in-flight signal before terminating a live \
+         drag (AC-5)"
+    );
+    assert!(
+        event_loop_src.contains("publish_local_drag(host, &mut self.app)"),
+        "the focus-loss arm must run the terminator's publish half, guarded by the \
+         drag-in-flight signal (AC-5, D4)"
     );
 }
 
@@ -3138,7 +3195,10 @@ fn decide_wheel_event_active_tab_change_discards_the_carried_remainder() {
     };
 
     let outcome = decide_wheel_event(&inputs);
-    assert!(outcome.updates.reset, "AC-6: a tab change must reset");
+    assert!(
+        outcome.updates.reset_tracking_inactive || outcome.updates.reset_tab_changed,
+        "AC-6: a tab change must reset"
+    );
     assert_eq!(outcome.updates.built_for_tab, Some(1));
 
     let mut dest = Vec::new();
@@ -3192,7 +3252,7 @@ fn decide_wheel_event_observing_tracking_inactive_discards_the_carried_remainder
     };
 
     let outcome = decide_wheel_event(&inputs);
-    assert!(outcome.updates.reset);
+    assert!((outcome.updates.reset_tracking_inactive || outcome.updates.reset_tab_changed));
     let mut dest = Vec::new();
     apply_outcome(outcome, &mut records, &mut dest);
     assert_eq!(records.report_accum, 0.0);
@@ -3254,10 +3314,12 @@ fn decide_wheel_event_reactivation_after_an_owner_recorded_release_accumulates_f
         row: 5,
         hovered_link: false,
         middle_click_paste_enabled: false,
+        drag_in_flight: false,
         records,
     });
     assert!(
-        !release_outcome.updates.reset,
+        !(release_outcome.updates.reset_tracking_inactive
+            || release_outcome.updates.reset_tab_changed),
         "D10: an owner-recorded release must not itself reset gesture/cache state"
     );
     assert_eq!(
@@ -3451,7 +3513,13 @@ fn apply_wheel_report_step_grid_rejected_notch_yields_zero_and_leaves_the_whole_
     let mut dest = Vec::new();
     // A delta large enough that folding it into 0.9 would cross a notch
     // boundary (0.9 + 5.0 = 5.9 -> would report 5 notches if folded).
-    let notches = apply_wheel_report_step(outcome, &mut records, &mut dest, 5.0);
+    let notches = apply_wheel_report_step(
+        outcome,
+        &mut records,
+        &mut dest,
+        5.0,
+        mouse_report::HeldButtons::default(),
+    );
 
     assert_eq!(
         notches, 0,
@@ -3511,7 +3579,10 @@ fn apply_wheel_report_step_local_arm_dispositions_leave_the_accumulator_unaffect
         };
         let outcome = decide_wheel_event(&inputs);
         assert_eq!(outcome.disposition, Disposition::Local(LocalArm::ScrollScrollback));
-        assert!(!outcome.updates.reset, "test setup: this arm must not itself reset");
+        assert!(
+            !(outcome.updates.reset_tracking_inactive || outcome.updates.reset_tab_changed),
+            "test setup: this arm must not itself reset"
+        );
 
         // Reference: what apply_outcome alone (no fold) would leave.
         let mut expected = before;
@@ -3520,7 +3591,13 @@ fn apply_wheel_report_step_local_arm_dispositions_leave_the_accumulator_unaffect
 
         let mut records = before;
         let mut dest = Vec::new();
-        let notches = apply_wheel_report_step(outcome, &mut records, &mut dest, 5.0);
+        let notches = apply_wheel_report_step(
+            outcome,
+            &mut records,
+            &mut dest,
+            5.0,
+            mouse_report::HeldButtons::default(),
+        );
         assert_eq!(notches, 0, "AC-2: the scrollback local arm must yield a zero notch count");
         assert_eq!(
             records, expected,
@@ -3569,7 +3646,13 @@ fn apply_wheel_report_step_local_arm_dispositions_leave_the_accumulator_unaffect
 
         let mut records = before;
         let mut dest = Vec::new();
-        let notches = apply_wheel_report_step(outcome, &mut records, &mut dest, 5.0);
+        let notches = apply_wheel_report_step(
+            outcome,
+            &mut records,
+            &mut dest,
+            5.0,
+            mouse_report::HeldButtons::default(),
+        );
         assert_eq!(
             notches, 0,
             "AC-2: the arrow-translation local arm must yield a zero notch count"
@@ -3620,7 +3703,13 @@ fn apply_wheel_report_step_report_disposition_folds_the_delta_exactly_once() {
 
     let mut records = before;
     let mut dest = Vec::new();
-    let notches = apply_wheel_report_step(outcome, &mut records, &mut dest, 0.7);
+    let notches = apply_wheel_report_step(
+        outcome,
+        &mut records,
+        &mut dest,
+        0.7,
+        mouse_report::HeldButtons::default(),
+    );
 
     let (expected_notches, expected_frac) = accumulate_wheel_report_lines(0.6, 0.7);
     assert_eq!(
@@ -3671,7 +3760,13 @@ fn apply_wheel_report_step_sub_notch_run_still_reports_exactly_at_the_crossing_e
             records,
         };
         let outcome = decide_wheel_event(&inputs);
-        let notches = apply_wheel_report_step(outcome, &mut records, &mut dest, delta);
+        let notches = apply_wheel_report_step(
+            outcome,
+            &mut records,
+            &mut dest,
+            delta,
+            mouse_report::HeldButtons::default(),
+        );
 
         let (expected_notches, expected_frac) = accumulate_wheel_report_lines(reference_acc, delta);
         reference_acc = expected_frac;
@@ -3725,6 +3820,7 @@ fn discard_at_release_survives_an_intervening_accepted_motion_before_the_next_wh
         row: 5,
         hovered_link: false,
         middle_click_paste_enabled: false,
+        drag_in_flight: false,
         records,
     });
     apply_outcome(release_outcome, &mut records, &mut dest);
@@ -3777,7 +3873,13 @@ fn discard_at_release_survives_an_intervening_accepted_motion_before_the_next_wh
         records,
     };
     let wheel_outcome = decide_wheel_event(&wheel_inputs);
-    let notches = apply_wheel_report_step(wheel_outcome, &mut records, &mut dest, 0.5);
+    let notches = apply_wheel_report_step(
+        wheel_outcome,
+        &mut records,
+        &mut dest,
+        0.5,
+        mouse_report::HeldButtons::default(),
+    );
     let (expected_notches, expected_frac) = accumulate_wheel_report_lines(0.0, 0.5);
     assert_eq!(notches, expected_notches);
     assert_eq!(
@@ -3824,6 +3926,7 @@ fn discard_at_tracking_session_boundary_leaves_the_owner_recorded_and_the_drags_
         row: 5,
         hovered_link: false,
         middle_click_paste_enabled: false,
+        drag_in_flight: false,
         records,
     });
     assert!(matches!(press_outcome.disposition, Disposition::Report { .. }));
@@ -3905,6 +4008,7 @@ fn discard_at_tracking_session_boundary_leaves_the_owner_recorded_and_the_drags_
         row: 5,
         hovered_link: false,
         middle_click_paste_enabled: false,
+        drag_in_flight: false,
         records,
     });
     match &release_outcome.disposition {
@@ -3993,7 +4097,13 @@ fn rejected_event_mid_run_of_sub_notch_deltas_leaves_the_run_untouched() {
             records,
         };
         let outcome = decide_wheel_event(&inputs);
-        apply_wheel_report_step(outcome, &mut records, &mut dest, 0.3);
+        apply_wheel_report_step(
+            outcome,
+            &mut records,
+            &mut dest,
+            0.3,
+            mouse_report::HeldButtons::default(),
+        );
     }
     let acc_before_rejection = records.report_accum;
     assert!((acc_before_rejection - 0.6).abs() < 1.0e-5);
@@ -4020,7 +4130,13 @@ fn rejected_event_mid_run_of_sub_notch_deltas_leaves_the_run_untouched() {
         records,
     };
     let rejected_outcome = decide_wheel_event(&rejected_inputs);
-    let notches = apply_wheel_report_step(rejected_outcome, &mut records, &mut dest, 5.0);
+    let notches = apply_wheel_report_step(
+        rejected_outcome,
+        &mut records,
+        &mut dest,
+        5.0,
+        mouse_report::HeldButtons::default(),
+    );
     assert_eq!(notches, 0);
     assert_eq!(
         records.report_accum, acc_before_rejection,
@@ -4046,7 +4162,13 @@ fn rejected_event_mid_run_of_sub_notch_deltas_leaves_the_run_untouched() {
         records,
     };
     let outcome = decide_wheel_event(&inputs);
-    let notches = apply_wheel_report_step(outcome, &mut records, &mut dest, 0.3);
+    let notches = apply_wheel_report_step(
+        outcome,
+        &mut records,
+        &mut dest,
+        0.3,
+        mouse_report::HeldButtons::default(),
+    );
     let (expected_notches, expected_frac) = accumulate_wheel_report_lines(acc_before_rejection, 0.3);
     assert_eq!(notches, expected_notches, "the run must resume, not restart or skip");
     assert_eq!(records.report_accum, expected_frac);
@@ -4086,7 +4208,13 @@ fn local_arm_event_mid_run_of_sub_notch_deltas_leaves_the_run_untouched() {
             records,
         };
         let outcome = decide_wheel_event(&inputs);
-        apply_wheel_report_step(outcome, &mut records, &mut dest, 0.3);
+        apply_wheel_report_step(
+            outcome,
+            &mut records,
+            &mut dest,
+            0.3,
+            mouse_report::HeldButtons::default(),
+        );
     }
     let acc_before_local_arm = records.report_accum;
 
@@ -4114,10 +4242,16 @@ fn local_arm_event_mid_run_of_sub_notch_deltas_leaves_the_run_untouched() {
     };
     let local_outcome = decide_wheel_event(&local_inputs);
     assert!(
-        !local_outcome.updates.reset,
+        !(local_outcome.updates.reset_tracking_inactive || local_outcome.updates.reset_tab_changed),
         "test setup: this local arm must not itself reset"
     );
-    let notches = apply_wheel_report_step(local_outcome, &mut records, &mut dest, 5.0);
+    let notches = apply_wheel_report_step(
+        local_outcome,
+        &mut records,
+        &mut dest,
+        5.0,
+        mouse_report::HeldButtons::default(),
+    );
     assert_eq!(notches, 0);
     assert_eq!(
         records.report_accum, acc_before_local_arm,
@@ -4142,7 +4276,13 @@ fn local_arm_event_mid_run_of_sub_notch_deltas_leaves_the_run_untouched() {
         records,
     };
     let outcome = decide_wheel_event(&inputs);
-    let notches = apply_wheel_report_step(outcome, &mut records, &mut dest, 0.3);
+    let notches = apply_wheel_report_step(
+        outcome,
+        &mut records,
+        &mut dest,
+        0.3,
+        mouse_report::HeldButtons::default(),
+    );
     let (expected_notches, expected_frac) =
         accumulate_wheel_report_lines(acc_before_local_arm, 0.3);
     assert_eq!(notches, expected_notches, "the run must resume, not restart or skip");
@@ -4184,7 +4324,10 @@ fn tab_change_and_tracking_release_observed_by_the_same_event_discard_cleanly_on
         records,
     };
     let outcome = decide_wheel_event(&inputs);
-    assert!(outcome.updates.reset, "test setup: the tab change must reset");
+    assert!(
+        outcome.updates.reset_tracking_inactive || outcome.updates.reset_tab_changed,
+        "test setup: the tab change must reset"
+    );
     assert_eq!(
         outcome.updates.tracking_active,
         Some(false),

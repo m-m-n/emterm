@@ -1,0 +1,29 @@
+feature: mouse-report-reset-active-gesture
+collected_at: "2026-09-20T05:05:00+09:00"
+session_ids: ["01a0bb26-61bd-7545-b6a9-da832b35da75.jsonl"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - "Review round 1: 15 dispatched runs のうち 11 が rate_limited でスキップ。
+     Codex / LiteLLM ハーネスが両方落ち、4 観点とも Claude fallback で完走した。
+     critical/high はゼロだが、クロスバリデーションの実効カバレッジは
+     fallback のみだった点を記録しておく。"
+  - "Codex 相談が usage limit で 2 回失敗し、question-resolution.md の
+     Opus エスカレーションに 1 回落ちた（batch-audit 参照）。無人 run では
+     Codex 可用性がボトルネックになりうる。"
+  - "未解決の medium findings 4 件（stable_id: 592613773b46218d /
+     79f4847088dad493 / f8102391ba47175c / af839059e5de363c）は
+     residual_critical_high の対象外のため step は completed になったが、
+     人間評価者に渡す価値がある。"
+  - "verify: TS-9（実ウィンドウでの PRIMARY 選択・middle-click 貼り付け・
+     link hover・resize カーソル）は手動シナリオとして未実施のまま残っている。"
+  - "verify: format gate は workflow.yaml で空文字。crate 全体の
+     cargo fmt --check は main 時点で既に 57 hunk ずれており、gate として
+     機能させるには別途リポジトリ全体の整形が要る。本 feature の新規ブロック内に
+     3 hunk（mouse_report.rs 2928 / 3019 / 3027）が含まれる。"
