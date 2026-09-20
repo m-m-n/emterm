@@ -1,0 +1,49 @@
+schema_version: 1
+feature: probe-example-font-paths
+records:
+  - question_id: scope.defect-already-resolved
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T02:15:12+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [cancel_feature]
+    freeform: null
+    normalized_answer: "Close the feature as a duplicate of merged feature example-font-absolute-path."
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (policy action codex_consultation);
+      codex_consulted: true, 3 turns on harness entry 'codex' via
+      scripts/run_codex_exec.sh readonly; opus_escalation: false.
+      Options not chosen: regression_guard_only, full_fix_and_guard.
+      Key points of the discussion - turn 1 settled the implementation shape
+      (manifest-relative PathBuf join; source-scan guard rather than a runtime
+      font-open test, because src-tauri/assets/fonts/ is untracked and fetched
+      over the network); turn 2 found the absolute-path defect already absent at
+      the base revision and recommended delivering only the guard; turn 3
+      received the decisive evidence that both halves were already delivered by
+      merged feature example-font-absolute-path (commit e36d9c13) and chose
+      cancel_feature.
+  - question_id: docs.m-placement-run-comment
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T02:15:12+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [leave_as_is]
+    freeform: null
+    normalized_answer: "Out of scope; filed as a separate follow-up task."
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; codex_consulted: true.
+      Options not chosen: add_run_comment (chosen at turn 2, superseded at turn 3).
+      Codex's reasoning: the task's expectation that run-instruction comments
+      point at the current layout does not create an obligation to add a comment
+      to a file that carries none.
+  - question_id: design-step.recommendation
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T02:15:12+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "Skip the design step."
+    resolution_note: >-
+      gate: create-spec.design-step; resolved from references/batch-policies.yaml,
+      option_id decide_autonomously. codex_consulted: false. Moot after cancellation.

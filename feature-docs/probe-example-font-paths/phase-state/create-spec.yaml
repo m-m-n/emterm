@@ -1,16 +1,84 @@
 schema_version: 1
 feature: probe-example-font-paths
 phase: create-spec
-status: dispatching
+status: failed
 generation: 1
-base_revision: 61c611331896c157e435c6d3606b3a3e711f61e6
+base_revision: ad582b2c42fe2917438fa42b5dfbbd2544a77875
 last_input_digest: sha256:bf0c7a1acfeebabbaa8b9b83476c17d588086b0dd5b29b5a92fadcf54accaba7
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-21T02:15:05+09:00"
+    questions:
+      - question_id: scope.defect-already-resolved
+        status: answered
+      - question_id: testing.regression-guard-shape
+        status: obsolete
+      - question_id: testing.guard-scan-scope
+        status: obsolete
+      - question_id: docs.m-placement-run-comment
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  scope.defect-already-resolved:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T02:15:05+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [cancel_feature]
+    freeform: null
+    normalized_answer: >-
+      Close the feature as a duplicate. Both halves of the task's definition of
+      done are already satisfied on main at 61c61133 by the merged em-workflow
+      feature example-font-absolute-path (implementation commit e36d9c13).
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; codex_consulted: true (3 turns,
+      harness entry: codex); opus_escalation: false. Turn 1 and turn 2 of the
+      consultation assumed remaining work existed. Turn 3 carried the decisive
+      finding that feature example-font-absolute-path is fully completed and
+      merged (workflow.yaml: all steps completed, design skipped, verify passed;
+      implementation commit e36d9c13 "task0001: resolve font paths at runtime and
+      add examples hygiene scan"). Codex chose cancel_feature over
+      minimal_gap_closure and g1_and_g2, reasoning that the stated expectation
+      "run-instruction comments point at the current directory layout" does not
+      impose an obligation to ADD a comment to a file that has none, and that the
+      stale test inventory does not leave the definition of done unmet. The
+      orchestrator independently verified the mapping onto option_id
+      cancel_feature: (1) both probes resolve fonts via
+      PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/fonts"); (2)
+      src-tauri/tests/examples_source_hygiene.rs exists and its 7 tests all pass;
+      (3) zero occurrences of /home/, workspace/Inconsolata or native-poc under
+      src-tauri/examples/.
+  docs.m-placement-run-comment:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T02:15:05+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [leave_as_is]
+    freeform: null
+    normalized_answer: >-
+      Out of scope for this feature; filed as a separate follow-up task (G1).
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; codex_consulted: true.
+      Consultation turn 2 chose add_run_comment; turn 3, after the duplicate
+      finding, superseded it with cancel_feature for the whole feature and
+      assigned this gap to a separate ticket instead.
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T02:15:05+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "Accept the analyst's recommendation: skip the design step."
+    resolution_note: >-
+      gate: create-spec.design-step; resolved from references/batch-policies.yaml
+      (option_id decide_autonomously). Moot once the feature was cancelled.
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:bf0c7a1acfeebabbaa8b9b83476c17d588086b0dd5b29b5a92fadcf54accaba7
     output_digest: null
 artifacts: []
@@ -18,4 +86,7 @@ patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
-last_error: null
+last_error: >-
+  Feature cancelled during create-spec: the reported defect and its required
+  regression test are both already present and passing on the base revision.
+  No REQUIREMENTS.md / SPEC.md / workflow.yaml was written.
