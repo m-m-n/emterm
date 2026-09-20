@@ -1,0 +1,43 @@
+feature: focus-loss-drag-termination
+collected_at: "2026-09-20T18:05:00+09:00"
+session_ids:
+  - 01a0bdf6-5445-72a2-98b2-ae88e49aa285
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - note: |
+      create-spec の 3 つの要件明確化ゲートがすべて Codex 相談で解決された
+      (batch-audit.yaml の requirement.fr3-termination-scope /
+      edge-case.release-never-arrives / testing.window-free-termination-predicate)。
+      うち edge-case.release-never-arrives は Codex が NO_MAPPING を返し、
+      Opus エスカレーションで決着した唯一のケース。
+  - note: |
+      Codex が指摘した「mouse_report_held は event-derived record であって
+      物理状態のクエリではない」という観点が、後続の 2 ゲート
+      (terminate_on_focus_regain / terminate_on_unheld_motion の却下) の
+      判断根拠として再利用された。ゲート間で知見が伝播した例。
+  - note: |
+      verify で TS-7 (手動 GUI シナリオ) が実行不能だったため、
+      unlisted gate `verify.manual-scenario-unexecutable` を Codex 相談で解決し、
+      「pass (automatable surface に限定) + TS-7 は not executed と明示」とした。
+      このプロジェクトには E2E 自動化が無く (SPEC assumption A6)、
+      無人 batch 環境では GUI シナリオが構造的に検証不能。
+      同種の GUI 機能では毎回同じゲートが立つ見込み。
+  - note: |
+      レビュー round 1 は comprehensive / security / spec の 3 観点すべてが
+      findings 空で返り、evaluator の独立再読でも裏付けられた。
+      タスク 1 件・差分 4 ファイルの小規模変更では 1 ラウンドで収束する。
+  - note: |
+      実装は task0001 の 1 タスクのみで、コンフリクト再試行も
+      files 予測ミスも発生しなかった。
+  - note: |
+      残件: Focused(true) で実際の物理ボタン状態を問い合わせる
+      (X11 XQueryPointer / Wayland 相当) non-event-derived terminator。
+      release が永久に来ないケースの取りこぼしが残る。
+      別タスクとして起票する対象。
