@@ -167,3 +167,36 @@ records:
       skill SSOT の明文（「Step C に到達しない起動では --pr が付いていても PR は作られない」「--pr は
       起動ごとの設定で前の起動からは引き継がれない」）と一致する。
       次回 `--batch --once --pr example-font-absolute-path` を渡せば Step C に到達し PR が作成される。
+  - question_id: null
+    packet_id: null
+    answered_at: "2026-09-21T09:40:00+09:00"
+    source: unlisted-gate-fallback
+    answer_mode: single_select
+    selected_option_ids: [remove_worktree]
+    freeform: null
+    normalized_answer: "Step C の完了処理で integration worktree を SSOT どおり git worktree remove する（ブランチはローカル・リモートとも残す）"
+    resolution_note: >-
+      gate: Step C の worktree 掃除と、起動時の自由記述（「integration ブランチを
+      ローカルにもリモートにも残す」）との緊張関係。gate_id なし。
+      references/batch-mode.md の unlisted-gate fallback（Codex 相談 → 最小副作用オプション）に従った。
+      この起動は --batch --once --pr で、全 7 step が completed のため Step B は実行対象を持たず
+      Step C に直行した。--pr により完了方式は「PR を作成」に固定され、AskUserQuestion は出していない。
+      選択肢: (A) remove_worktree = SSOT どおり git worktree remove する（ブランチは残す）/
+      (B) keep_worktree = PR 指摘に即応できるよう worktree を残す（SSOT から逸脱）。
+      採用: (A)。codex_consulted: true / harness: codex（codex-harness second-opinion, read-only, 1 ターン）/
+      opus_escalation: false。
+      Codex の理由: git ではある作業ツリーでチェックアウト中のブランチは別の作業ツリーで
+      同時にチェックアウトできない（checkout lock）ため、worktree を残すとメイン作業ツリーから
+      git switch できない。worktree を削除してもローカルブランチ・リモートブランチ・コミットは
+      残るため可逆性が高く、必要なら git worktree add で再作成できる。
+      加えて、人間の指示は「ブランチを保持する」と述べているだけで worktree の保持は要求していない。
+      不採用 (B) の最も強い根拠（Codex が明示）: worktree を残せば PR の指摘へ即座に対応でき、
+      作業環境の配置も維持されるため継続作業の手間が最小になる。
+      Codex が挙げた残存リスク: 削除後に PR 対応を始める際はメイン作業ツリーでの切り替えまたは
+      worktree の再作成が必要になる。また gitignored ファイル等の Git 管理外の状態が
+      worktree 内にあれば削除で失われ得るため、事前確認が必要。
+      orchestrator の受け入れ: 残存リスクを削除前に検証した。git status --porcelain --untracked-files=all は
+      空（未追跡の非 ignore ファイルは無し）、ignored エントリは node_modules/ ・ src-tauri/target ・
+      src-tauri/assets（fetch-fonts.sh が取得するフォント）・ src-tauri/viewer, src-tauri/settings の
+      bun dist バンドルのみで、いずれも再生成可能。失って困る Git 管理外の状態は無いと確認した。
+      また origin への push 済みで unpushed commit は 0 件。
