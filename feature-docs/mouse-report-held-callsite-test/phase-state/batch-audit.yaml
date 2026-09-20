@@ -1,0 +1,70 @@
+schema_version: 1
+feature: mouse-report-held-callsite-test
+records:
+  - question_id: create-plan.codex-consultation.traceability-gaps
+    packet_id: null
+    answered_at: "2026-09-21T02:53:53+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [keep_spec_traceability]
+    freeform: "FR8 / NFR1-NFR7 keep an empty tests list, matching SPEC's Traceability table."
+    normalized_answer: "Option A — leave tests: [] for the constraint-type requirements."
+    resolution_note: >-
+      gate: user-directed Codex consultation on an open planning point (no gate_id;
+      requested by the launch instruction \"Consult Codex on any unclear points\").
+      options: (A) leave tests: [] matching SPEC's Traceability table;
+      (B) mint new TS IDs so every requirement maps to a scenario.
+      codex_consulted: true. opus_escalation: false. chosen: A.
+      codex reasoning: constraint-type requirements (no existing-test edits, no new
+      deps, naming convention, determinism, negligible cost, feature gate unaffected)
+      are better verified by diff / build / code inspection than by a dedicated
+      scenario; minting TS IDs would duplicate the same checks under new names and
+      diverge from SPEC. mitigation adopted: VERIFICATION.md keeps stating, per
+      requirement, \"no dedicated TS; verified by AC / code inspection\".
+  - question_id: create-plan.codex-consultation.tdd-red-first
+    packet_id: null
+    answered_at: "2026-09-21T02:53:53+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [mutate_real_source_in_memory]
+    freeform: "TS-5 derives its mutation inputs from the real embedded source instead of hand-written synthetic bodies."
+    normalized_answer: "Option C — keep TS-4/TS-5 as the red-first proof, but build TS-5's mutations by rewriting the real extracted bodies in memory."
+    resolution_note: >-
+      gate: user-directed Codex consultation on an open planning point (no gate_id).
+      options: (A) accept TS-4/TS-5 as-is, TS-1/2/3/6 are pure regression pins;
+      (B) have the implementer temporarily break production source to observe red,
+      then revert; (C) Codex's own proposal.
+      codex_consulted: true. opus_escalation: false. chosen: C.
+      codex reasoning: (B) blurs the FR4 production freeze and leaves no reproducible
+      evidence; plain (A) has a real hole — hand-written synthetic inputs can drift
+      from the real function shape, so the judgment function can be correct while the
+      body extractor's wiring to the real file is wrong, and TS-1/2/3/6 then pass
+      vacuously. (C) keeps the freeze and closes the hole by mutating the real
+      extracted bodies in memory, asserting unmutated-pass / exactly-one-site-changed
+      / mutated-fail per mutation.
+      adopted into: IMPLEMENTATION.md D6.1, tasks/task0001.md AC-6 and Test Notes,
+      VERIFICATION.md TS-5 row.
+  - question_id: create-plan.codex-consultation.receiver-identifier
+    packet_id: null
+    answered_at: "2026-09-21T02:53:53+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [param_set_membership_plus_no_rebinding]
+    freeform: "The held receiver identifier must come from the enclosing function's parameter set AND must not be re-bound before the call."
+    normalized_answer: "Option C — parameter-set membership plus a conservative re-binding rejection."
+    resolution_note: >-
+      gate: user-directed Codex consultation on an open planning point (no gate_id).
+      options: (A) accept parameter-set membership alone; (B) hardcode the literal
+      receiver name `host`; (C) Codex's own proposal.
+      codex_consulted: true. opus_escalation: false. chosen: C.
+      codex reasoning: (B) breaks on a legitimate parameter rename and contradicts
+      NFR8's intent; (A) has a confirmed false-green hole — a same-named local
+      binding (e.g. `let host = ...;`) shadowing the parameter still satisfies the
+      three-token check while no longer referring to the live parameter. (C) keeps
+      deriving the name from the parameter set and additionally rejects any `let`,
+      closure parameter, or `match` / `if let` / `while let` pattern that re-binds
+      that identifier ahead of the call; deliberately conservative and syntactic, no
+      full Rust name resolution, and a conservative rejection is a red rather than a
+      silent pass.
+      adopted into: IMPLEMENTATION.md D6.2, tasks/task0001.md E4 rule 3b, AC-6 and
+      the TS-4 edge-case list, VERIFICATION.md TS-5 / AC-3 rows.
