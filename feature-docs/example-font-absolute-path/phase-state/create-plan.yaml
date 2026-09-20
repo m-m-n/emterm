@@ -1,0 +1,21 @@
+schema_version: 1
+feature: example-font-absolute-path
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: c7574c12d4e241bb0f6df5d53ee453e48839e2a2
+last_input_digest: sha256:f5d1fa783108298028e030cf843aab1180f6dd88fee2d674f7d254aaee35b757
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:f5d1fa783108298028e030cf843aab1180f6dd88fee2d674f7d254aaee35b757
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
