@@ -120,3 +120,40 @@ records:
       Adopted verbatim: M6 and SC1 are recorded as PASS on the evidence of this
       run's own clean-start fetch-then-test sequence; no separate run was
       attempted, and none is possible.
+  - question_id: develop.once-pr-boundary
+    packet_id: null
+    answered_at: "2026-09-20T23:50:00+09:00"
+    source: codex-consultation
+    answer_mode: single_select
+    selected_option_ids: ["option_a"]
+    freeform: null
+    normalized_answer: "honor the --once retrospect boundary; do not run Step C, do not push, do not open the PR in this launch"
+    resolution_note: >-
+      Unlisted-gate fallback (no gate_id at the originating site; batch-mode.md
+      "Any other non-packet AskUserQuestion site"). The launch carried
+      `--batch --once --pr fetch-fonts-noto-color-emoji` together with a
+      free-text requester instruction to push the integration branch and open a
+      PR against base_branch with `gh pr create`, keeping the branch both
+      locally and on the remote. At entry the only pending step was
+      `retrospect`, so under skills/develop/SKILL.md's `--once` phase-boundary
+      table the turn must end once `retrospect` reaches `completed`, and Step C
+      (where a PR would be created) is carried over to the next launch. The same
+      document's `--pr` clause states that `--pr` takes effect only on a launch
+      that executes Step C and is not inherited across launches. Options put to
+      Codex: (option_a) honor `--once` strictly -- run only `retrospect`, end at
+      the boundary with a `phase_done` structured result, create no PR, and state
+      that a follow-up launch carrying `--pr` is required; (option_b) treat the
+      requester's prose as overriding the `--once` boundary for this run and
+      continue into Step C in the same turn, opening the PR.
+      Codex (readonly sandbox, exit 0) chose option_a. Its key points: rule 2 of
+      the skill anticipates exactly this flag combination and fixes the outcome,
+      so the combination is not an oversight the orchestrator may repair; the
+      free-text instruction expresses the requester's end state but does not
+      authorize crossing a documented execution boundary on this particular
+      launch; and PR creation is an outward-facing side effect that should not be
+      produced by implicitly overriding a written boundary. It added that the
+      result must state plainly that no PR was created and that the next launch
+      must itself carry `--pr`.
+      Adopted option_a verbatim. Nothing is lost: the PR is created by the
+      follow-up launch `/em-workflow:develop --batch --once --pr fetch-fonts-noto-color-emoji`,
+      which enters directly at Step C.
