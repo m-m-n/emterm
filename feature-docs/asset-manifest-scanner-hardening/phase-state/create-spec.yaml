@@ -1,17 +1,98 @@
 schema_version: 1
 feature: asset-manifest-scanner-hardening
 phase: create-spec
-status: initialized
+status: awaiting_answers
 generation: 1
-base_revision: 61c61133
-last_input_digest: null
-active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+base_revision: 49004162a89d7c4ab179d14342bb16ce353fab65
+last_input_digest: "sha256:61bc19f722b82f4b422af39ec600628eac7960bb16346942834057b596a88709"
+active_request_id: create-spec-run-0001
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-21T01:58:00+09:00"
+    questions:
+      - question_id: requirement.include-bytes-delimiter-forms
+        status: answered
+      - question_id: requirement.non-literal-macro-argument
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.include-bytes-delimiter-forms:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T02:05:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [parens_only]
+    freeform: null
+    normalized_answer: "include_bytes! の走査対象は丸括弧形式のみに保ち、境界検出だけを追加する"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (batch-policies.yaml action:
+      codex_consultation, record_as_assumption: true). Codex consulted via
+      run_codex_exec.sh readonly, 1 turn, harness entry `codex`. Codex scanned
+      all 287 Rust sources under src-tauri/ and found zero bracket/brace
+      `include_bytes!` forms and zero `concat!`-assembled embeds; all 7 real
+      embeds are plain parenthesis + bare literal in
+      src-tauri/src/render/font/resolver.rs. Option not chosen:
+      all_delimiter_forms (would add two more delimiter-matching paths and
+      their tests for a form nothing in the tree uses, beyond the requested
+      scope). Recorded as assumption a5.
+  requirement.non-literal-macro-argument:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T02:05:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [skip_non_literal]
+    freeform: null
+    normalized_answer: "括弧内の最初の文字列リテラルだけを見て、無ければその呼び出しは抽出せず次へ進む"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (batch-policies.yaml action:
+      codex_consultation, record_as_assumption: true). Same single Codex
+      consultation as the sibling question (one consultation per packet).
+      Codex confirmed build.rs:160 is the only non-literal call shape in the
+      tree and that it must yield the empty set; the other build.rs
+      occurrences are comments. Option not chosen: descend_nested_literals
+      (per-literal extension matching cannot reconstruct a `concat!` result
+      anyway, and widens the window for picking up unrelated literals).
+      Recorded as assumption a6.
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T02:05:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "requirements-analyst の design_step_recommendation (skip) をそのまま採用する"
+    resolution_note: >-
+      gate: create-spec.design-step resolved from references/batch-policies.yaml
+      (action: select, option_id: decide_autonomously). Option not chosen:
+      ask_user (batch mode has no responder).
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: "sha256:61bc19f722b82f4b422af39ec600628eac7960bb16346942834057b596a88709"
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: "sha256:e2af61437ab49b416c0c5c644af3ba515a0136aed8bb9b4100693a7b109fc865"
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/components/md3-select.ts
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: "sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef"
+      src-tauri/web-shared/styles.css: "sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb"
+      src-tauri/web-shared/components/md3-select.css: "sha256:b09cdb7c03aecfd24ac44581995a8f75188c4929c744af5e065f5a2a947ae9cd"
+      src-tauri/web-shared/components/md3-select.ts: "sha256:8212cad86e4f25206de4dbdc72ae0e74df5618449e7fca76d06264f22ab42577"
+      src-tauri/web-shared/settings/markdown-theme-presets.ts: "sha256:8344c4f43366d3e78df8c8f170a5fc75e93121d16e64912635c51880ff6a429a"
+      src-tauri/web-shared/settings/ui-theme-presets.ts: "sha256:5e1afbad9942f28348372986ffcb0a77f7992edb67c5d760637c0019404a3094"
+    truncated: false
 last_error: null
