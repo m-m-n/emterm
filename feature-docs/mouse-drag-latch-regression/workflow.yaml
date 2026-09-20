@@ -1,0 +1,309 @@
+schema_version: 1
+feature: mouse-drag-latch-regression
+created: '2026-09-21'
+base_branch: main
+goal: |
+  マウスレポート: ドラッグ中の reset で host.dragging がラッチしゴーストドラッグになる
+
+  ## 現象 (必須)
+  マウスレポート実装（ブランチ `em-workflow/mouse-reporting/integration`）の rework で入ったリグレッション。
+  `apply_outcome` は `updates.reset` が立つたびに `records.gesture_owner.clear_all()` を実行する。`reset = !tracking_active || tab_changed` は `decide_press` / `decide_wheel_event` / `decide_release`（no-owner 分岐）から立つため、**トラッキングモードが無効な通常状態では、押下のたび・ホイールノッチのたびに reset が true** になる。
+  左ボタン押下でグリッド上に `Left = Local` が記録され `begin_selection_drag` が `host.dragging = true` にする。そのドラッグ中にホイールを回すか別のボタンを押すと reset が発火して Left スロットが消える。対応する左解放時に `peek(Left) == None` となり `Disposition::Nothing` が返り、`complete_selection_and_publish_to_primary` が呼ばれない。
+  `host.dragging` はクレート全体で 2 箇所（`pointer_routing.rs:330` で true、`:353` で false）にしか代入が無く、他に落とす経路が無いため **true のままラッチする**。
+  フォーカス喪失経路でも同じラッチに到達する。`event_loop.rs:249` は `Focused(false)` で `mouse_report::clear_all` を呼ぶが、`host.dragging` も `app.pending_selection_anchor` も触らない。
+  結果:
+  - 以降のすべての PointerMoved がボタンを押していないのに選択範囲を伸ばす
+  - `update_resize_hint` / `refresh_link_hover` が恒久的にスキップされる
+  - 選択が PRIMARY に publish されない
+  ベースコミットには無条件の `(Left, Released) => host.dragging = false` があり、この経路は到達不能だった。task0005 / task0006 のリグレッション。
+
+  ## 再現手順 (必須)
+  1. eMterm を起動する（マウスレポート対応 TUI は不要）
+  2. グリッド上で左ボタンを押したままドラッグして選択を始める
+  3. ドラッグ中にホイールを 1 ノッチ回す（または別のボタンを押す）
+  4. 左ボタンを離す
+  5. ボタンを押していないのにポインタ移動で選択範囲が伸び続ける。選択が PRIMARY にも入らない
+  別経路: 手順 3 の代わりにウィンドウのフォーカスを外しても同じ状態になる。
+
+  ## 期待する挙動 (必須)
+  - 左解放時は、ジェスチャ所有権の記録が残っているかどうかに関わらず `host.dragging` を落とし、`app.pending_selection_anchor` を消費する
+  - reset はセルキャッシュと陳腐化したジェスチャ記録の無効化のためにあり、物理的に押下継続中のジェスチャを破棄しない
+  - フォーカス喪失時は `mouse_report::clear_all` と併せて `host.dragging` と pending anchor も落とす
+
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  （左ドラッグ中のホイール / 左ドラッグ中の第 2 ボタン押下 / 左ドラッグ中のフォーカス喪失 の 3 ケースで、最終的に `dragging == false` かつ選択が publish されること）
+
+  ## 該当箇所 (任意)
+  - `src-tauri/src/window_host/mouse_report.rs:912` — `apply_outcome` の `updates.reset` 分岐
+  - `src-tauri/src/window_host/pointer_routing.rs:330` / `:353` — `host.dragging` の唯一の代入箇所
+  - `src-tauri/src/window_host/event_loop.rs:249` — `Focused(false)` 時の `clear_all`
+
+  ## 実害・発生条件 (任意)
+  マウスレポートの有効・無効を問わず発生する。一度踏むとウィンドウを作り直すまで選択機能が壊れたままになるため、影響は大きい。
+  レビュー由来: em-workflow review round 3 / stable_id `1ac64f41111531a6` / severity high / category comprehensive。batch モードの review rework cap 到達により deferred として残った。修正が `mouse_report.rs` / `pointer_routing.rs` / `event_loop.rs` の 3 ファイルにまたがるため、single-file の auto-fix editor では適用できなかった。
+parent_branch: em-workflow/mouse-drag-latch-regression/integration
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/md3.rs
+  components:
+    rust:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
+      format_command: make fmt-check
+      e2e_test_command: ''
+    webview-ts:
+      language: typescript
+      build_command: bun run build:viewer && bun run build:settings
+      test_command: bun test
+      format_command: bunx biome check .
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 96d25c4ede7708bb1a7a6089e797df59c665dd8f
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 本フィーチャは Rust のユニットテスト追加のみで、UI サーフェス・視覚的変更・新しいユーザー操作・デザイントークンの消費をいずれも持たない。
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: 61e08f0eddcae72b5605ce59030ad57f9c599300
+- id: implement
+  status: completed
+  completed_at_commit: e7723a6dc2b0e072d390cddbf7f78295ae82b526
+  base_commit: 8c3b4cce8fc15692cdd859d1fdfec09ec796b2c2
+- id: review
+  status: completed
+  completed_at_commit: 8ddefa0cd30079523ae467a45b58ef79f006f754
+- id: verify
+  status: completed
+  completed_at_commit: 1a7e799b1b7f9a998c72e908dde8cc4f6281a424
+  result: pass
+  failed_items: []
+  not_executed_items:
+  - id: TS-M1
+    kind: manual
+    reason: >-
+      Requires a human at a physical display to drive a release build's pointer.
+      This run is headless and unattended, and the project has no E2E harness for
+      the wgpu-rendered native terminal surface. Resolved per batch-audit.yaml
+      record `verify.manual-item-unexecutable` (Codex-consulted): recorded as not
+      executed rather than pass or fail. FR4, the only requirement TS-M1 covers,
+      is independently verified by TS-6's change-set inspection.
+  evidence:
+    build: 'cargo check (gui): exit 0'
+    test: 'cargo test --lib -- --test-threads=1: 3492 passed, 0 failed, 3 ignored'
+    ts_1_to_5: 'all five new regression scenarios present and passing'
+    ts_6: 'change-set inspection: only src-tauri/src/window_host/tests.rs under src-tauri/src/ (+421 lines, test module only); no dependency manifest changed'
+    ts_7: 'both pre-existing focus-loss pins unmodified (no deletions in the diff) and passing'
+    ts_8: 'cargo check --no-default-features: exit 0'
+    ts_9: 'the five scenarios pass 3x by name filter without --test-threads=1, 0.00s each'
+    ts_10: 'each new test carries a doc comment naming one of the four mechanism labels; no forbidden type named; no new file, compile unit or dependency'
+    format: 'make fmt-check (cargo fmt --all --check + bunx biome check .): exit 0'
+    webview_ts: 'bun test 349 passed 0 failed; bunx biome check . clean; bun run build:viewer && build:settings: exit 0'
+    e2e: 'no e2e_test_command configured for either component'
+    excluded_requirements: 'none (no requirement carries status: excluded)'
+- id: retrospect
+  status: completed
+  completed_at_commit: 8090828be78f05750051cd6c560582bfa099edcd
+tasks:
+  task0001:
+    title: "Pin the ghost-drag latch mechanisms and the focus-loss semantics with seam-level regression tests"
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/window_host/tests.rs
+    skills: []
+    domains: ["input-handling", "ui"]
+    complexity: medium
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    - NFR7
+    status: merged
+    notes: null
+    branch: em-workflow/mouse-drag-latch-regression/task0001
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: true
+  perspectives:
+    comprehensive:
+      harness: codex
+      status: completed
+      findings: 1
+    security:
+      harness: codex
+      status: completed
+      findings: 0
+    spec:
+      harness: litellm
+      model: muse-spark
+      status: completed
+      findings: 4
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: ドラッグ中のホイールノッチで進行中の左ドラッグが取り残されないこと
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-3
+  FR2:
+    title: ドラッグ中の第 2 ボタン押下で進行中の左ドラッグが取り残されないこと
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-3
+  FR3:
+    title: ドラッグ中のフォーカス喪失は現行の意図した仕様として固定されること
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-4
+    - TS-5
+  FR4:
+    title: 本番コードの挙動変更を行わないこと
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-M1
+    - TS-6
+  FR5:
+    title: 既存のフォーカス喪失ゲートのテストを維持すること
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-4
+    - TS-7
+  FR6:
+    title: 各テストが守る機構を明示すること
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-10
+  NFR1:
+    title: ウィンドウ非依存のシームのみを対象とすること
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-10
+  NFR2:
+    title: 既存のインラインテストモジュールに追加し依存を増やさないこと
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-6
+    - TS-10
+  NFR3:
+    title: リポジトリのテスト命名規約に従うこと
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-10
+  NFR4:
+    title: 決定的かつ並列安全であること
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-9
+  NFR5:
+    title: 観測可能な契約をアサートすること
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-10
+  NFR6:
+    title: 実行コストが無視できること
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-9
+  NFR7:
+    title: フィーチャゲートに影響しないこと
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2

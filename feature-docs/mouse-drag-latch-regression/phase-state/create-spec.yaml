@@ -1,0 +1,50 @@
+schema_version: 1
+feature: mouse-drag-latch-regression
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 96d25c4ede7708bb1a7a6089e797df59c665dd8f
+last_input_digest: sha256:ec897b7a097b0036d7cad1c53f4465660fe1b33cb18f3ac3605421b3e5ae8041
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: sha256:6e7eee20be89256e00a1fb1edd8e70baca2f72ffcaa29ba26ada8666a23e9cc1
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:ec897b7a097b0036d7cad1c53f4465660fe1b33cb18f3ac3605421b3e5ae8041
+    output_digest: null
+artifacts:
+  - path: feature-docs/mouse-drag-latch-regression/REQUIREMENTS.md
+    sha256: sha256:aea1e6b7dcffceb12e643cbfbe70491265a972abab5d467d94e351ad49260bdf
+    produced_by: create-spec-run-0002
+  - path: feature-docs/mouse-drag-latch-regression/SPEC.md
+    sha256: sha256:a6e1a7aefa0ad9c010d5c60cefa886964aeae0aace3571913b7c8961a9a645dd
+    produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+    truncated: false
+  e2e:
+    resolved_at_generation: 1
+    paths: []
+    truncated: false
+  reference_scan_targets:
+    resolved_at_generation: 1
+    paths:
+      - src-tauri/src/window_host/mouse_report.rs
+      - src-tauri/src/window_host/pointer_routing.rs
+      - src-tauri/src/window_host/event_loop.rs
+      - src-tauri/src/window_host/tests.rs
+    truncated: false
+last_error: null

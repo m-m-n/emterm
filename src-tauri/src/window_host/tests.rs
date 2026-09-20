@@ -4782,3 +4782,424 @@ fn consume_drag_termination_consumes_anchor_even_when_drag_flag_already_false() 
     assert_eq!(pending_anchor, None);
     assert_eq!(anchor, Some(Pos { row: 0, col: 0 }));
 }
+
+// ── task0001 (mouse-drag-latch-regression): seam-level regression pins for
+// the ghost-drag latch mechanisms and the focus-loss semantics around them.
+// Each test's doc comment names exactly one of the four mechanism labels
+// from IMPLEMENTATION.md's Conventions section; none constructs a
+// `WindowHost`, winit, GPU-surface, PTY or terminal-mode type (NFR1), and
+// each builds its own records/state inline (NFR4). ─────────────────────
+
+/// task0001 (FR1, AC-1). Mechanism: reset-clears-held-gesture-slot — also
+/// exercises held-unaware-apply-entry-point on the WHEEL path in the same
+/// assertion, since the reset can only exclude a held button's slot when
+/// the live held-button value actually reaches the wheel path's
+/// apply-and-fold unit.
+///
+/// A left press has already started a selection drag (the left gesture
+/// slot records a local owner). A wheel notch then arrives with tracking
+/// inactive — the trigger for a tracking-inactive reset — decided and
+/// applied through `apply_wheel_report_step` with the live held-button
+/// value reporting left as held. The held slot must survive that reset,
+/// and the drag must still complete correctly on its eventual left
+/// release.
+#[test]
+fn wheel_notch_mid_left_drag_preserves_held_gesture_slot_and_completes_selection() {
+    use mouse_report::{
+        ButtonEventInputs, Disposition, GestureOwner, GestureOwnership, GridOwnershipInputs,
+        HeldButtons, LocalArm, MouseEventKind, MouseReportEncoding, MouseReportRecords,
+        WheelEventInputs, apply_wheel_report_step, decide_button_event, decide_wheel_event,
+    };
+
+    let mut gesture = GestureOwnership::new();
+    gesture.record_press(MouseButtonId::Left, GestureOwner::Local);
+    let mut records = MouseReportRecords {
+        gesture_owner: gesture,
+        built_for_tab: Some(0),
+        ..MouseReportRecords::default()
+    };
+
+    let wheel_outcome = decide_wheel_event(&WheelEventInputs {
+        kind: MouseEventKind::WheelUp,
+        grid: GridOwnershipInputs::default(),
+        mods: Modifiers::NONE,
+        mode_1000: false,
+        mode_1002: false,
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 0,
+        column: 5,
+        row: 5,
+        on_alt_screen: false,
+        alt_scroll_mode_bit: false,
+        alt_scroll_setting: false,
+        records,
+    });
+    assert!(
+        wheel_outcome.updates.reset_tracking_inactive,
+        "test setup: tracking inactive must trigger the reset this test pins"
+    );
+
+    let mut dest = Vec::new();
+    let held = HeldButtons {
+        left: true,
+        middle: false,
+        right: false,
+    };
+    apply_wheel_report_step(wheel_outcome, &mut records, &mut dest, 1.0, held);
+
+    assert_eq!(
+        records.gesture_owner.peek(MouseButtonId::Left),
+        Some(GestureOwner::Local),
+        "reset-clears-held-gesture-slot: a tracking-inactive reset triggered by a wheel notch \
+         must not clear the held left button's gesture slot, and the wheel path must hand the \
+         live held-button value to the held-aware apply entry point for that exclusion to \
+         happen at all"
+    );
+
+    let release_outcome = decide_button_event(ButtonEventInputs {
+        kind: MouseEventKind::Release,
+        button: MouseButtonId::Left,
+        grid: GridOwnershipInputs::default(),
+        mods: Modifiers::NONE,
+        mode_1000: false,
+        mode_1002: false,
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 0,
+        column: 5,
+        row: 5,
+        hovered_link: false,
+        middle_click_paste_enabled: false,
+        drag_in_flight: true,
+        records,
+    });
+    assert_eq!(
+        release_outcome.disposition,
+        Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary),
+        "reset-clears-held-gesture-slot: the surviving gesture slot must still route the left \
+         release to the selection-completion arm"
+    );
+
+    let mut dragging = true;
+    let mut pending_anchor = Some(Pos { row: 5, col: 5 });
+    let resolved_text = "selected text".to_string();
+    let (_anchor, targets) = consume_drag_termination(
+        &mut dragging,
+        &mut pending_anchor,
+        Some(resolved_text.as_str()),
+        false,
+    );
+    let mut sink = RecordingSelectionSink::default();
+    publish_to_targets(&mut sink, targets, &resolved_text);
+
+    assert!(
+        !dragging,
+        "reset-clears-held-gesture-slot: the drag flag must read false after termination"
+    );
+    assert!(
+        sink.calls
+            .iter()
+            .any(|(destination, _)| *destination == SelectionDestination::Primary),
+        "reset-clears-held-gesture-slot: the publish seam must record a PRIMARY write"
+    );
+}
+
+/// task0001 (FR2, AC-2). Mechanism: held-unaware-apply-entry-point — also
+/// exercises reset-clears-held-gesture-slot in the same assertion, since
+/// the same held left slot is what must survive.
+///
+/// A left press has already started a selection drag. A second button's
+/// press (right) then arrives with tracking inactive — the trigger for a
+/// tracking-inactive reset — decided and applied directly through
+/// `apply_outcome_with_held` with the live held-button value reporting
+/// left as held. The held left slot must survive that reset, and the drag
+/// must still complete correctly on its eventual left release.
+#[test]
+fn second_button_press_mid_left_drag_preserves_held_gesture_slot_and_completes_selection() {
+    use mouse_report::{
+        ButtonEventInputs, Disposition, GestureOwner, GestureOwnership, GridOwnershipInputs,
+        HeldButtons, LocalArm, MouseEventKind, MouseReportEncoding, MouseReportRecords,
+        apply_outcome_with_held, decide_button_event,
+    };
+
+    let mut gesture = GestureOwnership::new();
+    gesture.record_press(MouseButtonId::Left, GestureOwner::Local);
+    let mut records = MouseReportRecords {
+        gesture_owner: gesture,
+        built_for_tab: Some(0),
+        ..MouseReportRecords::default()
+    };
+
+    let press_outcome = decide_button_event(ButtonEventInputs {
+        kind: MouseEventKind::Press,
+        button: MouseButtonId::Right,
+        grid: GridOwnershipInputs::default(),
+        mods: Modifiers::NONE,
+        mode_1000: false,
+        mode_1002: false,
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 0,
+        column: 6,
+        row: 6,
+        hovered_link: false,
+        middle_click_paste_enabled: false,
+        drag_in_flight: false,
+        records,
+    });
+    assert!(
+        press_outcome.updates.reset_tracking_inactive,
+        "test setup: tracking inactive must trigger the reset this test pins"
+    );
+
+    let mut dest = Vec::new();
+    let held = HeldButtons {
+        left: true,
+        middle: false,
+        right: false,
+    };
+    apply_outcome_with_held(press_outcome, &mut records, &mut dest, held);
+
+    assert_eq!(
+        records.gesture_owner.peek(MouseButtonId::Left),
+        Some(GestureOwner::Local),
+        "held-unaware-apply-entry-point: the button path must hand the live held-button value \
+         to apply_outcome_with_held so a tracking-inactive reset triggered by a second \
+         button's press excludes the held left button's gesture slot instead of clearing it"
+    );
+
+    let release_outcome = decide_button_event(ButtonEventInputs {
+        kind: MouseEventKind::Release,
+        button: MouseButtonId::Left,
+        grid: GridOwnershipInputs::default(),
+        mods: Modifiers::NONE,
+        mode_1000: false,
+        mode_1002: false,
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 0,
+        column: 6,
+        row: 6,
+        hovered_link: false,
+        middle_click_paste_enabled: false,
+        drag_in_flight: true,
+        records,
+    });
+    assert_eq!(
+        release_outcome.disposition,
+        Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary),
+        "held-unaware-apply-entry-point: the surviving gesture slot must still route the left \
+         release to the selection-completion arm"
+    );
+
+    let mut dragging = true;
+    let mut pending_anchor = Some(Pos { row: 6, col: 6 });
+    let resolved_text = "selected text".to_string();
+    let (_anchor, targets) = consume_drag_termination(
+        &mut dragging,
+        &mut pending_anchor,
+        Some(resolved_text.as_str()),
+        false,
+    );
+    let mut sink = RecordingSelectionSink::default();
+    publish_to_targets(&mut sink, targets, &resolved_text);
+
+    assert!(
+        !dragging,
+        "held-unaware-apply-entry-point: the drag flag must read false after termination"
+    );
+    assert!(
+        sink.calls
+            .iter()
+            .any(|(destination, _)| *destination == SelectionDestination::Primary),
+        "held-unaware-apply-entry-point: the publish seam must record a PRIMARY write"
+    );
+}
+
+/// task0001 (FR1, FR2, AC-3). Mechanism: ungated-no-owner-left-release. A
+/// left release with no recorded gesture owner still completes the
+/// selection exactly when the drag-in-flight signal is true, and stays a
+/// no-op when it is false; a middle or right release with no owner never
+/// takes this arm regardless of the signal (the fallback stays
+/// left-only).
+#[test]
+fn no_owner_left_release_matrix_gates_completion_on_drag_in_flight() {
+    use mouse_report::{
+        ButtonEventInputs, Disposition, GridOwnershipInputs, LocalArm, MouseEventKind,
+        MouseReportEncoding, MouseReportRecords, decide_button_event,
+    };
+
+    fn release_inputs(button: MouseButtonId, drag_in_flight: bool) -> ButtonEventInputs {
+        ButtonEventInputs {
+            kind: MouseEventKind::Release,
+            button,
+            grid: GridOwnershipInputs::default(),
+            mods: Modifiers::NONE,
+            mode_1000: false,
+            mode_1002: false,
+            mode_1003: false,
+            encoding: MouseReportEncoding::Sgr,
+            active_tab: 0,
+            column: 5,
+            row: 5,
+            hovered_link: false,
+            middle_click_paste_enabled: false,
+            drag_in_flight,
+            records: MouseReportRecords::default(),
+        }
+    }
+
+    assert_eq!(
+        decide_button_event(release_inputs(MouseButtonId::Left, true)).disposition,
+        Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary),
+        "ungated-no-owner-left-release: a no-owner left release with the drag-in-flight signal \
+         true must name the selection-completion arm"
+    );
+    assert_eq!(
+        decide_button_event(release_inputs(MouseButtonId::Left, false)).disposition,
+        Disposition::Nothing,
+        "ungated-no-owner-left-release: a no-owner left release with the signal false must stay \
+         a no-op"
+    );
+    assert_eq!(
+        decide_button_event(release_inputs(MouseButtonId::Middle, true)).disposition,
+        Disposition::Nothing,
+        "ungated-no-owner-left-release: a no-owner middle release must stay a no-op regardless \
+         of the signal"
+    );
+    assert_eq!(
+        decide_button_event(release_inputs(MouseButtonId::Right, true)).disposition,
+        Disposition::Nothing,
+        "ungated-no-owner-left-release: a no-owner right release must stay a no-op regardless \
+         of the signal"
+    );
+}
+
+/// task0001 (FR3(a), FR5, AC-4). Mechanism: focus-loss-gate-inversion, the
+/// PRESERVED arm. Losing focus while the left button is still physically
+/// held must NOT terminate the drag — this is deliberate (A1,
+/// IMPLEMENTATION.md D4), not a defect awaiting repair; the drag's only
+/// remaining terminator is left's own, later release.
+#[test]
+fn focus_loss_with_left_held_preserves_drag_until_release_completes_it() {
+    use mouse_report::{
+        ButtonEventInputs, Disposition, GestureOwner, GestureOwnership, GridOwnershipInputs,
+        HeldButtons, LocalArm, MouseEventKind, MouseReportEncoding, MouseReportRecords, clear_all,
+        decide_button_event,
+    };
+
+    assert!(
+        !should_terminate_drag(true, true),
+        "focus-loss-gate-inversion: in-flight + held must NOT terminate — deliberate (A1, D4), \
+         not a defect"
+    );
+
+    // A left drag is mid-flight when focus is lost with the button still
+    // held; the focus-loss site empties both records regardless (D3).
+    let mut gesture = GestureOwnership::new();
+    gesture.record_press(MouseButtonId::Left, GestureOwner::Local);
+    let mut held = HeldButtons {
+        left: true,
+        middle: false,
+        right: false,
+    };
+    clear_all(&mut gesture, &mut held);
+
+    let release_outcome = decide_button_event(ButtonEventInputs {
+        kind: MouseEventKind::Release,
+        button: MouseButtonId::Left,
+        grid: GridOwnershipInputs::default(),
+        mods: Modifiers::NONE,
+        mode_1000: false,
+        mode_1002: false,
+        mode_1003: false,
+        encoding: MouseReportEncoding::Sgr,
+        active_tab: 0,
+        column: 5,
+        row: 5,
+        hovered_link: false,
+        middle_click_paste_enabled: false,
+        drag_in_flight: true,
+        records: MouseReportRecords {
+            gesture_owner: gesture,
+            built_for_tab: Some(0),
+            ..MouseReportRecords::default()
+        },
+    });
+    assert_eq!(
+        release_outcome.disposition,
+        Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary),
+        "focus-loss-gate-inversion: the preserved drag's later release is its only remaining \
+         terminator and must still name the selection-completion arm"
+    );
+
+    let mut dragging = true;
+    let mut pending_anchor = Some(Pos { row: 5, col: 5 });
+    let resolved_text = "selected text".to_string();
+    let (_anchor, targets) = consume_drag_termination(
+        &mut dragging,
+        &mut pending_anchor,
+        Some(resolved_text.as_str()),
+        false,
+    );
+    let mut sink = RecordingSelectionSink::default();
+    publish_to_targets(&mut sink, targets, &resolved_text);
+
+    assert!(
+        !dragging,
+        "focus-loss-gate-inversion: the drag flag must read false after termination"
+    );
+    assert!(
+        sink.calls
+            .iter()
+            .any(|(destination, _)| *destination == SelectionDestination::Primary),
+        "focus-loss-gate-inversion: the publish seam must record a PRIMARY write"
+    );
+}
+
+/// task0001 (FR3(b), AC-5). Mechanism: focus-loss-gate-inversion, the
+/// TERMINATING arm. Losing focus while the left button is NOT held must
+/// terminate the drag immediately — the focus-loss arm's publish half
+/// runs exactly as it does in production: clear the flag, consume the
+/// pending anchor, and publish to PRIMARY.
+#[test]
+fn focus_loss_with_left_not_held_terminates_and_publishes_the_drag() {
+    assert!(
+        should_terminate_drag(true, false),
+        "focus-loss-gate-inversion: in-flight + not held must terminate"
+    );
+
+    let mut dragging = true;
+    let mut pending_anchor = Some(Pos { row: 3, col: 4 });
+    let resolved_text = "selected text".to_string();
+
+    let (anchor, targets) = consume_drag_termination(
+        &mut dragging,
+        &mut pending_anchor,
+        Some(resolved_text.as_str()),
+        false,
+    );
+    let mut sink = RecordingSelectionSink::default();
+    publish_to_targets(&mut sink, targets, &resolved_text);
+
+    assert!(
+        !dragging,
+        "focus-loss-gate-inversion: the drag flag must read false"
+    );
+    assert_eq!(
+        pending_anchor, None,
+        "focus-loss-gate-inversion: the pending anchor slot must be emptied"
+    );
+    assert_eq!(
+        anchor,
+        Some(Pos { row: 3, col: 4 }),
+        "focus-loss-gate-inversion: the pending anchor must come back as consumed"
+    );
+    assert!(
+        sink.calls
+            .iter()
+            .any(|(destination, _)| *destination == SelectionDestination::Primary),
+        "focus-loss-gate-inversion: the publish seam must record a PRIMARY write"
+    );
+}
