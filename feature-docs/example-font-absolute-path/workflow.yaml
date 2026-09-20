@@ -108,9 +108,26 @@ workflow:
     status: completed
     completed_at_commit: 7412f93f90c0ff3fc40f1ad78e5d0395fe2b40d5
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: ec7a4a221becfbe82a146e0d3f8923429409cc95
+    result: pass
     failed_items: []
+    notes: |
+      build: ok (cargo build --examples, exit 0)
+      test: ok (3487 lib + 14 asset_manifest + 26 cli_subcommands + 7 examples_source_hygiene
+        + 10 mux_hot_upgrade、全 suite 0 failed、--test-threads=1)
+      format: ok (cargo fmt --check, exit 0)
+      TS1: pass (no_absolute_home_path_literals_in_examples 緑)
+      TS2: pass (no_native_poc_references_in_examples 緑)
+      TS3: pass (既存テスト一式緑、新規失敗なし)
+      TS4: pass (--examples ビルド exit 0)
+      TS5: pass (bold_raster_probe / m_placement_probe を実際に実行し panic なし、
+        coverage dump / placement dump が従来書式で出力された)
+      NFR1 追加確認: pass (--no-default-features --test examples_source_hygiene、7 passed)
+      SC-1..SC-8: 全て充足。SC-7 は統合差分に resolver.rs が現れないことで確認。
+      SC-4 は m_placement_probe.rs の差分が絶対パス箇所のみであることで確認。
+      SC-8 は font_select_probe -- Inconsolata の face 列挙出力で確認。
+      除外要件: なし (status: excluded の要件は無い)
   - id: retrospect
     status: pending
 
