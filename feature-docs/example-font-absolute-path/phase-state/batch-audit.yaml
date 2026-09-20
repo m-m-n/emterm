@@ -68,3 +68,46 @@ records:
       一致は証明しない。文書内容の誤りもこの補完では検出できない。
       orchestrator 側の受け入れ: レイヤー 5 の digest 照合はこの run では orchestrator の自己申告であり、
       独立クロスチェックではない旨を planner-output.json の warnings にも記録した。
+  - question_id: null
+    packet_id: null
+    answered_at: "2026-09-21T00:42:00+09:00"
+    source: unlisted-gate-fallback
+    answer_mode: single_select
+    selected_option_ids: [muse_spark_standard]
+    freeform: null
+    normalized_answer: "review R2 の litellm 観点 (performance / spec) は muse-spark (Standard) で dispatch した"
+    resolution_note: >-
+      gate: review R2 の muse-spark contributor-tier read-mapping (gate_id なし。
+      references/batch-mode.md の unlisted-gate fallback = Codex 相談 → 最小副作用オプション)。
+      争点: references/reviewers.yaml は performance / spec / architecture に literal `muse-spark` を割り当て
+      「渡された名前をそのまま流す・自分でモデルを選ばない」と定める一方、
+      references/review-phase.md は "Contributor-tier pre-dispatch criteria" を満たす場合に限り
+      `muse-spark` を contributor tier と読み替えることを許可している。
+      これに対し harness SSOT (vertex-review の litellm-harness スキル) は
+      「レビューはプライベートなコードを送るため muse-spark (Standard) を使う。
+      muse-spark-contributor をレビューに使ってはいけない」と無条件に禁止しており、文言が衝突していた。
+      選択肢: (A) muse_spark_standard = レジストリの literal 値をそのまま渡す /
+      (B) muse_spark_contributor = contributor tier 読み替えを行使する。
+      事前条件の機械判定はいずれも成立: consent store
+      (~/.claude/em-workflow/muse-consent.json) に本プロジェクト
+      (/home/sakura/src/my_projects/tauri/emterm/.git) のエントリあり、
+      リポジトリは public (github.com/m-m-n/emterm)・MIT、
+      diff に secret・third-party コード・未公開の差別化アイデアは無し。
+      Codex 相談 (codex-harness second-opinion, gpt-5.6-sol, read-only, 1 ターン) の結論は (B)。
+      理由: レジストリの verbatim 規則は一般則であり review-phase の carve-out は
+      `muse-spark` にスコープを限定した特則である・harness SSOT はモデルの同一性と課金/学習条件に対する
+      権威であって dispatch 時の選択条件に対する権威ではない・特則が効かないなら
+      Contributor-tier pre-dispatch criteria が死文になる・公開済み MIT コードなので
+      学習提供コストは低く単価は約 1/10。
+      Codex が付けた留保: 学習に使われるのは diff だけでなくレビュー入力全体と生成されたレビュー出力でもある。
+      orchestrator は一旦 (B) を採用して dispatch したが、Claude Code の auto mode 分類器が
+      2 本とも拒否した (performance = Data Exfiltration、spec = Traffic Redirection)。
+      これは skip_reason を伴わない harness レベルの拒否であり、references/review-phase.md の
+      retryable chain-walk 表の対象外。拒否メッセージが明示的に許す
+      "first try a safer method" に従い、学習提供を伴わないぶん厳密に副作用の小さい (A) に切り替えて再 dispatch し、
+      2 本とも受理された。よって最終採用は (A) muse_spark_standard。
+      不採用となった (B) の扱い: 分類器の拒否を迂回する再試行は行っていない。
+      切り替えは権限をより広げる方向ではなく狭める方向であり、
+      結果として harness SSOT の禁止規定と leaf の literal レジストリ値の双方に一致する。
+      Opus エスカレーションは実施していない (Codex 相談 1 ターンで論点が出揃い、
+      分類器の拒否が選択を機械的に確定させたため)。
