@@ -25,17 +25,23 @@ acceptance_tests:
       - window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing
     red_confirmed: false
     red_reason: >-
-      Structural criterion (absence of a compile-time-decidable-literal
-      branch condition), verified by inspection rather than a discrete red
-      observation: the rewritten test's publish step now scrutinizes
-      `resolved_text`, a `let resolved_text: Option<&str> = None;` local
-      binding, instead of the inline literal `None::<&str>` the prior
-      version matched directly. Confirmed by reading the diff
-      (`git diff -- src-tauri/src/window_host/tests.rs`) and by grepping
-      the test body for `None::<&str>` (no match after the edit). AC-3's
-      mutation below is the closest analogue to a red observation for a
-      criterion shaped like this, and demonstrates the rewritten branch's
-      assertions have force.
+      Structural criterion, re-described by task0005 (verify TS-10 /
+      review finding 2a1ad49b9263cb95): this task changed the publish
+      step's guard condition from the inline literal `None::<&str>` to a
+      `let resolved_text: Option<&str> = None;` local binding, so the
+      condition was no longer compile-time-decidable by the compiler.
+      That change did NOT remove the dead branch's effect — for this
+      test `resolved_text` is always `None`, so
+      `if let Some(text) = resolved_text { ... }` still never executed
+      the publish call at runtime, and the closing sink-emptiness
+      assertion still held regardless of `publish_to_targets`'s own
+      behaviour; the guard this task added was necessary but not
+      sufficient. task0005 removed the branch entirely, making the
+      publish call unconditional
+      (`publish_to_targets(&mut sink, targets, "unused")`), which is what
+      actually gives the closing assertion force — see
+      test-docs/focus-loss-drag-cleanup-test/task0005.tests.yaml AC-2 and
+      AC-3.
   AC-2:
     tests:
       - window_host::tests::focus_loss_cleanup_with_no_selection_publishes_nothing
