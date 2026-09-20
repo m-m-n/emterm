@@ -262,3 +262,68 @@ records:
       dropped by Phase R3b step 2 (severity not in {critical, high, medium}) and is
       recorded under `dropped_findings` in reviews/round2.yaml. It was also carried into
       the same follow-up task as a secondary item.
+  - gate_id: verify.ts10-disposition
+    phase: verify
+    decision: record_failed_and_auto_rework
+    codex_consulted: true
+    answered_at: "2026-09-20T18:15:00+09:00"
+    source: batch-codex-consultation
+    resolution_note: |
+      gate: unlisted orchestrator decision point (no gate_id at its originating site);
+      raised by the orchestrator on the user's standing instruction to consult Codex on
+      unclear points and adopt the comparatively better option. codex_consulted: true
+      (run_codex_exec.sh readonly, model_reasoning_effort=xhigh, -C the integration
+      worktree, exit 0, no files modified; Codex read VERIFICATION.md, tests.rs,
+      pointer_routing.rs, batch-audit.yaml and task0003.tests.yaml itself before
+      answering). opus_escalation: not run (Codex returned an unambiguous verdict).
+
+      Question: the verify phase measured every other scenario green (build OK, CLI-only
+      check OK, cargo test --lib -- --test-threads=1 = 3486 passed / 0 failed / 3 ignored,
+      cargo fmt --check clean, TS-1..TS-9 and TS-11 satisfied), and found exactly one
+      scenario unmet: TS-10. TS-10 requires the no-selection focus-loss test to assert the
+      destination decision directly AND to reach its closing sink-emptiness assertion with
+      no compile-time-decidable branch. The first clause holds (assert_eq! on targets, with
+      task0003's mutation proof). The second does not: resolved_text is a statically-known
+      None, the `if let` arm is dead, publish_to_targets is never called, the emptiness
+      assertion is a tautology, and the `if targets.primary` FALSE arm at
+      pointer_routing.rs:472 is exercised by no test. Minutes earlier the REVIEW phase,
+      advised by Codex, had deliberately deferred this same site (finding 2a1ad49b9263cb95,
+      MEDIUM) to an external follow-up task on authority grounds.
+        Option A: record TS-10 as a FAILED verify item and let batch auto-rework run one
+          round (lineage cap 1, hard cap 3; 0 consumed), routing back to implement.
+        Option B: record TS-10 as satisfied, treating the residual clause as already
+          adjudicated by the review phase's unresolved finding + filed follow-up.
+        Option C: fail verify without auto-rework, leaving it to the human.
+
+      Codex verdict: A. ADOPTED.
+      Codex's key points:
+      (1) TS-10's explicit condition is unmet. A direct assertion having force does not
+          repair the separate defect that the closing emptiness check always succeeds.
+      (2) The review phase's deferral was a decision bounded by THAT step's authority and
+          completion gate. Nothing in the review record exempts or amends TS-10, so it is
+          not a basis for passing the scenario at verify.
+      (3) Verify's own protocol sanctions this auto-rework and no cap is reached, so it is
+          a protocol path rather than an ad-hoc widening. Neither --once nor the human's
+          reading of the final report changes a verification condition.
+      (4) Against B: recording a finding as unresolved is not the same as meeting the
+          condition. Against C: with caps unconsumed there is no basis for skipping the
+          rework the protocol prescribes.
+      Codex's correction to the orchestrator's framing: test-docs/.../task0003.tests.yaml
+      AC-1 (line 24) carries the SAME inaccurate explanation — that moving the literal into
+      a binding resolved the dead-branch problem — so it must be corrected too, alongside
+      the tests.rs doc comment and task0001.tests.yaml AC-4.
+      Codex's prescribed shape for the rework, adopted verbatim into the rework task:
+        (a) keep the direct destination assertion,
+        (b) call publish_to_targets(&mut sink, targets, "unused") UNCONDITIONALLY with the
+            returned targets, then assert the sink is empty,
+        (c) prove by mutation that deleting the PRIMARY guard now makes the EMPTINESS
+            assertion fail (keeping the existing decision-inversion mutation too), revert
+            and re-run,
+        (d) correct all three inaccurate prose sites (tests.rs doc comment,
+            task0001.tests.yaml AC-4, task0003.tests.yaml AC-1),
+        (e) in the final report, record the initial TS-10 failure and the re-verification;
+            map only the scope actually closed onto the external follow-up task rather than
+            marking that whole task done.
+      Codex's own caveat, recorded for the human evaluator: it only read files; it did not
+      re-run the mutation experiments and relies on the existing records for those.
+      Options not chosen: B, C.
