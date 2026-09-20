@@ -81,7 +81,8 @@ workflow:
       untouched by it.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 91d15825dcd56924ff6331dd9536c7c8136e334b
   - id: implement
     status: pending
     base_commit: null
@@ -94,7 +95,20 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Repair the four drifted references in task0001.tests.yaml and record name-resolution evidence
+    plan: tasks/task0001.md
+    files:
+      - test-docs/wheel-report-fraction-accum/task0001.tests.yaml
+      - test-docs/wheel-report-tests-yaml-name-drift/task0001.tests.yaml
+    skills: []
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -108,61 +122,61 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3]
   FR2:
     title: Repair the AC-6 red_reason body (line 57)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-3]
   FR3:
     title: Repair the AC-7 red_reason error quotation (line 67)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-3]
   FR4:
     title: Repair the AC-7 red_reason sentence that depends on the removed field (lines 73-75)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-3]
   FR5:
     title: Preserve every red verdict and all still-accurate text
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-4]
   FR6:
     title: Record manual name-resolution evidence for AC-1
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2]
   NFR1:
     title: Maintainability (documentation-only change)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-5]
   NFR2:
     title: Maintainability (preserve the file's YAML form)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4]
   NFR3:
     title: Compatibility (sequencing constraint)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
