@@ -4667,23 +4667,39 @@ fn focus_loss_cleanup_publishes_selection_without_a_window() {
     );
 }
 
-/// AC-4 edge case (Test Notes): no selection at all -> nothing recorded,
-/// empty anchor returned.
+/// AC-4 edge case (Test Notes) / task0003 (focus-loss-drag-cleanup-test)
+/// AC-1, AC-2, AC-3: no selection at all -> nothing recorded, empty anchor
+/// returned, and the destination decision itself is asserted directly
+/// against FR6's write rule for this case (neither destination selected)
+/// before the test ever attempts a publish. The publish step is driven by
+/// `resolved_text`, a value-carrying `Option<&str>` binding, not by a
+/// literal the compiler can fold away, so the closing sink-emptiness
+/// assertion constrains the publish path instead of restating a
+/// tautology.
 #[test]
 fn focus_loss_cleanup_with_no_selection_publishes_nothing() {
     let mut dragging = true;
     let mut pending_anchor: Option<Pos> = None;
+    let resolved_text: Option<&str> = None;
 
     let (anchor, targets) =
-        consume_drag_termination(&mut dragging, &mut pending_anchor, None, true);
-
-    let mut sink = RecordingSelectionSink::default();
-    if let Some(text) = None::<&str> {
-        publish_to_targets(&mut sink, targets, text);
-    }
+        consume_drag_termination(&mut dragging, &mut pending_anchor, resolved_text, true);
 
     assert!(!dragging);
     assert_eq!(anchor, None, "no pending anchor present");
+    assert_eq!(
+        targets,
+        SelectionPublishTargets {
+            primary: false,
+            clipboard: false,
+        },
+        "AC-2: a no-selection termination selects neither destination (FR6)"
+    );
+
+    let mut sink = RecordingSelectionSink::default();
+    if let Some(text) = resolved_text {
+        publish_to_targets(&mut sink, targets, text);
+    }
     assert!(
         sink.calls.is_empty(),
         "no selection must publish to neither destination"
