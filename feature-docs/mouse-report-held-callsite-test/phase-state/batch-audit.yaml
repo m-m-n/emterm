@@ -68,3 +68,50 @@ records:
       silent pass.
       adopted into: IMPLEMENTATION.md D6.2, tasks/task0001.md E4 rule 3b, AC-6 and
       the TS-4 edge-case list, VERIFICATION.md TS-5 / AC-3 rows.
+  - question_id: develop.codex-consultation.once-vs-pr-boundary
+    packet_id: null
+    answered_at: "2026-09-21T03:45:00+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [end_at_phase_boundary_no_pr]
+    freeform: "--once boundary wins; the PR is created by the launch that actually reaches Step C with --pr."
+    normalized_answer: "Option A — end this launch at the implement phase boundary; do not push, do not create a PR."
+    resolution_note: >-
+      gate: user-directed Codex consultation on a launch-argument ambiguity (no gate_id;
+      requested by the launch instruction "Consult Codex on any unclear points").
+      ambiguity: the launch carried --batch --once --pr plus the prose instruction
+      "Once the implementation is finished, push the integration branch to the remote
+      and create a Pull Request against base_branch with gh pr create". The implement
+      step just reached completed, which is a --once phase boundary, but Step C
+      (completion processing, the only PR-creating site) was not reached.
+      options: (A) end at the implement phase boundary, no push and no PR, and state in
+      the report that the launch reaching Step C must itself carry --pr;
+      (B) push the integration branch and open the PR now, immediately after implement
+      completed, then still end the turn at the --once boundary.
+      codex_consulted: true (codex CLI, read-only sandbox, model gpt-5.6-sol, exit 0).
+      opus_escalation: false. chosen: A.
+      codex reasoning: (1) the skill's own contract governs this exact flag combination
+      directly and unambiguously — at an intermediate phase boundary nothing PR-related
+      happens, and only the Step C launch creates the PR — so the specific on-point
+      contract outranks a generic reading of the prose; (2) the same user passed --once
+      in the same invocation, so reading "once the implementation is finished" as "the
+      instant the implement step flips to completed" would make their own --once flag
+      self-contradictory; the better reading is "when the workflow's implementation work
+      reaches Step C"; (3) pushing/opening a PR now front-runs Step C and breaks the
+      state machine's execution order that --once exists to bound; (4) a PR opened before
+      the workflow's own review and verify steps exposes a change that may still contain
+      undetected defects, can fire premature notifications and automated checks, and
+      creates a false impression of being quality-checked, causing diff churn as review
+      and verify keep changing the branch; (5) pushing to a remote is outward-facing and
+      not fully reversible — deleting a branch or PR afterwards does not undo external
+      visibility, notifications, automation or audit trails — so an unattended batch run
+      should take the conservative option.
+      caveats recorded per codex: (a) --pr is per-invocation and never inherited, so if
+      the external service re-invokes without --pr on the launch that finally reaches
+      Step C, no PR is ever created; (b) this run's report therefore states explicitly
+      that em-workflow/mouse-report-held-callsite-test/integration exists locally only,
+      is unpushed, and that no PR exists yet, and flags that the Step C launch must carry
+      --pr; (c) the ambiguity itself is recorded here — "implementation" could plausibly
+      have meant the implement step specifically.
+      side effects of this run: none outward-facing. No git push, no gh pr create, no
+      remote branch, no PR.
