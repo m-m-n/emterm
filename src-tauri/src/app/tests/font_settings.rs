@@ -152,7 +152,11 @@ fn apply_settings_preserves_active_cursor_override_when_scheme_unchanged() {
     app.spawn_initial_tab();
     {
         let mut theme = app.tabs[0].theme.lock();
-        assert!(theme.apply_osc(12, "rgb:aa/bb/cc", term_core::OscTerminator::Bel).changed);
+        assert!(
+            theme
+                .apply_osc(12, "rgb:aa/bb/cc", term_core::OscTerminator::Bel)
+                .changed
+        );
     }
     let mut new = Settings::default();
     new.cursor_blink = false; // unrelated change; scheme stays default
@@ -179,7 +183,11 @@ fn apply_settings_scheme_change_with_active_override_updates_scheme_baseline_onl
     app.spawn_initial_tab();
     {
         let mut theme = app.tabs[0].theme.lock();
-        assert!(theme.apply_osc(12, "rgb:aa/bb/cc", term_core::OscTerminator::Bel).changed);
+        assert!(
+            theme
+                .apply_osc(12, "rgb:aa/bb/cc", term_core::OscTerminator::Bel)
+                .changed
+        );
     }
     let mut new = Settings::default();
     new.terminal_color_scheme = "dracula".to_string();
@@ -205,7 +213,11 @@ fn apply_settings_scheme_change_with_active_override_updates_scheme_baseline_onl
     // A subsequent OSC 112 restores the NEW scheme's cursor color, not
     // the old (default) scheme's.
     let mut theme = app.tabs[0].theme.lock();
-    assert!(theme.apply_osc(112, "", term_core::OscTerminator::Bel).changed);
+    assert!(
+        theme
+            .apply_osc(112, "", term_core::OscTerminator::Bel)
+            .changed
+    );
     assert_eq!(theme.cursor_fg, expected_scheme_cursor);
 }
 

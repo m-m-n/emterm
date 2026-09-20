@@ -385,7 +385,14 @@ mod tests {
         let mut windows = BTreeMap::new();
         windows.insert(10, make_window(10, "a"));
         windows.insert(20, make_window(20, "b"));
-        let s = MuxSession::from_restored(1, "restored".to_string(), windows, vec![20, 10], Some(20), 99);
+        let s = MuxSession::from_restored(
+            1,
+            "restored".to_string(),
+            windows,
+            vec![20, 10],
+            Some(20),
+            99,
+        );
         assert_eq!(s.id, 1);
         assert_eq!(s.name, "restored");
         assert_eq!(s.window_order, vec![20, 10]);
@@ -399,7 +406,8 @@ mod tests {
     /// original sequence rather than restarting from 1.
     #[test]
     fn from_restored_next_window_id_continues_the_original_sequence() {
-        let mut s = MuxSession::from_restored(1, "s".to_string(), BTreeMap::new(), vec![], None, 50);
+        let mut s =
+            MuxSession::from_restored(1, "s".to_string(), BTreeMap::new(), vec![], None, 50);
         assert_eq!(s.alloc_window_id(), 50);
         assert_eq!(s.alloc_window_id(), 51);
     }

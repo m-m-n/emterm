@@ -1391,7 +1391,10 @@ fn inactive_pane_query_produces_no_response_while_active_pane_query_still_answer
     let active_pane = 10;
     let background_pane = 20;
     let mut tab = test_tab();
-    tab.apply_mux_message(welcome_msg(&[(1, "a", active_pane), (2, "b", background_pane)], 0));
+    tab.apply_mux_message(welcome_msg(
+        &[(1, "a", active_pane), (2, "b", background_pane)],
+        0,
+    ));
     tab.core.lock().set_cursor(0, 0);
 
     // A CPR query addressed to the BACKGROUND pane (not currently active

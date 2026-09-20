@@ -261,7 +261,10 @@ mod tests {
         let mut armed_latch = AgentStatusExitLatch::new();
         armed_latch.record_set();
         let parts = armed_latch.state_parts();
-        assert_eq!(AgentStatusExitLatch::from_state_parts(parts.0, parts.1, parts.2), armed_latch);
+        assert_eq!(
+            AgentStatusExitLatch::from_state_parts(parts.0, parts.1, parts.2),
+            armed_latch
+        );
 
         let mut command_ended_latch = AgentStatusExitLatch::new();
         command_ended_latch.record_set();

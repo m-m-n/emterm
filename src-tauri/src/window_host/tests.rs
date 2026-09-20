@@ -1568,9 +1568,31 @@ fn wheel_report_notches_near_zero_and_sub_notch_deltas_are_zero() {
 #[test]
 fn wheel_report_notches_invariant_sweep_never_exceeds_the_cap() {
     let inputs: &[f32] = &[
-        0.0, 0.5, 1.0, 3.7, 50.0, 99.999, 100.0, 100.999, 101.0, 1_000.0, 1.0e6, 1.0e30,
-        f32::MAX, -0.5, -1.0, -3.7, -50.0, -99.999, -100.0, -100.999, -101.0, -1_000.0, -1.0e6,
-        -1.0e30, f32::MIN,
+        0.0,
+        0.5,
+        1.0,
+        3.7,
+        50.0,
+        99.999,
+        100.0,
+        100.999,
+        101.0,
+        1_000.0,
+        1.0e6,
+        1.0e30,
+        f32::MAX,
+        -0.5,
+        -1.0,
+        -3.7,
+        -50.0,
+        -99.999,
+        -100.0,
+        -100.999,
+        -101.0,
+        -1_000.0,
+        -1.0e6,
+        -1.0e30,
+        f32::MIN,
     ];
     for &lines in inputs {
         let result = wheel_report_notches(lines);
@@ -1624,10 +1646,7 @@ fn bounded_wheel_report_duplicate_at_cap_yields_exactly_cap_concatenations() {
 fn bounded_wheel_report_duplicate_above_cap_still_caps_at_exactly_cap() {
     let expected = SAMPLE_WHEEL_REPORT_PAYLOAD.repeat(MAX_WHEEL_REPORT_NOTCHES as usize);
     assert_eq!(
-        bounded_wheel_report_duplicate(
-            SAMPLE_WHEEL_REPORT_PAYLOAD,
-            MAX_WHEEL_REPORT_NOTCHES + 1
-        ),
+        bounded_wheel_report_duplicate(SAMPLE_WHEEL_REPORT_PAYLOAD, MAX_WHEEL_REPORT_NOTCHES + 1),
         expected
     );
     assert_eq!(
@@ -2031,10 +2050,10 @@ fn mouse_input_press_guard_queries_shared_sidebar_hit_region_before_selection_st
     // every guard above (including this one) has had its chance to
     // return. The ordering property this test pins is unchanged: the
     // guard section located above ends before this marker appears.
-    let selection_start_pos = arm_body
-        .find("LocalArm::BeginSelectionDrag")
-        .expect("selection-start arm (LocalArm::BeginSelectionDrag) not found in the \
-                 PointerButton handler");
+    let selection_start_pos = arm_body.find("LocalArm::BeginSelectionDrag").expect(
+        "selection-start arm (LocalArm::BeginSelectionDrag) not found in the \
+                 PointerButton handler",
+    );
     assert!(
         guard_start + sidebar_guard_pos < selection_start_pos,
         "the sidebar hit-region guard must run BEFORE the selection-start arm so a hit \
@@ -3024,7 +3043,10 @@ fn accumulate_wheel_report_lines_non_finite_deltas_are_rejected_without_mutation
 fn accumulate_wheel_report_lines_exact_notch_boundary_leaves_zero_remainder() {
     let (n, a) = accumulate_wheel_report_lines(0.5, 0.5);
     assert_eq!(n, 1);
-    assert_eq!(a, 0.0, "boundary-exact crossing must leave exactly 0.0, not a denormal leftover");
+    assert_eq!(
+        a, 0.0,
+        "boundary-exact crossing must leave exactly 0.0, not a denormal leftover"
+    );
 
     let (n, a) = accumulate_wheel_report_lines(-0.5, -0.5);
     assert_eq!(n, -1);
@@ -3037,7 +3059,10 @@ fn accumulate_wheel_report_lines_exact_notch_boundary_leaves_zero_remainder() {
 fn accumulate_wheel_report_lines_near_one_accumulator_plus_same_direction_delta() {
     let (n, a) = accumulate_wheel_report_lines(0.999_999, 0.5);
     assert_eq!(n, 1);
-    assert!(a.is_finite() && a.abs() < 1.0, "remainder must be finite and sub-notch, got {a}");
+    assert!(
+        a.is_finite() && a.abs() < 1.0,
+        "remainder must be finite and sub-notch, got {a}"
+    );
 }
 
 /// Edge case (Test Notes): a long run of alternating-sign sub-notch deltas
@@ -3102,7 +3127,10 @@ fn accumulate_wheel_report_lines_never_exceeds_the_cap_across_a_sweep_of_extreme
 fn accumulate_wheel_report_lines_saturation_discards_excess_instead_of_banking_it() {
     let (n, frac) = accumulate_wheel_report_lines(0.0, 1.0e6);
     assert_eq!(n, MAX_WHEEL_REPORT_NOTCHES as i32);
-    assert_eq!(frac, 0.0, "saturated-away magnitude must not survive as a leftover remainder");
+    assert_eq!(
+        frac, 0.0,
+        "saturated-away magnitude must not survive as a leftover remainder"
+    );
 
     let (n, frac) = accumulate_wheel_report_lines(0.0, -1.0e6);
     assert_eq!(n, -(MAX_WHEEL_REPORT_NOTCHES as i32));
@@ -3472,8 +3500,7 @@ fn decide_motion_event_owner_established_local_branch_surfaces_tracking_observat
 /// decision layer (`decide_wheel_event`) so this exercises the actual
 /// rejected disposition, not a hand-built one.
 #[test]
-fn apply_wheel_report_step_grid_rejected_notch_yields_zero_and_leaves_the_whole_record_unchanged()
- {
+fn apply_wheel_report_step_grid_rejected_notch_yields_zero_and_leaves_the_whole_record_unchanged() {
     use mouse_report::{
         Disposition, GridOwnershipInputs, MouseEventKind, MouseReportEncoding, MouseReportRecords,
         WheelEventInputs, apply_wheel_report_step, decide_wheel_event,
@@ -3578,7 +3605,10 @@ fn apply_wheel_report_step_local_arm_dispositions_leave_the_accumulator_unaffect
             records: before,
         };
         let outcome = decide_wheel_event(&inputs);
-        assert_eq!(outcome.disposition, Disposition::Local(LocalArm::ScrollScrollback));
+        assert_eq!(
+            outcome.disposition,
+            Disposition::Local(LocalArm::ScrollScrollback)
+        );
         assert!(
             !(outcome.updates.reset_tracking_inactive || outcome.updates.reset_tab_changed),
             "test setup: this arm must not itself reset"
@@ -3598,7 +3628,10 @@ fn apply_wheel_report_step_local_arm_dispositions_leave_the_accumulator_unaffect
             5.0,
             mouse_report::HeldButtons::default(),
         );
-        assert_eq!(notches, 0, "AC-2: the scrollback local arm must yield a zero notch count");
+        assert_eq!(
+            notches, 0,
+            "AC-2: the scrollback local arm must yield a zero notch count"
+        );
         assert_eq!(
             records, expected,
             "AC-2: the scrollback local arm must leave the accumulator exactly what \
@@ -3720,7 +3753,11 @@ fn apply_wheel_report_step_report_disposition_folds_the_delta_exactly_once() {
         records.report_accum, expected_frac,
         "AC-3: the delta must be folded exactly once into the stored fraction"
     );
-    assert_eq!(dest.len(), 1, "a report disposition must still push exactly one report");
+    assert_eq!(
+        dest.len(),
+        1,
+        "a report disposition must still push exactly one report"
+    );
 }
 
 /// AC-3: a run of sub-notch deltas, driven entirely through the gate
@@ -3774,7 +3811,10 @@ fn apply_wheel_report_step_sub_notch_run_still_reports_exactly_at_the_crossing_e
             notches, expected_notches,
             "iteration {i} (delta={delta}): gated run must match an ungated direct fold"
         );
-        assert_eq!(records.report_accum, reference_acc, "iteration {i}: accumulator drifted");
+        assert_eq!(
+            records.report_accum, reference_acc,
+            "iteration {i}: accumulator drifted"
+        );
     }
 }
 
@@ -3900,7 +3940,7 @@ fn discard_at_release_survives_an_intervening_accepted_motion_before_the_next_wh
 fn discard_at_tracking_session_boundary_leaves_the_owner_recorded_and_the_drags_release_still_reports()
  {
     use mouse_report::{
-        ButtonEventInputs, Disposition, GestureOwner, MotionEventInputs, GridOwnershipInputs,
+        ButtonEventInputs, Disposition, GestureOwner, GridOwnershipInputs, MotionEventInputs,
         MouseButtonId, MouseEventKind, MouseReportEncoding, MouseReportRecords, apply_outcome,
         decide_button_event, decide_motion_event,
     };
@@ -3929,7 +3969,10 @@ fn discard_at_tracking_session_boundary_leaves_the_owner_recorded_and_the_drags_
         drag_in_flight: false,
         records,
     });
-    assert!(matches!(press_outcome.disposition, Disposition::Report { .. }));
+    assert!(matches!(
+        press_outcome.disposition,
+        Disposition::Report { .. }
+    ));
     apply_outcome(press_outcome, &mut records, &mut dest);
     assert_eq!(
         records.gesture_owner.peek(MouseButtonId::Left),
@@ -4169,8 +4212,12 @@ fn rejected_event_mid_run_of_sub_notch_deltas_leaves_the_run_untouched() {
         0.3,
         mouse_report::HeldButtons::default(),
     );
-    let (expected_notches, expected_frac) = accumulate_wheel_report_lines(acc_before_rejection, 0.3);
-    assert_eq!(notches, expected_notches, "the run must resume, not restart or skip");
+    let (expected_notches, expected_frac) =
+        accumulate_wheel_report_lines(acc_before_rejection, 0.3);
+    assert_eq!(
+        notches, expected_notches,
+        "the run must resume, not restart or skip"
+    );
     assert_eq!(records.report_accum, expected_frac);
 }
 
@@ -4285,7 +4332,10 @@ fn local_arm_event_mid_run_of_sub_notch_deltas_leaves_the_run_untouched() {
     );
     let (expected_notches, expected_frac) =
         accumulate_wheel_report_lines(acc_before_local_arm, 0.3);
-    assert_eq!(notches, expected_notches, "the run must resume, not restart or skip");
+    assert_eq!(
+        notches, expected_notches,
+        "the run must resume, not restart or skip"
+    );
     assert_eq!(records.report_accum, expected_frac);
 }
 

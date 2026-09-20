@@ -528,7 +528,11 @@ pub(super) fn accumulate_wheel_report_lines(acc: f32, lines: f32) -> (i32, f32) 
         return (0, acc);
     }
     let total = acc + lines;
-    let whole = if total >= 0.0 { total.floor() } else { total.ceil() };
+    let whole = if total >= 0.0 {
+        total.floor()
+    } else {
+        total.ceil()
+    };
     let whole_abs = whole.abs();
     let saturated = whole_abs > MAX_WHEEL_REPORT_NOTCHES as f32;
     let magnitude = whole_abs.min(MAX_WHEEL_REPORT_NOTCHES as f32) as i32;
@@ -652,14 +656,12 @@ mod wheel_consumer_tests {
                                     got, with_other_shift,
                                     "tracking-inactive branch must not consult shift"
                                 );
-                                let expected = if on_alt_screen
-                                    && alt_scroll_mode_bit
-                                    && alt_scroll_setting
-                                {
-                                    WheelConsumer::TranslateToArrows
-                                } else {
-                                    WheelConsumer::ScrollScrollback
-                                };
+                                let expected =
+                                    if on_alt_screen && alt_scroll_mode_bit && alt_scroll_setting {
+                                        WheelConsumer::TranslateToArrows
+                                    } else {
+                                        WheelConsumer::ScrollScrollback
+                                    };
                                 assert_eq!(got, expected);
                             }
                         }

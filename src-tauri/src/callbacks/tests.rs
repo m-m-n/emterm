@@ -115,8 +115,11 @@ fn osc_4_sets_palette_and_marks_theme_dirty() {
     // not through `NativeCallbacks::on_osc` (osc-color-query-response D7) —
     // see `Harness::responder`'s doc.
     let h = default_harness();
-    h.responder()
-        .respond(OSC_SET_COLOR_PALETTE as u16, "5;rgb:11/22/33", OscTerminator::Bel);
+    h.responder().respond(
+        OSC_SET_COLOR_PALETTE as u16,
+        "5;rgb:11/22/33",
+        OscTerminator::Bel,
+    );
     assert_eq!(h.theme.lock().palette256[5], Some(Rgb(0x11, 0x22, 0x33)));
     assert!(h.cb.take_theme_dirty());
     // Second drain returns false (latch behavior).

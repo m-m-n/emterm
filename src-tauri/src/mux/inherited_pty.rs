@@ -14,7 +14,7 @@
 use std::io::{self, Read, Write};
 use std::os::unix::io::{FromRawFd, RawFd};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use portable_pty::{MasterPty, PtySize};
 
 /// Presents an inherited raw PTY master descriptor as a [`MasterPty`].
