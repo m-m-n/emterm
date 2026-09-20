@@ -188,3 +188,77 @@ records:
         ADOPTED: B1. Options not chosen: B2, B3.
 
       No Opus escalation was run: Codex returned a decision for both points.
+  - gate_id: review.residual-medium-disposition
+    phase: review
+    round: 2
+    decision: close_round_and_file_follow_up
+    codex_consulted: true
+    answered_at: "2026-09-20T18:05:00+09:00"
+    source: batch-codex-consultation
+    resolution_note: |
+      gate: unlisted orchestrator decision point (no gate_id at its originating site);
+      raised by the orchestrator on the user's standing instruction to consult Codex on
+      unclear points and adopt the comparatively better option. codex_consulted: true
+      (gpt-5.6-sol via the default Codex provider, readonly sandbox, exit 0, no files
+      modified; Codex read tests.rs, pointer_routing.rs and task0001.tests.yaml itself
+      before answering). opus_escalation: not run (Codex returned an unambiguous verdict).
+
+      Question: review round 2 left exactly one surviving finding (stable_id
+      2a1ad49b9263cb95, MEDIUM, src-tauri/src/window_host/tests.rs:4699) — the test
+      focus_loss_cleanup_with_no_selection_publishes_nothing binds resolved_text to a
+      statically-known None, so its `if let` arm is dead, publish_to_targets is never
+      invoked, and the closing sink-emptiness assertion is a tautology; the
+      `if targets.primary` FALSE arm at pointer_routing.rs:472 is therefore exercised by
+      no test at all, and the test's own doc comment (plus the copied AC-4 red_reason in
+      task0001.tests.yaml) claims the opposite. The site had already survived one full
+      rework cycle (task0003). Phase R4's auto-fix candidate gate is critical/high only,
+      and the completion gate (residual_critical_high == 0) is satisfied, so the protocol
+      permits closing.
+        Option A: close the round per protocol — record the finding as `unresolved`,
+          complete the review step, file a follow-up task in the external tracker.
+        Option B: treat the finding as in-scope for this run and fix it before the review
+          step closes (drop the dead `if let`, correct the doc comment and the
+          task0001.tests.yaml prose).
+
+      Codex verdict: A. ADOPTED.
+      Codex's key points:
+      (1) It independently confirmed the finding's factual claims, and called the
+          inaccurate evidence prose "the exact defect class this feature was created to
+          eliminate" — so the cost of leaving it is real, not nominal.
+      (2) It still rejected B: an orchestrator unilaterally widening a MEDIUM-severity fix
+          inside an unattended run oversteps authority it was not given, independent of
+          whether the fix is correct. Letting "the fix is small" justify bypassing the
+          severity gate, the rework cap and the completion gate nullifies those controls.
+          The question is not "is the code fine" but "does the review step have the
+          authority to make this change in this run" — and it does not.
+      (3) On severity: MEDIUM is the right classification but "heavier than typical
+          MEDIUM". There is no runtime misbehaviour; the defect is an untested negative
+          branch plus inaccurate evidence prose — inadequate verification, not a
+          functional bug. Codex made the mutation argument explicitly: deleting the
+          `if targets.primary` guard and always writing PRIMARY still passes the suite,
+          so that branch has zero regression protection.
+      (4) On deferral: a generic follow-up ticket is NOT adequate on its own, because this
+          site already survived one partial rework. The follow-up must explicitly require
+          (a) calling publish_to_targets(&mut sink, targets, "unused") unconditionally,
+          (b) verifying by mutation that deleting the PRIMARY guard fails the test,
+          (c) correcting BOTH the test doc comment and the task0001.tests.yaml prose, and
+          (d) linking to this round's unresolved finding record.
+          All four were carried verbatim into the filed follow-up task.
+      (5) Correction Codex made to the orchestrator's framing: option B's remedy is not
+          single-file — it touches both tests.rs and task0001.tests.yaml.
+      Codex's own caveat, recorded for the human evaluator: if downstream tooling treats
+      `unresolved` findings as ignorable and publishes the evidence record as
+      unconditionally valid, that is a separate design problem with the completion-gate
+      semantics itself, worth reviewing independently of this call.
+
+      Options not chosen: B (fix within this run).
+    orchestrator_note: |
+      The orchestrator independently verified the finding before consulting Codex, by
+      reading tests.rs:4660-4707 and pointer_routing.rs:455-485 directly: resolved_text is
+      `let resolved_text: Option<&str> = None;`, the `if let Some(text) = resolved_text`
+      arm is statically dead, and publish_to_targets is never entered in that test.
+      A second, LOW-severity evaluator-originated finding (the FR8 backfill's "no selection
+      resolved" phrasing at SPEC.md:353-354, VERIFICATION.md:43 and VERIFICATION.md:73) was
+      dropped by Phase R3b step 2 (severity not in {critical, high, medium}) and is
+      recorded under `dropped_findings` in reviews/round2.yaml. It was also carried into
+      the same follow-up task as a secondary item.

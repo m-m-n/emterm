@@ -1,0 +1,154 @@
+round: 2
+executed_at: '2026-09-20T18:05:00+09:00'
+scope:
+  review_mode: diff
+  base_commit: d2e39b1fae5aa120b826dfa71097b78091bd7564
+  head_commit: 552acf60de3aba5b5e919248a03a948bc85e083c
+  changed_files:
+  - feature-docs/mouse-report-reset-active-gesture/SPEC.md
+  - feature-docs/mouse-report-reset-active-gesture/VERIFICATION.md
+  - src-tauri/src/window_host/mod.rs
+  - src-tauri/src/window_host/pointer_routing.rs
+  - src-tauri/src/window_host/tests.rs
+  - test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml
+  - test-docs/focus-loss-drag-cleanup-test/task0002.tests.yaml
+  - test-docs/focus-loss-drag-cleanup-test/task0003.tests.yaml
+  - test-docs/focus-loss-drag-cleanup-test/task0004.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: 2a1ad49b9263cb95
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/tests.rs
+  line: 4699
+  title: 'Round-1 item 3623270de026dc88 only partially resolved: no test drives publish_to_targets with
+    primary == false, and the test''s own doc comment claims the opposite'
+  description: 'The round-1 rework (task0003) fixed half of finding 3623270de026dc88 and left the other
+    half. focus_loss_cleanup_with_no_selection_publishes_nothing now asserts the destination decision
+    directly (assert_eq!(targets, SelectionPublishTargets { primary: false, clipboard: false }) at tests.rs:4690-4697),
+    which has real force over selection_publish_targets. But resolved_text is bound to None at tests.rs:4683,
+    so the `if let Some(text) = resolved_text` at tests.rs:4700 never executes, publish_to_targets is
+    never called, and the closing assert!(sink.calls.is_empty()) at tests.rs:4703-4706 holds regardless
+    of what publish_to_targets does. Every other call site driving publish_to_targets passes targets with
+    primary == true (tests.rs:4577, 4596, 4612, 4651), so the `if targets.primary` false arm at pointer_routing.rs:472
+    is exercised by no test at all: deleting that guard and always writing PRIMARY leaves the whole suite
+    green. Additionally, the doc comment added at tests.rs:4674-4678 states that the publish step ''is
+    driven by resolved_text, a value-carrying Option<&str> binding, not by a literal the compiler can
+    fold away, so the closing sink-emptiness assertion constrains the publish path instead of restating
+    a tautology.'' That claim is false as written: the binding is a statically-known None in the same
+    function body, the branch is dead, and the assertion is still a tautology with respect to the publish
+    path. The same wording was carried into the AC-4 evidence record at test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml
+    (AC-4 red_reason), so the evidence record overstates what the test constrains, which is the class
+    of defect this whole feature exists to remove.'
+  suggestion: 'Keep the direct targets assertion, then call publish_to_targets(&mut sink, targets, "unused")
+    unconditionally (drop the `if let`) before asserting sink.calls is empty, so the primary == false
+    arm of pointer_routing.rs:472 is actually executed. Verify by mutation: deleting the `if targets.primary`
+    guard must make the test fail. Then correct the doc comment at tests.rs:4674-4678 and the matching
+    AC-4 red_reason sentence in test-docs/focus-loss-drag-cleanup-test/task0001.tests.yaml to describe
+    what the test does after the change (the publish is invoked with the no-selection targets and records
+    nothing) rather than the dead-branch framing.'
+  sources:
+  - codex:comprehensive
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: medium severity is outside Phase R4's auto-fix candidate gate (critical/high only),
+    so no auto-fix was attempted; residual_critical_high == 0 so the completion gate is satisfied. Carried
+    to a follow-up task per the Codex consultation recorded in phase-state/batch-audit.yaml (gate_id review.residual-medium-disposition).
+evaluation:
+  round_summary: 'Round 2, cross_validation on, diff mode over 9 changed files. No reviewer reported any
+    critical or high finding this round, so dismissed_sites is empty; the single reviewer finding (comprehensive#0,
+    medium) is carried forward. No injection attempt, role override, or embedded instruction was present
+    in any reviewer output - all four outputs were plain schema-shaped result objects. Round-1 continuity,
+    verified independently: 5cd234f39613770d is resolved (task0001.tests.yaml AC-6 now states the NotoColorEmoji.ttf
+    manual-fetch precondition, says the unqualified full-suite command holds only under it, and reconciles
+    with task0002''s compile-failure record); de41ddfa4f021530 is resolved in substance (SPEC TS-4 and
+    VERIFICATION TS-4/SC-C now separate the composed unit test from the adapter wiring, record the write-REQUEST
+    caveat, and keep AC-3''s hardware confirmation on manual TS-9), with only a low wording finding left
+    over; 3623270de026dc88 is NOT resolved and is carried forward. Per-perspective Independent Inspection
+    Duty coverage: comprehensive#0 -> findings (corroborated by reading tests.rs:4670-4707 and pointer_routing.rs:467-478;
+    the evaluator''s own read added the false doc-comment claim at tests.rs:4674-4678, folded into the
+    same carried finding); performance#0 -> corroborated (the refactor adds two branches and one trait
+    dispatch on the once-per-gesture-termination publish path, allocates nothing new, introduces no loop,
+    holds no lock longer, does no per-frame work); architecture#0 -> corroborated (pure state core plus
+    total destination predicate in pointer_routing.rs, a SelectionWriteSink trait whose production impl
+    sits on WindowHost in mod.rs:839-850, all pub(super), no layer inversion, no cycle, publish_local_drag
+    keeps its name, visibility, signature and return type); spec#0 -> findings (FR8''s substantive requirements
+    are met; only the backfill''s ''no selection resolved'' phrasing was questioned). Cross-validation
+    caveat for the record: architecture#0''s summary states it ''declined'' all three round-1 items as
+    inconsistent with the current text and implementation. That judgment is outside its dispatched perspective
+    and is not corroborated - 3623270de026dc88 is only partially resolved - so that sentence must not
+    be read as independent confirmation that the round-1 items are closed.'
+  recommended_action: auto_fix
+  action_rationale: 'Advice only (Phase R3b: recommended_action never overrides the completion gate or
+    the auto-fix candidate gate). The evaluator argued that no critical or high findings survive and no
+    production-behaviour defect was found - publish_local_drag, the destination predicate and the sink
+    seam are behaviourally faithful to the pre-refactor body - leaving one medium test-strength gap with
+    a concrete remedy and one low documentation-wording issue, both bounded edits needing no design decision.
+    The orchestrator did not act on this: medium is outside Phase R4''s candidate gate (critical/high
+    only), and the low finding was dropped by Phase R3b step 2 (severity not in {critical, high, medium}).'
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-focus-loss-drag-cleanup-test-20260920T090103Z.md
+  note: no vulnerability perspective was selected this round (no dependency manifest or lockfile in the
+    diff), so the findings set handed to file-tasks was empty; the ntd branch degraded to report (listing_exit_nonzero)
+dropped_findings:
+- reason: 'severity low: dropped at Phase R3b step 2 (severity must be in {critical, high, medium})'
+  origin: claude:evaluator (Independent Inspection Duty; the spec reviewer saw it and deliberately excluded
+    it)
+  file: feature-docs/mouse-report-reset-active-gesture/SPEC.md
+  line: 353
+  title: FR8 backfill text says the cited test runs with 'no selection resolved' while claiming it asserts
+    the publish payload; the test does feed a resolved selection string
+  note: 'The phrase occurs three times: SPEC.md:353-354, VERIFICATION.md:43 (TS-4 row) and VERIFICATION.md:73
+    (SC-C row). Intended meaning is ''no selection is resolved from a TerminalCore via Selection::resolve
+    - the resolved text is handed in as a plain value'', which is true and is the NFR1 point; read literally
+    the phrase contradicts the payload claim beside it. Disclosure only - carried into the follow-up task,
+    not into findings.'
