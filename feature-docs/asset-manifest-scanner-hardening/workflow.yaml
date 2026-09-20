@@ -95,7 +95,8 @@ workflow:
   result: pass
   failed_items: []
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: 7159e16a09d50819928877cbf9ccb4dbd0e3ae62
 tasks:
   task0001:
     title: Directory-only build-output exclusion and parenthesis-bounded macro-argument
