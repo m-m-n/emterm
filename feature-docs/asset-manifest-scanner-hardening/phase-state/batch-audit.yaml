@@ -1,0 +1,63 @@
+schema_version: 1
+feature: asset-manifest-scanner-hardening
+records:
+  - question_id: implement.focused-test-command-approval
+    packet_id: null
+    answered_at: "2026-09-21T02:20:00+09:00"
+    source: batch-codex-consulted
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "pre-record the focused test command into the approval store before launching the implementer"
+    normalized_answer: "pre-record the focused test command into the approval store before launching the implementer"
+    resolution_note: >-
+      gate: unlisted non-packet gate — the task plan's focused iteration command
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test asset_manifest`
+      is neither declared in workflow.yaml nor present in the approval store, so bash_guard.py
+      returns no decision and the command falls through to the non-deterministic permission
+      classifier; a prior incident in this project stalled an unattended run for hours on an
+      `ask` verdict. options: (a) pre-record the focused command; (b) leave it out and let the
+      implementer fall back to the already-approved whole-suite test command; (c) rewrite the
+      task plan to use only the whole-suite command. codex_consulted: true. Codex converged on
+      (a): (b) is not actually a safe fallback because the stall itself blocks the fallback, and
+      the focused command is a read-only subset of the already-approved whole-suite invocation,
+      so the incremental privilege is effectively narrower than what is already granted. Codex
+      preferred a task-scoped/expiring approval where the tooling supports one; bash_guard.py's
+      approval store has no scoping or expiry, so the permanent registration form was used.
+      opus_escalation: not run. chosen: (a) — recorded
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test asset_manifest`
+      via `bash_guard.py --record`.
+  - question_id: review.spec-baseline-count-inaccuracy
+    packet_id: null
+    answered_at: "2026-09-21T02:45:00+09:00"
+    source: batch-codex-consulted
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "correct SPEC.md / REQUIREMENTS.md AC6 baseline count 12 -> 14 on the integration branch"
+    normalized_answer: "correct the stale AC6 baseline test count in place (option A)"
+    resolution_note: >-
+      gate: unlisted non-packet gate raised during review round 1. The spec reviewer (spec#0,
+      litellm/muse-spark) reported, outside its JSON findings, that SPEC.md AC6 states "The
+      existing 12 tests pass unmodified" while the pre-change baseline of
+      src-tauri/tests/asset_manifest.rs at 61c61133 is 14 `#[test]` functions
+      (`git show 61c61133:src-tauri/tests/asset_manifest.rs | grep -c '#\[test\]'` -> 14);
+      test-docs/.../task0001.tests.yaml already cites 14/14 correctly. The substance of AC6
+      (all pre-existing tests stay green) is satisfied, so this is a documentation inaccuracy,
+      not a code defect, and it was not raised as a review finding by any of the four
+      perspectives. options: (a) correct SPEC.md AC6 now on the integration branch before the
+      PR is opened; (b) leave the spec as-is, record the inaccuracy and file a separate
+      follow-up task; (c) route the workflow back to the create-spec step to re-issue SPEC.md.
+      codex_consulted: true. Codex recommended (a) on four grounds: the baseline test count is
+      a verifiable fact future readers use to judge regression scope, so a stale number is a
+      correctness risk rather than cosmetic; the edit adds, removes and relaxes no requirement,
+      so it does not undermine the spec's frozen-contract role as long as the correction is
+      visible in the review record and commit history; NFR5's containment clause names only
+      `src-tauri/tests/asset_manifest.rs` and therefore does not govern feature-docs/; and (c)
+      is disproportionate, incurring re-execution, state management and re-approval overhead
+      for a one-number fix when all four review perspectives returned zero findings. Codex's
+      caveat: choose (b) instead if the workflow carries an explicit rule that a post-freeze
+      SPEC.md may never be edited for any reason. No such rule exists — em-workflow's develop
+      protocol has the orchestrator write and commit feature-docs/ documents as a normal
+      operation, and the spec-change transition that routes back to create-spec is reserved for
+      requirement changes needing re-planning, which this is not. opus_escalation: not run.
+      chosen: (a) — SPEC.md:202 and REQUIREMENTS.md:201 changed from 12 to 14; no code, test or
+      workflow.yaml requirement entry was touched.

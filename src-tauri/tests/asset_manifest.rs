@@ -83,31 +83,69 @@ fn find_missing_declarations(
 
 /// The file-name component of every `include_bytes!("...")` literal in
 /// `text` whose path ends in one of `FONT_EXTENSIONS`.
+///
+/// Per call site (IMPLEMENTATION.md D2): after the fixed opening substring
+/// matches, the argument region runs from just after the opening parenthesis
+/// to the parenthesis that returns the nesting depth to zero. Only a string
+/// literal wholly inside that region is a candidate; a region with no
+/// closing parenthesis in the remaining text ends the whole scan. Scanning
+/// always resumes immediately after the region's closing parenthesis, never
+/// from a quote position — this keeps a quote belonging to unrelated code
+/// (FR2/FR5) from being picked up, and keeps the pass forward-only (NFR4).
 fn embedded_font_names(text: &str) -> BTreeSet<String> {
     const NEEDLE: &str = "include_bytes!(";
     let mut out = BTreeSet::new();
     let mut rest = text;
     while let Some(start) = rest.find(NEEDLE) {
         let after_needle = &rest[start + NEEDLE.len()..];
-        let Some(quote_start) = after_needle.find('"') else {
-            break;
-        };
-        let after_open_quote = &after_needle[quote_start + 1..];
-        let Some(quote_end) = after_open_quote.find('"') else {
-            break;
-        };
-        let literal_path = &after_open_quote[..quote_end];
-        if let Some(name) = Path::new(literal_path).file_name().and_then(|n| n.to_str()) {
-            let is_font = FONT_EXTENSIONS.iter().any(|ext| {
-                name.rsplit_once('.')
-                    .map(|(_, actual_ext)| actual_ext.eq_ignore_ascii_case(ext))
-                    .unwrap_or(false)
-            });
-            if is_font {
-                out.insert(name.to_string());
+
+        // Bound the argument region by parenthesis nesting depth (the
+        // opening parenthesis just consumed by NEEDLE starts depth at 1).
+        let mut depth: i32 = 1;
+        let mut region_end = None;
+        for (idx, ch) in after_needle.char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        region_end = Some(idx);
+                        break;
+                    }
+                }
+                _ => {}
             }
         }
-        rest = &after_open_quote[quote_end + 1..];
+        let Some(region_end) = region_end else {
+            // No parenthesis returns the depth to zero anywhere in the
+            // remaining text: end the scan, returning what was collected.
+            break;
+        };
+        let region = &after_needle[..region_end];
+
+        // Look for a string literal wholly inside the region only.
+        if let Some(quote_start) = region.find('"') {
+            let after_open_quote = &region[quote_start + 1..];
+            if let Some(quote_end) = after_open_quote.find('"') {
+                let literal_path = &after_open_quote[..quote_end];
+                if let Some(name) = Path::new(literal_path).file_name().and_then(|n| n.to_str()) {
+                    let is_font = FONT_EXTENSIONS.iter().any(|ext| {
+                        name.rsplit_once('.')
+                            .map(|(_, actual_ext)| actual_ext.eq_ignore_ascii_case(ext))
+                            .unwrap_or(false)
+                    });
+                    if is_font {
+                        out.insert(name.to_string());
+                    }
+                }
+            }
+            // Else: opening quote inside the region but no closing quote
+            // inside it — this call contributes nothing (FR5).
+        }
+
+        // Resume immediately after the region's closing parenthesis, never
+        // before it and never from a quote position.
+        rest = &after_needle[region_end + 1..];
     }
     out
 }
@@ -172,11 +210,25 @@ fn is_build_output_dir(name: &str) -> bool {
 /// `true` if `relative_path` (relative to the crate manifest directory)
 /// must be excluded from the walk: it sits under a build-output directory,
 /// or it is this checking test's own source (TS5).
+///
+/// The build-output prefix rule is applied to every ordinary-name component
+/// except the final one (AC-1): a file whose own name merely starts with the
+/// prefix stays in scope here. A build-output directory reached as a walk
+/// entry (its name is the final component of its own relative path) is
+/// therefore never excluded by this predicate; it is stopped one step later
+/// by `is_build_output_dir` in the walk (IMPLEMENTATION.md D1). Do not add a
+/// compensating final-component check here — that would re-introduce the gap
+/// this narrowing fixes.
 fn is_excluded_path(relative_path: &Path) -> bool {
     if relative_path == Path::new(SELF_RELATIVE_PATH) {
         return true;
     }
-    relative_path.components().any(|component| match component {
+    let mut components: Vec<Component> = relative_path.components().collect();
+    // The final component (if any) is never subject to the prefix rule. A
+    // single-component path (AC-1 boundary) has only a final component, so
+    // it is never excluded here.
+    components.pop();
+    components.into_iter().any(|component| match component {
         Component::Normal(name) => name.to_str().map(is_build_output_dir).unwrap_or(false),
         _ => false,
     })
@@ -363,6 +415,47 @@ fn non_font_extension_embed_is_ignored() {
     assert!(embedded_font_names(text).is_empty());
 }
 
+// ── AC-4 / TS4: a non-literal argument must not leak into a later,
+// unrelated literal (shaped like the generated ViewerAsset call site in
+// build.rs, whose macro argument is a format placeholder, not a literal) ──
+
+#[test]
+fn embedded_font_names_non_literal_argument_does_not_leak_into_unrelated_literal() {
+    let text = concat!(
+        "bytes: include_bytes!({abs_str:?}), content_type: {ct:?} }},\n",
+        "const UNRELATED: &str = \"UnrelatedFile.ttf\";\n",
+    );
+    assert!(
+        embedded_font_names(text).is_empty(),
+        "a non-literal macro argument must not leak into a later unrelated literal"
+    );
+}
+
+// ── AC-5 / TS5: a non-literal call immediately followed by a real call
+// must not misalign the scan ────────────────────────────────────────────
+
+#[test]
+fn embedded_font_names_non_literal_argument_does_not_misalign_following_real_call() {
+    let text = concat!(
+        "include_bytes!({abs_str:?}), end of generated literal\"\n",
+        "include_bytes!(\"../../assets/fonts/Alpha-Regular.ttf\"),\n",
+    );
+    assert_eq!(
+        embedded_font_names(text),
+        names(&["Alpha-Regular.ttf"]),
+        "a stray quote after a non-literal argument must not misalign the scan"
+    );
+}
+
+// ── Edge case (Test Notes): a region with no closing parenthesis ends the
+// scan without panicking, rather than looping or reading unrelated text ──
+
+#[test]
+fn embedded_font_names_call_missing_closing_parenthesis_ends_scan_without_panicking() {
+    let text = "include_bytes!(\"../../assets/fonts/Alpha-Regular.ttf\"\n";
+    assert_eq!(embedded_font_names(text), BTreeSet::new());
+}
+
 // ── AC-6 / TS6: build-output directories are excluded ─────────────────
 
 #[test]
@@ -392,6 +485,29 @@ fn walk_excludes_its_own_source_file() {
     assert!(!is_excluded_path(Path::new("tests/cli_subcommands.rs")));
 }
 
+// ── AC-1 / TS1: a final component starting with the build-output prefix
+// must not, on its own, exclude the path ──────────────────────────────
+
+#[test]
+fn walk_does_not_exclude_path_whose_final_component_starts_with_build_output_prefix() {
+    for path in [
+        Path::new("src/target-shaped-file.rs"),
+        Path::new("src/target.rs"),
+    ] {
+        assert!(
+            !is_excluded_path(path),
+            "{path:?} must not be excluded merely because its own name starts with the build-output prefix"
+        );
+    }
+}
+
+#[test]
+fn walk_does_not_exclude_single_component_path_starting_with_build_output_prefix() {
+    // Boundary case the narrowing creates: a single-component path's only
+    // component is the final one, so the prefix rule never applies to it.
+    assert!(!is_excluded_path(Path::new("target-shaped-file.rs")));
+}
+
 // ── AC-5: no font binary ever needs to exist ──────────────────────────
 
 #[test]
@@ -408,6 +524,44 @@ fn scan_requires_no_font_binaries_present() {
     .expect("write fake source");
     let embedded = scan_embedded_fonts(root);
     assert_eq!(embedded, names(&["Fake-Regular.ttf"]));
+}
+
+// ── AC-3 / TS3: a build-output-prefixed file name stays in scope, but a
+// build-output directory still stops the walk ─────────────────────────
+
+#[test]
+fn scan_finds_embed_in_file_whose_name_begins_with_build_output_prefix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("src")).expect("create src dir");
+    std::fs::write(
+        root.join("src/target-shaped.rs"),
+        r#"pub const X: &[u8] = include_bytes!("../assets/fonts/Boundary-Regular.ttf");"#,
+    )
+    .expect("write source file whose name starts with the build-output prefix");
+    let embedded = scan_embedded_fonts(root);
+    assert_eq!(
+        embedded,
+        names(&["Boundary-Regular.ttf"]),
+        "a file whose own name begins with the build-output prefix must still be scanned"
+    );
+}
+
+#[test]
+fn scan_finds_nothing_when_embed_is_inside_build_output_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("target-host/build")).expect("create build-output dir");
+    std::fs::write(
+        root.join("target-host/build/generated.rs"),
+        r#"pub const X: &[u8] = include_bytes!("../assets/fonts/Boundary-Regular.ttf");"#,
+    )
+    .expect("write source file inside a build-output directory");
+    let embedded = scan_embedded_fonts(root);
+    assert!(
+        embedded.is_empty(),
+        "an embedding inside a build-output directory must not be found"
+    );
 }
 
 // ── AC-3 / AC-5: the repository-facing invariant ───────────────────────
