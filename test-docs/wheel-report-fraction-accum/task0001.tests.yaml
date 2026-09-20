@@ -54,24 +54,24 @@ acceptance_tests:
     red_reason: >-
       Pre-implementation, `error[E0560]: struct
       \`window_host::mouse_report::MouseReportRecords\` has no field
-      named \`report_accum\`` / \`last_tracking_active\` (the fields
+      named \`report_accum\`` (the fields
       this test constructs did not exist).
   AC-7:
     tests:
       - window_host::tests::decide_wheel_event_observing_tracking_inactive_discards_the_carried_remainder
-      - window_host::tests::decide_wheel_event_detects_reactivation_observed_only_by_an_owner_recorded_release
+      - window_host::tests::decide_wheel_event_reactivation_after_an_owner_recorded_release_accumulates_from_zero
       - window_host::tests::decide_motion_event_owner_established_local_branch_surfaces_tracking_observation_only
     red_confirmed: true
     red_reason: >-
       Pre-implementation, the same E0560/E0609 "no field
-      \`report_accum\`/\`last_tracking_active\`/\`tracking_active\`"
+      \`report_accum\`/\`tracking_active\`"
       errors as AC-6 (6 occurrences of the report_accum error alone
       across these three tests). The second test in this group is the
       exact gap the coordinator's second-opinion clarification named
       (an owner-recorded release observing tracking-inactive without
       itself resetting gesture/cache state, D10) — before this task's
-      RecordUpdates.tracking_active field and
-      MouseReportRecords.last_tracking_active field existed, this
+      RecordUpdates.tracking_active field
+      existed, this
       scenario could not even be expressed, let alone pass.
   AC-8:
     tests:
