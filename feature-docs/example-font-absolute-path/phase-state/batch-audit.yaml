@@ -139,3 +139,31 @@ records:
       skill SSOT の明文（「Step C に到達しない起動では --pr が付いていても PR は作られない」）と
       一致する。PR は次回以降 `--batch --once --pr` を Step C に到達する起動で渡すことで作成される。
       opus_escalation: false。
+  - question_id: null
+    packet_id: null
+    answered_at: "2026-09-21T01:10:00+09:00"
+    source: unlisted-gate-fallback
+    answer_mode: single_select
+    selected_option_ids: [stop_at_once_boundary]
+    freeform: null
+    normalized_answer: "retrospect を completed にした時点で --once のフェーズ境界として終了し、Step C (push + gh pr create) は次回起動に委ねる"
+    resolution_note: >-
+      gate: --once のフェーズ境界と、起動時の自由記述（「実装が終わったら integration ブランチを
+      push して gh pr create で PR を作る」）との緊張関係の再発。gate_id なし。
+      references/batch-mode.md の unlisted-gate fallback（Codex 相談 → 最小副作用オプション）に従った。
+      前回起動（verify 境界）で同じ論点を (A) で解決済みだが、2 回目の先送りになるため改めて相談した。
+      選択肢: (A) stop_at_once_boundary = retrospect completed のコミット時点で --once の停止条件 7 により終了し、
+      Step C / PR 作成を後続起動に残す /
+      (B) override_once_and_open_pr = --once を上書きして Step C まで走り切り push + PR 作成まで行う。
+      採用: (A)。codex_consulted: true / harness: codex（codex-harness second-opinion, read-only, 1 ターン）/
+      opus_escalation: false。
+      Codex の理由: skill SSOT は「retrospect が completed になりコミットされた時点」を --once の境界と明記し、
+      Step C を独立した 1 フェーズとして次回起動に持ち越すと定めている。前回起動が batch-audit.yaml に
+      記録した決定とも整合する。state=phase_done は外部サービスに同一フィーチャーの再起動を促すため、
+      先送りしても最終目的（PR 作成）は失われない。
+      不採用 (B) の最も強い根拠（Codex が明示）: 利用者は「実装が終わったら push + PR」を一義的に要求しており、
+      これは 2 回目の先送りになる。次回起動で --pr が渡されなければ PR が永久に作られない運用リスクがある。
+      orchestrator の受け入れ: (A) は push も PR 作成も行わないため副作用が最小であり、
+      skill SSOT の明文（「Step C に到達しない起動では --pr が付いていても PR は作られない」「--pr は
+      起動ごとの設定で前の起動からは引き継がれない」）と一致する。
+      次回 `--batch --once --pr example-font-absolute-path` を渡せば Step C に到達し PR が作成される。
