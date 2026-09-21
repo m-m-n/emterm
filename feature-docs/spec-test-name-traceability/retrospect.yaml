@@ -1,0 +1,34 @@
+feature: spec-test-name-traceability
+collected_at: "2026-09-21T13:05:00+09:00"
+session_ids: [01a0c201-540f-7384-abba-041bd63ada0f]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - "verify: 新しい integration worktree で main の build gate (cargo check) が
+     build.rs:84 の font_missing で落ちた。assets/fonts/Noto-COLRv1.ttf・
+     viewer/dist・settings/dist・node_modules はいずれも gitignore された
+     生成物で、Markdown のみの変更集合とは無関係。事前承認済みの複合リテラル
+     (fetch-fonts.sh && bun install && build:viewer && build:settings && cargo check)
+     で provisioning してからゲートを通した。fresh worktree での build gate は
+     provisioning 前提が要ることが繰り返し出る可能性がある。"
+  - "create-plan: SPEC.md の AC-3 が『tests.rs:6000〜EOF の fn 名』と書いていたが、
+     リテラルに抽出すると fixture/helper を含む 31 件になり、同じ AC が述べる
+     件数 25 と矛盾していた。planner は D2 として片側解決し AC-3 本文は据え置いた。
+     orchestrator が post-validation で AC-3 の文言を `#[test]` 注釈付きに限定する
+     よう最小修正。create-plan から create-spec へ戻る遷移が定義されていないため、
+     仕様文言の軽微な不整合を planning 段階で発見したときの正規ルートが無い。"
+  - "review: reviewers.yaml の contributor-tier read-mapping と vertex-review の
+     litellm-harness スキルの『muse-spark-contributor をレビューに使ってはいけない』
+     が真正面から衝突した。consent store に記録があり、対象が public MIT リポジトリの
+     Markdown のみだったため contributor tier を採用。2 つの SSOT の優先関係が
+     明文化されていない。"
+  - "本 feature 自体が、前 feature の verify で failed_item とせず申し送りにした
+     ドキュメント・実装間の traceability ドリフトの後始末。severity ゲートで low と
+     判定されて round 1 で drop された spec レビュアーの指摘が、結局は別タスクとして
+     戻ってきている。"
