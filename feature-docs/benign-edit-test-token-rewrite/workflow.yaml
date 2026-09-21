@@ -50,7 +50,8 @@ workflow:
       下すべき視覚的判断が存在しない。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: d1b36055d53747070db759f725ac9fd25718ffba
   - id: implement
     status: pending
     base_commit: null
@@ -63,7 +64,19 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "良性編集テストを閉じた集合のみに結合する構築方式へ書き換える"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/window_host/tests.rs
+    skills: []
+    domains: [input-handling]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -79,63 +92,63 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3, TS-4]
   FR2:
     title: "Class B の良性編集をトークンレベルで再現する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2]
   FR3:
     title: "すべての良性編集に対する空虚化防止ガード"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3, TS-4]
   FR4:
     title: "Class A の良性編集をアンカー＋バイト切り出しのソース編集として行う"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-3, TS-4, TS-5, TS-6, TS-7]
   FR5:
     title: "すべての良性編集で判定結果が変わらない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3, TS-4]
   NFR1:
     title: "走査モジュールへの新機能追加・新規依存を行わない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3, TS-4]
   NFR2:
     title: "変更範囲はテストのみ"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-M1]
   NFR3:
     title: "リポジトリのテスト規約"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6, TS-7]
   NFR4:
     title: "フィーチャーゲートと実行コストに影響しない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-M1]
 
 batch:
