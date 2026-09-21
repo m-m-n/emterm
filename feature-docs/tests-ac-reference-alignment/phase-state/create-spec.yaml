@@ -1,0 +1,17 @@
+schema_version: 1
+feature: tests-ac-reference-alignment
+phase: create-spec
+status: in_progress
+last_input_digest: "eef65524e35935cd55d2f86153036ba288a240da7541b2911d933d89ecef2c10"
+rounds: 0
+answers: []
+assumptions: []
+artifacts: {}
+resolved_input_cache:
+  resolved_at_commit: "9f1129b84182d715fd024f323f468918dd14245c"
+  design_system_candidates:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/md3.rs
+  e2e_discovery: []
+  reference_scan_targets: []
