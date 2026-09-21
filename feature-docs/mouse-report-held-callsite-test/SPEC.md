@@ -231,32 +231,55 @@ path that never materializes is not a violation.
 
 ### Unit Tests
 
-- [ ] **TS-1** `run_button_decision_passes_live_held_value_to_the_held_aware_apply_entry_point`
+- [ ] **TS-1** `run_button_decision_calls_apply_outcome_with_held_once_with_live_held_as_fourth_arg`
       — `include_str!("pointer_routing.rs")` を波括弧深度で走査して `run_button_decision` の
       本体を抽出し、トークン列から `mouse_report::apply_outcome_with_held(` の実引数を分解する。
       実引数 4 個、第 4 実引数が `[host 引数名, `.`, `mouse_report_held`]` の 3 トークンと完全
       一致することをアサートする。host 引数名は同関数のシグネチャから取得する。
       （要件: FR1, FR5 / AC: AC-2, AC-3）
-- [ ] **TS-2** `handle_mouse_wheel_passes_live_held_value_to_the_wheel_report_step`
+- [ ] **TS-2** `handle_mouse_wheel_calls_apply_wheel_report_step_once_with_live_held_as_fifth_arg`
       — 同様に `handle_mouse_wheel` の本体を抽出し、`mouse_report::apply_wheel_report_step(` の
       実引数が 5 個で第 5 実引数が同じ 3 トークン列であることをアサートする。
       （要件: FR2, FR5 / AC: AC-4）
-- [ ] **TS-3** `button_and_wheel_bodies_never_call_the_held_unaware_apply_entry_point`
+- [ ] **TS-3** `neither_call_site_body_contains_the_held_unaware_apply_path`
       — 抽出した 2 本体のトークン列に `mouse_report :: apply_outcome (` 相当の並びが現れない
       ことをアサートする。`apply_outcome_with_held` は別識別子なので誤検出しないことを同テスト内で
       確認する。（要件: FR3 / AC: AC-3, AC-4）
-- [ ] **TS-4** `body_extractor_tolerates_benign_edits_and_ignores_comments_and_string_literals`
+- [ ] **TS-4**
       — メモリ内のソース断片に対する走査器テスト。行コメント／入れ子ブロックコメント、
       エスケープ入り文字列、raw 文字列（`#` 個数違い）、byte/C 文字列、ライフタイム `'a` と
       文字リテラル `'a'` の区別、末尾カンマ、改行位置の違いをカバーする。コメント／文字列の
       中に正しい呼び出しを書いた入力では検出が成立しない（赤を隠せない）ことをアサートする。
       （要件: FR6, FR7 / AC: AC-5, AC-6）
-- [ ] **TS-5** `argument_scanner_rejects_defaulted_and_deleted_held_arguments`
+      - `sanity_the_fake_callee_pattern_matches_a_real_unquoted_call` — scaffold /
+        sanity anchor: 合成した callee パターンが実際の非クォート呼び出しに一致することを
+        検証し、TS-4 の否定的ケースが空虚にならないことを担保する。
+      - `scanner_treats_a_correct_call_written_inside_a_line_comment_as_absent`
+      - `scanner_treats_a_correct_call_written_inside_a_string_literal_as_absent`
+      - `scanner_ignores_call_shaped_text_inside_nested_block_comments`
+      - `scanner_ignores_call_shaped_text_inside_a_raw_string_with_differing_hash_counts`
+      - `scanner_tokenizes_byte_and_c_string_literals_as_opaque_literals`
+      - `scanner_distinguishes_a_lifetime_marker_from_an_adjacent_character_literal`
+      - `scanner_does_not_terminate_a_character_literal_on_an_escaped_quote`
+      - `scanner_does_not_terminate_a_string_literal_on_an_escaped_quote`
+      - `scanner_never_matches_an_identifier_as_a_prefix_of_a_longer_one`
+      - `argument_splitter_ignores_a_trailing_comma`
+      - `judge_call_tolerates_the_argument_list_rewrapped_across_lines`
+      - `judge_call_tolerates_a_comment_between_the_callee_and_its_opening_paren`
+      - `judge_call_rejects_a_let_bound_shadow_of_the_receiver_before_the_call`
+      - `judge_call_rejects_a_closure_parameter_shadow_of_the_receiver_before_the_call`
+      - `judge_call_rejects_a_match_arm_pattern_shadow_of_the_receiver_before_the_call`
+      - `judge_call_rejects_an_if_let_pattern_shadow_of_the_receiver_before_the_call`
+      - `judge_call_rejects_when_the_held_unaware_path_also_appears_elsewhere_in_the_body`
+- [ ] **TS-5**
       — メモリ内の変異済みソース断片（第 4/第 5 実引数を `HeldButtons::default()` に置換した
       もの、当該引数を削除したもの、旧ラッパへ差し戻したもの）に対し、走査器の判定関数が
       不合格を返すことをアサートする。実ファイルに変異を加えずに TS-1〜TS-3 の赤条件を証明する。
       （要件: FR7 / AC: AC-2, AC-3, AC-4）
-- [ ] **TS-6** `held_argument_scan_is_scoped_to_the_two_named_bodies_only`
+      - `button_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted`
+      - `wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted`
+      - `button_path_benign_edits_to_the_real_source_are_still_accepted`
+- [ ] **TS-6** `body_extractor_returns_exactly_the_two_named_bodies_excluding_the_motion_path`
       — モーション経路（`handle_pointer_moved` 内の 3 番目の `apply_outcome_with_held` 呼び出し）が
       抽出結果に混入しないことをアサートする。これが既存の全ファイル走査ニードルとの差分であり、
       本 feature の検出漏れ解消の本体。（要件: FR5, NFR8 / AC: AC-5）
