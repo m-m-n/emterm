@@ -153,3 +153,65 @@ records:
     `gh pr create`, no merge in this launch. The PR is created in the launch
     that actually reaches Step C, which must itself carry `--pr` (the flag is
     per-launch and is not carried over).
+- question_id: review.muse-spark-tier-read-mapping
+  packet_id: null
+  answered_at: '2026-09-21T12:21:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - contributor_tier
+  freeform: null
+  normalized_answer: dispatch the spec perspective's muse-spark chain entry as the contributor tier
+  resolution_note: >-
+    Autonomous fail-closed-route resolution (no gate_id at the originating
+    site; raised by the orchestrator during review Phase R2 fan-out, not by a
+    worker packet). Consulted per the user's standing instruction for this run
+    to consult Codex on unclear points and adopt the option judged
+    comparatively better. codex_consulted: true; harness entry: codex
+    (run_codex_exec.sh readonly); turns used: 1; Opus escalation: not run.
+    --- THE POINT: two SSOTs in the same rule set conflict on which LiteLLM
+    tier a review dispatch may use. `references/reviewers.yaml` +
+    `references/review-phase.md` define a "Contributor-tier read-mapping":
+    when `muse-spark` is the chain entry the registry selected, reading it as
+    the contributor tier is permitted after two checks pass -- consent
+    recorded (mechanical, via the consent store) and a per-dispatch judgment,
+    whose stated default is to USE the contributor tier. The vertex-review
+    plugin's `litellm-harness` skill states the opposite as a flat
+    prohibition: "レビューはプライベートなコードを送るため muse-spark
+    (Standard) を使う。muse-spark-contributor をレビューに使ってはいけない"
+    (contributor tier = the input may be used for model training).
+    --- OPTIONS: (A) contributor tier -- reviewers.yaml is the more specific
+    authority for which model each perspective gets, it defines the
+    read-mapping explicitly, its per-dispatch default is "use", and every
+    scope-exclusion clause is satisfied; (B) standard tier -- a flat
+    prohibition should win over a permissive default.
+    --- MECHANICAL CHECK (performed before dispatch): `muse_guard.py
+    --project-dir <repo> --list` returned the project key, i.e. consent IS
+    recorded for this repository.
+    --- PER-DISPATCH JUDGMENT (performed before dispatch): the reviewed diff
+    is documentation-only -- test-function names in three Markdown design
+    documents realigned to test functions that exist in
+    src-tauri/src/window_host/tests.rs. No secrets or credentials, no
+    third-party or vendored code, no unpublished design idea that is the
+    project's differentiator. None of the scope exclusions applies.
+    --- ADOPTED: A. Codex judged A comparatively better: reviewers.yaml /
+    review-phase.md are the more specific authority because they directly
+    govern per-perspective model selection and the consent-plus-judgment
+    read-mapping, so the harness skill's prohibition is better read as a
+    general default that the consent mechanism overrides than as an absolute
+    the registry cannot override. Codex attached one condition -- an MIT
+    license does not by itself establish that the repository is public, and a
+    private repository falls under the scope exclusion.
+    --- CONDITION VERIFIED: `gh repo view --json visibility,licenseInfo`
+    returned visibility PUBLIC and MIT License for m-m-n/emterm, so the
+    exclusion does not apply and the condition holds. No correction needed
+    going forward.
+    --- NOT ADOPTED: B. It would have been the smaller-side-effect option in
+    the abstract, but the consent store had already recorded the user's
+    decision for this repository, so B would discard a decision the user
+    made deliberately through the only interactive path that records it.
+    --- CONSEQUENCE: run spec#0 was dispatched to
+    vertex-review:vertex-reviewer with model muse-spark-contributor, recorded
+    as such in reviews/round1.yaml `perspective_runs`. The acknowledged
+    downside is that the submitted input may be used for model training; the
+    input was three Markdown documents from a public MIT repository.
