@@ -1,0 +1,64 @@
+feature: tests-ac-reference-alignment
+collected_at: "2026-09-22T00:22:00+09:00"
+session_ids: ["01a0c485-5d46-74d0-b598-98ee03eb80a0"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - test-docs/tests-ac-reference-alignment/task0001.tests.yaml
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: minimal
+    rationale: >-
+      decide-tier.py: score.probabilities['0']=1.0 >= 0.8 (p0_floor) and
+      score.expectation_clear=0.81 >= 0.5 (expectation_clear_floor); both
+      bases evaluated to the same tier.
+    bases:
+      - basis: description_only
+        probabilities: {"0": 1.0, "1": 0.0, "2": 0.0}
+        expectation_clear: 0.81
+        confidence: 0.99
+        observed_at: "2026-09-21T23:57:00+09:00"
+      - basis: description_plus_code
+        probabilities: {"0": 1.0, "1": 0.0, "2": 0.0}
+        expectation_clear: 0.75
+        confidence: 0.99
+        observed_at: "2026-09-21T23:57:05+09:00"
+    pre_survey_estimate:
+      files_expected: 1
+      changed_lines_approx: 50
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - >-
+    tier=minimal の予測 files_expected=1 に対し、実際は tests.rs に加えて
+    test-docs/tests-ac-reference-alignment/task0001.tests.yaml が新規作成された。
+    test-docs/<feature>/ の作業記録はリポジトリ全体の既存慣例 (main 上に約 77 件の
+    同型ディレクトリ) だが、tier 事前見積りにも task の files 宣言にも現れていない。
+    見積りが慣例的な副産物ファイルを織り込めていない。
+  - >-
+    TASK.md の「変更ファイルは tests.rs のみ」条項が、コード変更のスコープ制約なのか
+    リポジトリ全体の網羅的な許可リストなのかを文面から判定できず、verify で Codex
+    相談を要した (batch-audit.yaml の verify 記録)。網羅的許可リストと読むと本
+    ワークフローが必ず書く feature-docs/ 自身も違反になるため、TASK.md 生成時点で
+    「コード変更の範囲」であることを明示する書き方が望ましい。
+  - >-
+    verify の build_command が worktree では素で失敗した。build.rs が bundled font
+    (assets/fonts/Noto-COLRv1.ttf) と web バンドルの存在を前提とするのに対し、
+    新規 worktree にはどちらも無い。実装内容と無関係な環境要因でありながら、
+    毎回 fetch-fonts.sh + bun install + build:viewer + build:settings の前置きを
+    要する。worktree 初期化手順として定型化できていない。
+  - >-
+    起動引数 --batch --once --pr と自由文の PR 作成指示が retrospect 境界で衝突した。
+    --once は retrospect 完了でターンを終え Step C を次回起動へ持ち越すため、この起動
+    では PR は作られない。--pr は起動ごとの設定で持ち越されないため、次回起動にも
+    --pr を付ける必要がある。外部サービス側の再起動引数の組み立てに依存する構造。
