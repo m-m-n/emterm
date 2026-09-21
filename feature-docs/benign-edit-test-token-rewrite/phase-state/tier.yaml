@@ -1,0 +1,33 @@
+schema_version: 1
+feature: benign-edit-test-token-rewrite
+tier: full
+bases:
+- basis: description_only
+  probabilities:
+    '0': 0.07
+    '1': 0.93
+    '2': 0.0
+  expectation_clear: 0.42
+  confidence: 0.9
+  observed_at: '2026-09-22T02:43:10.597601+09:00'
+- basis: description_plus_code
+  probabilities:
+    '0': 0.02
+    '1': 0.98
+    '2': 0.0
+  expectation_clear: 0.47
+  confidence: 0.96
+  observed_at: '2026-09-22T02:43:10.597601+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/window_host/tests.rs
+  changed_lines_approx: 160
+  new_functions_needed: 2
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+rationale: Both readings evaluated to full (P(0)=0.07 / 0.02, below the reduced row's
+  0.40 floor); decide-tier.py fell through to the unconditional full row.
+decided_at: '2026-09-22T02:43:10.597601+09:00'
