@@ -97,3 +97,41 @@ records:
       最終報告で「計画作成のみ完了」「Step C 未到達のため push・PR は未実行」
       「--pr は起動間で引き継がれないため Step C に到達する起動で再指定が必要」を
       明記するよう助言。本報告はこれに従っている。
+  - gate_id: null
+    question_id: implement.range-notation-annotation
+    packet_id: null
+    raised_by: orchestrator
+    answered_at: "2026-09-22T00:00:00+09:00"
+    source: codex-consultation
+    answer_mode: select
+    question: >-
+      TASK.md 適用規則 2 の末尾「範囲表記も タスクローカル番号の範囲である旨が
+      わかる形にする」を、implementer は範囲表記 `AC-1..AC-7.`（tests.rs:5212）
+      自体に手を加えず、その直下 5213-5215 行に置いた規則 1 の宣言で満たしたと
+      扱った。これで規則 2 を満たすか。
+    options:
+      - option_id: declaration_suffices
+        label: "(A) 宣言が直下にあるため範囲表記は追記不要。現状で完了"
+      - option_id: annotate_range_inline
+        label: "(B) 範囲表記にも個別に出典を追記すべき。レビュー前に修正"
+    selected_option_ids: [declaration_suffices]
+    chosen: declaration_suffices
+    codex_consulted: true
+    opus_escalation: false
+    freeform: "run_codex_exec.sh readonly による実ファイル照合込みの比較判定で (A) を採用"
+    normalized_answer: "範囲表記への追記は行わず、直下の宣言で規則 2 を満たすとする"
+    resolution_note: >-
+      Codex 判定 (A)。根拠: (1) TASK.md 規則 2 は出典の明記と範囲の識別可能性を
+      求めるが、同一行への追記までは指定していない。(2) 範囲表記 tests.rs:5212 の
+      直下 5213-5215 行に宣言があり、区切り線は 5216 行。同一コメントブロックの
+      続きとして出典を明記しており、規則 1 が指定する設置位置とも一致する。
+      (3) 対象グループ 5207-6888 行を走査した結果、範囲表記は 5212 行の 1 箇所のみ
+      で、未注記の範囲表記は他に無い。
+      併せて注記漏れの独立検証も依頼した。`^\s*//.*AC-[0-9]+` で抽出した
+      コメント/doc コメントの AC 参照 18 行を全件確認し、範囲表記以外の 17 行は
+      15 行が同一行に出典を持ち、5975 行と 6503 行はそれぞれ直後の 5976 行・
+      6504 行に出典がある。注記漏れは無い。診断文字列 31 箇所は規則 3 に従い
+      対象外。
+      (B) を採らなかった代償: 規則 2 が範囲への個別追記を要求するという読みが
+      正しかった場合、5212 行への出典追記という手戻りが生じる。実行動作・テスト
+      判定には影響しない。
