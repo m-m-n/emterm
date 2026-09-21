@@ -215,3 +215,46 @@ records:
     as such in reviews/round1.yaml `perspective_runs`. The acknowledged
     downside is that the submitted input may be used for model training; the
     input was three Markdown documents from a public MIT repository.
+- question_id: verify.build-gate-prerequisite-provisioning
+  packet_id: null
+  answered_at: '2026-09-21T12:34:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - use_approved_provisioning_prefix_literal
+  freeform: null
+  normalized_answer: provision prerequisites via the pre-approved composite command literal whose terminal
+    segment is byte-identical to the prescribed build command
+  resolution_note: 'gate: unlisted non-packet gate raised by the orchestrator in the verify phase (no
+    gate_id at the originating site), resolved per batch-mode.md ''Any other non-packet AskUserQuestion
+    site'' — Codex consultation first, minimum-side-effect option as fallback. codex_consulted: true;
+    harness entry: codex-harness:second-opinion-agent (readonly, default provider/model, codex session
+    01a0c1ff-b5a4-77e0-9f95-994c78eb1094); turns used: 1; Opus escalation: not run (Codex returned a
+    decisive recommendation on turn 1).
+    --- SITUATION: VERIFICATION.md prescribes `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+    src-tauri/Cargo.toml` as the `main` component build gate. Run verbatim in the fresh integration
+    worktree it FAILED at src-tauri/build.rs:84 with `build_rs.font_missing: bundled font missing at
+    assets/fonts/Noto-COLRv1.ttf`. viewer/dist, settings/dist and node_modules were also absent. All
+    of these are gitignored build prerequisites, not part of the Markdown-only change set.
+    --- OPTIONS: (1) run the pre-approved composite literal `bash scripts/fetch-fonts.sh && bun install
+    && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check
+    --manifest-path src-tauri/Cargo.toml`, whose terminal segment is byte-identical to the prescribed
+    command; (2) record the verbatim failure as a verify failed_item and trigger a rework round; (3)
+    skip the build gate as inapplicable.
+    --- ADOPTED: 1. Codex judged 1 comparatively better: the failure is a fresh-worktree provisioning
+    gap in gitignored generated artifacts and dependencies, not a regression from the change; the
+    terminal segment executes the exact same cargo check, so the gate is discharged correctly; and the
+    provisioning command is itself already explicitly pre-approved in this project''s bash_guard
+    registry, so no new command authority is claimed.
+    --- NOT ADOPTED: 2. It would burn a verify rework round on an environment gap that no documentation
+    edit can fix, and rework-task-synthesis has no task shape for "the worktree lacked fonts". 3. It
+    would discard a build check that can actually be run, weakening the NFR1 regression evidence the
+    change set depends on.
+    --- RISK ACKNOWLEDGED: Codex flagged that the provisioning step could update pre-existing broken
+    generated artifacts into a working state and thereby mask inconsistencies in those outputs. It
+    judged the risk of masking an actual Rust compilation regression LOW, because the terminal cargo
+    check invocation is identical between the two literals. Provisioning failures are not swallowed
+    either — `&&` chaining means a fetch-fonts / bun install / bundle failure aborts before the check.
+    --- CONSEQUENCE: the `main` build gate ran green after provisioning (cargo check finished in
+    22.43s). The `cli_feature_gate` and `web` gates, the two test gates and both format gates were then
+    run as their own prescribed literals and all passed. verify.result = pass.'
