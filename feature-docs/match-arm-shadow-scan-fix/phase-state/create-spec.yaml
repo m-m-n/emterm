@@ -1,0 +1,7 @@
+schema_version: 1
+feature: match-arm-shadow-scan-fix
+phase: create-spec
+status: in_progress
+last_input_digest: "884cfadb84bc81eb6b49c642ca0ea3a1ac15ba4acf207e70fe4eceaba6006000"
+answers: []
+written_artifacts: []
