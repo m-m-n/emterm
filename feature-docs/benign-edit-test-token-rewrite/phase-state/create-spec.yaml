@@ -1,0 +1,9 @@
+schema_version: 1
+feature: benign-edit-test-token-rewrite
+phase: create-spec
+status: in_progress
+mode: batch
+last_input_digest: "sha256:753fcaa3720443fd3d4cec6b330fee09916ec4f356e7d500253be8348afc2d74"
+answers: []
+assumptions: []
+rounds: 0
