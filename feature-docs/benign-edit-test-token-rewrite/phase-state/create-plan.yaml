@@ -1,18 +1,31 @@
 schema_version: 1
 feature: benign-edit-test-token-rewrite
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
 mode: batch
-base_revision: 511d3b261d1b295b5db3de433fd46923a8eaf0d4
+base_revision: d1b36055d53747070db759f725ac9fd25718ffba
 last_input_digest: sha256:5bc78b9dbc45ccac3a18396bdba050915a184d11bd1079137c503013c1d9850c
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-plan-run-0001
-    status: dispatched
+    status: completed
     input_digest: sha256:5bc78b9dbc45ccac3a18396bdba050915a184d11bd1079137c503013c1d9850c
-artifacts: []
-patches: []
+artifacts:
+  - path: feature-docs/benign-edit-test-token-rewrite/IMPLEMENTATION.md
+    sha256: sha256:8feba8bc4577b6695dcc2134033011603a849e0e0f66558941ebc44d90fce8c6
+    produced_by: create-plan-run-0001
+  - path: feature-docs/benign-edit-test-token-rewrite/VERIFICATION.md
+    sha256: sha256:375df759e7df0d2d9eddbdcd7ac9908deb5585693ebfaf49e133716ae9f76397
+    produced_by: create-plan-run-0001
+  - path: feature-docs/benign-edit-test-token-rewrite/tasks/task0001.md
+    sha256: sha256:dd7582213e5d074ca605366ba5a552391d834b5935720f4c28df88a9871c6cf4
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: benign-edit-test-token-rewrite-p0002
+    operation: replace_planning
+    status: applied
+    applied_at_commit: d1b36055d53747070db759f725ac9fd25718ffba
 stale_redispatch_count: 0
