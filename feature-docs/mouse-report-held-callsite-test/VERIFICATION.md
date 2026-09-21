@@ -21,7 +21,7 @@ Run both from the repository root.
 ## Test Verification
 
 - Command: `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib`
-- Expected: exit code 0; the six new `window_host::tests` entries below appear
+- Expected: exit code 0; the 25 new `window_host::tests` entries below appear
   in the run and pass; no pre-existing test changes its result.
 - Coverage target: not applicable — the project has no coverage tooling
   configured, and this feature adds tests only (no production lines to cover).
@@ -36,12 +36,12 @@ Run both from the repository root.
 
 | ID | Scenario | Expected Result | Test Type |
 |----|----------|-----------------|-----------|
-| TS-1 | `run_button_decision_passes_live_held_value_to_the_held_aware_apply_entry_point` — extract the button-path body from the embedded source and decompose the held-aware apply call's arguments | Exactly one such call; 4 arguments; the 4th is exactly the three-token held sequence whose leading identifier is one of the function's own parameters | Unit |
-| TS-2 | `handle_mouse_wheel_passes_live_held_value_to_the_wheel_report_step` — same for the wheel-path body and the wheel report step call | Exactly one such call; 5 arguments; the 5th is the same three-token held sequence | Unit |
-| TS-3 | `button_and_wheel_bodies_never_call_the_held_unaware_apply_entry_point` — whole-token search of both extracted bodies | The held-unaware apply path is absent from both bodies; the held-aware name is demonstrated not to trigger the check | Unit |
-| TS-4 | `body_extractor_tolerates_benign_edits_and_ignores_comments_and_string_literals` — in-memory inputs covering comments, literals and benign edits | Benign edits stay accepted; a "correct call" written inside a comment or a string literal does not satisfy the judgment | Unit |
-| TS-5 | `argument_scanner_rejects_defaulted_and_deleted_held_arguments` — in-memory rewrites of the **real extracted bodies** for both call sites (IMPLEMENTATION.md D6.1) | For each mutation (defaulted argument, deleted argument, reverted to the held-unaware path, receiver identifier shadowed by a same-named local) the unmutated body passes, the rewrite touched exactly one site, and the mutated body is rejected | Unit |
-| TS-6 | `held_argument_scan_is_scoped_to_the_two_named_bodies_only` — the motion path's call against the extracted bodies | The motion-path call is absent from both extracted bodies | Unit |
+| TS-1 | `run_button_decision_calls_apply_outcome_with_held_once_with_live_held_as_fourth_arg` — extract the button-path body from the embedded source and decompose the held-aware apply call's arguments | Exactly one such call; 4 arguments; the 4th is exactly the three-token held sequence whose leading identifier is one of the function's own parameters | Unit |
+| TS-2 | `handle_mouse_wheel_calls_apply_wheel_report_step_once_with_live_held_as_fifth_arg` — same for the wheel-path body and the wheel report step call | Exactly one such call; 5 arguments; the 5th is the same three-token held sequence | Unit |
+| TS-3 | `neither_call_site_body_contains_the_held_unaware_apply_path` — whole-token search of both extracted bodies | The held-unaware apply path is absent from both bodies; the held-aware name is demonstrated not to trigger the check | Unit |
+| TS-4 | `sanity_the_fake_callee_pattern_matches_a_real_unquoted_call` (sanity/scaffold anchor — proves the synthetic callee pattern matches unquoted text, so this scenario's negative cases are not vacuous)<br>`scanner_treats_a_correct_call_written_inside_a_line_comment_as_absent`<br>`scanner_treats_a_correct_call_written_inside_a_string_literal_as_absent`<br>`scanner_ignores_call_shaped_text_inside_nested_block_comments`<br>`scanner_ignores_call_shaped_text_inside_a_raw_string_with_differing_hash_counts`<br>`scanner_tokenizes_byte_and_c_string_literals_as_opaque_literals`<br>`scanner_distinguishes_a_lifetime_marker_from_an_adjacent_character_literal`<br>`scanner_does_not_terminate_a_character_literal_on_an_escaped_quote`<br>`scanner_does_not_terminate_a_string_literal_on_an_escaped_quote`<br>`scanner_never_matches_an_identifier_as_a_prefix_of_a_longer_one`<br>`argument_splitter_ignores_a_trailing_comma`<br>`judge_call_tolerates_the_argument_list_rewrapped_across_lines`<br>`judge_call_tolerates_a_comment_between_the_callee_and_its_opening_paren`<br>`judge_call_rejects_a_let_bound_shadow_of_the_receiver_before_the_call`<br>`judge_call_rejects_a_closure_parameter_shadow_of_the_receiver_before_the_call`<br>`judge_call_rejects_a_match_arm_pattern_shadow_of_the_receiver_before_the_call`<br>`judge_call_rejects_an_if_let_pattern_shadow_of_the_receiver_before_the_call`<br>`judge_call_rejects_when_the_held_unaware_path_also_appears_elsewhere_in_the_body` — in-memory inputs covering comments, literals and benign edits | Benign edits stay accepted; a "correct call" written inside a comment or a string literal does not satisfy the judgment | Unit |
+| TS-5 | `button_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted`<br>`wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted`<br>`button_path_benign_edits_to_the_real_source_are_still_accepted` — in-memory rewrites of the **real extracted bodies** for both call sites (IMPLEMENTATION.md D6.1) | For each mutation (defaulted argument, deleted argument, reverted to the held-unaware path, receiver identifier shadowed by a same-named local) the unmutated body passes, the rewrite touched exactly one site, and the mutated body is rejected | Unit |
+| TS-6 | `body_extractor_returns_exactly_the_two_named_bodies_excluding_the_motion_path` — the motion path's call against the extracted bodies | The motion-path call is absent from both extracted bodies | Unit |
 | TS-M1 | `manual: none required` — change-set inspection; no runtime behaviour changes, no E2E harness exists | The change set is contained in the declared paths and touches no production behaviour | Manual |
 
 ## Code Quality Verification
@@ -52,8 +52,19 @@ Run both from the repository root.
 - Static analysis: no separate lint command is configured; the two `cargo check`
   runs above are the static gate.
 - Inspection items:
-  - New test names follow `<subject>_<scenario>_<expected>` and match the TS
-    names in this document character for character (NFR3).
+  - Naming and traceability (NFR3) is a two-way check; the normative side is
+    `src-tauri/src/window_host/tests.rs`, and this document follows it, never
+    the reverse:
+    1. every test name listed in this document's Test Scenarios table exists
+       verbatim as a `fn <name>()` in `src-tauri/src/window_host/tests.rs`;
+    2. every test function this feature added to that file appears in exactly
+       one TS row of the table — no added test undocumented, no documented
+       name absent from the file. "Added" is the set of functions carrying a
+       `#[test]` attribute between the `AC-3/TS-1` section marker and end of
+       file (25 of them); the fixture/helper functions in that span carry no
+       test attribute and are not part of it (IMPLEMENTATION.md decision D2);
+    3. each of those names follows `<subject>_<scenario>_<expected>`, per
+       `test/README.md` "Test Naming Conventions".
   - No test constructs or names a windowing, GPU, PTY or terminal-core runtime
     type (NFR1).
   - No new dependency appears in any manifest (NFR2); the feature's dependency
@@ -70,7 +81,7 @@ Run both from the repository root.
 
 | ID | Criterion | How to Verify |
 |----|-----------|---------------|
-| AC-1 | The library test run passes including the new tests | Run the Test Verification command; confirm exit 0 and that TS-1 … TS-6 appear in the run |
+| AC-1 | The library test run passes including the new tests | Run the Test Verification command; confirm exit 0 and that the named test functions listed in the Test Scenarios table above appear in the run |
 | AC-2 | A test fails if the button path's 4th argument becomes a default value | TS-5's defaulted-argument input for the button call site is rejected |
 | AC-3 | A test fails if that argument is deleted, or the call reverts to the held-unaware path | TS-5's deleted-argument, reverted-call and shadowed-receiver inputs are rejected; TS-3 forbids the held-unaware path in the body |
 | AC-4 | A test fails on any of the same three mutations at the wheel call site | TS-5's three wheel-side inputs are rejected; TS-2 and TS-3 cover the file-backed side |
