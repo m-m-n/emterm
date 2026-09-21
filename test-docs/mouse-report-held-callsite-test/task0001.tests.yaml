@@ -1,0 +1,109 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::sanity_the_fake_callee_pattern_matches_a_real_unquoted_call
+      - window_host::tests::scanner_treats_a_correct_call_written_inside_a_line_comment_as_absent
+      - window_host::tests::scanner_treats_a_correct_call_written_inside_a_string_literal_as_absent
+      - window_host::tests::scanner_ignores_call_shaped_text_inside_nested_block_comments
+      - window_host::tests::scanner_ignores_call_shaped_text_inside_a_raw_string_with_differing_hash_counts
+      - window_host::tests::scanner_tokenizes_byte_and_c_string_literals_as_opaque_literals
+      - window_host::tests::scanner_distinguishes_a_lifetime_marker_from_an_adjacent_character_literal
+      - window_host::tests::scanner_does_not_terminate_a_character_literal_on_an_escaped_quote
+      - window_host::tests::scanner_does_not_terminate_a_string_literal_on_an_escaped_quote
+      - window_host::tests::scanner_never_matches_an_identifier_as_a_prefix_of_a_longer_one
+      - window_host::tests::argument_splitter_ignores_a_trailing_comma
+      - window_host::tests::judge_call_tolerates_the_argument_list_rewrapped_across_lines
+      - window_host::tests::judge_call_tolerates_a_comment_between_the_callee_and_its_opening_paren
+      - window_host::tests::judge_call_rejects_a_let_bound_shadow_of_the_receiver_before_the_call
+      - window_host::tests::judge_call_rejects_a_closure_parameter_shadow_of_the_receiver_before_the_call
+      - window_host::tests::judge_call_rejects_a_match_arm_pattern_shadow_of_the_receiver_before_the_call
+      - window_host::tests::judge_call_rejects_an_if_let_pattern_shadow_of_the_receiver_before_the_call
+      - window_host::tests::judge_call_rejects_when_the_held_unaware_path_also_appears_elsewhere_in_the_body
+    red_confirmed: true
+    red_reason: >
+      Observed directly via temporary reverts (undone immediately after, full
+      suite re-confirmed green): disabling line-comment stripping and
+      string-literal detection in tokenize() turned both headline sub-cases
+      red — "assertion failed: a call spelled only inside a line
+      comment/string literal must not satisfy the judgment function" (Ok
+      returned where Err was required). The rule-3b (shadow) and rule-4
+      (held-unaware-path-anywhere) sub-cases share their red evidence with
+      AC-6 below (same judge_call code paths, verified by the same reverts).
+  AC-2:
+    tests:
+      - window_host::tests::body_extractor_returns_exactly_the_two_named_bodies_excluding_the_motion_path
+    red_confirmed: false
+    red_reason: >
+      The two named call sites are already correct at the base revision
+      (SPEC A1), so extraction succeeds and this pin is green from the first
+      compile — there is no faulty-code state to observe it fail against.
+      Per the task plan's TDD ordering note, this file-backed test's red
+      condition is discharged by TS-5 (AC-6) mutating the real extracted
+      bodies in memory, not by observing this test itself fail.
+  AC-3:
+    tests:
+      - window_host::tests::run_button_decision_calls_apply_outcome_with_held_once_with_live_held_as_fourth_arg
+    red_confirmed: false
+    red_reason: >
+      The button call site is already correct at the base revision (SPEC
+      A1); this file-backed pin is green from the first compile. Its red
+      condition is proven by AC-6's button-path mutation test instead (see
+      button_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted).
+  AC-4:
+    tests:
+      - window_host::tests::handle_mouse_wheel_calls_apply_wheel_report_step_once_with_live_held_as_fifth_arg
+    red_confirmed: false
+    red_reason: >
+      The wheel call site is already correct at the base revision (SPEC A1);
+      this file-backed pin is green from the first compile. Its red
+      condition is proven by AC-6's wheel-path mutation test instead (see
+      wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted).
+  AC-5:
+    tests:
+      - window_host::tests::neither_call_site_body_contains_the_held_unaware_apply_path
+    red_confirmed: false
+    red_reason: >
+      The held-unaware path was already absent from both bodies at the base
+      revision, so this regression guard is green from the first compile.
+      Its rejecting power (that the check would fire if the path appeared)
+      is demonstrated by AC-1/AC-6's rule-4 isolation test
+      (judge_call_rejects_when_the_held_unaware_path_also_appears_elsewhere_in_the_body),
+      which was directly observed red when rule 4 was disabled.
+  AC-6:
+    tests:
+      - window_host::tests::button_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted
+      - window_host::tests::wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted
+      - window_host::tests::button_path_benign_edits_to_the_real_source_are_still_accepted
+    red_confirmed: true
+    red_reason: >
+      Observed red directly via three isolated temporary reverts to the
+      implementation, each restored immediately after and the full
+      window_host::tests:: suite (226 tests) re-confirmed green before
+      proceeding: (1) disabling E4 rule 3b (is_rebound_before) turned
+      button_path_real_body_mutations_..., wheel_path_real_body_mutations_...,
+      and the four AC-1 shadow tests (let/closure/match/if-let) red — 6
+      failures; (2) disabling E4 rule 4 (the forbidden-path check) turned
+      judge_call_rejects_when_the_held_unaware_path_also_appears_elsewhere_in_the_body
+      red — this isolates rule 4 from rule 1, which the "revert to
+      held-unaware path" mutation cannot do alone since renaming the primary
+      callee always also trips rule 1; (3) disabling the trailing-comma
+      guard in split_arg_spans turned argument_splitter_ignores_a_trailing_comma
+      red ("found [[Ident(a)], [...], []]" — 3 args instead of 2).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Constraint-type requirement with no dedicated TS scenario in the
+      SPEC's traceability table (IMPLEMENTATION.md Open Questions);
+      verified by change-set inspection and the two approved commands
+      rather than a test. `git diff --stat` shows exactly one file changed
+      (src-tauri/src/window_host/tests.rs, 1498 insertions(+), 0
+      deletions(-)) — no production file and no existing test touched.
+      `cargo test --lib` (full suite): 3517 passed, 0 failed, 3 ignored (the
+      3 ignored are pre-existing and unrelated; 25 more passing tests than
+      the 3492/0/3 baseline, exactly the 25 tests this task adds).
+      `cargo check --no-default-features`: clean — window_host is
+      gui-gated, so this file is not even compiled in the CLI-only build.

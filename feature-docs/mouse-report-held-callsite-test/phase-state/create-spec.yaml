@@ -1,0 +1,98 @@
+schema_version: 1
+feature: mouse-report-held-callsite-test
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 16549487ecf13119cd36cb0496533a7c7125edaa
+last_input_digest: sha256:2b3ec862b2af00fec47f3e4dd4489709914bbb2d6430b65f7db94e019c32ed8e
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-21T02:38:22+09:00"
+    questions:
+      - question_id: requirement.callsite-fixation-mechanism
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.callsite-fixation-mechanism:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T02:38:22+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [source_scan_with_nfr_exception]
+    freeform: null
+    normalized_answer: |
+      呼び出し側の固定は source-scan 方式で行い、今回の SPEC で NFR5 に「ボタン経路と
+      ホイール経路の held 実引数の受け渡し検査に限る」明示的な例外を置く。
+      プロダクションコード（pointer_routing.rs / mouse_report.rs）は据え置き、
+      変更は src-tauri/src/window_host/tests.rs への追加に閉じる。
+      source-scan は生の substring ではなくトークン単位で行う:
+      - include_str!("pointer_routing.rs") を読み、トップレベルの run_button_decision と
+        handle_mouse_wheel の本体を、引数括弧の後の { から対応する } まで波括弧深度で抽出する
+        （行番号・コメント・次関数位置に依存しない）
+      - 新規依存を追加せず、テスト内に状態付きの字句走査器を置く。行コメント／入れ子ブロック
+        コメントは空白相当、文字列・文字リテラル（エスケープ・raw の # 個数・byte/C 文字列・
+        ライフタイムとの区別を含む）は中身を検索しない単一トークンとして扱う
+      - ボタン本体: mouse_report::apply_outcome_with_held( の実引数が 4 個で、第 4 引数が
+        [host引数の識別子, ., mouse_report_held] の 3 トークンと完全一致すること
+      - ホイール本体: mouse_report::apply_wheel_report_step( の実引数が 5 個で、第 5 引数が
+        同じ 3 トークンと完全一致すること
+      - 両本体で mouse_report::apply_outcome( の出現を禁止する
+      - 良性編集（空白・改行・コメント・末尾カンマ・無関係コードの並べ替え）で緑のまま、
+        いずれかの既定値化・旧ラッパへの差し戻し・当該引数の削除で赤になること。走査器は
+        メモリ内入力でも検証し、コメントや文字列に正しい呼び出しを書いても赤を隠せないことを確認する
+      - false red の抑制: 固定名は対象関数名・呼び出し先名・フィールド名に限り、host は実際の
+        引数名から取得する。正当なリネームでは同じ変更で検索名も更新する旨を SPEC に明記する
+    resolution_note: |
+      gate: create-spec.requirement-clarification (batch-policies.yaml: action: codex_consultation,
+      record_as_assumption: true)。codex_consulted: true（harness entry: codex、2 ターン、収束）。
+      Opus escalation: 実行せず（2 ターン目で option_id に明確に写像したため）。
+      analyst の暫定推奨は observable_seam_refactor だったが採用しなかった。Codex の論拠:
+      (1) apply 部分を純粋に関数抽出しても、呼び出し側が HeldButtons::default() を渡す退行は
+      関数単体テストでは緑のまま検出できない。(2) HeldSource trait + スパイ方式は小変更で
+      実装できる（Codex はターン 1 の「大改修」評価をターン 2 で訂正した）が、テストが
+      その関数を直接呼ぶ限り run_button_decision 自体は実行されないため、既定値を返す
+      HeldSource を渡す退行や旧 apply_outcome への差し戻しを検出できず、呼び出し側の固定に
+      ならない。本物の run_button_decision を走らせるには WindowHost / App 依存の切り離しが
+      必要で、それは前 feature の FR4（プロダクションコード据え置き）に反する。
+      (3) held 非対応ラッパ削除も apply_outcome_with_held(..., HeldButtons::default()) が
+      コンパイル可能なままなので不十分。したがって 3 案の中では、対象を 2 接続に限定した
+      source-scan の方が比較して良いと判断した。
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T02:38:22+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "analyst の design_step_recommendation (skip) をそのまま採用する"
+    resolution_note: |
+      gate: create-spec.design-step (batch-policies.yaml: action: select,
+      option_id: decide_autonomously)。UI 表面・デザイントークンに一切触れないテスト専用変更のため。
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: sha256:88ee6a693e350829b09f8e3bee83a038f2dcfb1af486690a2f82e9bd74719898
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:3f98674d5c13233d3c3a2a9bd957e4aa92f7fff72a3c15dd9c51aad2bfb9c932
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:2b3ec862b2af00fec47f3e4dd4489709914bbb2d6430b65f7db94e019c32ed8e
+    output_digest: null
+artifacts:
+  - path: feature-docs/mouse-report-held-callsite-test/REQUIREMENTS.md
+    sha256: sha256:4386304b8a73bc8e8e455e2e3843d3d1c473992ee3e5d9e9d90bc35f115d1726
+    produced_by: create-spec-run-0003
+  - path: feature-docs/mouse-report-held-callsite-test/SPEC.md
+    sha256: sha256:b68045f9fff93b9262b545c978d15c2b6b9da46aa27cbff74bf7906cd5a7c9b5
+    produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
