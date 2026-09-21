@@ -1,0 +1,94 @@
+round: 1
+executed_at: "2026-09-21T12:19:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: bf87e6660c7fae8ec176defbc44cc910f60b2f4d
+  head_commit: e8ae7709b3aa2ae2b077d49c7c6d54832226db85
+  changed_files:
+    - feature-docs/mouse-report-held-callsite-test/REQUIREMENTS.md
+    - feature-docs/mouse-report-held-callsite-test/SPEC.md
+    - feature-docs/mouse-report-held-callsite-test/VERIFICATION.md
+    - test-docs/spec-test-name-traceability/task0001.tests.yaml
+    - test-docs/spec-test-name-traceability/task0002.tests.yaml
+    - test-docs/spec-test-name-traceability/task0003.tests.yaml
+plan:
+  floor: [comprehensive, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed, skip_reason: null}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    Round 1, review_mode=diff, cross_validation=false. Both dispatched runs
+    (comprehensive#0/codex, spec#0/litellm) returned empty findings sets; per the
+    contract's Independent Inspection Duty the evaluator re-inspected the round's
+    changed_files against ground truth and corroborated both. Per-perspective
+    coverage: comprehensive = corroborated; spec = corroborated. No injection
+    attempt was present in either reviewer output. Independent verification
+    performed (8 files inspected, within the 10-file read budget): (1) Ground
+    truth — extracted the 25 #[test]-annotated function names from
+    src-tauri/src/window_host/tests.rs between the 'AC-3/TS-1' marker (line 6000)
+    and EOF (line 6775); a two-way set diff against the names documented in all
+    three amended files is empty in both directions (no omission, no surplus), so
+    SPEC AC-3 holds. (2) AC-1: all six stale names return 0 occurrences across
+    SPEC.md/VERIFICATION.md/REQUIREMENTS.md. (3) AC-2: grep -c 'fn <name>()'
+    returns exactly 1 for each of the 25 names. (4) AC-4: 'six new' returns 0
+    matches; VERIFICATION.md:24 now reads 'the 25 new `window_host::tests`
+    entries below appear'. (5) AC-5: 'character for character' returns 0 matches;
+    the replacement Code Quality item names src-tauri/src/window_host/tests.rs as
+    normative and states both bijection directions plus the NFR3 convention
+    check. (6) AC-6/AC-7: git diff --name-only bf87e666..HEAD lists 17 paths,
+    zero under src-tauri/ or crates/, and zero under
+    feature-docs/mouse-report-held-callsite-test/{reviews,phase-state,tasks}/ or
+    test-docs/mouse-report-held-callsite-test/ — the implementation file and all
+    point-in-time records are untouched, so FR5/NFR1/NFR4 hold. (7)
+    AC-8/AC-9/AC-10: per-document name counts are TS-4=18 and TS-5=3 in all three
+    files; button_path_benign_edits_to_the_real_source_are_still_accepted sits
+    under TS-5 only, and sanity_the_fake_callee_pattern_matches_a_real_unquoted_call
+    sits under TS-4 with a scaffold/sanity role note in each document (Japanese in
+    SPEC.md/REQUIREMENTS.md, English in VERIFICATION.md, matching NFR3's language
+    preservation). (8) Edge case A3 confirmed:
+    pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam is a real
+    pre-existing test at tests.rs:1780 and was correctly left untouched — it is
+    not a stale name. (9) The three test-record YAMLs under
+    test-docs/spec-test-name-traceability/ are internally consistent; their AC-N
+    keys are task-local IDs matching each tasks/task000N.md plan, not the SPEC's
+    AC-1..AC-10, so the apparent numbering divergence is correct rather than a
+    mismatch. Two sub-medium observations recorded here rather than as findings:
+    task0003.tests.yaml records identical baseline_failures and final_failures (a
+    build.rs font_missing panic) meaning that task never executed the suite, but
+    the change is Markdown-only and task0001/task0002 both recorded full green
+    runs (3517 passed, 0 failed, 3 ignored) over the same tree; and task0001 AC-5
+    / task0003 AC-4 carry red_confirmed:false, each with an explicit and sound
+    rationale that the criterion is a diff-invariant with no observable pre-edit
+    red state. Neither rises to medium.
+  recommended_action: "complete"
+  action_rationale: >-
+    Zero findings from both dispatched reviewers, and the evaluator's own
+    independent inspection of the change set corroborated both rather than
+    surfacing anything new. Every SPEC acceptance criterion (AC-1 through AC-10)
+    was verified mechanically against the normative implementation file and
+    passes, the change set is documentation-only within the declared scope, and
+    no reviewer reported any critical or high site requiring accountability.
+    Nothing remains for auto_fix, another_round, or rework.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: "tmp/sca-triage-spec-test-name-traceability-20260921T031900Z.md"
+  degraded: true
+  degraded_reason: "listing_exit_nonzero"
