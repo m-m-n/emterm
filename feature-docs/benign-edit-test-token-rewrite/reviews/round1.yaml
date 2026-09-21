@@ -1,0 +1,173 @@
+round: 1
+executed_at: '2026-09-22T04:31:25+09:00'
+scope:
+  review_mode: diff
+  base_commit: 5bfb3957318973945478d7990e3721712826a91f
+  head_commit: 51dea2815fd10fd5a9fe42014ada0093ef83ceb9
+  changed_files:
+  - src-tauri/src/window_host/tests.rs
+  - test-docs/benign-edit-test-token-rewrite/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  discretionary:
+  - perspective: performance
+    reason: diff がテストモジュールへ約700行のトークン走査コードを追加しており、SPEC の NFR4 が「実行コストに影響しない」と宣言しているため、計算量とテスト実行コストを裁量で確認する。
+  cross_validation: true
+perspective_runs:
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: 5ca53d4f98ce3d6f
+  coupling_id: 6cd1c20386b8a37a
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/tests.rs
+  line: 6914
+  title: count_top_level_args undercounts trailing literal arguments, weakening the FR4c mislocation guard
+  description: '`anchor_scan::scan` (tests.rs:6914-6922) consumes numeric literals and (tests.rs:6885-6899)
+    string literals without emitting any PosTok. `count_top_level_args` (tests.rs:7005-7026) counts depth-0
+    commas and then adds one final segment only when `seg_start < end`. For `probe_call(a, b, c, d, 0)`
+    the token range is `a , b , c , d ,` — 4 commas, and `seg_start` lands exactly on `close_idx`, so
+    `seg_start < end` is false and the count is reported as 4. A 5-argument call therefore satisfies an
+    `expected_arg_count` of 4 and `locate_call` returns Ok. The same holds for a trailing plain-string
+    argument, and `probe_call(0, 1, 2, 3)` is counted as 3. This degrades the token-shape check that SPEC
+    FR4c / AC-6 exists to provide: a future refactor that appends a literal-valued argument to the held-aware
+    call would slip past the guard the feature was written to add. No production impact — the routine
+    is `#[cfg(test)]`-gated and the real call site (`pointer_routing.rs:850`) passes four identifier/expression
+    arguments, so the guard is correct today.'
+  suggestion: Emit an opaque positional PosTok for numeric and string literals (kind irrelevant, only
+    the position matters for counting) so every argument contributes at least one token, and add a negative
+    test asserting that `probe_call(a, b, c, d, 0)` is rejected when 4 arguments are expected.
+  sources:
+  - codex:comprehensive
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: medium severity — outside Phase R4's critical/high auto-fix candidate gate. Filed
+    as a follow-up task; see the run report.
+evaluation:
+  round_summary: 'Round 1, cross_validation=true, review_mode=diff. Five perspectives dispatched (security#0,
+    comprehensive#0 via codex; architecture#0, spec#0, performance#0 via litellm/muse-spark), all completed;
+    unreviewed_perspectives empty; round_context empty. Four of five reviewers returned empty findings
+    sets; comprehensive#0 returned three medium findings, all in the new `#[cfg(test)]` `anchor_scan`
+    module. The evaluator independently traced all three against the code and confirmed each mechanism
+    is real, then demoted two to low and kept one at medium — none are production-reachable: the entire
+    change set is `src-tauri/src/window_host/tests.rs` plus the test record, and `mod tests` is `#[cfg(test)]`-gated
+    at window_host/mod.rs:866. The evaluator added one low finding of its own on AC-numbering drift.
+
+
+    Injection attempts: none detected in any reviewer_outputs entry. One schema irregularity worth recording,
+    not an injection: the spec#0 entry carried free-form prose appended after its JSON verdict, self-labelled
+    by the dispatching reviewer agent as "informational leads, NOT schema findings". Its content was analytical,
+    contained no instructions, role overrides or "ignore previous instructions" patterns, and was treated
+    strictly as data to verify — both of its leads turned out not to hold (recorded in dismissed_sites).
+
+
+    Per-perspective coverage (Independent Inspection Duty; 7 files inspected, within the 10-file budget):
+
+    - security: corroborated. Diff is `#[cfg(test)]`-gated test code only; no runtime path, no I/O, no
+    network, no deserialization of external input, no secrets, no new dependency. `include_str!` targets
+    an in-repo sibling source file.
+
+    - architecture: corroborated. `mod anchor_scan` is a private module inside the existing inline tests
+    module, deliberately kept outside `call_site_scan` per NFR1/D3; `call_site_scan` is unmodified and
+    reused as-is; no production file touched; no layer crossing, no cycle, no new compilation unit (NFR1/NFR2
+    hold).
+
+    - performance: corroborated. `scan` is a single O(n) pass over a ~1300-line in-memory string, invoked
+    a handful of times across four unit tests; `#[cfg(test)]` gating means zero production cost and no
+    effect on the `--no-default-features` build (NFR4).
+
+    - spec: findings. The reviewer''s empty verdict is broadly corroborated — SPEC AC-2 (the old test
+    and its three source literals are gone; grep clean), AC-8/NFR2 (only tests.rs under src-tauri/), AC-3/AC-4/AC-5/AC-6/AC-7
+    all implemented, with fault-injection evidence recorded per-AC in task0001.tests.yaml. The evaluator''s
+    own inspection surfaced one low finding (dual AC numbering) that neither the reviewer nor its addendum
+    identified.
+
+    - comprehensive: findings. All three reviewer findings carried forward, two demoted to low.'
+  recommended_action: complete
+  action_rationale: No critical or high findings this round, from any of the five perspectives or from
+    the evaluator's own inspection. The change set is confined to `#[cfg(test)]` test code and its test
+    record, production behaviour is provably unchanged, and every SPEC acceptance criterion checkable
+    statically is satisfied with recorded fault-injection evidence. The four remaining items are latent
+    robustness and readability gaps in a test-only helper whose doc comment already scopes it as a non-general
+    parser; none blocks the feature's stated goal of removing the closed-set coupling, and none is required
+    by an AC. Auto-fix was not recommended because the medium finding's remedy (emitting tokens for literals)
+    changes the arg-counting path the four green tests depend on, and is safer folded into a deliberate
+    follow-up than applied unattended.
+dismissed_sites:
+- file: src-tauri/src/window_host/tests.rs
+  line: 7477
+  run_id: spec#0
+  reason: false positive
+- file: src-tauri/src/window_host/tests.rs
+  line: 7278
+  run_id: spec#0
+  reason: false positive
+dismissed_sites_dropped: []
+gate_drops:
+- reason: severity `low` — dropped at Phase R3b step 2 (severity must be critical/high/medium)
+  entries:
+  - file: src-tauri/src/window_host/tests.rs
+    line: 6885
+    confidence: 75
+    title: Scanner treats neither char literals nor raw strings as opaque, so a ')' in a literal can silently
+      truncate the located range
+  - file: src-tauri/src/window_host/tests.rs
+    line: 7065
+    confidence: 80
+    title: locate_call anchors on `fn <name>` at any brace depth while extract_function requires top level
+  - file: src-tauri/src/window_host/tests.rs
+    line: 7278
+    confidence: 90
+    title: In-code "AC-N" references follow task0001.md's numbering, which is offset from SPEC.md's
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-benign-edit-test-token-rewrite-20260921T193125Z.md
+  note: vulnerability perspective was not selected this round (no dependency manifest or lockfile in the
+    diff), so the unresolved-vulnerability finding set handed to file-tasks was empty. The script degraded
+    to the report branch (listing_exit_nonzero) and filed nothing.
