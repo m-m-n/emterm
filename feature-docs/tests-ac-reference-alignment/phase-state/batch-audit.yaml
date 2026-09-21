@@ -173,3 +173,28 @@ records:
       1 回消費する。確認済みのコード変更違反も文書保護違反も無い状態での手戻りで
       あり、実害に見合わない。
       残存リスク: 条項の文言には作業記録を除外する条件が明記されていない。
+
+  - phase: verify
+    gate_id: null
+    gate: "verify build_command 実行 — worktree に bundled font が無くビルド前提が未充足"
+    at: "2026-09-22T00:05:00+09:00"
+    options:
+      - "workflow.yaml の build_command を素で実行する（build.rs が font_missing で panic するため失敗）"
+      - "同じ cargo check を含む承認済み複合コマンドを実行してフォント取得と web バンドル生成を先に済ませる"
+      - "verify を fail として記録する"
+    chosen: "承認済み複合コマンドを実行"
+    codex_consulted: false
+    opus_escalation: false
+    freeform: "承認済みコマンド一覧との照合のみで決定。新規承認は発生していない"
+    normalized_answer: >-
+      `bash scripts/fetch-fonts.sh && bun install && bun run build:viewer &&
+      bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check
+      --manifest-path src-tauri/Cargo.toml` を実行した
+    resolution_note: >-
+      workflow.yaml の build_command を素で実行したところ build.rs が
+      `build_rs.font_missing: bundled font missing at assets/fonts/Noto-COLRv1.ttf`
+      で panic した。worktree に bundled font と web バンドルが未取得だったためで、
+      実装内容とは無関係な環境要因。上記の複合コマンドは bash_guard.py --list に
+      既に載っている承認済みリテラルであり、末尾は build_command と同一の
+      cargo check。新規のコマンド承認は一切発生していない。実行後は
+      cargo check / cargo test --lib / cargo fmt --check のいずれも成功。
