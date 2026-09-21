@@ -109,3 +109,58 @@ records:
     ''CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib''; ''cargo
     fmt --manifest-path src-tauri/Cargo.toml --check''; ''bun run build:viewer && bun run build:settings'';
     ''bun test''; ''bunx biome check .''. codex_consulted: false (nothing unresolved).'
+- question_id: create-plan.task-split-granularity
+  packet_id: null
+  answered_at: '2026-09-22T03:14:00+09:00'
+  source: codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - single_task
+  freeform: null
+  normalized_answer: Consolidate planning into a single task (task0001) instead of two parallel tasks
+    that both declare src-tauri/src/window_host/tests.rs.
+  resolution_note: 'gate: create-plan.task-split-granularity (unlisted gate; it carries no gate_id at
+    its originating site, so it was resolved via the autonomous fail-closed route in batch-mode.md).
+
+    codex_consulted: true (scripts/run_codex_exec.sh readonly, reasoning effort xhigh, -C the integration
+    worktree).
+
+    Opus escalation: not run - Codex returned a decision.
+
+
+    Options presented:
+
+    (A) Keep the planner''s two parallel tasks - task0001 Class A (anchor + byte-slice rebuild, sole owner
+    of removing the old test and its 3 source literals) and task0002 Class B (token-level rebuild via
+    find_calls / split_arg_spans / splice_tokens). Both declared the same single file src-tauri/src/window_host/tests.rs,
+    so implement would run two parallel worktrees over one file.
+
+    (B) Consolidate into a single task so no two parallel worktrees declare the same file.
+
+
+    Chosen: (B).
+
+
+    Codex''s reasoning:
+
+    - D2 / D3 reduce edit overlap, but the planner itself conceded adjacent-hunk merges are possible;
+    the conflict risk is therefore not shown to be eliminated.
+
+    - (A) may shorten wall-clock, but conflict resolution and re-verification can eat the saving, and
+    no per-task duration estimate was given, so the size of the saving cannot be asserted.
+
+    - For one file and roughly 160 changed lines, reducing integration uncertainty outweighs an uncertain
+    speedup.
+
+
+    Option not chosen (A), with its own argument: Class A / Class B split the implementation technique,
+    and D2 / D3 separate the edit ranges, so parallelisation is defensible - if no conflict materialises
+    and both tasks are substantial, it does save time.
+
+
+    Effect on the plan: tasks/task0002.md removed; task0001 absorbs both classes; complexity raised medium
+    -> high (9 requirements, 7 test scenarios, a new hand-written scan routine, and EC-3 - a silent-vacuity
+    failure mode rated high impact in REQUIREMENTS 10.1). The higher complexity adds architecture to the
+    review floor and arms cross_validation. IMPLEMENTATION.md D1 was rewritten to record this decision,
+    and the Shared Components section was dropped (no longer two tasks on one file), its constraints moved
+    into task0001''s Design.'
