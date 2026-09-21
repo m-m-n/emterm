@@ -1,0 +1,21 @@
+schema_version: 1
+feature: match-arm-shadow-scan-fix
+phase: create-plan
+status: in_progress
+generation: 1
+base_revision: 820da2f56c008735b138d19286329cee8121ee0c
+last_input_digest: sha256:a45bfc1126c2beb888ab0c7203fca5bbacf92cc7f1d41be572134deff92e295f
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
+notes: >-
+  minimal tier: IMPLEMENTATION.md / VERIFICATION.md / task splitting are
+  subtracted. The planner writes no artifacts and returns only the workflow
+  patch registering a single task whose plan points at TASK.md.
