@@ -52,3 +52,64 @@ records:
     ''bun run build:viewer && bun run build:settings''; ''bun test''; ''bunx biome check .''. No refusal
     pattern matched. ''cargo fmt --all --check'' was deliberately NOT adopted as the format command: this
     repository is not uniformly rustfmt-formatted and a crate-wide fmt would dirty unrelated files.'
+- question_id: create-plan.ac3-extraction-condition
+  packet_id: null
+  answered_at: '2026-09-21T12:05:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - adopt_d2_and_correct_ac3_wording
+  freeform: null
+  normalized_answer: adopt decision D2 and apply a minimal orchestrator post-validation correction to AC-3's Check wording in SPEC.md and REQUIREMENTS.md
+  resolution_note: >-
+    Unlisted-gate fallback (no gate_id at the originating site; the planner
+    returned it as a warning, not a question packet). Raised by the
+    orchestrator during create-plan validation, per the user's standing
+    instruction for this run to consult Codex on unclear points and adopt the
+    option judged comparatively better. codex_consulted: true; harness entry:
+    codex (run_codex_exec.sh readonly); turns used: 2; Opus escalation: not
+    run. --- THE POINT: SPEC.md AC-3's Check text reads "a two-way set diff
+    between the names extracted from the three documents and the 25 `fn` names
+    in src-tauri/src/window_host/tests.rs between the `AC-3/TS-1` section
+    marker (tests.rs:6000) and end of file (tests.rs:6776) is empty". Extracted
+    literally, that span yields 31 `fn` names: the 25 carrying `#[test]` plus 6
+    fixture/helper builders that do not (tests.rs:6127 fake_params, 6414
+    default_held_value_tokens, 6424 shadow_host_prelude_tokens and three
+    others). The criterion's own stated count (25) and its own stated subject
+    ("the implementation's added test set") therefore contradict its
+    mechanical Check text. The planner resolved this one-sidedly as decision
+    D2 ("the `#[test]`-annotated functions in that span") and left AC-3
+    unchanged. --- TURN 1 asked Codex to choose between A (adopt D2, leave
+    AC-3 as written) and B (amend AC-3 before planning completes). Codex
+    picked B: the count 25 and the phrase "the implementation's added test
+    set" already support D2's reading, but a Check that yields 31 when run
+    verbatim leaves a later verifier free to compute a different set, and
+    annotating some other document does not remove the discrepancy inside
+    AC-3 itself. --- TURN 2 restated two constraints that turn 1 had
+    understated: (i) the only defined transition back to create-spec in this
+    workflow is the rework phase's specification-change transition, reachable
+    from review and verify, so create-plan cannot legally enter it -- taking B
+    as written would mean stopping the unattended run or inventing an
+    undefined transition; (ii) the orchestrator has an established, recorded
+    practice of minimal post-validation edits to phase artifacts (precedent:
+    the previous feature's create-plan phase-state records orchestrator edits
+    to the planner's IMPLEMENTATION.md, task plan and VERIFICATION.md). Given
+    those, the options offered were A (unchanged), C (adopt D2 AND correct
+    AC-3's Check wording in place, recorded in phase-state, no create-spec
+    round trip), and B' (stop the run and hand AC-3 back to a human). Codex
+    picked C: it preserves the count, the requirement set and AC-3's intent
+    while making the extraction condition literally executable, and it
+    resolves the discrepancy without an undefined transition or an
+    interruption. --- ADOPTED: C. NOT ADOPTED: A (leaves SPEC wording and the
+    operative check disagreeing); B/B' (no legal route from create-plan, and
+    the cost is a stopped unattended run for a wording fix that changes no
+    requirement). --- APPLIED: SPEC.md AC-3 and REQUIREMENTS.md's AC-3
+    checklist entry now read "the names of the 25 `#[test]`-annotated
+    functions in ..." and state explicitly that fixture and helper functions
+    in the same span are excluded. IMPLEMENTATION.md's Open Questions entry is
+    marked resolved and points here. No FR/NFR, no acceptance-criterion
+    intent, and no count changed. --- RESIDUAL RISK Codex named: the cited
+    precedent covers planning artifacts rather than SPEC.md, so applying it to
+    SPEC.md is a judgment call; and a correct extraction condition still does
+    not by itself guarantee the two-way set diff comes out empty -- that is
+    what this feature's TS-3 checks.

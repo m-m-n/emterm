@@ -1,21 +1,65 @@
 schema_version: 1
 feature: spec-test-name-traceability
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
-base_revision: 4967971237bb8054e5f0fb15f8a4710edcb82b9e
+base_revision: fbc5447dbdb3d5aac5ef325debe7904be0dd285e
 last_input_digest: sha256:bf6e6dda983060b7d0a323d0c8f937d0b23e106b7c539c3acd1afcac95b80e81
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-plan-run-0001
-    status: dispatched
+    status: completed
     input_digest: sha256:bf6e6dda983060b7d0a323d0c8f937d0b23e106b7c539c3acd1afcac95b80e81
     output_digest: null
-artifacts: []
-patches: []
+artifacts:
+  - path: feature-docs/spec-test-name-traceability/IMPLEMENTATION.md
+    sha256: sha256:7469b23975834bf4e3e0fcbc51cb83505126086096df702bf760f3a2215e8492
+    produced_by: create-plan-run-0001
+  - path: feature-docs/spec-test-name-traceability/VERIFICATION.md
+    sha256: sha256:49191b5c898fcc566dda560d6562688eef409009377ac56e255d0ca513d2d1a1
+    produced_by: create-plan-run-0001
+  - path: feature-docs/spec-test-name-traceability/tasks/task0001.md
+    sha256: sha256:d7d8e851773a7cd0a6669d91698849f353c5d9b126bcdc580befe36c738e8924
+    produced_by: create-plan-run-0001
+  - path: feature-docs/spec-test-name-traceability/tasks/task0002.md
+    sha256: sha256:b7f93f25b2b24e250ae4f1211bfae56d7ba33612ee26c93d475c12ca668a02cc
+    produced_by: create-plan-run-0001
+  - path: feature-docs/spec-test-name-traceability/tasks/task0003.md
+    sha256: sha256:2fada8ccd723e7501ceea5b916b2324e311dbf7808789f66064d23f36618cf69
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: spec-test-name-traceability-p0001
+    status: applied
+    base_input_digest: sha256:bf6e6dda983060b7d0a323d0c8f937d0b23e106b7c539c3acd1afcac95b80e81
+    base_workflow_blob: ffc3eb9c48bac65b1d8a4ce24d91d5cd60b8ebc5
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
 last_error: null
+notes: |
+  Validation: scripts/validate-worker-output.py --kind worker-result --worker
+  implementation-planner with --workflow / --registries / --feature-dir /
+  --phase-state / --digest-source / --dry-run-apply exited 0 (layers 1, 2, 3,
+  6). Layer 4 (scope): git status in the integration worktree listed only the
+  five declared artifacts. Layer 5 (artifact): all five exist; the planner
+  could not compute sha256 in its dispatch, so the orchestrator computed the
+  digests recorded above. Layer 3 was additionally confirmed by hand: the
+  input_digest recomputed at return time, over the same input set with the
+  worker's own newly written artifacts excluded, equals the dispatch-time
+  digest, so no third-party input changed during the dispatch window.
+
+  Orchestrator post-validation edits to phase artifacts, adopted from the
+  Codex consultation recorded in phase-state/batch-audit.yaml as
+  create-plan.ac3-extraction-condition (option C):
+  (1) SPEC.md AC-3 and REQUIREMENTS.md's AC-3 checklist entry: the Check text
+      now names "the 25 `#[test]`-annotated functions" instead of "the 25 `fn`
+      names", and states that fixture and helper functions in the same span are
+      excluded. The literal previous wording extracted 31 names from that span
+      and contradicted the criterion's own stated count of 25. No FR/NFR, no
+      acceptance-criterion intent and no count changed.
+  (2) IMPLEMENTATION.md Open Questions: the AC-3 entry is marked resolved and
+      points at that audit record.
+  The workflow patch, the task set and the requirements mapping are unchanged
+  by these edits; the digests above are post-edit.
