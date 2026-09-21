@@ -105,7 +105,7 @@ workflow:
     base_commit: "5643e41f5f2b1534ba355470564673d37d21084b"
     completed_at_commit: "5fe1d61e47479968b8d8aa95fa226198b3f952b1"
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -128,8 +128,16 @@ tasks:
     branch: em-workflow/tests-ac-reference-alignment/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, security]
+    discretionary: []
+    cross_validation: false
+    notes: >-
+      spec 観点は spec_available=false のためスキップ（tier=minimal で SPEC.md は
+      TASK.md に置換され存在しない）。license / vulnerability は依存マニフェスト・
+      ロックファイル・vendored コードに触れないため非選択。
 
 requirements: {}
 
