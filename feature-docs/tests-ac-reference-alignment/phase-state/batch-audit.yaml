@@ -1,0 +1,67 @@
+schema_version: 1
+feature: tests-ac-reference-alignment
+records:
+  - gate_id: create-spec.requirement-clarification
+    raised_by: orchestrator
+    question: >-
+      完了の定義が二案を並記している。(A) tests.rs の AC 参照を SPEC.md の AC 番号へ
+      付け替える / (B) 番号は据え置き、参照がタスクローカル番号である旨を明記する。
+      どちらを採るか。
+    options:
+      - option_id: renumber_to_spec
+        label: "(A) SPEC の AC 番号へ付け替える"
+      - option_id: annotate_task_local
+        label: "(B) タスクローカル番号である旨を明記する"
+    chosen: annotate_task_local
+    codex_consulted: true
+    opus_escalation: false
+    resolution_note: >-
+      requirements-analyst は ASM-1 として (A) を仮置きしたが、run_codex_exec.sh readonly
+      で Codex に実ファイル照合込みで比較させたところ (B) が comparatively better と判定
+      された。理由: (1) tests.rs の 1 つの AC ラベルが SPEC の複数 AC に対応する箇所が
+      ある（TS-1 は SPEC AC-2 と AC-3、TS-5 は AC-2/AC-3/AC-4）ため、単一の `AC-N` では
+      対応を表現できず付け替えは機械的に成立しない。(2) `AC-6(a)(b)(c)` の小項目は
+      task0001 にしか存在せず SPEC 側に対応が無い。(3) test-docs/mouse-report-held-
+      callsite-test/task0001.tests.yaml がタスク AC 番号をキーにしているため、コード側
+      だけ付け替えると既存の対応が切れる。(4) SPEC の AC 番号は将来の spec 改版で
+      振り直されうるが、タスクローカル番号は凍結済み。
+      引き換えに失うのは「SPEC の AC 番号で直接 grep できる」性質で、Codex もこれは
+      (A) の優位点として明示している。
+  - gate_id: create-spec.requirement-clarification
+    raised_by: orchestrator
+    question: >-
+      (B) を採るとき、AC ラベルを含むアサーション診断文字列 31 箇所をどう扱うか。
+    options:
+      - option_id: annotate_each_diagnostic
+        label: "(B1) 診断文字列ごとに直前へ出典コメントを追加（31 行増）"
+      - option_id: group_banner_only
+        label: "(B2) グループ冒頭に宣言を 1 つ置き、診断文字列には触れない"
+    chosen: group_banner_only
+    codex_consulted: true
+    opus_escalation: false
+    resolution_note: >-
+      Codex 2 回目の相談で (B2) を推奨。失敗ログだけを見る読み手への誤誘導リスクは
+      B1 でも解消しない（コメントはログに出ない）ため B1 に固有の優位性が無く、
+      テスト本体の signal-to-noise・差分サイズ・レビュー負担で B2 が上回る。
+      グループ内へのテスト追加を宣言が自動的に包含する点も B2 の利点。
+      宣言の設置位置は tests.rs:5212 の `AC-1..AC-7` 範囲コメント直後。
+  - gate_id: create-spec.design-step
+    raised_by: requirements-analyst
+    question: design ステップを実行するか
+    chosen: decide_autonomously
+    codex_consulted: false
+    opus_escalation: false
+    resolution_note: >-
+      batch-policies.yaml の create-spec.design-step に従い analyst の推奨
+      (skipped) を採用。UI 要素・デザイントークン・ユーザー可視面の変更が無い
+      コメント限定変更のため。tier=minimal でも design は削減対象。
+  - gate_id: create-spec.design-system
+    raised_by: orchestrator
+    question: project.design_system の kind と paths
+    chosen: project_native
+    codex_consulted: false
+    opus_escalation: false
+    resolution_note: >-
+      batch-policies.yaml の create-spec.design-system に従い最上位候補
+      doc/UI-DESIGN-GUIDELINES.yaml を採って project_native。
+      .claude/rules/ui-design.md が同ファイルを single source of truth と明記。
