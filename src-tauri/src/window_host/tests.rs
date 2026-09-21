@@ -5210,6 +5210,9 @@ fn focus_loss_with_left_not_held_terminates_and_publishes_the_drag() {
 // source-scan exception; never a whole-file substring needle). Pins
 // FR1-FR3 at exactly the two call connections FR1/FR2/FR3 name, and
 // nothing wider (Out of Scope). AC-1..AC-7.
+// Every AC-N label in this group, including comments and assertion
+// messages, uses the task-local numbering of
+// mouse-report-held-callsite-test/task0001, not SPEC.md's AC numbering.
 // ────────────────────────────────────────────────────────────────────
 
 /// E1-E4 scan elements (task0001.md "Element responsibilities and
@@ -5969,9 +5972,9 @@ mod call_site_scan {
     }
 
     /// Test-only mutation tool for TS-5: replaces `body[start..end]` with
-    /// `replacement`, used to build the mutated inputs AC-6 requires to be
-    /// rewrites of the real extracted bodies rather than hand-written
-    /// stand-ins.
+    /// `replacement`, used to build the mutated inputs AC-6
+    /// (mouse-report-held-callsite-test/task0001) requires to be rewrites
+    /// of the real extracted bodies rather than hand-written stand-ins.
     pub(super) fn splice_tokens(
         body: &[Tok],
         start: usize,
@@ -6011,12 +6014,14 @@ fn wheel_path_body() -> call_site_scan::FunctionBody {
         .expect("handle_mouse_wheel must be found at the top level of pointer_routing.rs")
 }
 
-// ── AC-3/TS-1: button call site ─────────────────────────────────────
+// ── AC-3/TS-1 (mouse-report-held-callsite-test/task0001): button call
+// site ─────────────────────────────────────────────────────────────
 
-/// AC-3/TS-1: `run_button_decision`'s body calls the held-aware apply
-/// entry point exactly once, with four arguments whose fourth is the
-/// three-token `host.mouse_report_held` sequence — pinning FR1's held
-/// pass-through at the button call site.
+/// AC-3/TS-1 (mouse-report-held-callsite-test/task0001):
+/// `run_button_decision`'s body calls the held-aware apply entry point
+/// exactly once, with four arguments whose fourth is the three-token
+/// `host.mouse_report_held` sequence — pinning FR1's held pass-through
+/// at the button call site.
 #[test]
 fn run_button_decision_calls_apply_outcome_with_held_once_with_live_held_as_fourth_arg() {
     let body = button_path_body();
@@ -6035,10 +6040,12 @@ fn run_button_decision_calls_apply_outcome_with_held_once_with_live_held_as_four
     );
 }
 
-// ── AC-4/TS-2: wheel call site ──────────────────────────────────────
+// ── AC-4/TS-2 (mouse-report-held-callsite-test/task0001): wheel call
+// site ─────────────────────────────────────────────────────────────
 
-/// AC-4/TS-2: `handle_mouse_wheel`'s body calls the wheel report step
-/// entry point exactly once, with five arguments whose fifth is the same
+/// AC-4/TS-2 (mouse-report-held-callsite-test/task0001):
+/// `handle_mouse_wheel`'s body calls the wheel report step entry point
+/// exactly once, with five arguments whose fifth is the same
 /// three-token held sequence — pinning FR2's held pass-through at the
 /// wheel call site.
 #[test]
@@ -6059,13 +6066,14 @@ fn handle_mouse_wheel_calls_apply_wheel_report_step_once_with_live_held_as_fifth
     );
 }
 
-// ── AC-5/TS-3: held-unaware path absent from both bodies ────────────
+// ── AC-5/TS-3 (mouse-report-held-callsite-test/task0001): held-unaware
+// path absent from both bodies ───────────────────────────────────────
 
-/// AC-5/TS-3: neither extracted body contains the held-unaware
-/// `mouse_report::apply_outcome` as a whole-token sequence, and the
-/// held-aware name is NOT caught by the same check — proving the two
-/// identifiers are distinguished as whole tokens (D3), not by a
-/// substring/prefix accident.
+/// AC-5/TS-3 (mouse-report-held-callsite-test/task0001): neither
+/// extracted body contains the held-unaware `mouse_report::apply_outcome`
+/// as a whole-token sequence, and the held-aware name is NOT caught by
+/// the same check — proving the two identifiers are distinguished as
+/// whole tokens (D3), not by a substring/prefix accident.
 #[test]
 fn neither_call_site_body_contains_the_held_unaware_apply_path() {
     let button = button_path_body();
@@ -6086,12 +6094,14 @@ fn neither_call_site_body_contains_the_held_unaware_apply_path() {
     );
 }
 
-// ── AC-2/TS-6: body extraction excludes the motion path ─────────────
+// ── AC-2/TS-6 (mouse-report-held-callsite-test/task0001): body
+// extraction excludes the motion path ────────────────────────────────
 
-/// AC-2/TS-6: the body extractor returns exactly the two named top-level
-/// bodies, the motion path's own copy of the held-aware call is excluded
-/// from both, and a name that cannot be located fails explicitly rather
-/// than yielding an empty body.
+/// AC-2/TS-6 (mouse-report-held-callsite-test/task0001): the body
+/// extractor returns exactly the two named top-level bodies, the motion
+/// path's own copy of the held-aware call is excluded from both, and a
+/// name that cannot be located fails explicitly rather than yielding an
+/// empty body.
 #[test]
 fn body_extractor_returns_exactly_the_two_named_bodies_excluding_the_motion_path() {
     let tokens = call_site_scan::tokenize(pointer_routing_src());
@@ -6129,7 +6139,8 @@ fn body_extractor_returns_exactly_the_two_named_bodies_excluding_the_motion_path
     );
 }
 
-// ── AC-1/TS-4: in-memory scanner edge cases ──────────────────────────
+// ── AC-1/TS-4 (mouse-report-held-callsite-test/task0001): in-memory
+// scanner edge cases ──────────────────────────────────────────────────
 //
 // These exercise the scan elements directly against small, hand-built,
 // in-memory inputs (Test Notes: "Unit, in-memory input") rather than the
@@ -6172,8 +6183,9 @@ fn sanity_the_fake_callee_pattern_matches_a_real_unquoted_call() {
     );
 }
 
-/// AC-1/TS-4: a correct call spelled only inside a `//` line comment must
-/// not satisfy the judgment function.
+/// AC-1/TS-4 (mouse-report-held-callsite-test/task0001): a correct call
+/// spelled only inside a `//` line comment must not satisfy the
+/// judgment function.
 #[test]
 fn scanner_treats_a_correct_call_written_inside_a_line_comment_as_absent() {
     let body = "// svc::apply_with_held(a, ctx.held_flag)\nlet _x = 1;";
@@ -6183,8 +6195,9 @@ fn scanner_treats_a_correct_call_written_inside_a_line_comment_as_absent() {
     );
 }
 
-/// AC-1/TS-4: a correct call spelled only inside a string literal must
-/// not satisfy the judgment function.
+/// AC-1/TS-4 (mouse-report-held-callsite-test/task0001): a correct call
+/// spelled only inside a string literal must not satisfy the judgment
+/// function.
 #[test]
 fn scanner_treats_a_correct_call_written_inside_a_string_literal_as_absent() {
     let body = r#"let _s = "svc::apply_with_held(a, ctx.held_flag)";"#;
@@ -6487,8 +6500,9 @@ fn judge_call_rejects_an_if_let_pattern_shadow_of_the_receiver_before_the_call()
 /// E4 rule 4: the held-unaware path appearing anywhere else in the body
 /// must reject the call, even when the primary call site (rules 1-3b) is
 /// otherwise entirely well-formed — isolates rule 4 from rule 1, which
-/// the "revert to the held-unaware path" mutation (AC-6) cannot do on
-/// its own since renaming the primary callee always also trips rule 1.
+/// the "revert to the held-unaware path" mutation (AC-6,
+/// mouse-report-held-callsite-test/task0001) cannot do on its own since
+/// renaming the primary callee always also trips rule 1.
 #[test]
 fn judge_call_rejects_when_the_held_unaware_path_also_appears_elsewhere_in_the_body() {
     let src = "svc::apply_with_held(a, ctx.held_flag); if false { svc::apply(a, b); }";
@@ -6499,7 +6513,8 @@ fn judge_call_rejects_when_the_held_unaware_path_also_appears_elsewhere_in_the_b
     );
 }
 
-// ── AC-6/TS-5: mutations derived from the real extracted bodies ──────
+// ── AC-6/TS-5 (mouse-report-held-callsite-test/task0001): mutations
+// derived from the real extracted bodies ─────────────────────────────
 //
 // D6.1 / IMPLEMENTATION.md: these mutate the REAL extracted bodies in
 // memory (never a hand-written stand-in) so the file-backed TS-1/TS-2
@@ -6527,11 +6542,12 @@ fn shadow_host_prelude_tokens() -> Vec<call_site_scan::Tok> {
     ]
 }
 
-/// AC-6: the button path's real body — unmutated, and under each of the
-/// four required mutations (default value, deletion, revert to the
-/// held-unaware path, receiver shadowing). Each mutation asserts the
-/// rewrite touched exactly the intended site and nothing else, then that
-/// the mutated body is rejected.
+/// AC-6 (mouse-report-held-callsite-test/task0001): the button path's
+/// real body — unmutated, and under each of the four required mutations
+/// (default value, deletion, revert to the held-unaware path, receiver
+/// shadowing). Each mutation asserts the rewrite touched exactly the
+/// intended site and nothing else, then that the mutated body is
+/// rejected.
 #[test]
 fn button_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted() {
     let body = button_path_body();
@@ -6683,7 +6699,8 @@ fn button_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted(
     }
 }
 
-/// AC-6: the wheel path's real body under the same four mutations.
+/// AC-6 (mouse-report-held-callsite-test/task0001): the wheel path's
+/// real body under the same four mutations.
 #[test]
 fn wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted() {
     let body = wheel_path_body();
@@ -6805,10 +6822,10 @@ fn wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted()
     }
 }
 
-/// AC-6: benign edits applied directly to a COPY of the embedded
-/// production source — re-wrapping, an inserted comment, a trailing
-/// comma, and re-ordering two independent unrelated statements — must
-/// all still be accepted.
+/// AC-6 (mouse-report-held-callsite-test/task0001): benign edits applied
+/// directly to a COPY of the embedded production source — re-wrapping,
+/// an inserted comment, a trailing comma, and re-ordering two
+/// independent unrelated statements — must all still be accepted.
 #[test]
 fn button_path_benign_edits_to_the_real_source_are_still_accepted() {
     let src = pointer_routing_src();
