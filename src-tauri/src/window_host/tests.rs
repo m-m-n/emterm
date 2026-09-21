@@ -6822,61 +6822,542 @@ fn wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted()
     }
 }
 
-/// AC-6 (mouse-report-held-callsite-test/task0001): benign edits applied
-/// directly to a COPY of the embedded production source — re-wrapping,
-/// an inserted comment, a trailing comma, and re-ordering two
-/// independent unrelated statements — must all still be accepted.
+// ─────────────────────────────────────────────────────────────────────
+// benign-edit-test-token-rewrite/task0001: Class A anchor routine
+// ─────────────────────────────────────────────────────────────────────
+//
+// A byte-position-preserving scanner, deliberately kept OUTSIDE
+// `call_site_scan` (D3, NFR1 — that module's own tokenizer intentionally
+// discards byte positions and stays frozen). It exists only so the
+// benign-edit tests below can slice the embedded production source by
+// structural byte range instead of matching its text (AC-2).
+mod anchor_scan {
+    enum Kind {
+        Ident(String),
+        Punct(char),
+    }
+
+    struct PosTok {
+        start: usize,
+        end: usize,
+        kind: Kind,
+    }
+
+    /// Tokenizes `src`, tracking byte offsets and stripping whitespace,
+    /// line/nested-block comments, and string-literal contents (opaque,
+    /// contributing zero tokens — same effect as a comment). Enough
+    /// structure for the anchor routine below, no more (Out of Scope:
+    /// not a general Rust parser).
+    fn scan(src: &str) -> Vec<PosTok> {
+        let chars: Vec<(usize, char)> = src.char_indices().collect();
+        let n = chars.len();
+        let mut out = Vec::new();
+        let mut i = 0usize;
+        while i < n {
+            let (pos, c) = chars[i];
+            if c.is_whitespace() {
+                i += 1;
+                continue;
+            }
+            if c == '/' && i + 1 < n && chars[i + 1].1 == '/' {
+                i += 2;
+                while i < n && chars[i].1 != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if c == '/' && i + 1 < n && chars[i + 1].1 == '*' {
+                i += 2;
+                let mut depth = 1i32;
+                while i < n && depth > 0 {
+                    if chars[i].1 == '/' && i + 1 < n && chars[i + 1].1 == '*' {
+                        depth += 1;
+                        i += 2;
+                    } else if chars[i].1 == '*' && i + 1 < n && chars[i + 1].1 == '/' {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            if c == '"' {
+                i += 1;
+                while i < n {
+                    if chars[i].1 == '\\' && i + 1 < n {
+                        i += 2;
+                        continue;
+                    }
+                    if chars[i].1 == '"' {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            if c.is_alphabetic() || c == '_' {
+                let start_byte = pos;
+                i += 1;
+                while i < n && (chars[i].1.is_alphanumeric() || chars[i].1 == '_') {
+                    i += 1;
+                }
+                let end_byte = if i < n { chars[i].0 } else { src.len() };
+                out.push(PosTok {
+                    start: start_byte,
+                    end: end_byte,
+                    kind: Kind::Ident(src[start_byte..end_byte].to_string()),
+                });
+                continue;
+            }
+            if c.is_ascii_digit() {
+                i += 1;
+                while i < n
+                    && (chars[i].1.is_alphanumeric() || chars[i].1 == '_' || chars[i].1 == '.')
+                {
+                    i += 1;
+                }
+                continue;
+            }
+            let end_byte = if i + 1 < n { chars[i + 1].0 } else { src.len() };
+            out.push(PosTok {
+                start: pos,
+                end: end_byte,
+                kind: Kind::Punct(c),
+            });
+            i += 1;
+        }
+        out
+    }
+
+    fn is_whitespace_only(src: &str, start: usize, end: usize) -> bool {
+        src[start..end].chars().all(char::is_whitespace)
+    }
+
+    fn ident_text(tok: &PosTok) -> Option<&str> {
+        match &tok.kind {
+            Kind::Ident(s) => Some(s.as_str()),
+            Kind::Punct(_) => None,
+        }
+    }
+
+    fn is_punct(tok: &PosTok, c: char) -> bool {
+        matches!(&tok.kind, Kind::Punct(p) if *p == c)
+    }
+
+    /// Finds `fn`'s own body braces starting the scan at `after_name`
+    /// (the token index right after the function's own name): skips the
+    /// parameter list by paren depth, then any return-type/where-clause
+    /// tokens, then walks the first top-level `{` to its own matching
+    /// `}`.
+    fn find_body_braces(toks: &[PosTok], after_name: usize) -> Option<(usize, usize)> {
+        let n = toks.len();
+        let mut i = after_name;
+        while i < n && !is_punct(&toks[i], '(') {
+            if is_punct(&toks[i], '{') || is_punct(&toks[i], ';') {
+                return None;
+            }
+            i += 1;
+        }
+        if i >= n {
+            return None;
+        }
+        let mut depth = 1i32;
+        i += 1;
+        while i < n && depth > 0 {
+            if is_punct(&toks[i], '(') {
+                depth += 1;
+            } else if is_punct(&toks[i], ')') {
+                depth -= 1;
+            }
+            i += 1;
+        }
+        while i < n && !is_punct(&toks[i], '{') {
+            if is_punct(&toks[i], ';') {
+                return None;
+            }
+            i += 1;
+        }
+        if i >= n {
+            return None;
+        }
+        let body_start = i + 1;
+        let mut bdepth = 1i32;
+        let mut e = body_start;
+        while e < n && bdepth > 0 {
+            if is_punct(&toks[e], '{') {
+                bdepth += 1;
+            } else if is_punct(&toks[e], '}') {
+                bdepth -= 1;
+                if bdepth == 0 {
+                    break;
+                }
+            }
+            e += 1;
+        }
+        if bdepth != 0 {
+            return None;
+        }
+        Some((body_start, e))
+    }
+
+    fn count_top_level_args(toks: &[PosTok], start: usize, end: usize) -> usize {
+        let mut depth = 0i32;
+        let mut count = 0usize;
+        let mut seg_start = start;
+        let mut i = start;
+        while i < end {
+            if is_punct(&toks[i], '(') || is_punct(&toks[i], '[') || is_punct(&toks[i], '{') {
+                depth += 1;
+            } else if is_punct(&toks[i], ')') || is_punct(&toks[i], ']') || is_punct(&toks[i], '}')
+            {
+                depth -= 1;
+            } else if depth == 0 && is_punct(&toks[i], ',') {
+                count += 1;
+                seg_start = i + 1;
+            }
+            i += 1;
+        }
+        if seg_start < end {
+            count += 1;
+        }
+        count
+    }
+
+    /// A located call's byte range, decomposed into the pieces the
+    /// benign edits below need (Design, アンカールーチンの責務と契約,
+    /// 事後条件（成功時）): the callee's own bare-name end (to insert
+    /// text right after it), the call's own parentheses, and — trimmed
+    /// of the whitespace immediately inside them — the argument-list
+    /// text itself.
+    pub(super) struct AnchoredCall {
+        pub callee_end: usize,
+        pub open_paren_end: usize,
+        pub close_paren_start: usize,
+        pub args_start: usize,
+        pub args_end: usize,
+    }
+
+    /// FR4a: locates the single call to `callee_last_segment` inside
+    /// `fn_name`'s own body, by structural position only — walking
+    /// `fn` keyword → function name → callee name → paren-depth from
+    /// the callee's own `(` — never by line number or by matching the
+    /// call's text as a substring. FR4c: before returning, verifies the
+    /// located range's token shape (callee's bare name immediately
+    /// followed by `(`, with exactly `expected_arg_count` top-level
+    /// arguments) and fails explicitly on any mismatch, never silently
+    /// returning the wrong range.
+    pub(super) fn locate_call(
+        src: &str,
+        fn_name: &str,
+        callee_last_segment: &str,
+        expected_arg_count: usize,
+    ) -> Result<AnchoredCall, String> {
+        let toks = scan(src);
+        let n = toks.len();
+
+        // Step 1 (FR4a-1 / EC-1): `fn` keyword directly (whitespace-only
+        // gap — never a comment) adjacent to `fn_name`, then that
+        // function's own body braces.
+        let mut body_range: Option<(usize, usize)> = None;
+        let mut i = 0usize;
+        while i < n {
+            if ident_text(&toks[i]) == Some("fn") {
+                if let Some(name_tok) = toks.get(i + 1) {
+                    if ident_text(name_tok) == Some(fn_name)
+                        && is_whitespace_only(src, toks[i].end, name_tok.start)
+                    {
+                        if let Some(range) = find_body_braces(&toks, i + 2) {
+                            body_range = Some(range);
+                            break;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        let (body_start, body_end) = body_range.ok_or_else(|| {
+            format!(
+                "anchor: `fn {fn_name}` not found with its name directly (whitespace-only) \
+                 adjacent to the `fn` keyword — explicit failure, never a wrong-function \
+                 anchor (EC-1)"
+            )
+        })?;
+
+        // Step 2 (FR4a-2): every occurrence of the callee's bare name,
+        // immediately followed by `(`, inside that body — exactly one
+        // is required.
+        let mut hits = Vec::new();
+        let mut j = body_start;
+        while j < body_end {
+            if ident_text(&toks[j]) == Some(callee_last_segment) {
+                if let Some(open) = toks.get(j + 1) {
+                    if is_punct(open, '(') {
+                        hits.push(j);
+                    }
+                }
+            }
+            j += 1;
+        }
+        if hits.len() != 1 {
+            return Err(format!(
+                "anchor: expected exactly one call to `{callee_last_segment}` inside \
+                 `fn {fn_name}`, found {} — explicit failure, never a silent wrong pick",
+                hits.len()
+            ));
+        }
+        let callee_idx = hits[0];
+        let open_idx = callee_idx + 1;
+
+        // Step 3 (FR4a-3 / EC-2): paren-depth walk from the call's own
+        // `(` to its matching `)`. Comment content was already discarded
+        // by `scan` above, so an unbalanced `)` written inside a comment
+        // can never desync this walk — the comment is recognized and
+        // the correct range is still returned.
+        let mut depth = 1i32;
+        let mut k = open_idx + 1;
+        while k < body_end && depth > 0 {
+            if is_punct(&toks[k], '(') {
+                depth += 1;
+            } else if is_punct(&toks[k], ')') {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            k += 1;
+        }
+        if depth != 0 {
+            return Err(format!(
+                "anchor: unmatched `(` for the call to `{callee_last_segment}` inside \
+                 `fn {fn_name}` — explicit failure, never a silently wrong range"
+            ));
+        }
+        let close_idx = k;
+
+        // Step 4 (FR4c): verify the token shape before returning.
+        let arg_count = count_top_level_args(&toks, open_idx + 1, close_idx);
+        if arg_count != expected_arg_count {
+            return Err(format!(
+                "anchor: `{callee_last_segment}` inside `fn {fn_name}`: expected \
+                 {expected_arg_count} top-level arguments, found {arg_count} — explicit \
+                 failure (FR4c), never a silently wrong range"
+            ));
+        }
+
+        let callee_end = toks[callee_idx].end;
+        let open_paren_end = toks[open_idx].end;
+        let close_paren_start = toks[close_idx].start;
+        let interior = &src[open_paren_end..close_paren_start];
+        let leading_ws = interior.len() - interior.trim_start().len();
+        let trailing_ws = interior.len() - interior.trim_end().len();
+
+        Ok(AnchoredCall {
+            callee_end,
+            open_paren_end,
+            close_paren_start,
+            args_start: open_paren_end + leading_ws,
+            args_end: close_paren_start - trailing_ws,
+        })
+    }
+}
+
+// ── AC-3/AC-4 (benign-edit-test-token-rewrite/task0001): the Class A
+// anchor routine's own negative cases (TS-5/TS-6/TS-7) ─────────────────
+//
+// In-memory, hand-built inputs distinct from the embedded production
+// source (Test Notes) — these exercise `anchor_scan::locate_call` itself,
+// not the real call site, so the fixture names below (`probe_fn` /
+// `probe_call`) name nothing in the production codebase.
+
+/// AC-3/TS-5 (benign-edit-test-token-rewrite/task0001): a call with
+/// fewer top-level arguments than expected must be rejected by the
+/// token-shape check before any range is returned.
 #[test]
-fn button_path_benign_edits_to_the_real_source_are_still_accepted() {
+fn anchor_locate_call_wrong_argument_count_returns_err() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32) { probe_call(a, b, c); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-3/TS-5: a call with 3 arguments must be rejected when 4 are expected"
+    );
+}
+
+/// AC-3/TS-5 (benign-edit-test-token-rewrite/task0001): a bare reference
+/// to the callee's name that is not itself shaped as a call (not
+/// immediately followed by `(`) must not be accepted as a call site.
+#[test]
+fn anchor_locate_call_callee_not_shaped_as_a_call_returns_err() {
+    let src = "fn probe_fn(a: i32) { let _unused = probe_call; }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-3/TS-5: a bare reference to the callee name, not shaped as a call, must not \
+         be accepted"
+    );
+}
+
+/// AC-4/TS-6 (benign-edit-test-token-rewrite/task0001, EC-1): a block
+/// comment between the `fn` keyword and the function name must never be
+/// silently skipped over — the anchor must fail explicitly rather than
+/// risk mis-anchoring.
+#[test]
+fn anchor_locate_call_fn_name_separated_by_a_comment_returns_err() {
+    let src = "fn /* c */ probe_fn(a: i32, b: i32, c: i32, d: i32) { probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4/TS-6/EC-1: a comment between `fn` and the function name must never be \
+         silently skipped over"
+    );
+}
+
+/// AC-4/TS-7 (benign-edit-test-token-rewrite/task0001, EC-2): an
+/// unbalanced closing parenthesis written inside a comment, in the
+/// middle of the argument list, must not desync the paren-depth walk —
+/// the comment is recognized (its contents contribute zero tokens) and
+/// the correct range is still returned.
+#[test]
+fn anchor_locate_call_unbalanced_paren_inside_a_comment_still_returns_the_correct_range() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) {\n    \
+               probe_call(a, b, /* a stray ) inside a comment */ c, d);\n}";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-4/TS-7/EC-2: a stray `)` written inside a comment must not desync the \
+         paren-depth walk",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, /* a stray ) inside a comment */ c, d",
+        "AC-4/TS-7: the returned argument-text range must span exactly the real arguments"
+    );
+}
+
+// ── AC-5/AC-7/AC-8 (benign-edit-test-token-rewrite/task0001): Class A
+// benign edits against the real embedded production source ─────────────
+
+/// Re-tokenizes `edited_src`, re-extracts `BUTTON_PATH_FN`'s body, and
+/// judges it exactly as the unedited body is judged (AC-8) — shared by
+/// every Class A benign-edit test below.
+fn assert_button_path_edit_is_accepted(edited_src: &str, what: &str) {
+    let tokens = call_site_scan::tokenize(edited_src);
+    let body = call_site_scan::extract_function(&tokens, BUTTON_PATH_FN)
+        .unwrap_or_else(|e| panic!("AC-8: {what}: the edited body must still be found: {e}"));
+    call_site_scan::judge_call(
+        &body.tokens,
+        &body.params,
+        &HELD_AWARE_BUTTON_CALLEE,
+        4,
+        4,
+        HELD_FIELD,
+        &HELD_UNAWARE_CALLEE,
+    )
+    .unwrap_or_else(|e| panic!("AC-8: {what}: judgment must still accept the edit: {e}"));
+}
+
+/// TS-3 (benign-edit-test-token-rewrite/task0001): re-wrapping the
+/// held-aware call's argument list across new line breaks, built by
+/// slicing the embedded production source's own bytes around a
+/// structurally located call — never by replicating its text as a
+/// literal (FR4b, AC-5).
+#[test]
+fn button_path_rewrapped_argument_list_edit_is_accepted() {
     let src = pointer_routing_src();
-    let real_call = "mouse_report::apply_outcome_with_held(outcome, &mut records, &mut dest, host.mouse_report_held);";
-    assert!(
-        src.contains(real_call),
-        "sanity: this must match the real call text verbatim or this test proves nothing"
-    );
+    let anchored = anchor_scan::locate_call(src, BUTTON_PATH_FN, HELD_AWARE_BUTTON_CALLEE[1], 4)
+        .expect("TS-3 precondition: the real call site must anchor cleanly");
+    let head = &src[..anchored.open_paren_end];
+    let args_text = &src[anchored.args_start..anchored.args_end];
+    let tail = &src[anchored.close_paren_start..];
+    let open_ws = "\n        ";
+    let close_ws = "\n    ";
 
-    let edited_call = "mouse_report::apply_outcome_with_held /* rewrapped */ (\n        outcome,\n        \
-                        &mut records,\n        &mut dest,\n        host.mouse_report_held,\n    );";
-    let edited_src = src.replacen(real_call, edited_call, 1);
-    assert_ne!(edited_src, src, "sanity: the edit must actually apply");
+    let edited_src = format!("{head}{open_ws}{args_text}{close_ws}{tail}");
 
-    let tokens = call_site_scan::tokenize(&edited_src);
-    let body = call_site_scan::extract_function(&tokens, BUTTON_PATH_FN)
-        .expect("AC-6: the edited body must still be found");
-    call_site_scan::judge_call(
-        &body.tokens,
-        &body.params,
-        &HELD_AWARE_BUTTON_CALLEE,
-        4,
-        4,
-        HELD_FIELD,
-        &HELD_UNAWARE_CALLEE,
-    )
-    .expect("AC-6: re-wrapping, an inserted comment, and a trailing comma must not turn this red");
-
-    // Re-ordering two independent, unrelated statements earlier in the
-    // same body must also leave the call-site judgment unaffected.
-    let stmt_a = "let hovered_link = !host.hover.link_cells.is_empty();";
-    let stmt_b = "let middle_click_paste_enabled = app.settings.middle_click_paste;";
-    assert!(
-        src.contains(stmt_a) && src.contains(stmt_b),
-        "sanity: both statements must match verbatim"
-    );
-    let placeholder = "\u{0}PLACEHOLDER\u{0}";
-    let reordered_src = src
-        .replacen(stmt_a, placeholder, 1)
-        .replacen(stmt_b, stmt_a, 1)
-        .replacen(placeholder, stmt_b, 1);
     assert_ne!(
-        reordered_src, src,
-        "sanity: the reorder must actually apply"
+        edited_src, src,
+        "AC-7 vacuity guard: the re-wrap edit must actually change the source bytes"
+    );
+    let new_args_start = head.len() + open_ws.len();
+    let new_args_end = new_args_start + args_text.len();
+    assert_eq!(
+        &edited_src[new_args_start..new_args_end],
+        args_text,
+        "AC-5: the argument text must be carried over byte-for-byte, unrewritten"
     );
 
-    let tokens = call_site_scan::tokenize(&reordered_src);
-    let body = call_site_scan::extract_function(&tokens, BUTTON_PATH_FN)
-        .expect("AC-6: the reordered body must still be found");
-    call_site_scan::judge_call(
+    assert_button_path_edit_is_accepted(&edited_src, "re-wrapped argument list");
+}
+
+/// TS-4 (benign-edit-test-token-rewrite/task0001): inserting a block
+/// comment between the callee's own name and its opening `(` — same
+/// anchor, same slice construction as TS-3 (Design).
+#[test]
+fn button_path_call_with_inserted_comment_edit_is_accepted() {
+    let src = pointer_routing_src();
+    let anchored = anchor_scan::locate_call(src, BUTTON_PATH_FN, HELD_AWARE_BUTTON_CALLEE[1], 4)
+        .expect("TS-4 precondition: the real call site must anchor cleanly");
+    let head = &src[..anchored.callee_end];
+    let args_text = &src[anchored.args_start..anchored.args_end];
+    let tail = &src[anchored.close_paren_start..];
+    let inserted = " /* benign */ (";
+
+    let edited_src = format!("{head}{inserted}{args_text}{tail}");
+
+    assert_ne!(
+        edited_src, src,
+        "AC-7 vacuity guard: the comment-insertion edit must actually change the source \
+         bytes"
+    );
+    let new_args_start = head.len() + inserted.len();
+    let new_args_end = new_args_start + args_text.len();
+    assert_eq!(
+        &edited_src[new_args_start..new_args_end],
+        args_text,
+        "AC-5: the argument text must be carried over byte-for-byte, unrewritten"
+    );
+
+    assert_button_path_edit_is_accepted(&edited_src, "call with an inserted comment");
+}
+
+// ── AC-6/AC-7/AC-8 (benign-edit-test-token-rewrite/task0001): Class B
+// benign edits, built with the existing token helpers only ─────────────
+
+/// TS-1 (benign-edit-test-token-rewrite/task0001): appending a trailing
+/// comma to the held-aware call's argument list, built purely from the
+/// existing token helpers (Design, Class B).
+#[test]
+fn button_path_trailing_comma_edit_is_accepted() {
+    let body = button_path_body();
+    let calls = call_site_scan::find_calls(&body.tokens, &HELD_AWARE_BUTTON_CALLEE);
+    assert_eq!(
+        calls.len(),
+        1,
+        "TS-1 precondition: exactly one real call site"
+    );
+    let args_end = calls[0].args_end;
+
+    let mutated = call_site_scan::splice_tokens(
         &body.tokens,
+        args_end,
+        args_end,
+        vec![call_site_scan::Tok::Punct(",".to_string())],
+    );
+
+    assert_ne!(
+        mutated, body.tokens,
+        "AC-7 vacuity guard: appending the trailing comma must actually change the token \
+         sequence"
+    );
+
+    let spans = call_site_scan::split_arg_spans(&mutated, calls[0].args_start, args_end + 1);
+    assert_eq!(
+        spans.len(),
+        4,
+        "EC-4: a trailing comma must not change the number of arguments the splitter sees"
+    );
+
+    call_site_scan::judge_call(
+        &mutated,
         &body.params,
         &HELD_AWARE_BUTTON_CALLEE,
         4,
@@ -6884,5 +7365,157 @@ fn button_path_benign_edits_to_the_real_source_are_still_accepted() {
         HELD_FIELD,
         &HELD_UNAWARE_CALLEE,
     )
-    .expect("AC-6: re-ordering two independent unrelated statements must not turn this red");
+    .expect("AC-8: a trailing comma on the held-aware call must not turn this red");
+}
+
+/// The token span `[start, end)` of the top-level `let` statement
+/// beginning at `let_index` (which must index a `let` token) — bounded
+/// by that statement's own terminating `;` at brace/paren/bracket depth
+/// zero relative to the statement's own start.
+fn let_statement_span(tokens: &[call_site_scan::Tok], let_index: usize) -> Option<(usize, usize)> {
+    let n = tokens.len();
+    let mut depth = 0i32;
+    let mut i = let_index;
+    while i < n {
+        match &tokens[i] {
+            call_site_scan::Tok::Punct(p) if p == "(" || p == "[" || p == "{" => depth += 1,
+            call_site_scan::Tok::Punct(p) if p == ")" || p == "]" || p == "}" => depth -= 1,
+            call_site_scan::Tok::Punct(p) if p == ";" && depth == 0 => {
+                return Some((let_index, i + 1));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The identifier bound by a simple `let NAME = ...;` statement — the
+/// first identifier after `let` (optionally after `mut`). `None` for
+/// anything more complex (destructuring patterns etc.), which the
+/// caller then treats as ineligible rather than guessing.
+fn simple_let_binding_name(stmt: &[call_site_scan::Tok]) -> Option<&str> {
+    let mut i = 1usize; // stmt[0] is `let`
+    if let Some(call_site_scan::Tok::Ident(id)) = stmt.get(i) {
+        if id == "mut" {
+            i += 1;
+        }
+    }
+    match stmt.get(i) {
+        Some(call_site_scan::Tok::Ident(id)) => Some(id.as_str()),
+        _ => None,
+    }
+}
+
+fn mentions_identifier(tokens: &[call_site_scan::Tok], name: &str) -> bool {
+    tokens
+        .iter()
+        .any(|t| matches!(t, call_site_scan::Tok::Ident(id) if id == name))
+}
+
+/// TS-2 (benign-edit-test-token-rewrite/task0001): finds two adjacent,
+/// independent top-level `let` statements in `tokens` — selected
+/// structurally (token scan), never by matching a specific statement's
+/// source text (Design, Class B). `None` when no such pair exists — the
+/// caller must then fail explicitly, never silently skip the edit (Test
+/// Notes).
+fn find_adjacent_independent_let_pair(
+    tokens: &[call_site_scan::Tok],
+) -> Option<((usize, usize), (usize, usize))> {
+    let n = tokens.len();
+    let mut depth = 0i32;
+    let mut i = 0usize;
+    while i < n {
+        match &tokens[i] {
+            call_site_scan::Tok::Punct(p) if p == "(" || p == "[" || p == "{" => {
+                depth += 1;
+                i += 1;
+                continue;
+            }
+            call_site_scan::Tok::Punct(p) if p == ")" || p == "]" || p == "}" => {
+                depth -= 1;
+                i += 1;
+                continue;
+            }
+            call_site_scan::Tok::Ident(id) if id == "let" && depth == 0 => {
+                let (a_start, a_end) = let_statement_span(tokens, i)?;
+                let next_is_let = matches!(
+                    tokens.get(a_end),
+                    Some(call_site_scan::Tok::Ident(id2)) if id2 == "let"
+                );
+                if next_is_let {
+                    if let Some((b_start, b_end)) = let_statement_span(tokens, a_end) {
+                        let names = (
+                            simple_let_binding_name(&tokens[a_start..a_end]),
+                            simple_let_binding_name(&tokens[b_start..b_end]),
+                        );
+                        if let (Some(name_a), Some(name_b)) = names {
+                            let independent = !mentions_identifier(&tokens[b_start..b_end], name_a)
+                                && !mentions_identifier(&tokens[a_start..a_end], name_b);
+                            if independent {
+                                return Some(((a_start, a_end), (b_start, b_end)));
+                            }
+                        }
+                    }
+                }
+                i = a_end;
+                continue;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    None
+}
+
+/// TS-2 (benign-edit-test-token-rewrite/task0001): swapping two
+/// adjacent, independent top-level statements — selected structurally,
+/// never by matching a statement's source text — must not affect the
+/// held-aware call-site judgment.
+#[test]
+fn button_path_independent_statement_reorder_edit_is_accepted() {
+    let body = button_path_body();
+    let calls = call_site_scan::find_calls(&body.tokens, &HELD_AWARE_BUTTON_CALLEE);
+    assert_eq!(
+        calls.len(),
+        1,
+        "TS-2 precondition: exactly one real call site"
+    );
+
+    let (a_span, b_span) = find_adjacent_independent_let_pair(&body.tokens).expect(
+        "TS-2 precondition: the real body must contain an adjacent, independent pair of \
+         top-level `let` statements",
+    );
+    let (a_start, a_end) = a_span;
+    let (b_start, b_end) = b_span;
+    assert_eq!(
+        a_end, b_start,
+        "TS-2 precondition: the two statements must be adjacent"
+    );
+    assert!(
+        b_end <= calls[0].call_start || a_start >= calls[0].args_end + 1,
+        "TS-2 precondition: the reordered statements must not overlap the held-aware call \
+         site"
+    );
+
+    let mut swapped = body.tokens[b_start..b_end].to_vec();
+    swapped.extend_from_slice(&body.tokens[a_start..a_end]);
+    let mutated = call_site_scan::splice_tokens(&body.tokens, a_start, b_end, swapped);
+
+    assert_ne!(
+        mutated, body.tokens,
+        "AC-7 vacuity guard: the reorder must actually change the token sequence"
+    );
+
+    call_site_scan::judge_call(
+        &mutated,
+        &body.params,
+        &HELD_AWARE_BUTTON_CALLEE,
+        4,
+        4,
+        HELD_FIELD,
+        &HELD_UNAWARE_CALLEE,
+    )
+    .expect("AC-8: reordering two independent, unrelated statements must not turn this red");
 }
