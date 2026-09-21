@@ -1,51 +1,62 @@
 schema_version: 1
 feature: benign-edit-test-token-rewrite
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 mode: batch
-last_input_digest: "sha256:753fcaa3720443fd3d4cec6b330fee09916ec4f356e7d500253be8348afc2d74"
+last_input_digest: sha256:320a7b65c9e8cf4a4d9c6fe823b5c128ef4b92c1c3fe1e3dcfa556e80f1a7af3
 active_request_id: null
 packets:
   benign-edit-test-token-rewrite-q0001:
     status: answered
-    issued_at: "2026-09-22T02:50:30+09:00"
+    issued_at: '2026-09-22T02:50:30+09:00'
     questions:
-      - question_id: requirement.class-n-benign-edit-coverage
-        status: answered
-      - question_id: design-step.recommendation
-        status: answered
+    - question_id: requirement.class-n-benign-edit-coverage
+      status: answered
+    - question_id: design-step.recommendation
+      status: answered
 answers:
   requirement.class-n-benign-edit-coverage:
     packet_id: benign-edit-test-token-rewrite-q0001
-    answered_at: "2026-09-22T02:50:30+09:00"
+    answered_at: '2026-09-22T02:50:30+09:00'
     source: codex-consultation
     answer_mode: single_select
-    selected_option_ids: [closed_set_text_anchor]
+    selected_option_ids:
+    - closed_set_text_anchor
     freeform: null
-    normalized_answer: >-
-      Split the four benign edits by tokenizer visibility. Class B (trailing comma,
-      statement reorder) is reproduced at token level via find_calls / split_arg_spans /
-      splice_tokens. Class A (re-wrap, comment insertion) stays a source-TEXT edit whose
-      site is located structurally by a two-stage anchor - first the enclosing function
-      name, then the callee name after it, then a paren-depth scan for the call's byte
-      span - and the edited source is built by SLICING the original bytes so the argument
-      text is carried through verbatim and never re-typed. No span-carrying tokenizer is
-      added to the scan module.
+    normalized_answer: Split the four benign edits by tokenizer visibility. Class B (trailing comma, statement
+      reorder) is reproduced at token level via find_calls / split_arg_spans / splice_tokens. Class A
+      (re-wrap, comment insertion) stays a source-TEXT edit whose site is located structurally by a two-stage
+      anchor - first the enclosing function name, then the callee name after it, then a paren-depth scan
+      for the call's byte span - and the edited source is built by SLICING the original bytes so the argument
+      text is carried through verbatim and never re-typed. No span-carrying tokenizer is added to the
+      scan module.
   design-step.recommendation:
     packet_id: benign-edit-test-token-rewrite-q0001
-    answered_at: "2026-09-22T02:50:30+09:00"
+    answered_at: '2026-09-22T02:50:30+09:00'
     source: batch-policy
     answer_mode: single_select
-    selected_option_ids: [skip_design]
+    selected_option_ids:
+    - skip_design
     freeform: null
-    normalized_answer: >-
-      Skip the design step. Test-only change inside one existing inline test module;
+    normalized_answer: Skip the design step. Test-only change inside one existing inline test module;
       no UI surface, no visual output, no new module boundary.
 worker_runs:
-  - request_id: cs-analyst-001
-    status: needs_user_input
-    input_digest: "sha256:753fcaa3720443fd3d4cec6b330fee09916ec4f356e7d500253be8348afc2d74"
-artifacts: []
+- request_id: cs-analyst-001
+  status: needs_user_input
+  input_digest: sha256:753fcaa3720443fd3d4cec6b330fee09916ec4f356e7d500253be8348afc2d74
+- request_id: cs-analyst-002
+  status: completed
+  input_digest: sha256:783737275a33ba249a67a6fb986698cbf2afa73acbe8ddc6d29f1f1bc4f63a26
+- request_id: cs-specwriter-001
+  status: completed
+  input_digest: sha256:320a7b65c9e8cf4a4d9c6fe823b5c128ef4b92c1c3fe1e3dcfa556e80f1a7af3
+artifacts:
+- path: feature-docs/benign-edit-test-token-rewrite/REQUIREMENTS.md
+  sha256: sha256:8aceb91e3ce94ca8cfb3a209670450c7f90062547a4d0b9587b10a10d97d2fe0
+  produced_by: cs-specwriter-001
+- path: feature-docs/benign-edit-test-token-rewrite/SPEC.md
+  sha256: sha256:fc44573f69534172733be0f6fdb4572f53e08f00ea7c0ec9623b4bfe91c8f568
+  produced_by: cs-specwriter-001
 patches: []
 stale_redispatch_count: 0
