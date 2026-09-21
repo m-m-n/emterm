@@ -174,7 +174,8 @@ workflow:
   result: pass
   failed_items: []
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: 8c5d53fbaba9a661ee5332f3acb601e0e9eedd43
 tasks:
   task0001:
     title: rule 3b の match アーム走査を末尾カンマ無しブロック本体アーム以降にも継続させる
