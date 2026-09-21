@@ -1,0 +1,18 @@
+schema_version: 1
+feature: benign-edit-test-token-rewrite
+phase: create-plan
+status: dispatching
+generation: 1
+mode: batch
+base_revision: 511d3b261d1b295b5db3de433fd46923a8eaf0d4
+last_input_digest: sha256:5bc78b9dbc45ccac3a18396bdba050915a184d11bd1079137c503013c1d9850c
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:5bc78b9dbc45ccac3a18396bdba050915a184d11bd1079137c503013c1d9850c
+artifacts: []
+patches: []
+stale_redispatch_count: 0
