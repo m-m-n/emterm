@@ -65,3 +65,35 @@ records:
       batch-policies.yaml の create-spec.design-system に従い最上位候補
       doc/UI-DESIGN-GUIDELINES.yaml を採って project_native。
       .claude/rules/ui-design.md が同ファイルを single source of truth と明記。
+  - gate_id: null
+    question_id: develop.once-pr-conflict
+    packet_id: null
+    raised_by: orchestrator
+    answered_at: "2026-09-21T23:40:00+09:00"
+    source: codex-consultation
+    answer_mode: select
+    question: >-
+      起動引数 `--batch --once --pr` と、ユーザー散文「実装完了後に integration
+      ブランチを push して gh pr create で PR を作る」が衝突する。`--once` は
+      1 フェーズで終了し、`--pr` は全 step 完了後の Step C でのみ効く。
+      どちらの読みを採るか。
+    options:
+      - option_id: honor_once
+        label: "(A) --once を字義どおり守る。create-plan のみ実行し PR は作らない"
+      - option_id: prose_overrides
+        label: "(B) 散文を優先し、retrospect と Step C まで一気に走らせて PR を作る"
+    selected_option_ids: [honor_once]
+    chosen: honor_once
+    codex_consulted: true
+    opus_escalation: false
+    freeform: "run_codex_exec.sh readonly による比較判定で (A) を採用"
+    normalized_answer: "--once を字義どおり守り、create-plan のフェーズ境界で終了する"
+    resolution_note: >-
+      run_codex_exec.sh readonly で Codex に両案を比較させたところ (A) が
+      comparatively better と判定。理由は (1) `--once` は実行範囲の明示指定であり、
+      散文は完了後処理を述べるだけで --once の解除を明示していない、(2) 無人実行で
+      (B) を採ると明示された実行範囲を推測で拡大することになる。Codex は併せて
+      「評価者が PR 作成済みと誤認する / PR 不在を失敗と誤判定する」リスクを挙げ、
+      最終報告で「計画作成のみ完了」「Step C 未到達のため push・PR は未実行」
+      「--pr は起動間で引き継がれないため Step C に到達する起動で再指定が必要」を
+      明記するよう助言。本報告はこれに従っている。

@@ -98,7 +98,8 @@ workflow:
       トークン・ユーザー可視面の変更が無く設計判断の余地が無い。
   - id: create-plan
     artifacts: [tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: "3cef0422fced378c0c31c5c9f1bc792671de8304"
   - id: implement
     status: pending
     base_commit: null
@@ -111,7 +112,19 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: tests.rs の AC 参照にタスクローカル番号の出典を明記する
+    plan: TASK.md
+    files:
+      - src-tauri/src/window_host/tests.rs
+    skills: []
+    domains: [input-handling]
+    complexity: low
+    requirements: []
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
