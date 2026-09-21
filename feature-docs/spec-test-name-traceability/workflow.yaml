@@ -133,7 +133,8 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR1, FR5, NFR1, NFR2, NFR3, NFR4]
-    status: pending
+    status: in_progress
+    branch: em-workflow/spec-test-name-traceability/task0001
   task0002:
     title: "Revise the target VERIFICATION.md: test names, count claim, AC-1 wording, naming inspection item"
     plan: tasks/task0002.md
@@ -143,7 +144,8 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR2, FR3, FR5, NFR1, NFR2, NFR3, NFR4]
-    status: pending
+    status: in_progress
+    branch: em-workflow/spec-test-name-traceability/task0002
   task0003:
     title: "Revise the target REQUIREMENTS.md traceability table to the implementation test names"
     plan: tasks/task0003.md
@@ -153,7 +155,8 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR4, FR5, NFR1, NFR2, NFR3, NFR4]
-    status: pending
+    status: in_progress
+    branch: em-workflow/spec-test-name-traceability/task0003
 
 review:
   status: pending
