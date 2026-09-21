@@ -1,0 +1,91 @@
+task_id: task0001
+baseline_failures: []          # 3517 passed, 0 failed, 3 ignored (cargo test --lib, before any edit)
+final_failures: []             # 3523 passed, 0 failed, 3 ignored (6 new tests added, all green)
+acceptance_tests:
+  AC-1:
+    description: >-
+      A match arm pattern binding the receiver in the SECOND arm, preceded
+      by a trailing-comma-less block-bodied arm, must be rejected.
+    tests: [window_host::tests::judge_call_rejects_a_match_arm_pattern_shadow_after_a_trailing_comma_less_block_bodied_arm]
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, is_rebound_before returned false (in_pattern stuck
+      false after the first arm's `}` since no trailing comma followed
+      it), so judge_fake(src).is_err() failed:
+      "a match arm pattern binding `ctx` after a trailing-comma-less
+      block-bodied arm must be rejected" panic at tests.rs:6386.
+  AC-2:
+    description: >-
+      A match arm pattern binding the receiver in the THIRD arm, preceded
+      by two trailing-comma-less block-bodied arms, must be rejected.
+    tests: [window_host::tests::judge_call_rejects_a_match_arm_pattern_shadow_after_two_trailing_comma_less_block_bodied_arms]
+    red_confirmed: true
+    red_reason: >-
+      Same root cause as AC-1, extended over two prior arms; failed before
+      the fix at tests.rs:6401.
+  AC-3:
+    description: >-
+      Nested closing parens/brackets inside an earlier block-bodied arm's
+      body must not be mistaken for that arm's own closing brace — the
+      scan must still reach and reject the next arm's pattern.
+    tests: [window_host::tests::judge_call_rejects_a_match_arm_pattern_shadow_when_an_earlier_block_body_holds_nested_parens_and_brackets]
+    red_confirmed: true
+    red_reason: >-
+      Failed before the fix at tests.rs:6417, same root cause as AC-1 (the
+      nested `(`/`[` tokens are secondary — the underlying bug is that
+      `}` never resumed pattern scanning at all).
+  AC-4:
+    description: >-
+      Existing coverage (binding in the first arm) and a trailing-comma
+      block-bodied arm ahead of the binding arm must continue to be
+      rejected.
+    tests:
+      - window_host::tests::judge_call_rejects_a_match_arm_pattern_shadow_of_the_receiver_before_the_call
+      - window_host::tests::judge_call_rejects_a_match_arm_pattern_shadow_after_a_trailing_comma_block_bodied_arm
+    red_confirmed: false
+    red_reason: >-
+      Both cases were already correctly rejected before this change: the
+      first-arm case never depended on the `}` reset, and the
+      trailing-comma case was already handled by the pre-existing `,`
+      branch (in_pattern flips back to true at the comma regardless of
+      whether `}` also resets it). Verified by running the new
+      trailing-comma test before implementing the fix — it passed
+      immediately (not observed to fail for the right reason, so not
+      claimed as red-confirmed). This is genuine pre-existing coverage
+      with no observable behavior change, not a refactor gap.
+  AC-5:
+    description: >-
+      A match with no arm pattern binding the receiver must continue to
+      be accepted (no new false positive introduced by the fix).
+    tests: [window_host::tests::judge_call_accepts_a_match_with_no_arm_pattern_binding_the_receiver]
+    red_confirmed: false
+    red_reason: >-
+      Already accepted before the fix (this input never triggers the
+      buggy stuck-false-in_pattern path in a way that flips the outcome).
+      Verified by running before implementing — already green.
+  AC-6:
+    description: >-
+      An arm body containing a method chain (closing parens that are not
+      the arm's own closing brace) must continue to be accepted — the
+      chosen design (only `}` ends an arm, not `)`/`]`) does not
+      over-reject this case.
+    tests: [window_host::tests::judge_call_accepts_a_match_arm_body_containing_a_method_chain_with_closing_parens]
+    red_confirmed: false
+    red_reason: >-
+      Already accepted before the fix (the old code did not treat `)` as
+      an arm terminator either, so this input's outcome is unaffected by
+      this change). Verified by running before implementing — already
+      green. Included as a regression guard per the plan's Design note
+      (rejecting option A specifically to avoid over-rejecting this
+      shape).
+  AC-7:
+    description: >-
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib` is green.
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Build/full-suite gate, not a single unit test. Verified directly:
+      full `--lib` run after implementation reports 3523 passed, 0
+      failed, 3 ignored (baseline was 3517 passed, 0 failed, 3 ignored,
+      before any of the 6 new tests were added).

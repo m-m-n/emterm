@@ -5825,9 +5825,17 @@ mod call_site_scan {
         }
 
         // `match` arm patterns (the span before each arm's own top-level
-        // `=>`; arm bodies between `=>` and the next top-level `,` are
-        // skipped so a shadow-named value used in one arm's expression
-        // never falsely triggers the next arm's pattern check).
+        // `=>`). Two distinct separators end an arm body and resume
+        // pattern scanning for the next arm:
+        //   - a block body (`=> { .. }`) is separated by its own closing
+        //     `}`, whether or not a trailing `,` follows it;
+        //   - a non-block body is separated by the next top-level `,`, as
+        //     before.
+        // Struct literals and `if`/nested `match` bodies appearing at the
+        // top level of a non-block arm body can still make an inner `}`
+        // look like the arm's own terminator; that is a false positive
+        // (an over-eager rejection, never a silent miss) and is accepted
+        // as this layer performs no real name resolution.
         let mut i = 0usize;
         while i < prefix.len() {
             if matches!(&prefix[i], Tok::Ident(id) if id == "match") {
@@ -5860,7 +5868,13 @@ mod call_site_scan {
                     while m < arms_end {
                         match &prefix[m] {
                             Tok::Punct(p) if p == "{" || p == "(" || p == "[" => nest += 1,
-                            Tok::Punct(p) if p == "}" || p == ")" || p == "]" => nest -= 1,
+                            Tok::Punct(p) if p == "}" || p == ")" || p == "]" => {
+                                nest -= 1;
+                                if p == "}" && nest == 0 && !in_pattern {
+                                    in_pattern = true;
+                                    seg_start = m + 1;
+                                }
+                            }
                             Tok::Punct(p) if p == "=>" && nest == 0 && in_pattern => {
                                 if prefix[seg_start..m]
                                     .iter()
@@ -6374,6 +6388,88 @@ fn judge_call_rejects_a_match_arm_pattern_shadow_of_the_receiver_before_the_call
     assert!(
         judge_fake(src).is_err(),
         "a `match` arm pattern binding `ctx` ahead of the call must be rejected"
+    );
+}
+
+/// E4 rule 3b regression: a trailing-comma-less block-bodied arm ahead of
+/// the binding arm must not defeat the scan — the binding is in the
+/// *second* arm's pattern.
+#[test]
+fn judge_call_rejects_a_match_arm_pattern_shadow_after_a_trailing_comma_less_block_bodied_arm() {
+    let src = "match owner { None => {} Some(ctx) => {} } svc::apply_with_held(a, ctx.held_flag);";
+    assert!(
+        judge_fake(src).is_err(),
+        "a match arm pattern binding `ctx` after a trailing-comma-less block-bodied arm \
+         must be rejected"
+    );
+}
+
+/// E4 rule 3b regression: two trailing-comma-less block-bodied arms ahead
+/// of the binding arm must not defeat the scan — the binding is in the
+/// *third* arm's pattern.
+#[test]
+fn judge_call_rejects_a_match_arm_pattern_shadow_after_two_trailing_comma_less_block_bodied_arms() {
+    let src = "match owner { None => {} Some(other) => {} Some(ctx) => {} } \
+               svc::apply_with_held(a, ctx.held_flag);";
+    assert!(
+        judge_fake(src).is_err(),
+        "a match arm pattern binding `ctx` after two trailing-comma-less block-bodied arms \
+         must be rejected"
+    );
+}
+
+/// E4 rule 3b regression: nested closing parens/brackets inside a
+/// preceding block-bodied arm must not be mistaken for the arm's own
+/// closing brace — the scan must still reach and reject the next arm's
+/// pattern.
+#[test]
+fn judge_call_rejects_a_match_arm_pattern_shadow_when_an_earlier_block_body_holds_nested_parens_and_brackets()
+ {
+    let src = "match owner { None => { consume((1, [2])); } Some(ctx) => {} } \
+               svc::apply_with_held(a, ctx.held_flag);";
+    assert!(
+        judge_fake(src).is_err(),
+        "nested closing parens/brackets inside an earlier arm's block body must not hide a \
+         later arm's pattern shadow"
+    );
+}
+
+/// E4 rule 3b regression: a trailing-comma block-bodied arm ahead of the
+/// binding arm must still be rejected (unaffected by the fix — the comma
+/// already separated arms correctly).
+#[test]
+fn judge_call_rejects_a_match_arm_pattern_shadow_after_a_trailing_comma_block_bodied_arm() {
+    let src = "match owner { None => {}, Some(ctx) => {} } svc::apply_with_held(a, ctx.held_flag);";
+    assert!(
+        judge_fake(src).is_err(),
+        "a match arm pattern binding `ctx` after a trailing-comma block-bodied arm must be \
+         rejected"
+    );
+}
+
+/// E4 rule 3b: a `match` with no arm pattern binding the receiver must not
+/// be falsely rejected.
+#[test]
+fn judge_call_accepts_a_match_with_no_arm_pattern_binding_the_receiver() {
+    let src =
+        "match owner { None => {} Some(other) => {} } svc::apply_with_held(a, ctx.held_flag);";
+    assert!(
+        judge_fake(src).is_ok(),
+        "a `match` with no arm pattern binding `ctx` must not be rejected"
+    );
+}
+
+/// E4 rule 3b: an arm body containing a method chain (closing parens that
+/// are not the arm's own closing brace) must not be mistaken for the
+/// arm's terminator.
+#[test]
+fn judge_call_accepts_a_match_arm_body_containing_a_method_chain_with_closing_parens() {
+    let src = "match owner { Some(x) => make().with(ctx), None => {} } \
+               svc::apply_with_held(a, ctx.held_flag);";
+    assert!(
+        judge_fake(src).is_ok(),
+        "a method-chain arm body's closing parens must not be mistaken for the arm's \
+         terminator"
     );
 }
 
