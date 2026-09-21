@@ -183,7 +183,7 @@ tasks:
     - input-handling
     complexity: medium
     requirements: []
-    status: in_progress
+    status: merged
     branch: em-workflow/match-arm-shadow-scan-fix/task0001
     notes: null
 review:
