@@ -1,0 +1,74 @@
+task_id: task0001
+baseline_failures: []          # cargo test --lib: 3517 passed; 0 failed; 3 ignored (after `bash scripts/fetch-fonts.sh`, required once in this fresh worktree to unblock build.rs — no tracked file touched)
+final_failures: []             # cargo test --lib: 3517 passed; 0 failed; 3 ignored (unchanged from baseline; this task is Markdown-only and touches no Rust source)
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Shell check (no test code possible per Test Notes/D4): extracted the
+      identifiers presented as test names in the "Test Scenarios > Unit
+      Tests" section (headline backtick after each **TS-N**, plus nested
+      list items) and diffed against the 25-name canonical set from
+      IMPLEMENTATION.md. Before the edit the section carried the 6 stale
+      names (e.g. `run_button_decision_passes_live_held_value_to_the_held_aware_apply_entry_point`)
+      instead of the 25 canonical ones — set comparison failed. After the
+      edit: 25 total extracted names, 25 unique, exact match against the
+      canonical set.
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Shell check: per-TS identifier counts computed from the section
+      before the edit were 1/1/1/1/1/1 (one stale name per TS-1..TS-6),
+      not the required 1/1/1/18/3/1 — check failed for TS-4 and TS-5.
+      After the edit: TS-1=1, TS-2=1, TS-3=1, TS-4=18, TS-5=3, TS-6=1.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Shell check: `grep -c "fn <name>(" src-tauri/src/window_host/tests.rs`
+      for each of the 6 stale headline names returned 0 (none exist in
+      tests.rs) before the edit — check failed. After the edit, the same
+      grep for all 25 canonical identifiers returned exactly 1 for each,
+      confirmed by iterating the full extracted list with no mismatch
+      printed.
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Shell check: before the edit neither
+      `button_path_benign_edits_to_the_real_source_are_still_accepted` nor
+      `sanity_the_fake_callee_pattern_matches_a_real_unquoted_call`
+      appeared anywhere in the document (0 occurrences each) — check
+      failed. After the edit: `grep -n` shows
+      `button_path_benign_edits_to_the_real_source_are_still_accepted`
+      exactly once, at line 281 inside TS-5's nested list (and nowhere
+      else in the file); `sanity_the_fake_callee_pattern_matches_a_real_unquoted_call`
+      exactly once, at line 254 inside TS-4's nested list, immediately
+      followed by the scaffold/sanity-anchor role note in Japanese.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not observably red before implementation: prior to any edit the
+      working tree is byte-identical to the base revision everywhere,
+      including inside the Unit Tests bullets, so "outside the bullets is
+      byte-identical to base" holds vacuously true from the start — there
+      is no failing state to watch go red. Verified post-edit instead:
+      `git diff` on the file shows changed/added lines only inside the six
+      TS-1..TS-6 bullets (headline name swaps for TS-1/2/3/6, the name
+      removed after TS-4/TS-5's bold marker, and the new nested lists);
+      the Traceability tables, TS-M1 bullet, Edge Cases section, headings,
+      and surrounding prose are untouched in the diff.
+  AC-6:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Shell check: `git status` at Step 3 (before any edit) showed a
+      clean tree, i.e. `git diff --name-only` would report zero paths —
+      not "exactly one path", so the check failed. After the edit,
+      `git diff --name-only` reports exactly
+      `feature-docs/mouse-report-held-callsite-test/SPEC.md` and nothing
+      else (no path under src-tauri/, crates/, or the target feature's
+      reviews/, phase-state/, tasks/, or test-docs/).
