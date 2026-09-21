@@ -1,0 +1,52 @@
+task_id: task0003
+baseline_failures:
+  - "cargo test/check (--lib): build.rs panics `build_rs.font_missing: bundled font missing at assets/fonts/Noto-COLRv1.ttf` before any file in this task was touched (env/asset issue, unrelated to a Markdown-only change; confirmed identical with `git stash`/`git stash pop` before vs after editing the target document)"
+final_failures:
+  - "cargo test/check (--lib): same build.rs font_missing panic, unchanged after the edit (docs-only change touches no src-tauri/crates file, so the build outcome cannot differ)"
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Shell check (no test code possible per FR5/NFR1, decision D4): extracted the
+      backtick identifiers from section 12.2's TS-1..TS-6 rows in the base revision
+      and compared against IMPLEMENTATION.md's 25-identifier canonical table. Base
+      revision carried only 6 identifiers total (one per TS row, per-TS counts
+      1/1/1/1/1/1), none matching the canonical set — failing both the 25-count and
+      the required 1/1/1/18/3/1 per-TS distribution.
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Shell check: `grep -c "fn <name>(" src-tauri/src/window_host/tests.rs` for
+      each of the 6 base-revision identifiers returned 0 (none exists as a test
+      function) — the AC-2 "matches exactly one test function" requirement failed
+      for every identifier the base document presented as a test name.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Shell check: neither `button_path_benign_edits_to_the_real_source_are_still_accepted`
+      nor `sanity_the_fake_callee_pattern_matches_a_real_unquoted_call` appeared
+      anywhere in the base-revision document (grep returned 0 occurrences for both),
+      so the required TS-5/TS-4 placements and the scaffold role note did not exist.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      This criterion is a diff-invariant over the task's own edit (unchanged
+      columns/rows/other sections), not an independently falsifiable behavior: with
+      no edit yet applied the document is trivially byte-identical to itself, so
+      there is no meaningful pre-implementation red state to observe. Verified
+      post-hoc instead: `git diff` against the base revision shows changed lines
+      only inside the 12.2 table's テスト名 cells for TS-1..TS-6 (対応要件/対応AC
+      columns, TS-M1 row, and every other line of the file are unchanged).
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Shell check: `git diff --name-only` against the task's base revision returned
+      zero paths before any edit (0 paths present, not the required exactly-one),
+      failing the criterion. After the edit it returns exactly
+      `feature-docs/mouse-report-held-callsite-test/REQUIREMENTS.md` and nothing
+      else.
