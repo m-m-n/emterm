@@ -122,7 +122,7 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: []
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/tests-ac-reference-alignment/task0001
 
