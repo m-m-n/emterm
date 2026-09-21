@@ -1,0 +1,129 @@
+schema_version: 1
+feature: tests-ac-reference-alignment
+created: 2026-09-21
+base_branch: main
+goal: |
+  mouse-report-held-callsite-test: tests.rs の doc コメントの AC 番号が SPEC.md の AC 番号と一致しない
+
+  ## 現象
+  `src-tauri/src/window_host/tests.rs` の mouse-report-held-callsite-test 由来のテスト群は、節コメントと doc コメントで AC 番号を参照している。この AC 番号は実装計画 `tasks/task0001.md` 由来のタスクローカル番号で、`feature-docs/mouse-report-held-callsite-test/SPEC.md` の AC 番号とは対応していない。そのため、SPEC の AC 番号でコードを grep すると別の基準のテストに当たる。
+
+  | tests.rs の節コメント | SPEC.md の実際の対応 |
+  | --- | --- |
+  | `AC-3/TS-1` (tests.rs:6000) | TS-1 は AC-2, AC-3 |
+  | `AC-4/TS-2` (tests.rs:6024) | TS-2 は AC-4（偶然一致） |
+  | `AC-5/TS-3` (tests.rs:6048) | TS-3 は AC-3, AC-4（SPEC の AC-5 は良性編集の基準） |
+  | `AC-2/TS-6` (tests.rs:6075) | TS-6 は AC-5 |
+  | `AC-1/TS-4` (tests.rs:6118) | TS-4 は AC-5, AC-6（SPEC の AC-1 はスイート実行の基準） |
+  | `AC-6/TS-5` (tests.rs:6406) | TS-5 は AC-2, AC-3, AC-4 |
+
+  TS 番号の対応は正しく、ずれているのは AC 番号のみ。
+
+  ## 再現手順
+  1. `grep -n "AC-5/TS-3" src-tauri/src/window_host/tests.rs` を実行する
+  2. `feature-docs/mouse-report-held-callsite-test/SPEC.md` の AC-5 を読む
+  3. AC-5 が「良性編集を受け入れる」基準であり、TS-3（held-unaware 経路の不在確認）とは無関係であることを確認する
+
+  ## 期待する挙動
+  tests.rs の AC 参照から SPEC.md の該当 AC へ正しく辿れること。実装側のコメントを SPEC の AC 番号に揃えるか、参照がタスクローカル番号である旨をコメント自体に明記して誤読を防ぐかのいずれか。
+
+  ## 完了の定義
+  - [ ] tests.rs の AC 参照が、SPEC.md の AC 番号に一致する（あるいはタスクローカル番号である旨が参照箇所で明示されている）
+  - [ ] テストの挙動・カバレッジは変えない（本件はコメントの整合のみ）
+
+  ## 該当箇所
+  - `src-tauri/src/window_host/tests.rs:6000` — `AC-3/TS-1` 節コメント
+  - `src-tauri/src/window_host/tests.rs:6024` — `AC-4/TS-2`
+  - `src-tauri/src/window_host/tests.rs:6048` — `AC-5/TS-3`
+  - `src-tauri/src/window_host/tests.rs:6075` — `AC-2/TS-6`
+  - `src-tauri/src/window_host/tests.rs:6118` — `AC-1/TS-4`
+  - `src-tauri/src/window_host/tests.rs:6406` — `AC-6/TS-5`
+  - `feature-docs/mouse-report-held-callsite-test/SPEC.md` — AC-1〜AC-6 の定義
+  - `feature-docs/mouse-report-held-callsite-test/tasks/task0001.md` — タスクローカル AC 番号の出所（未確認）
+
+  ## 実害・発生条件
+  テストは全て緑で、退行検出能力に欠落は無い。実害はドキュメントからコードへの追跡性のみ。SPEC の AC 番号でコードを読もうとした人が、無関係なテストをその基準の検証だと誤認する。
+  本件は feature `spec-test-name-traceability`（TS 名の不一致を解消する作業）の create-spec フェーズで発見された。同 feature では Codex 相談のうえ「テスト名の不一致とは独立した別問題であり、今回の完了には不要」と判断してスコープ外とし、本タスクとして分離した。
+
+  Notion タスク URL: https://www.notion.so/3e23509ec8ee81a08352ebea61588844
+
+parent_branch: em-workflow/tests-ac-reference-alignment/integration
+tier: minimal
+tier_decision:
+  by: orchestrator
+  confidence:
+    - basis: description_only
+      probabilities: {"0": 1.0, "1": 0.0, "2": 0.0}
+      expectation_clear: 0.81
+    - basis: description_plus_code
+      probabilities: {"0": 1.0, "1": 0.0, "2": 0.0}
+      expectation_clear: 0.75
+  at: "2026-09-21T23:57:10+09:00"
+  reductions:
+    - REQUIREMENTS.md
+    - IMPLEMENTATION.md
+    - design step
+    - "SPEC.md (replaced by TASK.md)"
+    - task decomposition
+    - VERIFICATION.md
+    - task-level parallelism
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [TASK.md]
+    status: completed
+    completed_at_commit: "aab5b849619d899cd75a0445d2ceec70235c405a"
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      tier=minimal によるスキップ。加えて requirements-analyst の推奨も skipped:
+      Rust テストファイル内のコメント文字列のみの整合作業で、UI 要素・デザイン
+      トークン・ユーザー可視面の変更が無く設計判断の余地が無い。
+  - id: create-plan
+    artifacts: [tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements: {}
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2

@@ -1,7 +1,7 @@
 schema_version: 1
 feature: tests-ac-reference-alignment
 phase: create-spec
-status: in_progress
+status: completed
 last_input_digest: "eef65524e35935cd55d2f86153036ba288a240da7541b2911d933d89ecef2c10"
 rounds: 0
 answers: []
