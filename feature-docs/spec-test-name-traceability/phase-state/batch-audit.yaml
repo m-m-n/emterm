@@ -1,0 +1,48 @@
+schema_version: 1
+feature: spec-test-name-traceability
+records:
+  - question_id: create-spec.requirement-clarification
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T11:44:35+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+      - revise_docs_to_implementation_names
+      - spec_verification_requirements
+      - follow_source_section_ts5
+      - list_every_test_name
+      - out_of_scope
+    freeform: null
+    normalized_answer: "five requirement-clarification questions resolved in one batched Codex consultation"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (batch-policies.yaml action
+      codex_consultation, record_as_assumption: true). codex_consulted: true;
+      harness entry: codex (run_codex_exec.sh readonly); turns used: 1 of 5;
+      Opus escalation: not run (every question mapped on turn 1).
+      Codex concurred with the analyst's tentative position on all five.
+      Adopted / not adopted, per question ---
+      (1) remedy-direction: ADOPTED revise_docs_to_implementation_names.
+      The implemented test names already satisfy SPEC NFR3's
+      <subject>_<scenario>_<expected> pattern, so aligning the documents to the
+      code removes the mismatch without touching tests.rs and keeps behaviour,
+      coverage and granularity intact. NOT adopted: hybrid_rename_one_to_one_tests
+      (four renames buy no traceability the doc revision does not already give);
+      rename_all_tests_to_spec_names (Rust forbids duplicate function names, so
+      it would merge 18 TS-4 tests into one and 3 TS-5 tests into one, changing
+      granularity and failure isolation against the task's explicit constraint).
+      (2) amended-file-scope: ADOPTED spec_verification_requirements --
+      REQUIREMENTS.md:424-429 carries the same six names, so excluding it would
+      leave a third document pointing at tests that do not exist. NOT adopted:
+      spec_verification_only.
+      (3) benign-edit-test TS assignment: ADOPTED follow_source_section_ts5 --
+      tests.rs:5217-5218 names it "TS-5's benign-edit sub-case" and the section
+      comment at 6406 places it there; subject-matter overlap with TS-4 alone
+      does not justify reassignment. NOT adopted: follow_verification_description_ts4,
+      list_under_both.
+      (4) table granularity: ADOPTED list_every_test_name -- enumerating all 21
+      names allows the exact acceptance criterion (every listed name grep-resolves
+      to a real test) instead of a weakened prefix match. NOT adopted:
+      list_by_name_prefix_group.
+      (5) AC-number alignment: ADOPTED out_of_scope -- independent of the test-name
+      mismatch and not required to complete this fix; recorded for separate
+      follow-up. NOT adopted: in_scope.

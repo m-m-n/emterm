@@ -1,16 +1,86 @@
 schema_version: 1
 feature: spec-test-name-traceability
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
-base_revision: bf87e6660c7fae8ec176defbc44cc910f60b2f4d
+base_revision: 675cf98c8c1480e497883d478dee966488f408a4
 last_input_digest: sha256:bd08d481225ca2de5e72436eb98762efec032b063fa27bbab890aeddedc3fa56
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-21T11:44:29+09:00"
+    questions:
+      - question_id: requirement.remedy-direction
+        status: answered
+      - question_id: requirement.amended-file-scope
+        status: answered
+      - question_id: requirement.benign-edit-test-ts-assignment
+        status: answered
+      - question_id: requirement.scenario-table-granularity
+        status: answered
+      - question_id: requirement.ac-number-alignment-scope
+        status: answered
+      - question_id: design.design-step-recommendation
+        status: answered
+answers:
+  requirement.remedy-direction:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T11:44:29+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [revise_docs_to_implementation_names]
+    freeform: null
+    normalized_answer: revise_docs_to_implementation_names
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; codex_consulted: true; harness entry: codex; turns: 1; Codex agreed with the analyst's tentative position. Rationale adopted: the implemented names already satisfy SPEC NFR3's naming pattern, so aligning the documents to the code resolves the mismatch without touching tests.rs, preserving behaviour, coverage and test granularity. Options not chosen: hybrid_rename_one_to_one_tests (renames 4 functions for no traceability gain the doc revision does not already give), rename_all_tests_to_spec_names (would merge 18+3 tests into 2, changing granularity and failure isolation, which the task puts out of scope)."
+  requirement.amended-file-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T11:44:29+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [spec_verification_requirements]
+    freeform: null
+    normalized_answer: spec_verification_requirements
+    resolution_note: "gate: create-spec.requirement-clarification; codex_consulted: true; Codex agreed. All three current-state documents (SPEC.md, VERIFICATION.md, REQUIREMENTS.md:424-429) carry the same six unresolvable names; leaving REQUIREMENTS.md out would keep a third document pointing at tests that do not exist. Point-in-time records (reviews/roundN.yaml, phase-state/, tasks/, test-docs/) stay untouched as historical records. Option not chosen: spec_verification_only."
+  requirement.benign-edit-test-ts-assignment:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T11:44:29+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [follow_source_section_ts5]
+    freeform: null
+    normalized_answer: follow_source_section_ts5
+    resolution_note: "gate: create-spec.requirement-clarification; codex_consulted: true; Codex agreed. tests.rs:5217-5218 explicitly calls the test \"TS-5's benign-edit sub-case\" and the section comment at 6406 places it there, so the source's own grouping is authoritative. Overlap of subject matter with TS-4 alone does not justify reassignment or dual listing. Options not chosen: follow_verification_description_ts4, list_under_both."
+  requirement.scenario-table-granularity:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T11:44:29+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [list_every_test_name]
+    freeform: null
+    normalized_answer: list_every_test_name
+    resolution_note: "gate: create-spec.requirement-clarification; codex_consulted: true; Codex agreed. Enumerating all 21 names lets the acceptance criterion be the exact one (\"every name in the table grep-resolves to a real test\") rather than a weakened prefix match; the scaffold test is listed with its role noted. Option not chosen: list_by_name_prefix_group."
+  requirement.ac-number-alignment-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T11:44:29+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [out_of_scope]
+    freeform: null
+    normalized_answer: out_of_scope
+    resolution_note: "gate: create-spec.requirement-clarification; codex_consulted: true; Codex agreed. The AC-number mismatch in the tests' doc comments is independent of the test-name mismatch and is not needed to complete this fix; including it would extend the change set into tests.rs comments. Recorded for separate follow-up. Option not chosen: in_scope."
+  design.design-step-recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-21T11:44:29+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: decide_autonomously
+    resolution_note: "gate: create-spec.design-step; references/batch-policies.yaml select option_id decide_autonomously; the analyst's skip recommendation is accepted without asking. The feature edits Markdown only and touches no design token, CSS variable or egui widget."
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:bd08d481225ca2de5e72436eb98762efec032b063fa27bbab890aeddedc3fa56
     output_digest: null
 artifacts: []
