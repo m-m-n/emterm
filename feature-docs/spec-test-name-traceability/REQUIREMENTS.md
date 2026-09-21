@@ -386,9 +386,12 @@ Feature-specific paths in addition to the two defaults:
 - [ ] **AC-3**: The documented name set equals the implementation's added test
       set, in both directions — 25 names, no omission and no surplus. Check: a
       two-way set diff between the names extracted from the three documents and
-      the 25 `fn` names in `src-tauri/src/window_host/tests.rs` between the
-      `AC-3/TS-1` section marker (tests.rs:6000) and end of file (tests.rs:6776)
-      is empty.
+      the names of the 25 `#[test]`-annotated functions in
+      `src-tauri/src/window_host/tests.rs` between the `AC-3/TS-1` section
+      marker (tests.rs:6000) and end of file (tests.rs:6776) is empty. Fixture
+      and helper functions declared in the same span carry no `#[test]`
+      attribute and are excluded; extracting every `fn` in the span without
+      that filter yields more than 25 and is not the set this criterion means.
 - [ ] **AC-4**: VERIFICATION.md no longer claims six new test entries. Check:
       grep for "six new" in that file returns zero matches, and the Test
       Verification "Expected" line names 25 entries.
