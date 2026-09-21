@@ -128,8 +128,11 @@ tasks:
     branch: em-workflow/tests-ac-reference-alignment/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  needs_rework: false
+  residual_critical_high: 0
+  perspectives: [comprehensive, security]
   plan:
     floor: [comprehensive, security]
     discretionary: []
