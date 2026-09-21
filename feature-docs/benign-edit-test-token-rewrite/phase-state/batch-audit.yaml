@@ -194,3 +194,94 @@ records:
     Option not chosen (B), with its own argument: if the prose is read as an explicit instruction to carry THIS launch through to PR creation, it should outrank the skill's rule. Codex judged that argument weaker here because --once is equally an explicit user-supplied flag, so the prose alone is thin grounds for widening the run's scope.
 
     Effect on the run: this launch executes the implement phase only and ends at the --once phase boundary. No push and no PR are performed. Per skills/develop/SKILL.md, --pr is a per-launch setting that is not inherited, so the launch that eventually runs Step C must itself carry --pr.
+- question_id: develop.run-scope
+  packet_id: null
+  answered_at: '2026-09-22T12:00:00+09:00'
+  source: batch-audit-precedent
+  answer_mode: single_select
+  selected_option_ids:
+  - honor_once_no_pr
+  freeform: null
+  normalized_answer: Honor --once - run the verify phase only; create no PR this launch.
+  resolution_note: |
+    gate: develop.run-scope (unlisted gate; no gate_id at its originating site).
+    codex_consulted: false - the identical tension was already resolved by Codex
+    for this same feature earlier in the run (see the develop.run-scope record
+    dated 2026-09-22T03:10:25+09:00). The launch flags (--batch --once --pr) and
+    the accompanying prose are unchanged, so the earlier comparative judgement
+    applies verbatim and re-consulting would add nothing.
+    Opus escalation: not run.
+
+    At this launch the workflow had TWO phases remaining (verify, retrospect)
+    before Step C, so --once and the prose still cannot both be satisfied.
+    Chosen: honor --once. This launch executes verify only and ends at the
+    --once phase boundary. No push and no PR are performed. Per
+    skills/develop/SKILL.md, --pr is a per-launch setting that is not inherited,
+    so the launch that eventually runs Step C must itself carry --pr.
+- question_id: verify.scenario-name-drift
+  packet_id: null
+  answered_at: '2026-09-22T12:00:00+09:00'
+  source: codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - verify_pass_file_out_followup
+  freeform: null
+  normalized_answer: verify = pass; the TS name drift is filed as a separate documentation task.
+  resolution_note: |
+    gate: verify.scenario-name-drift (unlisted gate; no gate_id at its
+    originating site, resolved via the autonomous fail-closed route in
+    batch-mode.md).
+    codex_consulted: true (scripts/run_codex_exec.sh readonly, reasoning effort
+    xhigh, -C the integration worktree).
+    Opus escalation: not run - Codex returned a decision.
+
+    Tension: VERIFICATION.md (and SPEC.md / REQUIREMENTS.md) name TS-1..TS-7
+    test functions that do not exist under those identifiers. The implemented
+    functions are:
+      TS-1 -> button_path_trailing_comma_edit_is_accepted
+      TS-2 -> button_path_independent_statement_reorder_edit_is_accepted
+      TS-3 -> button_path_rewrapped_argument_list_edit_is_accepted
+      TS-4 -> button_path_call_with_inserted_comment_edit_is_accepted
+      TS-5 -> anchor_locate_call_wrong_argument_count_returns_err
+              + anchor_locate_call_callee_not_shaped_as_a_call_returns_err
+      TS-6 -> anchor_locate_call_fn_name_separated_by_a_comment_returns_err
+      TS-7 -> anchor_locate_call_unbalanced_paren_inside_a_comment_still_returns_the_correct_range
+    The substance of every scenario is implemented and green; only the
+    identifiers differ.
+
+    Options presented:
+    (A) verify = pass. The drift is a traceability/documentation defect; every
+        scenario's substance and every acceptance criterion is satisfied. File
+        the drift as a separate task.
+    (B) verify = fail. A VERIFICATION.md scenario naming a non-existent test
+        function is unsatisfied; route back to implement as rework.
+
+    Chosen: (A).
+
+    Codex's reasoning (it read tests.rs and the documents itself):
+    - It confirmed the substance of each scenario in the real test bodies:
+      TS-1's trailing comma with the argument count still 4, TS-2's structural
+      statement swap, TS-3/TS-4's byte-identical argument text, the vacuity
+      guard preceding the acceptance assertion in all four edits, and the
+      explicit Err paths for TS-5/TS-6. TS-7's implementation returns the
+      correct range, which VERIFICATION.md:42 explicitly admits as a passing
+      outcome.
+    - This repository's prior features (spec-test-name-traceability FR3,
+      stale-test-name-refs) establish that the FILE is normative and the
+      document follows it, and that the correct remedy is to realign the
+      document - not to reject the implementation.
+    - This feature's own NFR3 requires the <subject>_<scenario>_<expected>
+      naming convention, which the implemented names satisfy; it does not
+      require character-for-character agreement with the documents. No general
+      rule exists in this repository that makes a name mismatch alone render a
+      scenario unsatisfied.
+
+    Option not chosen (B), with its own argument: a verification document that
+    names a test function which does not exist cannot be mechanically checked,
+    and past features in this repository were filed precisely because such
+    stale references let a zero-test-count run pass unnoticed. Codex judged
+    this weaker here because the correspondence was established by direct
+    reading in this run, and because the established remedy is a document fix.
+
+    Follow-up filed: realign TS-1..TS-7 in SPEC.md / REQUIREMENTS.md /
+    VERIFICATION.md to the eight implemented function names.
