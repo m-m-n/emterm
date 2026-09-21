@@ -1,0 +1,19 @@
+schema_version: 1
+feature: tests-ac-reference-alignment
+phase: create-plan
+status: applying_patch
+generation: 1
+base_revision: c3284bb6cea93cbde2b62e72e15d370d70b21324
+last_input_digest: sha256:4f9e012d827d32cf0a800e1076bd5dd067a822f27a115ad3c0ab0f4a352e6c68
+active_request_id: create-plan-tests-ac-reference-alignment-001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-tests-ac-reference-alignment-001
+    status: completed
+    input_digest: sha256:4f9e012d827d32cf0a800e1076bd5dd067a822f27a115ad3c0ab0f4a352e6c68
+    output_digest: sha256:c1bdf226c58b4c8d3490b1fd813cf6bc66afe0b7cdb540bc5f5652f0bcdbc1ff
+    patch_id: tests-ac-reference-alignment-p0001
+    patch_applied: false
+    validated: true
+    validator_exit: 0
