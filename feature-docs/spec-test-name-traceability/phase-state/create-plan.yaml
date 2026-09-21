@@ -1,0 +1,21 @@
+schema_version: 1
+feature: spec-test-name-traceability
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 4967971237bb8054e5f0fb15f8a4710edcb82b9e
+last_input_digest: sha256:bf6e6dda983060b7d0a323d0c8f937d0b23e106b7c539c3acd1afcac95b80e81
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:bf6e6dda983060b7d0a323d0c8f937d0b23e106b7c539c3acd1afcac95b80e81
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
