@@ -1,0 +1,114 @@
+round: 1
+executed_at: '2026-09-21T23:02:17+09:00'
+scope:
+  review_mode: diff
+  base_commit: 642a3965a26b74a51cd03ee0b696e4725da30052
+  head_commit: 91500139dabe16fc4d86a88422dda247bb84caf7
+  changed_files:
+  - src-tauri/src/window_host/tests.rs
+  - test-docs/match-arm-shadow-scan-fix/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  discretionary: []
+  cross_validation: false
+  notes: 'spec perspective dropped: minimal tier has no SPEC.md (spec_available=false). license/vulnerability
+    not added: the diff touches no dependency manifest or lockfile.'
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings: []
+evaluation:
+  round_summary: 'Round 1, diff mode, cross_validation=false. Both dispatched runs (comprehensive#0, security#0)
+    returned empty findings sets, so there are no reviewer-reported critical/high sites to account for
+    and `dismissed_sites` is empty. The evaluator independently re-read the round''s two changed_files
+    plus `src-tauri/src/window_host/mod.rs` (3 files, well inside the 10-file read budget) and traced
+    the scanner change by hand.
+
+
+    Per-perspective coverage: comprehensive#0 = corroborated, plus one low-severity test-doc record-accuracy
+    nit of the evaluator''s own (see below). security#0 = corroborated.
+
+
+    Independent verification of the fix in `is_rebound_before` (src-tauri/src/window_host/tests.rs:5871-5877):
+    the new `}`-at-nest-0-while-not-in-pattern reset is monotone in the safe direction. Hand-traced block-bodied-arm
+    cases (with and without trailing comma, one and two prior arms, nested `(`/`[` inside a prior block
+    body), struct-pattern patterns (`Foo { a } => ...`, where the `{` is opened inside `(` or at pattern
+    level with in_pattern still true, so the reset correctly does not fire), non-block bodies containing
+    struct literals, `if/else` blocks, and nested `match` blocks. In every traced shape the reset either
+    lands on the true arm separator or moves `seg_start` EARLIER than the pre-fix `,` branch would have,
+    so the scanned pattern span is always a superset of the pre-fix span -- an over-rejection (red), never
+    a newly silent miss. That matches the new comment''s own claim; a concrete over-rejection shape exists,
+    e.g. `A => if c { 1 } else { ctx.f }, B => {}`. A `=>` cannot appear at nest 0 inside an arm body,
+    so the reset cannot cause a real arm''s pattern to be consumed as a body. The `nest -= 1` underflow
+    exposure on malformed input predates this change and is unchanged.
+
+
+    The six new tests are consistent with the diff: `fake_params()` contains only `ctx` (tests.rs:6141)
+    and `FAKE_FORBIDDEN = ["svc", "apply"]` does not token-match `svc::apply_with_held`, so both `is_ok()`
+    cases (AC-5, AC-6) genuinely exercise the rebinding path rather than passing for an unrelated reason.
+    The yaml''s test names all resolve to real `#[test]` fns in the diff.
+
+
+    Security: the whole change is inside `#[cfg(test)] mod tests;` (src-tauri/src/window_host/mod.rs:866-867)
+    plus a workflow record yaml with no build/CI consumer. The added Rust source strings are inert literals
+    fed to an in-process tokenizer; no production path, no I/O, no untrusted-input surface.
+
+
+    No prompt-injection attempt was present in either reviewer output or in the reviewed diff.
+
+
+    SUB-THRESHOLD OBSERVATION, DROPPED BY R3b STEP 2 AND THEREFORE NOT FIXED (recorded so it is not lost):
+    in `test-docs/match-arm-shadow-scan-fix/task0001.tests.yaml` around line 86, AC-7 is a build/full-suite
+    gate (`tests: []`) whose own `red_reason` prose describes only a post-implementation GREEN run, yet
+    it records `red_confirmed: true`, while AC-4/AC-5/AC-6 honestly record `red_confirmed: false`. The
+    flag contradicts its adjacent prose, and a machine consumer scanning only the flags would count AC-7
+    as TDD-red-verified coverage when it is a green-gate assertion. Severity low, no code affected. Recording
+    this in the round summary does NOT resolve the yaml inconsistency nor the mis-tally risk for a flag-only
+    reader -- the record remains inaccurate on the branch.
+
+
+    One further accepted residual (not raised as a finding): the documented false-positive shape (struct-literal
+    / `if` / nested-`match` `}` inside a non-block arm body triggering an over-eager reset) is described
+    in the new comment but not pinned by any test. Deliberate over-rejection is the safe direction, so
+    this is a coverage nit rather than a defect.'
+  recommended_action: complete
+  action_rationale: Both primary reviewers returned clean, and the evaluator's independent trace of the
+    `is_rebound_before` match-arm fix confirms it is correct and monotone toward over-rejection, with
+    the six new tests genuinely exercising the intended path. The only issue found is one low-severity
+    record-accuracy inconsistency in the test-doc yaml (AC-7's `red_confirmed` flag contradicting its
+    own prose), which affects no code and does not justify another review round or rework. recommended_action
+    is advice only; the completion gate (residual_critical_high == 0) is what decided this round.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-match-arm-shadow-scan-fix-20260921T140108Z.md
+  note: 'No `vulnerability` findings existed this round (the perspective was not selected: the diff touches
+    no dependency manifest or lockfile), so nothing was filed. The script reported degraded: true / degraded_reason:
+    listing_exit_nonzero (the notion-task-dispatch listing probe exited non-zero), which routed it to
+    the report branch.'

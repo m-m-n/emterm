@@ -166,7 +166,8 @@ workflow:
   completed_at_commit: 0d6d5200ec757ac88341932c26a25a4c7f91213a
   base_commit: 642a3965a26b74a51cd03ee0b696e4725da30052
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 91500139dabe16fc4d86a88422dda247bb84caf7
 - id: verify
   status: pending
   result: null
@@ -188,8 +189,11 @@ tasks:
     branch: em-workflow/match-arm-shadow-scan-fix/task0001
     notes: null
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
   plan:
     floor:
     - comprehensive
