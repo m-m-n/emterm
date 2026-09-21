@@ -9,7 +9,7 @@ active_request_id: null
 packets:
   benign-edit-test-token-rewrite-q0001:
     status: answered
-    issued_at: "2026-09-22T02:50:21+09:00"
+    issued_at: "2026-09-22T02:50:30+09:00"
     questions:
       - question_id: requirement.class-n-benign-edit-coverage
         status: answered
@@ -18,7 +18,7 @@ packets:
 answers:
   requirement.class-n-benign-edit-coverage:
     packet_id: benign-edit-test-token-rewrite-q0001
-    answered_at: "2026-09-22T02:50:21+09:00"
+    answered_at: "2026-09-22T02:50:30+09:00"
     source: codex-consultation
     answer_mode: single_select
     selected_option_ids: [closed_set_text_anchor]
@@ -27,22 +27,21 @@ answers:
       Split the four benign edits by tokenizer visibility. Class B (trailing comma,
       statement reorder) is reproduced at token level via find_calls / split_arg_spans /
       splice_tokens. Class A (re-wrap, comment insertion) stays a source-TEXT edit whose
-      site is located structurally by a two-stage anchor - first ,
-      then the callee name after it, then a paren-depth scan for the call's byte span -
-      and the edited source is built by SLICING the original bytes so the argument text is
-      carried through verbatim and never re-typed. No span-carrying tokenizer is added.
+      site is located structurally by a two-stage anchor - first the enclosing function
+      name, then the callee name after it, then a paren-depth scan for the call's byte
+      span - and the edited source is built by SLICING the original bytes so the argument
+      text is carried through verbatim and never re-typed. No span-carrying tokenizer is
+      added to the scan module.
   design-step.recommendation:
     packet_id: benign-edit-test-token-rewrite-q0001
-    answered_at: "2026-09-22T02:50:21+09:00"
+    answered_at: "2026-09-22T02:50:30+09:00"
     source: batch-policy
     answer_mode: single_select
     selected_option_ids: [skip_design]
     freeform: null
     normalized_answer: >-
       Skip the design step. Test-only change inside one existing inline test module;
-      no UI surface, no visual output, no new module boundary. Batch policy for
-      create-spec.design-step is decide_autonomously, and the option chosen was the
-      analyst's recommended one.
+      no UI surface, no visual output, no new module boundary.
 worker_runs:
   - request_id: cs-analyst-001
     status: needs_user_input
