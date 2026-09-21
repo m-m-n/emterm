@@ -666,6 +666,23 @@ Double-click selects a word and triple-click selects a line; continuing to hold 
 - Selection endpoints stay correct while scrolling, including when scrollback rows are evicted during the drag
 - The selection (and its pending drag anchor) clears when Enter is forwarded to the PTY (any `shift_enter_behavior` mode) or when copying via `keybinds.copy`, so highlights stranded by TUI line rewrites (e.g. Claude Code) don't linger
 - IME composition-commit Enter, modifier-only key presses, and other PTY-forwarded keys (printable keys, cursor keys, etc.) do not clear the selection, so a selection survives while the user keeps reading and typing
+- A left-button drag survives an interleaved wheel notch, a second button press, or the window losing focus while the button is still held; it terminates on the next left-button release
+
+---
+
+#### Mouse Reporting (DEC Private Modes)
+
+Terminal applications that enable DEC private mouse-tracking modes 1000 (normal / click tracking), 1002 (button-event / drag tracking), or 1003 (any-event tracking) receive pointer events on the terminal grid instead of eMterm's local pointer handling.
+
+**Key Functionality:**
+- Encodings: X10 (`CSI M Cb Cx Cy`) by default, or SGR extended coordinates (DECSET 1006, `CSI < Cb ; Cx ; Cy M` / `m`) when the application requests it
+- Reported events: button press/release, motion (gated by the active mode: 1000 none, 1002 only while a button is held, 1003 always), and wheel notches (button codes 64/65) on both the main and alternate screen
+- Reports carry the Ctrl and Alt/Meta modifier bits and are written to the active tab's PTY, including a mux-attached remote pane
+- Shift is the sole local override: holding Shift always uses eMterm's local behavior (text selection, Ctrl+click link open, middle-click paste, scrollback/alternate-scroll wheel) instead of reporting, even while a tracking mode is active
+- eMterm's own chrome (tab bar, status bar, scrollbar overlay, mux sidebar, CSD title bar and edge-resize zones, profile selector) is never reported and keeps its local behavior regardless of tracking mode
+- In the X10 encoding, a column or row beyond 223 produces no report (coordinates are never clamped); the SGR encoding has no such limit
+- Sub-notch (trackpad / pixel-delta) wheel input accumulates across events until a whole notch is available, so high-precision scrolling is not silently dropped on the report path
+- Wheel-notch duplication per event is capped at `MAX_WHEEL_REPORT_NOTCHES` (100), bounding worst-case PTY writes from inertial or synthetic wheel bursts
 
 ---
 
@@ -677,7 +694,7 @@ Middle mouse button (wheel click) pastes clipboard contents into the terminal.
 - On Windows, middle-click reads from the system CLIPBOARD. The `middle_click_paste` boolean setting (default: `true`) controls this.
 - On Linux, middle-click reads from the X11/Wayland PRIMARY selection first and falls back to CLIPBOARD when PRIMARY is empty. The `middle_click_paste` setting in `settings.json` is ignored on Linux.
 - Single-line text is pasted immediately; multi-line text shows a confirmation dialog
-- Middle-click paste takes priority over PTY mouse tracking mode
+- While a mouse-tracking mode is active, middle-click is reported to the application instead of pasting, unless Shift is held (see Mouse Reporting)
 
 ---
 
@@ -720,6 +737,7 @@ DEC private mode 1007 translates mouse wheel notches into arrow-key sequences se
 - Shift+wheel behaves the same as plain wheel
 - On the main screen the wheel still scrolls eMterm's own scrollback (no PTY bytes sent)
 - `alternate_scroll_enabled` setting (Settings → Terminal, default ON) opts out
+- Superseded by mouse reporting when a tracking mode is active: wheel notches are reported to the application instead, on both screens, unless Shift is held (see Mouse Reporting)
 
 ---
 
@@ -1532,6 +1550,18 @@ eMterm's Linux windowing backend defaults to winit's automatic selection, which 
 - `EMTERM_BACKEND=x11`: forces X11 when `DISPLAY` is set
 - `WindowEvent::KeyboardInput` events with `is_synthetic == true` are not forwarded to PTY write or keybinding dispatch, on any backend — closing an Xwayland application no longer leaks a stray keypress into eMterm
 - File drag-and-drop uses winit's `DragEntered`/`DragMoved`/`DragDropped`/`DragLeft` events, feeding the same SFTP upload entry point (see [SFTP File Upload](#sftp-file-upload) for the current Wayland drag-and-drop limitation)
+
+---
+
+#### Desktop Notification Delivery
+
+Desktop notifications (OSC 9, tab activity, agent status) are dispatched from a dedicated worker thread rather than the winit/egui event loop thread.
+
+**Key Functionality:**
+- The round-trip to the OS notification daemon (D-Bus on Linux, toast on Windows) runs off the event-loop thread, so a slow or hung notification daemon does not affect typing latency or frame pacing
+- Pending notifications queue with a capacity of 8; once full, further notifications are dropped rather than blocking
+- The first drop of a saturation episode is logged (`log::warn!`); further drops in the same episode are silent until the queue drains
+- On shutdown, the worker is joined with a bounded timeout so a hung notification call cannot hang application exit
 
 ---
 
