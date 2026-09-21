@@ -1,0 +1,34 @@
+schema_version: 1
+feature: tests-ac-reference-alignment
+tier: minimal
+bases:
+  - basis: description_only
+    probabilities:
+      "0": 1.0
+      "1": 0.0
+      "2": 0.0
+    expectation_clear: 0.81
+    confidence: 0.99
+    observed_at: "2026-09-21T23:57:00+09:00"
+  - basis: description_plus_code
+    probabilities:
+      "0": 1.0
+      "1": 0.0
+      "2": 0.0
+    expectation_clear: 0.75
+    confidence: 0.99
+    observed_at: "2026-09-21T23:57:05+09:00"
+pre_survey_estimate:
+  files_expected: 1
+  changed_lines_approx: 50
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+rationale: >-
+  decide-tier.py: score.probabilities['0']=1.0 >= 0.8 (p0_floor) and
+  score.expectation_clear=0.81 >= 0.5 (expectation_clear_floor); both
+  bases evaluated to the same tier.
+decided_at: "2026-09-21T23:57:10+09:00"
