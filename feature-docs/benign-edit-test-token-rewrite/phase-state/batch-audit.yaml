@@ -285,3 +285,49 @@ records:
 
     Follow-up filed: realign TS-1..TS-7 in SPEC.md / REQUIREMENTS.md /
     VERIFICATION.md to the eight implemented function names.
+- question_id: develop.run-scope
+  packet_id: null
+  answered_at: "2026-09-22T05:05:00+09:00"
+  source: codex-consultation
+  answer_mode: single_select
+  selected_option_ids: [honor_once_no_pr]
+  freeform: null
+  normalized_answer: >-
+    Honor --once - run the retrospect phase only; create no PR this launch.
+  resolution_note: |
+    gate: develop.run-scope (unlisted gate; no gate_id at its originating site,
+    resolved via the autonomous fail-closed route in batch-mode.md).
+    codex_consulted: true (scripts/run_codex_exec.sh readonly, -C the
+    integration worktree). Opus escalation: not run - Codex returned a decision.
+
+    Tension: the launch carried --batch --once --pr, while the accompanying
+    prose asked to push the integration branch and open a PR once the
+    implementation was finished. At this launch only ONE phase (retrospect)
+    remained before Step C, so --once and the prose still cannot both be
+    satisfied in a single launch.
+
+    Options presented:
+    (A) Honor --once strictly: run ONLY the retrospect phase, end at the
+        --once phase boundary, create no PR, and report that Step C remains.
+    (B) Treat the prose as overriding --once: run retrospect AND Step C in
+        this one launch, crossing one --once phase boundary, and open the PR.
+
+    Chosen: (A).
+
+    Codex's reasoning (verbatim points):
+    - SKILL.md states explicitly that --once ends at retrospect's completion
+      and defers Step C to the next launch.
+    - The launch prose asks for a PR and for the branch to be kept, but does
+      not say to cross a phase boundary in this launch.
+    - (A) keeps worktree removal, push and PR creation at the point the spec
+      designates for them (Step C), which are irreversible / outward-facing.
+    - (B) would break the --once contract and it is unclear how a two-phase
+      launch should be represented in the batch structured result.
+
+    Residual risk Codex flagged and this run carries forward: --pr is a
+    per-launch setting that is NOT persisted to workflow.yaml or phase-state,
+    so the launch that eventually runs Step C must itself carry --pr, or no
+    PR will be created. This is surfaced in the run report.
+
+    Precedent: identical to the two earlier develop.run-scope records for this
+    feature (2026-09-22T03:10:25+09:00 and 2026-09-22T12:00:00+09:00).
