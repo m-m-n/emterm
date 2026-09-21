@@ -1,0 +1,125 @@
+task_id: task0001
+baseline_failures:
+  - status_bar::runtime::tests::runtime_time_provider_timer_fires_wake
+final_failures:
+  - status_bar::runtime::tests::runtime_time_provider_timer_fires_wake
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      AC-1 is a structural/content property (old test
+      button_path_benign_edits_to_the_real_source_are_still_accepted, its 3
+      source-literal-copy strings, and their src.contains(...) sanity asserts
+      removed; new code never names a production identifier outside the six
+      closed-set constants except the receiver, which is read from
+      body.params) verified by code review and grep
+      (`grep -n "TEMP RED-CHECK"` clean, `grep -n src.contains` clean, manual
+      audit of every new literal against HELD_AWARE_BUTTON_CALLEE /
+      WHEEL_STEP_CALLEE / HELD_UNAWARE_CALLEE / HELD_FIELD / BUTTON_PATH_FN /
+      WHEEL_PATH_FN), not by an automated test with an observable red state.
+  AC-2:
+    tests:
+      - window_host::tests::button_path_rewrapped_argument_list_edit_is_accepted
+      - window_host::tests::button_path_call_with_inserted_comment_edit_is_accepted
+    red_confirmed: true
+    red_reason: >-
+      anchor_scan::locate_call and these tests did not exist before this
+      task (the module and its 3-step fn-name/callee-name/paren-depth
+      algorithm were written from scratch); ran green on first
+      implementation pass.
+  AC-3:
+    tests:
+      - window_host::tests::anchor_locate_call_wrong_argument_count_returns_err
+      - window_host::tests::anchor_locate_call_callee_not_shaped_as_a_call_returns_err
+    red_confirmed: true
+    red_reason: >-
+      Did not exist before this task. Additionally fault-injected: disabling
+      the `arg_count != expected_arg_count` shape check (temporarily gating
+      it with `false &&`) made
+      anchor_locate_call_wrong_argument_count_returns_err fail with
+      "AC-3/TS-5: a call with 3 arguments must be rejected when 4 are
+      expected", observed and then reverted.
+  AC-4:
+    tests:
+      - window_host::tests::anchor_locate_call_fn_name_separated_by_a_comment_returns_err
+      - window_host::tests::anchor_locate_call_unbalanced_paren_inside_a_comment_still_returns_the_correct_range
+    red_confirmed: true
+    red_reason: >-
+      Did not exist before this task. Additionally fault-injected: stubbing
+      is_whitespace_only to always return true (simulating the EC-1 bug of
+      tolerating a comment between `fn` and the function name) made
+      anchor_locate_call_fn_name_separated_by_a_comment_returns_err fail with
+      the expected panic message, and disabling block-comment skipping in
+      the scanner (simulating the EC-2 bug) made
+      anchor_locate_call_unbalanced_paren_inside_a_comment_still_returns_the_correct_range
+      fail with "expected 4 top-level arguments, found 3". Both observed and
+      reverted.
+  AC-5:
+    tests:
+      - window_host::tests::button_path_rewrapped_argument_list_edit_is_accepted
+      - window_host::tests::button_path_call_with_inserted_comment_edit_is_accepted
+    red_confirmed: true
+    red_reason: >-
+      Did not exist before this task; the byte-for-byte argument-text
+      equality assertion (AC-5) is exercised in both tests on first green
+      run.
+  AC-6:
+    tests:
+      - window_host::tests::button_path_trailing_comma_edit_is_accepted
+      - window_host::tests::button_path_independent_statement_reorder_edit_is_accepted
+    red_confirmed: true
+    red_reason: >-
+      Did not exist before this task. Additionally fault-injected: passing
+      an empty replacement (no-op splice) into
+      button_path_trailing_comma_edit_is_accepted's splice_tokens call made
+      it fail at the AC-7 vacuity assertion; reconstructing the original
+      (unswapped) order in
+      button_path_independent_statement_reorder_edit_is_accepted made it
+      fail at the same AC-7 assertion. Both observed and reverted.
+  AC-7:
+    tests:
+      - window_host::tests::button_path_rewrapped_argument_list_edit_is_accepted
+      - window_host::tests::button_path_call_with_inserted_comment_edit_is_accepted
+      - window_host::tests::button_path_trailing_comma_edit_is_accepted
+      - window_host::tests::button_path_independent_statement_reorder_edit_is_accepted
+    red_confirmed: true
+    red_reason: >-
+      All four vacuity guards were fault-injected directly and observed
+      red: TS-3 (empty wrap whitespace reproduces the original bytes
+      exactly) failed "the re-wrap edit must actually change the source
+      bytes"; TS-4 (head extended through the original `(`, empty insertion)
+      failed "the comment-insertion edit must actually change the source
+      bytes"; TS-1 (empty splice replacement) failed "appending the trailing
+      comma must actually change the token sequence"; TS-2 (splice
+      reconstructing the original order) failed "the reorder must actually
+      change the token sequence". All four reverted after observation.
+  AC-8:
+    tests:
+      - window_host::tests::button_path_rewrapped_argument_list_edit_is_accepted
+      - window_host::tests::button_path_call_with_inserted_comment_edit_is_accepted
+      - window_host::tests::button_path_trailing_comma_edit_is_accepted
+      - window_host::tests::button_path_independent_statement_reorder_edit_is_accepted
+    red_confirmed: true
+    red_reason: >-
+      Did not exist before this task; each test's closing judge_call(...)
+      .expect(...) (Class A: via assert_button_path_edit_is_accepted's
+      re-tokenize + re-extract_function + judge_call; Class B: judge_call
+      directly on the mutated body tokens) ran green on first
+      implementation pass using the same closed-set constants and arity
+      arguments as the unedited-body tests.
+  AC-9:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/test-suite-level criterion, not a single test. Verified by
+      running project_commands verbatim: `cargo test --manifest-path
+      src-tauri/Cargo.toml --lib` (3529 passed, 1 pre-existing unrelated
+      failure carried from baseline, 3 ignored) and `cargo check
+      --manifest-path src-tauri/Cargo.toml --no-default-features` (clean).
+      `cargo fmt --manifest-path src-tauri/Cargo.toml --check` is clean.
+      `git diff --stat` against the parent branch shows only
+      src-tauri/src/window_host/tests.rs changed. No Cargo.toml/Cargo.lock
+      changes (no new dependency). Test names follow
+      `<subject>_<scenario>_<expected>`; none require
+      `-- --test-threads=1`.
