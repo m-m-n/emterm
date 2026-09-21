@@ -1,0 +1,318 @@
+schema_version: 1
+feature: mouse-report-held-callsite-test
+records:
+  - question_id: create-plan.codex-consultation.traceability-gaps
+    packet_id: null
+    answered_at: "2026-09-21T02:53:53+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [keep_spec_traceability]
+    freeform: "FR8 / NFR1-NFR7 keep an empty tests list, matching SPEC's Traceability table."
+    normalized_answer: "Option A — leave tests: [] for the constraint-type requirements."
+    resolution_note: >-
+      gate: user-directed Codex consultation on an open planning point (no gate_id;
+      requested by the launch instruction \"Consult Codex on any unclear points\").
+      options: (A) leave tests: [] matching SPEC's Traceability table;
+      (B) mint new TS IDs so every requirement maps to a scenario.
+      codex_consulted: true. opus_escalation: false. chosen: A.
+      codex reasoning: constraint-type requirements (no existing-test edits, no new
+      deps, naming convention, determinism, negligible cost, feature gate unaffected)
+      are better verified by diff / build / code inspection than by a dedicated
+      scenario; minting TS IDs would duplicate the same checks under new names and
+      diverge from SPEC. mitigation adopted: VERIFICATION.md keeps stating, per
+      requirement, \"no dedicated TS; verified by AC / code inspection\".
+  - question_id: create-plan.codex-consultation.tdd-red-first
+    packet_id: null
+    answered_at: "2026-09-21T02:53:53+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [mutate_real_source_in_memory]
+    freeform: "TS-5 derives its mutation inputs from the real embedded source instead of hand-written synthetic bodies."
+    normalized_answer: "Option C — keep TS-4/TS-5 as the red-first proof, but build TS-5's mutations by rewriting the real extracted bodies in memory."
+    resolution_note: >-
+      gate: user-directed Codex consultation on an open planning point (no gate_id).
+      options: (A) accept TS-4/TS-5 as-is, TS-1/2/3/6 are pure regression pins;
+      (B) have the implementer temporarily break production source to observe red,
+      then revert; (C) Codex's own proposal.
+      codex_consulted: true. opus_escalation: false. chosen: C.
+      codex reasoning: (B) blurs the FR4 production freeze and leaves no reproducible
+      evidence; plain (A) has a real hole — hand-written synthetic inputs can drift
+      from the real function shape, so the judgment function can be correct while the
+      body extractor's wiring to the real file is wrong, and TS-1/2/3/6 then pass
+      vacuously. (C) keeps the freeze and closes the hole by mutating the real
+      extracted bodies in memory, asserting unmutated-pass / exactly-one-site-changed
+      / mutated-fail per mutation.
+      adopted into: IMPLEMENTATION.md D6.1, tasks/task0001.md AC-6 and Test Notes,
+      VERIFICATION.md TS-5 row.
+  - question_id: create-plan.codex-consultation.receiver-identifier
+    packet_id: null
+    answered_at: "2026-09-21T02:53:53+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [param_set_membership_plus_no_rebinding]
+    freeform: "The held receiver identifier must come from the enclosing function's parameter set AND must not be re-bound before the call."
+    normalized_answer: "Option C — parameter-set membership plus a conservative re-binding rejection."
+    resolution_note: >-
+      gate: user-directed Codex consultation on an open planning point (no gate_id).
+      options: (A) accept parameter-set membership alone; (B) hardcode the literal
+      receiver name `host`; (C) Codex's own proposal.
+      codex_consulted: true. opus_escalation: false. chosen: C.
+      codex reasoning: (B) breaks on a legitimate parameter rename and contradicts
+      NFR8's intent; (A) has a confirmed false-green hole — a same-named local
+      binding (e.g. `let host = ...;`) shadowing the parameter still satisfies the
+      three-token check while no longer referring to the live parameter. (C) keeps
+      deriving the name from the parameter set and additionally rejects any `let`,
+      closure parameter, or `match` / `if let` / `while let` pattern that re-binds
+      that identifier ahead of the call; deliberately conservative and syntactic, no
+      full Rust name resolution, and a conservative rejection is a red rather than a
+      silent pass.
+      adopted into: IMPLEMENTATION.md D6.2, tasks/task0001.md E4 rule 3b, AC-6 and
+      the TS-4 edge-case list, VERIFICATION.md TS-5 / AC-3 rows.
+  - question_id: develop.codex-consultation.once-vs-pr-boundary
+    packet_id: null
+    answered_at: "2026-09-21T03:45:00+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [end_at_phase_boundary_no_pr]
+    freeform: "--once boundary wins; the PR is created by the launch that actually reaches Step C with --pr."
+    normalized_answer: "Option A — end this launch at the implement phase boundary; do not push, do not create a PR."
+    resolution_note: >-
+      gate: user-directed Codex consultation on a launch-argument ambiguity (no gate_id;
+      requested by the launch instruction "Consult Codex on any unclear points").
+      ambiguity: the launch carried --batch --once --pr plus the prose instruction
+      "Once the implementation is finished, push the integration branch to the remote
+      and create a Pull Request against base_branch with gh pr create". The implement
+      step just reached completed, which is a --once phase boundary, but Step C
+      (completion processing, the only PR-creating site) was not reached.
+      options: (A) end at the implement phase boundary, no push and no PR, and state in
+      the report that the launch reaching Step C must itself carry --pr;
+      (B) push the integration branch and open the PR now, immediately after implement
+      completed, then still end the turn at the --once boundary.
+      codex_consulted: true (codex CLI, read-only sandbox, model gpt-5.6-sol, exit 0).
+      opus_escalation: false. chosen: A.
+      codex reasoning: (1) the skill's own contract governs this exact flag combination
+      directly and unambiguously — at an intermediate phase boundary nothing PR-related
+      happens, and only the Step C launch creates the PR — so the specific on-point
+      contract outranks a generic reading of the prose; (2) the same user passed --once
+      in the same invocation, so reading "once the implementation is finished" as "the
+      instant the implement step flips to completed" would make their own --once flag
+      self-contradictory; the better reading is "when the workflow's implementation work
+      reaches Step C"; (3) pushing/opening a PR now front-runs Step C and breaks the
+      state machine's execution order that --once exists to bound; (4) a PR opened before
+      the workflow's own review and verify steps exposes a change that may still contain
+      undetected defects, can fire premature notifications and automated checks, and
+      creates a false impression of being quality-checked, causing diff churn as review
+      and verify keep changing the branch; (5) pushing to a remote is outward-facing and
+      not fully reversible — deleting a branch or PR afterwards does not undo external
+      visibility, notifications, automation or audit trails — so an unattended batch run
+      should take the conservative option.
+      caveats recorded per codex: (a) --pr is per-invocation and never inherited, so if
+      the external service re-invokes without --pr on the launch that finally reaches
+      Step C, no PR is ever created; (b) this run's report therefore states explicitly
+      that em-workflow/mouse-report-held-callsite-test/integration exists locally only,
+      is unpushed, and that no PR exists yet, and flags that the Step C launch must carry
+      --pr; (c) the ambiguity itself is recorded here — "implementation" could plausibly
+      have meant the implement step specifically.
+      side effects of this run: none outward-facing. No git push, no gh pr create, no
+      remote branch, no PR.
+  - question_id: review.evaluator-confidence-type
+    packet_id: null
+    answered_at: "2026-09-21T04:02:00+09:00"
+    source: codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "Option B - discard the malformed per-finding confidence and stamp the neutral value 60"
+    normalized_answer: "Option B - discard the malformed per-finding confidence and stamp the neutral value 60"
+    resolution_note: |
+      gate: none (orchestrator-initiated clarification, requested by the user's "consult
+      Codex on any unclear points" instruction). Not a protocol gate; no gate_id exists.
+      unclear point: the round-1 evaluator returned `confidence` inside each finding as
+      the STRINGS "high" / "medium", but Phase R3b step 7 performs integer arithmetic on
+      that field and the round record persists an integer 0-100.
+      options considered: (A) map high->90 / medium->60 / low->30 and proceed;
+      (B) treat the non-integer value as a malformed field, discard it, stamp the neutral
+      60 that the protocol's degradation paths already use; (C) treat the whole
+      evaluation object as structurally malformed and trigger Phase R3b's
+      evaluator-failure degradation (re-gate each reviewer's own findings at 60).
+      codex_consulted: true. Codex's first answer chose (C), reasoning that a type error
+      should fall back to the protocol's defined degradation path rather than invent a
+      conversion table. The orchestrator re-consulted with one protocol fact that had
+      been missing from the first prompt: Phase R3b's degradation clause is a CLOSED list
+      of "exactly two structural triggers" — the evaluator's Task failed, or the returned
+      object is missing a required ROOT field — and here the Task succeeded and every
+      required root field was present, the defect being confined to a per-finding field;
+      R3b moreover already mandates per-field repair of untrusted evaluator output
+      elsewhere (4096-byte caps, stable_id recomputation, unknown-`sources` dropping).
+      Codex switched to (B) on that basis.
+      chosen: (B). Adopted as the comparatively better option.
+      options not chosen and why: (A) has no basis in the protocol for its specific
+      numbers; (C) does not meet its own closed trigger list and would discard the
+      evaluator's verified triage, including two findings it demoted to `low` with
+      recorded reasons, re-admitting them at medium.
+      opus_escalation: not run (Codex reached a decision).
+      effect on this round: both surviving medium findings persist with confidence 60.
+      No severity, category, resolution or completion-gate outcome changed.
+  - question_id: review.triage-filing-empty-set
+    packet_id: null
+    answered_at: "2026-09-21T04:03:00+09:00"
+    source: codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "Option A - record triage_filing.executed: true with the branch and report_path the script returned"
+    normalized_answer: "Option A - record triage_filing.executed: true with the branch and report_path the script returned"
+    resolution_note: |
+      gate: none (orchestrator-initiated clarification, requested by the user's "consult
+      Codex on any unclear points" instruction). Not a protocol gate; no gate_id exists.
+      unclear point: the `vulnerability` perspective was never selected this round (the
+      diff touches no dependency manifest or lockfile), so the unresolved-vulnerability
+      finding set handed to the `file-tasks` subcommand was empty, yet the round's
+      closing disposition was `complete` (not `another-round`), which the review protocol
+      says makes triage filing run.
+      options considered: (A) run it and record `executed: true` with the returned
+      `branch` and `report_path`; (B) record `executed: false` with everything
+      empty/null, on the grounds that nothing was actually triaged.
+      codex_consulted: true. Codex chose (A): `executed` states the fact that the step was
+      invoked; the protocol conditions the empty receipt on the `another-round`
+      disposition only, never on an empty finding set; and keeping the result arrays empty
+      while recording the returned `branch` and `report_path` lets an auditor distinguish
+      "ran, produced nothing" from "did not run" — whereas (B) would hide both the
+      invocation and the degradation the run reported.
+      chosen: (A). Adopted as the comparatively better option.
+      options not chosen and why: (B) conceals a real invocation and its degradation
+      signal from the audit record.
+      opus_escalation: not run (Codex reached a decision).
+      command run: scan-dependencies.py file-tasks --project-root <integration worktree>
+      --feature mouse-report-held-callsite-test --findings <empty JSON array>
+      --entry-point <notion-task-dispatch 0.5.0 ntd.sh>
+      result: {"branch":"report","filed_packages":[],"appended_packages":[],
+      "suppressed":[],"report_path":"/home/sakura/src/my_projects/tauri/emterm/tmp/
+      sca-triage-mouse-report-held-callsite-test-20260920T185636Z.md","degraded":true,
+      "degraded_reason":"listing_exit_nonzero","malformed_findings":[],
+      "listing_dropped_count":0,"failed_package":null,"failure_reason":null}
+      note: the run reported degraded=true / listing_exit_nonzero (the notion-task-dispatch
+      listing probe exited non-zero), so the script took the local-report branch rather
+      than the external-task-system branch. With an empty finding set this changes nothing
+      that was filed, but it is recorded here because the same degradation would matter on
+      a round that did have vulnerability findings.
+  - question_id: verify.codex-consultation.spec-test-name-drift
+    packet_id: null
+    answered_at: "2026-09-21T04:10:00+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [verify_passes_carry_forward]
+    freeform: "NFR3 は命名パターンのみを規定し、TS ラベルとの完全一致は規範要件ではない。全 TS シナリオの挙動は網羅されている。"
+    normalized_answer: "Option C — verify は pass。名称ドリフトは failed_item にせず、人間の評価者への申し送りとして残す。"
+    resolution_note: >-
+      gate: user-directed Codex consultation on the only open verify question
+      (no gate_id; requested by the launch instruction "Consult Codex on any
+      unclear points").
+      context: SPEC.md lists literal test names TS-1..TS-6; the delivered tests
+      cover every scenario but use different names and split TS-4/TS-5 into ~16
+      finer tests. VERIFICATION.md's Code Quality inspection item demands a
+      character-for-character match, wording that appears only in
+      VERIFICATION.md and not in SPEC's normative NFR3 text (which requires the
+      <subject>_<scenario>_<expected> pattern only). The review phase's spec
+      reviewer already raised this and the severity gate dropped it as low.
+      options: (A) failed_item -> auto-rework renaming ~20 delivered tests to
+      SPEC's literal TS names; (B) failed_item -> auto-rework amending
+      SPEC.md/VERIFICATION.md to the delivered names; (C) verify passes, drift
+      carried forward to the human evaluator; (D) something else.
+      codex_consulted: true. opus_escalation: false. chosen: C.
+      codex reasoning: NFR3 の規範テキストは命名形式のみを要求しており、TS 名との
+      完全一致を求めていないため、規範要件違反として扱う根拠が弱い。全六シナリオの
+      挙動が網羅され、ビルド・テスト・変更範囲の検証も通っているため自動手直しを
+      起動する必要性は低い。(A) は動作上の不足を解消せず、細分化されたテストと
+      六つの TS 名が一対一に対応しないため成立しない。(B) はテスト追加のみという
+      変更範囲を広げ、検証の最中に検証基準そのものを書き換えることになる。
+      residual risk (codex): VERIFICATION.md の全検査項目を例外なく合格必須と
+      する運用があれば C はそれと衝突する。名前の不整合は残るため、申し送りに
+      対応関係と合格判断を明記すること。
+      mitigation adopted: the TS -> delivered-name mapping and this pass
+      judgment are stated in the run report, and a separate Notion follow-up
+      task is filed to align SPEC.md / VERIFICATION.md with the delivered names.
+  - question_id: develop.codex-consultation.retrospect-boundary-vs-step-c
+    packet_id: null
+    answered_at: "2026-09-21T04:12:00+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [end_at_phase_boundary_no_pr]
+    freeform: "--once boundary wins again at the retrospect boundary; Step C and the PR belong to the next launch, which must itself carry --pr."
+    normalized_answer: "Option A — execute retrospect only, end the turn at the --once boundary, do not push, do not create a PR."
+    resolution_note: >-
+      gate: user-directed Codex consultation on a launch-argument ambiguity (no gate_id;
+      requested by the launch instruction "Consult Codex on any unclear points").
+      ambiguity: the launch carried --batch --once --pr plus the prose instruction
+      "Once the implementation is finished, push the integration branch to the remote and
+      create a Pull Request against base_branch with gh pr create. Keep the integration
+      branch both locally and on the remote (do not auto-merge it into base_branch)."
+      retrospect was the last pending step; completing it is a --once phase boundary, and
+      Step C (the only PR-creating site) is the sole remaining work. This is the SECOND
+      occurrence of the same ambiguity class on this feature — the first was at the
+      implement boundary (develop.codex-consultation.once-vs-pr-boundary) — but the facts
+      had changed materially: review and verify have since run and both passed, so two of
+      the first consultation's five reasons (work may still be defective; a PR would
+      front-run review/verify) no longer apply.
+      options: (A) execute retrospect only, end at the boundary, no push and no PR, and
+      state in the report that the launch reaching Step C must itself carry --pr;
+      (B) execute retrospect and then also Step C in the same launch (push, gh pr create,
+      keep the branch local + remote, remove the worktree), because retrospect + Step C is
+      all that remains and the user's prose explicitly asks for the PR.
+      codex_consulted: true (codex CLI, read-only sandbox, exit 0).
+      opus_escalation: false. chosen: A.
+      codex reasoning: (1) the --once contract is explicit and on-point — this launch's
+      boundary is "retrospect reaches completed and is committed", Step C is defined as an
+      independent phase carried to the NEXT launch, and --pr is explicitly per-invocation
+      and never inherited; a general prose instruction stating an end goal does not
+      override an on-point procedural rule about timing and authorization. (2) Step C now
+      would perform an outward-facing, not-fully-reversible action (git push + gh pr
+      create) on a launch the contract does not authorize for it; the quality-risk
+      concern from the first consultation is indeed reduced now that review and verify are
+      green, but the phase-boundary/authorization concern is unchanged and is the
+      decisive one. (3) consistency with the first consultation's precedent also favors A,
+      though Codex treats the contract itself rather than precedent-matching as the
+      deciding factor. (4) the cost of one more launch is acceptable relative to executing
+      an unauthorized outward-facing action unattended.
+      options not chosen and why: (B) would front-run Step C and break the execution order
+      that --once exists to bound, and would take an irreversible external action without
+      contract authorization on this launch.
+      caveats carried forward: (a) --pr is per-invocation and never inherited, so the
+      launch that finally reaches Step C MUST carry --pr, or no PR will ever be created;
+      (b) the integration branch em-workflow/mouse-report-held-callsite-test/integration
+      exists LOCALLY ONLY — it is unpushed and no PR exists; (c) all seven workflow steps
+      are now completed (design skipped), so the next launch does nothing but Step C.
+      side effects of this run: none outward-facing. No git push, no gh pr create, no
+      remote branch, no PR.
+  - question_id: develop.codex-consultation.step-c-worktree-removal
+    packet_id: null
+    answered_at: "2026-09-21T13:05:00+09:00"
+    source: codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [remove_worktree_keep_branch]
+    freeform: "\"keep the branch locally\" means the branch ref survives; it does not mean the worktree directory survives."
+    normalized_answer: "Option A — remove the integration worktree per the Step C contract, keep the branch locally and on the remote."
+    resolution_note: >-
+      gate: user-directed Codex consultation on the only open Step C point (no gate_id;
+      requested by the launch instruction "Consult Codex on any unclear points").
+      ambiguity: the launch prose says "Keep the integration branch both locally and on
+      the remote (do not auto-merge it into base_branch)", while Step C's contract says to
+      run `git worktree remove` on the integration worktree in EVERY completion mode and to
+      delete the branch only in the merge mode. Does "keep locally" also cover the worktree
+      working copy?
+      options: (A) remove the worktree per the contract, keep the branch ref local + remote;
+      (B) leave the worktree in place in case "keep locally" meant the working copy too.
+      codex_consulted: true (codex CLI, read-only sandbox, exit 0). opus_escalation: false.
+      chosen: A.
+      codex reasoning: "keep the branch locally" means not deleting the local branch ref;
+      it does not extend to retaining the working tree. The integration branch survives
+      `git worktree remove` intact, which matches the Step C contract, and removing the
+      worktree is in fact what releases git's checkout lock so the branch can be checked
+      out from the main working tree at all.
+      residual risk (codex): the user could conceivably have meant the worktree directory
+      too; the contract is explicit here, so removal is the sounder reading. Recovery is
+      trivial and non-destructive — `git worktree add <path> em-workflow/mouse-report-held-callsite-test/integration`
+      re-materializes it.
+      options not chosen and why: (B) contradicts an explicit, on-point contract clause on
+      the strength of an ambiguous reading, and would leave the branch locked out of the
+      main working tree.
+      side effects: outward-facing actions of this run are the intended ones only —
+      `git push` of the integration branch and `gh pr create` against main. No merge.
