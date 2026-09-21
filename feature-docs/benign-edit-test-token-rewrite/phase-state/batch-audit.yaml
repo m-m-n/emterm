@@ -331,3 +331,83 @@ records:
 
     Precedent: identical to the two earlier develop.run-scope records for this
     feature (2026-09-22T03:10:25+09:00 and 2026-09-22T12:00:00+09:00).
+- question_id: develop.completion-with-outstanding-items
+  packet_id: null
+  answered_at: "2026-09-22T14:20:00+09:00"
+  source: codex-consultation
+  answer_mode: single_select
+  selected_option_ids: [proceed_with_pr_disclosing]
+  freeform: null
+  normalized_answer: >-
+    Proceed with Step C - push the integration branch and open the PR against
+    main, disclosing both outstanding items in the PR body and filing them as
+    follow-up tasks.
+  resolution_note: |
+    gate: develop.completion-with-outstanding-items (unlisted gate; no gate_id
+    at its originating site, resolved via the autonomous fail-closed route in
+    batch-mode.md).
+    codex_consulted: true (scripts/run_codex_exec.sh readonly, reasoning effort
+    xhigh, -C the integration worktree). Opus escalation: not run - Codex
+    returned a decision.
+
+    Note on develop.run-scope: this launch carries --batch --once --pr and only
+    ONE phase (Step C) remained, so --once and the launch prose are BOTH
+    satisfiable here. The tension resolved three times earlier in this run
+    (2026-09-22T03:10:25, T12:00:00, T05:05:00) does not arise this launch, and
+    no run-scope gate was opened.
+
+    Tension actually resolved here: Step C performs outward-facing, partly
+    irreversible actions (push + PR creation) while two known defects remain
+    open.
+
+    Options presented:
+    (A) Proceed with Step C as specified: push
+        em-workflow/benign-edit-test-token-rewrite/integration, open a PR
+        against main, disclose both outstanding items in the PR body, and file
+        them as separate follow-up tasks.
+    (B) Withhold the PR this launch: keep the branch local only and require the
+        unresolved medium finding (and/or the document realignment) to be fixed
+        before anything is published to the remote.
+
+    Chosen: (A).
+
+    Codex's reasoning (it read tests.rs itself):
+    - Step C has been reached, --pr is present, and the launch prose asks for
+      exactly this: push the integration branch, open a PR against main, keep
+      the branch locally and on the remote.
+    - Completion conditions hold: design skipped with a recorded reason,
+      verify = pass, residual critical/high = 0. But "outside Phase R4's
+      critical/high auto-fix gate" is NOT by itself evidence that the medium
+      finding is harmless.
+    - Codex independently confirmed the finding is a FALSE GREEN, not merely a
+      false red: `scan` drops numeric and ordinary string literals from the
+      token stream, and `count_top_level_args` counts from commas plus the last
+      surviving token, so `probe_call(a, b, c, d, 0)` is counted as 4 arguments
+      and a `locate_call` expecting 4 wrongly succeeds (tests.rs:7005). This
+      weakens FR4c's misplacement guard.
+    - Mitigating fact Codex also verified: the Class A second stage uses a
+      DIFFERENT, literal-preserving lexer and re-checks the argument count via
+      `judge_call` (tests.rs:7238), so adding a real fifth argument to the
+      actual target call is still rejected. The defect alone does not make the
+      suite as a whole falsely green.
+    - The change is test-only and nothing is auto-merged, so disclosing the
+      defect and letting review proceed is the proportionate course.
+    - The TS-1..TS-7 name drift was already adjudicated earlier in this run as
+      a documentation defect with a separate-task remedy; turning it into a
+      publication blocker now would contradict that recorded judgement.
+
+    Option not chosen (B), with its own argument:
+    - (B) would fix, before publication, a known defect in which FR4c accepts
+      input it should reject. Because it concerns the test's own detection
+      power, there is genuine technical merit in fixing it first.
+    - Realigning the documents first would also let a reviewer reproduce the
+      verification more easily and reduce the chance the follow-up is dropped.
+      Codex judged these benefits insufficient to outweigh holding the PR.
+
+    Risks carried forward (Codex's own list, surfaced in the PR body and the
+    run report):
+    - The false-green path of stable_id 5ca53d4f98ce3d6f remains. A follow-up
+      task must fix the literal miscount and add a regression test.
+    - The TS-1..TS-7 vs. eight implemented function names mismatch remains;
+      selecting tests by the documents' names may run nothing. The three
+      documents need a correspondence table aligned to the implementation.
