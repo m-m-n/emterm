@@ -36,3 +36,39 @@ records:
       No Opus escalation ran. TASK.md was rewritten to prescribe Fix B before
       implement started; create-plan's registered task0001 points at TASK.md,
       so the plan document stays authoritative.
+  - question_id: review.codex-consultation
+    packet_id: null
+    answered_at: "2026-09-21T23:00:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "Option A — follow the protocol strictly; do not touch the yaml"
+    normalized_answer: "A"
+    resolution_note: >-
+      gate: none (user-instructed Codex consultation, launched per the run's
+      argument "Consult Codex on any unclear points and adopt the option judged
+      to be comparatively better"); codex_consulted: true (run_codex_exec.sh
+      readonly, model gpt-6-astra, reasoning xhigh, session
+      01a0c445-6c07-7c22-8685-e9a4d3968d1a).
+      Question: the round-1 evaluator raised one severity `low` finding — AC-7 in
+      test-docs/match-arm-shadow-scan-fix/task0001.tests.yaml records
+      `red_confirmed: true` although its own red_reason prose describes only a
+      post-implementation GREEN full-suite run, while AC-4/AC-5/AC-6 honestly
+      record `red_confirmed: false`. R3b step 2 drops any finding below severity
+      `medium`, so the protocol had already dropped it. Options: A (drop it,
+      record the observation in the round summary only), B (edit the yaml now as
+      an orchestrator-initiated documentation correction and commit it), C (file
+      a follow-up task in the external task system).
+      Options NOT chosen: B — rejected because in an unattended run, repairing a
+      sub-threshold finding as a "documentation correction" effectively bypasses
+      the phase's write-scope limit, and nothing in this run grants that
+      exception. C — rejected because the management overhead of a follow-up
+      ticket is disproportionate to a one-line record fix, and it leaves the
+      record wrong in the meantime.
+      Chosen: A. Codex explicitly noted the downside that must not be papered
+      over: recording the observation in the evaluation summary resolves neither
+      the yaml inconsistency nor the mis-tally risk for a consumer that reads the
+      flags alone — dropping the finding must not be restated as "the record is
+      correct". That caveat is written verbatim into round1.yaml's
+      evaluation.round_summary.
+      No Opus escalation ran.
