@@ -1,0 +1,75 @@
+feature: benign-edit-test-token-rewrite
+collected_at: "2026-09-22T05:01:35+09:00"
+session_ids: ["01a0c58c-6097-779f-9b12-b32c891198ec"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: >-
+        diff がテストモジュールへ約700行のトークン走査コードを追加しており、
+        SPEC の NFR4 が「実行コストに影響しない」と宣言しているため、
+        計算量とテスト実行コストを裁量で確認した。findings 0 件。
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: >-
+      Both readings evaluated to full (P(0)=0.07 / 0.02, below the reduced row's
+      0.40 floor); decide-tier.py fell through to the unconditional full row.
+    bases:
+      - basis: description_only
+        probabilities: {"0": 0.07, "1": 0.93, "2": 0.0}
+        expectation_clear: 0.42
+        confidence: 0.9
+      - basis: description_plus_code
+        probabilities: {"0": 0.02, "1": 0.98, "2": 0.0}
+        expectation_clear: 0.47
+        confidence: 0.96
+    pre_survey_estimate:
+      files_expected: [src-tauri/src/window_host/tests.rs]
+      changed_lines_approx: 160
+      new_functions_needed: 2
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - note: >-
+      tier 事前見積りの changed_lines_approx は 160 行だったが、実際の diff は
+      tests.rs に +703/-35 行だった（約 4 倍）。トークン走査ヘルパ群を新設する
+      タスクでは、見積りが本体の書き換え量しか数えず補助機構を数えていない
+      可能性がある。
+  - note: >-
+      review round 1 で comprehensive レビュアーが medium 3 件を返し、
+      evaluator が独立追跡のうえ 2 件を low に降格、1 件を medium 維持、
+      さらに自身で low 1 件を追加した。cross_validation=true + evaluator の
+      independent inspection が severity のインフレを実際に補正している。
+  - note: >-
+      spec#0 レビュアーが JSON verdict の後ろに自由記述（自称「informational
+      leads, NOT schema findings」）を付けて返した。evaluator はこれを
+      データとして検証し、2 件とも成立しないことを確認して dismissed_sites に
+      記録した。スキーマ逸脱そのものは注入ではなかったが、レビュアー出力の
+      スキーマ厳格性は改善余地がある。
+  - note: >-
+      triage_filing が degraded（listing_exit_nonzero）して report ブランチに
+      落ち、0 件起票で終わった。vulnerability 観点が未選択（diff に依存
+      マニフェストが無い）だったため実害は無いが、degrade が静かに起きる点は
+      観察しておく価値がある。
+  - note: >-
+      未解決 medium 1 件（stable_id 5ca53d4f98ce3d6f — count_top_level_args が
+      末尾リテラル引数を数え落とし FR4c の誤配置ガードを弱める）は Phase R4 の
+      critical/high ゲート外のため持ち越し。別タスクとして起票する。
+  - note: >-
+      VERIFICATION.md / SPEC.md / REQUIREMENTS.md の TS-1..TS-7 という識別子が
+      実装関数名と一致しておらず、verify 時に名前ドリフトとして表面化した。
+      Codex 相談の結果 verify=pass のままドキュメント整合を別タスクへ回した。
+      計画フェーズでシナリオ ID と関数名の対応を固定する仕組みが要る。
+  - note: >-
+      --batch --once --pr の起動が 3 回連続で develop.run-scope ゲートを踏み、
+      毎回 honor_once_no_pr に解決している。--pr が per-launch 設定で永続化
+      されないため、Step C を走らせる起動に --pr が付いていないと PR が
+      作られない構造的リスクが残る。
