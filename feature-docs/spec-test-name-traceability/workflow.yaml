@@ -109,7 +109,8 @@ workflow:
       design.design-step-recommendation = decide_autonomously.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: ef7a6aed6774de4a839bec34b09511662a60f6fd
   - id: implement
     status: pending
     base_commit: bf87e666
@@ -122,7 +123,37 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Revise the target SPEC.md Test Scenarios to the implementation test names"
+    plan: tasks/task0001.md
+    files:
+      - feature-docs/mouse-report-held-callsite-test/SPEC.md
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR1, FR5, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+  task0002:
+    title: "Revise the target VERIFICATION.md: test names, count claim, AC-1 wording, naming inspection item"
+    plan: tasks/task0002.md
+    files:
+      - feature-docs/mouse-report-held-callsite-test/VERIFICATION.md
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR2, FR3, FR5, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+  task0003:
+    title: "Revise the target REQUIREMENTS.md traceability table to the implementation test names"
+    plan: tasks/task0003.md
+    files:
+      - feature-docs/mouse-report-held-callsite-test/REQUIREMENTS.md
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR4, FR5, NFR1, NFR2, NFR3, NFR4]
+    status: pending
 
 review:
   status: pending
@@ -136,63 +167,63 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3, TS-8]
   FR2:
     title: "VERIFICATION.md Test Scenarios table revised, and its count claim corrected"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS-1, TS-2, TS-3, TS-4, TS-8]
   FR3:
     title: "VERIFICATION.md Code Quality naming inspection item replaced"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS-5]
   FR4:
     title: "REQUIREMENTS.md traceability table revised to implementation test names"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0003]
     tests: [TS-1, TS-2, TS-3, TS-8]
   FR5:
     title: "Documentation-only change set; production and record files untouched"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002, task0003]
     tests: [TS-6, TS-7]
   NFR1:
     title: "No source, manifest, or build-input change"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002, task0003]
     tests: [TS-6]
   NFR2:
     title: "Names copied verbatim"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002, task0003]
     tests: [TS-2]
   NFR3:
     title: "Existing document structure preserved"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002, task0003]
+    tests: [TS-5]
   NFR4:
     title: "Point-in-time records are immutable"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002, task0003]
     tests: [TS-7]
 
 batch:
