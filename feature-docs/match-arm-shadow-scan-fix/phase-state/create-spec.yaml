@@ -1,7 +1,9 @@
 schema_version: 1
 feature: match-arm-shadow-scan-fix
 phase: create-spec
-status: in_progress
-last_input_digest: "884cfadb84bc81eb6b49c642ca0ea3a1ac15ba4acf207e70fe4eceaba6006000"
+status: completed
+last_input_digest: 884cfadb84bc81eb6b49c642ca0ea3a1ac15ba4acf207e70fe4eceaba6006000
 answers: []
-written_artifacts: []
+written_artifacts:
+- path: feature-docs/match-arm-shadow-scan-fix/TASK.md
+notes: 'minimal tier: spec-writer not dispatched; orchestrator wrote TASK.md directly.'

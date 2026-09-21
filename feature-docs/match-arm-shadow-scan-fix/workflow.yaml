@@ -1,0 +1,188 @@
+schema_version: 1
+feature: match-arm-shadow-scan-fix
+created: '2026-09-21'
+base_branch: main
+goal: '# mouse-report-held-callsite-test: rule 3b の match アームシャドウ検出が末尾カンマ無しブロックアーム以降を読み飛ばす
+
+
+  種別: バグ / 優先度: 中
+
+  指示メモ: em-workflow review round 1 の deferred finding a12c34983f2f0797
+
+
+  ## 現象 (必須)
+
+  `mouse-report-held-callsite-test` が追加した字句走査器の rule 3b（`match` アームの
+
+  パターンによる受け手識別子のシャドウ検出）が、末尾カンマを持たないブロック本体アームの
+
+  後ろにある全アームのパターンを黙って読み飛ばす。
+
+  `is_rebound_before`（`src-tauri/src/window_host/tests.rs:5856-5881`）は、トップレベルの
+
+  `=>` で `in_pattern` を false にし、`Tok::Punct(",") if nest == 0 && !in_pattern` の分岐
+
+  （5874 行）でのみ true に戻す。`None => {}` のように末尾カンマを持たないブロック本体
+
+  アーム（rustfmt の通常形であり、`pointer_routing.rs:859-880` が実際に取っている形）を
+
+  通過すると `in_pattern` が false のまま固定され、以降のアームのパターンが走査されない。
+
+  `match owner { None => {} Some(host) => { ... } }` のトークン列: `=>` が in_pattern を
+
+  クリア、`{` / `}` が nest を 1 → 0 に戻し、`Some` / `(` / `host` / `)` はスキップされ、
+
+  2 つ目の `=>` は `in_pattern` ガードで弾かれる。
+
+  回帰テスト `judge_call_rejects_a_match_arm_pattern_shadow_of_the_receiver_before_the_call`
+
+  （`tests.rs:6372`）が緑なのは、束縛が**最初のアーム**にあるため
+
+  （`match owner { Some(ctx) => {} None => {} }`）。つまりスイートは「match アームの
+
+  シャドウは検出できている」という誤った安心を与えている。
+
+
+  ## 再現手順 (必須)
+
+  1. `src-tauri/src/window_host/tests.rs` の `judge_call_rejects_a_match_arm_pattern_shadow_of_the_receiver_before_the_call`
+
+  を複製し、束縛を 2 番目のアームに移した入力に変える
+
+  （例: `match owner { None => {} Some(ctx) => {} } svc::apply_with_held(a, ctx.held_flag);`）
+
+  2. `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` を実行する
+
+  3. 拒否されるべき入力が受理される（＝テストが緑になる）ことを確認する
+
+
+  ## 期待する挙動 (必須)
+
+  ブロック本体のアームが終端した時点（その閉じ `}` で nest が 0 に戻った時点）で
+
+  `in_pattern` を true に戻し、末尾カンマの有無にかかわらず以降のアームのパターンも
+
+  走査対象にする。
+
+
+  ## 完了の定義 (必須)
+
+  - [ ] 末尾カンマ無しブロック本体アームの後ろのアームでも、受け手識別子のシャドウを
+
+  検出して拒否する
+
+  - [ ] 束縛を 2 番目以降のアームに置いた negative ケースの回帰テストがある
+
+
+  ## 該当箇所 (任意)
+
+  - `src-tauri/src/window_host/tests.rs:5856-5881` — `is_rebound_before`
+
+  - `src-tauri/src/window_host/tests.rs:5874` — `in_pattern` を戻す唯一の分岐
+
+  - `src-tauri/src/window_host/tests.rs:6372` — 第 1 アームにしか束縛が無い既存テスト
+
+
+  ## 実害・発生条件 (任意)
+
+  影響は限定的。rule 3b は SPEC の FR1 / FR2 を超えた多層防御であり、3 トークンの実引数
+
+  形状の固定自体は効いている。現時点でどちらの実呼び出し側の手前にもこの種のシャドウは
+
+  存在しない。ただし将来、呼び出しより手前に `host` を束縛するアームが置かれると検出
+
+  されずに通る。
+
+  出典: em-workflow review round 1 の comprehensive レビュアー（stable_id
+
+  `a12c34983f2f0797` / severity medium / confidence 60）。Phase R4 の auto-fix ゲートは
+
+  critical / high のみが対象のため未修正で持ち越された。
+
+  対象ブランチ: `em-workflow/mouse-report-held-callsite-test/integration`
+
+  '
+parent_branch: em-workflow/match-arm-shadow-scan-fix/integration
+tier: minimal
+tier_decision:
+  by: em-workflow:develop Step A tier decision (jev + codex pre-survey)
+  confidence:
+    description_only:
+      probabilities:
+        '0': 0.98
+        '1': 0.02
+        '2': 0.0
+      expectation_clear: 0.91
+    description_plus_code:
+      probabilities:
+        '0': 0.8
+        '1': 0.2
+        '2': 0.0
+      expectation_clear: 0.9
+  at: '2026-09-21T22:27:12+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - IMPLEMENTATION.md
+  - design step
+  - SPEC.md (replaced by TASK.md)
+  - task splitting
+  - VERIFICATION.md
+  - task-level parallelism
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - TASK.md
+  status: completed
+  completed_at_commit: 55d161a685810f48c8b3d15481d89c3803a2ec83
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: minimal tier subtracts the design step; and this is an internal test-helper lexer fix
+    with no UI, visual or user-facing surface.
+- id: create-plan
+  artifacts:
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: 642a3965a26b74a51cd03ee0b696e4725da30052
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+requirements: {}
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
