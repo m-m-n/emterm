@@ -1,0 +1,84 @@
+task_id: task0001
+
+# This task is a comment-only edit (no production behavior changes, no new
+# test can prove a comment). Per the orchestrator's notes for this task, the
+# acceptance evidence is: (a) the full `--lib` suite completes with the same
+# test count and outcome before and after the edit, and (b) `git diff` shows
+# comment-only lines. Both were verified directly (commands below), not via
+# individual red/green tests.
+#
+# Baseline run (before any edit, working tree at the pre-edit commit via
+# `git stash`):
+#   CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
+#   -> test result: ok. 3523 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out
+#
+# Final run (after the edit, `git stash pop`):
+#   same command
+#   -> test result: ok. 3523 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out
+#
+# No individual test name changed status, so baseline_failures and
+# final_failures are both empty (identity confirmed: 3523/0/3 in both runs).
+baseline_failures: []
+final_failures: []
+
+acceptance_tests:
+  AC-1:
+    # Expected Result bullet 1: every AC-N label in tests.rs is identifiable,
+    # from the code alone, as task0001's (mouse-report-held-callsite-test)
+    # task-local numbering rather than SPEC.md's AC numbering.
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-expressible: this is a code-readability/traceability
+      criterion for a comment-only change, not an observable runtime
+      behavior. No implementation existed to fail red — the group header
+      at tests.rs:5213-5216 now carries an explicit source declaration, and
+      each of the ~17 comment/doc-comment AC-N references in the group
+      (tests.rs:5207-6871) is annotated inline with
+      "(mouse-report-held-callsite-test/task0001)". Verified by manual
+      review of `git diff` against the task plan's enumerated line ranges.
+  AC-2:
+    # Expected Result bullet 2: git diff changes are comment lines only;
+    # test names / #[test] attrs / input data / diagnostic strings /
+    # assertion expressions / scanning logic are unchanged.
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-expressible: this is a diff-shape constraint, verified by
+      inspecting the diff itself, not by running code.
+      `git diff -- src-tauri/src/window_host/tests.rs | grep -E '^[+-]' |
+      grep -v '^+++' | grep -v '^---' | grep -vE '^[+-]\s*(///|//)'`
+      produced zero output, confirming every changed line is a `//` or
+      `///` comment line.
+  AC-3:
+    # Expected Result bullet 3: cargo test --lib completes with the same
+    # test count and same result (all green) before and after the edit.
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a single test but a whole-suite identity check across the edit.
+      No red state exists to confirm (no behavior changed). Verified by
+      running the full --lib suite before (via git stash) and after (git
+      stash pop) the edit: both runs report "3523 passed; 0 failed; 3
+      ignored" with test-threads=1, i.e. an identical outcome.
+  AC-4:
+    # Expected Result bullet 4: cargo check (default features) and cargo
+    # check --no-default-features both pass.
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Outcome is a build pass/fail, not a test. Verified directly:
+      `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+      src-tauri/Cargo.toml` finished cleanly, and the same command with
+      `--no-default-features` also finished cleanly.
+  AC-5:
+    # Expected Result bullet 5: only src-tauri/src/window_host/tests.rs
+    # changed; no changes under feature-docs/mouse-report-held-callsite-test/.
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Scope constraint verified via `git status --short` (only
+      src-tauri/src/window_host/tests.rs modified) and `git diff --stat`;
+      feature-docs/mouse-report-held-callsite-test/ and
+      feature-docs/tests-ac-reference-alignment/SPEC.md /
+      tasks/task0001.md were never touched by this task's edits.
