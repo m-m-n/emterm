@@ -1,0 +1,61 @@
+feature: match-arm-shadow-scan-fix
+collected_at: '2026-09-21T23:08:00+09:00'
+session_ids:
+- 01a0c44b-94ec-70b3-ae03-8519a0ba0a70
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: minimal
+    rationale: score.probabilities['0']=0.98 >= 0.8 (p0_floor) and score.expectation_clear=0.91
+      >= 0.5 (expectation_clear_floor)
+    bases:
+    - basis: description_only
+      probabilities:
+        '0': 0.98
+        '1': 0.02
+        '2': 0.0
+      expectation_clear: 0.91
+      confidence: 0.96
+    - basis: description_plus_code
+      probabilities:
+        '0': 0.8
+        '1': 0.2
+        '2': 0.0
+      expectation_clear: 0.9
+      confidence: 0.7
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/window_host/tests.rs
+      changed_lines_approx: 25
+      new_functions_needed: 1
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+- note: >-
+    チケットが処方した Fix A（nest 0 に戻る任意の閉じ括弧でパターン走査を再開）を
+    Codex 相談で Fix B（閉じ `}` のみ）に差し替えた。Fix A は同じ未検出を直す一方で
+    `make().with(target)` のような非ブロックアーム本体を新たに過剰拒否する。
+    チケットの処方を鵜呑みにせず代替案を並べて比較した判断が効いた事例。
+  origin: phase-state/batch-audit.yaml records[0] (create-plan.codex-consultation)
+- note: >-
+    round 1 の評価者が severity low の記録不整合（task0001.tests.yaml の AC-7 が
+    red_confirmed: true を記録しつつ、prose では実装後の GREEN 実行しか述べていない）を
+    検出したが、R3b step 2 が medium 未満を落とすため未修正のまま残った。
+    ブランチ上の記録は不正確なままであり、フラグだけを読む機械的な消費者は
+    AC-7 を TDD red 検証済みとして数えうる。
+  origin: reviews/round1.yaml evaluation.round_summary
+- note: >-
+    Fix B が受け入れた既知の限界（非ブロックアーム本体内の構造体リテラル /
+    if / ネスト match の内側 `}` をアーム終端と誤読し過剰拒否する）は
+    新しいコメントに文書化されているが、テストで固定されていない。
+    過剰拒否は安全側のため欠陥ではなくカバレッジの nit。
+  origin: reviews/round1.yaml evaluation.round_summary
