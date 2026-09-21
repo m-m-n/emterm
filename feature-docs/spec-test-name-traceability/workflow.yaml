@@ -116,7 +116,8 @@ workflow:
     completed_at_commit: 4190ed13c9e56fbe6848acc646cce730f57da05b
     base_commit: bf87e666
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: e8ae7709b3aa2ae2b077d49c7c6d54832226db85
   - id: verify
     status: pending
     result: null
@@ -160,8 +161,9 @@ tasks:
     branch: em-workflow/spec-test-name-traceability/task0003
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, spec]
   residual_critical_high: 0
   needs_rework: false
   plan:
