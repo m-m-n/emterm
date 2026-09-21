@@ -1,0 +1,21 @@
+schema_version: 1
+feature: spec-test-name-traceability
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: bf87e6660c7fae8ec176defbc44cc910f60b2f4d
+last_input_digest: sha256:bd08d481225ca2de5e72436eb98762efec032b063fa27bbab890aeddedc3fa56
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:bd08d481225ca2de5e72436eb98762efec032b063fa27bbab890aeddedc3fa56
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
