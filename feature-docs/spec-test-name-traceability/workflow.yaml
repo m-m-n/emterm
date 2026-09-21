@@ -1,0 +1,205 @@
+schema_version: 1
+feature: spec-test-name-traceability
+created: 2026-09-21
+base_branch: main
+goal: |
+  mouse-report-held-callsite-test: SPEC/VERIFICATION の TS 名が実装テスト名と一致せず追跡できない
+
+  ## 現象 (必須)
+  `mouse-report-held-callsite-test` の SPEC.md は検証シナリオ TS-1〜TS-6 にテスト関数名を
+  リテラルで列挙しているが、実装された `src-tauri/src/window_host/tests.rs` にその名前の
+  テストは 1 本も存在しない。実装はすべてのシナリオを別名で満たし、さらに TS-4 / TS-5 を
+  より細かい約 16 本に分割している。
+  VERIFICATION.md の Code Quality Verification には「New test names follow
+  `<subject>_<scenario>_<expected>` and match the TS names in this document character for
+  character (NFR3)」という検査項目があり、この項目だけが未達のまま verify を pass させた。
+
+  ## 再現手順 (必須)
+  1. `feature-docs/mouse-report-held-callsite-test/SPEC.md` の 234 行目付近、TS-1〜TS-6 の
+  テスト名を読む
+  1. `grep -n "run_button_decision_passes_live_held_value_to_the_held_aware_apply_entry_point" src-tauri/src/window_host/tests.rs`
+  を実行する
+  1. 一致が 0 件であることを確認する（TS-2〜TS-6 も同様）
+
+  ## 期待する挙動 (必須)
+  SPEC.md / VERIFICATION.md に書かれたテスト名から、実際に存在するテストへ辿れること。
+  実装側のテスト名を SPEC のリテラル名に合わせるか、SPEC.md と VERIFICATION.md を実装名に
+  合わせて改訂するかのいずれか。後者を採る場合は TS-4 / TS-5 が複数テストに分割されている
+  事実も traceability 表に反映する。
+
+  ## 完了の定義 (必須)
+  - [ ] SPEC.md の TS-1〜TS-6 に書かれた名前で実際のテストを特定できる
+  - [ ] VERIFICATION.md の「character for character」検査項目が、実装と矛盾しない表現に
+  なっている（あるいは実装がその表現を満たす）
+  - [ ] テストの挙動・カバレッジは変えない（本件は命名とドキュメントの整合のみ）
+
+  ## 該当箇所 (任意)
+  - `feature-docs/mouse-report-held-callsite-test/SPEC.md:234` 付近 — TS-1〜TS-6 の定義
+  - `feature-docs/mouse-report-held-callsite-test/SPEC.md:102` — NFR3 の規範テキスト
+  （命名パターンのみを要求し、TS 名との一致は求めていない）
+  - `feature-docs/mouse-report-held-callsite-test/VERIFICATION.md` — Code Quality
+  Verification の検査項目
+  - `src-tauri/src/window_host/tests.rs` — 実装されたテスト群
+
+  TS と実装名の対応:
+
+  | TS | 実装されたテスト |
+  | --- | --- |
+  | TS-1 | `run_button_decision_calls_apply_outcome_with_held_once_with_live_held_as_fourth_arg` |
+  | TS-2 | `handle_mouse_wheel_calls_apply_wheel_report_step_once_with_live_held_as_fifth_arg` |
+  | TS-3 | `neither_call_site_body_contains_the_held_unaware_apply_path` |
+  | TS-4 | `scanner_*` / `judge_call_tolerates_*` / `judge_call_rejects_*` / `argument_splitter_ignores_a_trailing_comma` / `button_path_benign_edits_to_the_real_source_are_still_accepted`（約 14 本） |
+  | TS-5 | `button_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted`、`wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted` |
+  | TS-6 | `body_extractor_returns_exactly_the_two_named_bodies_excluding_the_motion_path` |
+
+  ## 実害・発生条件 (任意)
+  テスト自体は全て緑で、退行検出能力に欠落は無い（`cargo test --lib` 3517 passed）。
+  実害はドキュメントからコードへの追跡性のみ。将来この機能を読み直す人が、SPEC の
+  テスト名でコードを grep して「テストが実装されていない」と誤認するリスクがある。
+  本件は review round 1 の spec レビュアーも指摘したが severity ゲートで low と判定されて
+  drop された。verify フェーズでは Codex に相談し、NFR3 の規範テキストが命名パターンのみを
+  要求していることを根拠に failed_item とせず pass、申し送りとして本タスクを起票する判断を
+  採った（`feature-docs/mouse-report-held-callsite-test/phase-state/batch-audit.yaml` の
+  `verify.codex-consultation.spec-test-name-drift`）。
+
+  対象ブランチ: `em-workflow/mouse-report-held-callsite-test/integration`（main にマージ済み）
+parent_branch: em-workflow/spec-test-name-traceability/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    cli_feature_gate:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: "bunx biome check ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: ceefb6ceaf765d5eea18afcbc3b88ad687e67c97
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      The change set is three Markdown documents. Nothing is rendered, no UI
+      surface is added or altered, and no design token, MD3 constant or CSS
+      variable is touched, so there is no visual decision for a design step to
+      make. Accepted autonomously in batch mode per answer
+      design.design-step-recommendation = decide_autonomously.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: bf87e666
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "SPEC.md Test Scenarios revised to implementation test names"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2, TS-3, TS-8]
+  FR2:
+    title: "VERIFICATION.md Test Scenarios table revised, and its count claim corrected"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-8]
+  FR3:
+    title: "VERIFICATION.md Code Quality naming inspection item replaced"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-5]
+  FR4:
+    title: "REQUIREMENTS.md traceability table revised to implementation test names"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2, TS-3, TS-8]
+  FR5:
+    title: "Documentation-only change set; production and record files untouched"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-6, TS-7]
+  NFR1:
+    title: "No source, manifest, or build-input change"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-6]
+  NFR2:
+    title: "Names copied verbatim"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-2]
+  NFR3:
+    title: "Existing document structure preserved"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Point-in-time records are immutable"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-7]
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
