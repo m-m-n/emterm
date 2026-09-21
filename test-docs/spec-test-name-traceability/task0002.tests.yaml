@@ -1,0 +1,100 @@
+task_id: task0002
+baseline_failures: []          # cargo test --lib: 3517 passed; 0 failed; 3 ignored (4a, pre-edit)
+final_failures: []             # cargo test --lib: 3517 passed; 0 failed; 3 ignored (post-edit, unchanged)
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      No test code exists for this Markdown-only task (FR5/NFR1 forbid touching
+      src-tauri/). Check: extract the identifiers presented as test names from the
+      TS-1..TS-6 rows and diff the set + per-TS counts against IMPLEMENTATION.md's
+      25-identifier canonical table. Base revision (git show HEAD:...) carried only
+      6 identifiers (one per row), none matching the canonical 25 — confirmed red.
+      After the edit, the extracted set is exactly the 25 canonical identifiers
+      with per-TS counts 1/1/1/18/3/1 — confirmed green.
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Check: each identifier the document presents as a test name must match
+      exactly one `fn <name>()` in src-tauri/src/window_host/tests.rs. Base
+      revision: all 6 identifiers it carried returned zero fn matches (stale
+      names) — confirmed red. After the edit: all 25 identifiers each match
+      exactly one fn definition (grep -c "fn <name>(" == 1 for all) — confirmed
+      green.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Check: string search for "six new" over the document (expect zero matches)
+      and read-back of the Test Verification Expected line's count. Base revision
+      contained "the six new `window_host::tests` entries" — confirmed red (one
+      match). After the edit the line reads "the 25 new ..." and "six new" has
+      zero occurrences in the document — confirmed green.
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Check: read back the Success Criteria AC-1 row's verification wording. Base
+      revision read "confirm exit 0 and that TS-1 … TS-6 appear in the run" — TS
+      IDs never appear in cargo test output, so this instruction is unexecutable
+      — confirmed red. After the edit it reads "confirm exit 0 and that the named
+      test functions listed in the Test Scenarios table above appear in the run"
+      — confirmed green.
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Check: (a) string search for "character for character" (expect zero
+      matches), (b) the naming item contains the literal string
+      "src-tauri/src/window_host/tests.rs", (c) the item states all three parts
+      (file-to-doc, doc-to-file bijection with the D2 added-test-set definition,
+      and the naming convention) plus the direction of authority. Base revision's
+      naming item read "match the TS names in this document character for
+      character" (one-way, unsatisfiable, and the banned string present) and did
+      not contain the tests.rs path literal — confirmed red. After the edit the
+      item enumerates the three parts, states the file is normative, contains the
+      literal path string, and "character for character" has zero occurrences —
+      confirmed green.
+  AC-6:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Check: locate `button_path_benign_edits_to_the_real_source_are_still_accepted`
+      and confirm it appears under TS-5 and no other TS row; locate
+      `sanity_the_fake_callee_pattern_matches_a_real_unquoted_call` and confirm it
+      appears under TS-4 with a role note. Base revision contained neither name
+      anywhere in the document — confirmed red (the criterion's placement could
+      not hold since the names were absent). After the edit,
+      `button_path_benign_edits_to_the_real_source_are_still_accepted` appears
+      exactly once, in the TS-5 row, and
+      `sanity_the_fake_callee_pattern_matches_a_real_unquoted_call` appears in the
+      TS-4 row with a parenthetical identifying it as the sanity/scaffold anchor
+      — confirmed green.
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Check: `git diff --name-only` against the base revision lists exactly one
+      path, and `git diff` shows changed lines only inside the four edited
+      regions (Test Verification Expected line, the TS-1..TS-6 Scenario cells,
+      the AC-1 verification cell, the naming inspection item). Before any edit
+      the working tree was clean (no diff at all, trivially not satisfying "diff
+      contains exactly the four edits" since there was no diff to inspect) —
+      recorded as red by construction; the task plan does not admit a
+      pre-implementation failing state distinct from "no changes yet" for a
+      byte-identical-outside-four-edits criterion. After the edit, `git diff
+      --name-only` lists exactly
+      feature-docs/mouse-report-held-callsite-test/VERIFICATION.md, and `git
+      diff` shows hunks only at the Test Verification line, the TS-1..TS-6 rows,
+      the AC-1 row, and the naming inspection item — confirmed green.
+notes: >-
+  Documentation-only task (FR5/NFR1 forbid src-tauri/ and crates/ changes); no
+  test code was added or could be added per the task plan's Test Notes. All
+  acceptance criteria were discharged by shell checks (grep/diff) run against
+  the working tree, per IMPLEMENTATION.md decision D4. The `#[test]`-annotated
+  span used for the D2 added-test-set definition (AC-3/TS-1 marker to EOF) was
+  independently re-derived from src-tauri/src/window_host/tests.rs and found to
+  be exactly the same 25 identifiers as IMPLEMENTATION.md's canonical table
+  before any edit was made, confirming the canonical table's accuracy.
