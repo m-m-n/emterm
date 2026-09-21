@@ -164,3 +164,33 @@ records:
     review floor and arms cross_validation. IMPLEMENTATION.md D1 was rewritten to record this decision,
     and the Shared Components section was dropped (no longer two tasks on one file), its constraints moved
     into task0001''s Design.'
+- question_id: develop.run-scope
+  packet_id: null
+  answered_at: '2026-09-22T03:10:25+09:00'
+  source: codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - honor_once_no_pr
+  freeform: null
+  normalized_answer: Honor --once - run the implement phase only; create no PR this launch.
+  resolution_note: |
+    gate: develop.run-scope (unlisted gate; it carries no gate_id at its originating site, so it was resolved via the autonomous fail-closed route in batch-mode.md).
+    codex_consulted: true (scripts/run_codex_exec.sh readonly, reasoning effort xhigh, -C the project root).
+    Opus escalation: not run - Codex returned a decision.
+
+    Tension: the launch carried --batch --once --pr, while the accompanying prose asked to push the integration branch and open a PR once the implementation was finished. At launch the workflow had FOUR phases remaining (implement, review, verify, retrospect) before Step C, so --once and the prose could not both be satisfied in this launch.
+
+    Options presented:
+    (A) Honor --once strictly: run ONLY the implement phase, end at the phase boundary, create no PR, and report that review / verify / retrospect and Step C remain.
+    (B) Treat the prose as overriding --once: run all four remaining phases and open the PR in this single launch.
+
+    Chosen: (A).
+
+    Codex's reasoning:
+    - --once explicitly scopes THIS launch; the prose specifies what to do at completion. With no explicit retraction of --once in the prose, the reading that satisfies both is preferred, and it matches the skill's own --pr applicability rule.
+    - Choosing (B) in an unattended --batch run would carry the run three phases beyond what the flags authorize and would additionally perform a publishing action (push + PR).
+    - Reversibility favors (A): if (A) is not what the user meant, relaunching without --once and with --pr resumes the work. (B) has operations that are undoable in principle, but the extra execution cost and the effects of publishing cannot be fully undone.
+
+    Option not chosen (B), with its own argument: if the prose is read as an explicit instruction to carry THIS launch through to PR creation, it should outrank the skill's rule. Codex judged that argument weaker here because --once is equally an explicit user-supplied flag, so the prose alone is thin grounds for widening the run's scope.
+
+    Effect on the run: this launch executes the implement phase only and ends at the --once phase boundary. No push and no PR are performed. Per skills/develop/SKILL.md, --pr is a per-launch setting that is not inherited, so the launch that eventually runs Step C must itself carry --pr.
