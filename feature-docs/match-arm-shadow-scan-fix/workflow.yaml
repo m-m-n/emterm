@@ -183,8 +183,8 @@ tasks:
     - input-handling
     complexity: medium
     requirements: []
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/match-arm-shadow-scan-fix/task0001
     notes: null
 review:
   status: pending
