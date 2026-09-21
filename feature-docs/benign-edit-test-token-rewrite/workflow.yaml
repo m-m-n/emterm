@@ -57,7 +57,8 @@ workflow:
     base_commit: 5bfb3957318973945478d7990e3721712826a91f
     completed_at_commit: fbd0f9c7e741018d7be56ce3988eef6d8e72ca38
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 51dea2815fd10fd5a9fe42014ada0093ef83ceb9
   - id: verify
     status: pending
     result: null
@@ -80,8 +81,8 @@ tasks:
     branch: em-workflow/benign-edit-test-token-rewrite/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, architecture, spec]
     discretionary:
@@ -91,7 +92,12 @@ review:
           SPEC の NFR4 が「実行コストに影響しない」と宣言しているため、
           計算量とテスト実行コストを裁量で確認する。
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    security: {status: completed, source: codex, findings: 0}
+    comprehensive: {status: completed, source: codex, findings: 3}
+    architecture: {status: completed, source: "litellm:muse-spark", findings: 0}
+    spec: {status: completed, source: "litellm:muse-spark", findings: 0}
+    performance: {status: completed, source: "litellm:muse-spark", findings: 0}
   residual_critical_high: 0
   needs_rework: false
 
