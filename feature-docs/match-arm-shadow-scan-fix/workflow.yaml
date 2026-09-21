@@ -166,7 +166,7 @@ workflow:
   completed_at_commit: 0d6d5200ec757ac88341932c26a25a4c7f91213a
   base_commit: 642a3965a26b74a51cd03ee0b696e4725da30052
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -188,8 +188,16 @@ tasks:
     branch: em-workflow/match-arm-shadow-scan-fix/task0001
     notes: null
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    discretionary: []
+    cross_validation: false
+    notes: 'spec perspective dropped: minimal tier has no SPEC.md (spec_available=false).
+      license/vulnerability not added: the diff touches no dependency manifest or lockfile.'
   residual_critical_high: 0
   needs_rework: false
 requirements: {}
