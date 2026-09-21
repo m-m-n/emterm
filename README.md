@@ -85,10 +85,11 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
     because PRIMARY handles them natively (and their `settings.json` values
     are ignored).
   - Shift+Enter behavior setting: pass-through, Alt+Enter rewrite (default), or LF for multiline input in AI interfaces
-  - Word and line selection drag: double-click (word) or triple-click (line) then drag keeps the originally clicked word/line anchored for the whole drag
+  - Word and line selection drag: double-click (word) or triple-click (line) then drag keeps the originally clicked word/line anchored for the whole drag; a drag survives an interleaved wheel/button press or a focus loss while the mouse button is held
   - Mouse selection clears when Enter is sent to the shell or when copying, so TUI line rewrites (e.g. Claude Code) don't leave stale highlights on screen
   - Comprehensive special key mapping (Ctrl+symbols, modified arrow keys, F-keys, Shift+Tab)
   - Alternate scroll mode (DECSET 1007): mouse wheel sends arrow keys in alternate-screen apps (default ON, configurable)
+  - Mouse reporting for DEC private modes 1000/1002/1003 (X10 and SGR/1006 encodings): TUI/full-screen applications (vim, tmux, htop, Claude Code) receive clicks, drags, and wheel notches; hold Shift to force eMterm's local selection, link-open, middle-click paste, or scrollback/alternate-scroll behavior instead; eMterm's own chrome (tab bar, status bar, scrollbar, mux sidebar, window edges) always keeps its local behavior
 
 - **Navigation**
   - OSC 133 semantic prompt jump (Ctrl+Up / Ctrl+Down)
@@ -122,6 +123,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - OS desktop notifications when the window is not focused (configurable)
   - Notification throttling to prevent spam during high-frequency output
   - Notification title/body text is escaped against markup before reaching a markup-capable notification server, and is not written to the log file
+  - Notification dispatch runs on a dedicated background thread; a slow or hung OS notification daemon does not affect typing latency, and a full queue (capacity 8) drops further notifications rather than blocking
   - Restart toast when the running binary no longer matches the on-disk binary after a package update, e.g. `apt`/`dpkg` (Linux)
   - Windows: application icon embedded in the `.exe` shown on all windows; a shell that exits naturally (`exit`, Ctrl+D) reliably closes its tab
 
