@@ -1,0 +1,38 @@
+schema_version: 1
+feature: match-arm-shadow-scan-fix
+records:
+  - question_id: create-plan.codex-consultation
+    packet_id: null
+    answered_at: "2026-09-21T22:41:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "Fix B — only a closing `}` that returns nest to 0 terminates a match arm"
+    normalized_answer: "Fix B"
+    resolution_note: >-
+      gate: none (user-instructed Codex consultation, launched per the run's
+      argument "Consult Codex on any unclear points and adopt the option judged
+      to be comparatively better"); codex_consulted: true (run_codex_exec.sh
+      readonly, model gpt-6-astra, reasoning xhigh, session
+      01a0c42d-7c90-7a21-9465-ea24e17767af).
+      Question: the ticket prescribed Fix A (any closing bracket `}`/`)`/`]` that
+      returns nest to 0 re-enters pattern scanning) for rule 3b's match-arm
+      splitting loop in src-tauri/src/window_host/tests.rs; alternatives were
+      Fix B (only `}`) and Fix C (track whether the arm body started with `{`).
+      Options NOT chosen: Fix A — rejected because Fix B fixes the same
+      under-detection while newly over-rejecting nothing; Fix A additionally
+      over-rejects non-block arm bodies whose checked name appears after a
+      top-level closing bracket (`make().with(target)`, `make().target()`,
+      `factory()(target)`, `make()[target]`, `make() + target`). Fix C —
+      rejected because the start-token flag trades over-rejection for new
+      under-detection (`None => if cond { a() } else { b() }`, trailing-comma-less
+      nested `match` bodies).
+      Chosen: Fix B. Codex also corrected the ticket's stated over-rejection
+      example — `Some(x) => foo(bar), None => {}` is NOT over-rejected under
+      Fix A. Residual limitation shared by all three options (inner `}` of a
+      struct literal / if / nested match misread as an arm terminator) is
+      accepted here because it falls on the conservative reject side, and is
+      now documented in TASK.md's Change section.
+      No Opus escalation ran. TASK.md was rewritten to prescribe Fix B before
+      implement started; create-plan's registered task0001 points at TASK.md,
+      so the plan document stays authoritative.
