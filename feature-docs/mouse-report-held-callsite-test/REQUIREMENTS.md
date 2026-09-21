@@ -421,12 +421,12 @@ flowchart TD
 
 | TS ID | テスト名 | 対応要件 | 対応AC |
 |-------|----------|----------|--------|
-| TS-1 | `run_button_decision_passes_live_held_value_to_the_held_aware_apply_entry_point` | FR1, FR5 | AC-2, AC-3 |
-| TS-2 | `handle_mouse_wheel_passes_live_held_value_to_the_wheel_report_step` | FR2, FR5 | AC-4 |
-| TS-3 | `button_and_wheel_bodies_never_call_the_held_unaware_apply_entry_point` | FR3 | AC-3, AC-4 |
-| TS-4 | `body_extractor_tolerates_benign_edits_and_ignores_comments_and_string_literals` | FR6, FR7 | AC-5, AC-6 |
-| TS-5 | `argument_scanner_rejects_defaulted_and_deleted_held_arguments` | FR7 | AC-2, AC-3, AC-4 |
-| TS-6 | `held_argument_scan_is_scoped_to_the_two_named_bodies_only` | FR5, NFR8 | AC-5 |
+| TS-1 | `run_button_decision_calls_apply_outcome_with_held_once_with_live_held_as_fourth_arg` | FR1, FR5 | AC-2, AC-3 |
+| TS-2 | `handle_mouse_wheel_calls_apply_wheel_report_step_once_with_live_held_as_fifth_arg` | FR2, FR5 | AC-4 |
+| TS-3 | `neither_call_site_body_contains_the_held_unaware_apply_path` | FR3 | AC-3, AC-4 |
+| TS-4 | `sanity_the_fake_callee_pattern_matches_a_real_unquoted_call`（scaffold/sanity アンカー: 偽の callee パターンがクォートなしの実呼び出しに一致することを保証し、TS-4 の否定ケースを空虚にしない）<br>`scanner_treats_a_correct_call_written_inside_a_line_comment_as_absent`<br>`scanner_treats_a_correct_call_written_inside_a_string_literal_as_absent`<br>`scanner_ignores_call_shaped_text_inside_nested_block_comments`<br>`scanner_ignores_call_shaped_text_inside_a_raw_string_with_differing_hash_counts`<br>`scanner_tokenizes_byte_and_c_string_literals_as_opaque_literals`<br>`scanner_distinguishes_a_lifetime_marker_from_an_adjacent_character_literal`<br>`scanner_does_not_terminate_a_character_literal_on_an_escaped_quote`<br>`scanner_does_not_terminate_a_string_literal_on_an_escaped_quote`<br>`scanner_never_matches_an_identifier_as_a_prefix_of_a_longer_one`<br>`argument_splitter_ignores_a_trailing_comma`<br>`judge_call_tolerates_the_argument_list_rewrapped_across_lines`<br>`judge_call_tolerates_a_comment_between_the_callee_and_its_opening_paren`<br>`judge_call_rejects_a_let_bound_shadow_of_the_receiver_before_the_call`<br>`judge_call_rejects_a_closure_parameter_shadow_of_the_receiver_before_the_call`<br>`judge_call_rejects_a_match_arm_pattern_shadow_of_the_receiver_before_the_call`<br>`judge_call_rejects_an_if_let_pattern_shadow_of_the_receiver_before_the_call`<br>`judge_call_rejects_when_the_held_unaware_path_also_appears_elsewhere_in_the_body` | FR6, FR7 | AC-5, AC-6 |
+| TS-5 | `button_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted`<br>`wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted`<br>`button_path_benign_edits_to_the_real_source_are_still_accepted` | FR7 | AC-2, AC-3, AC-4 |
+| TS-6 | `body_extractor_returns_exactly_the_two_named_bodies_excluding_the_motion_path` | FR5, NFR8 | AC-5 |
 | TS-M1 | `manual: none required` | FR4 | AC-7 |
 
 各シナリオの補足:
