@@ -133,7 +133,7 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR1, FR5, NFR1, NFR2, NFR3, NFR4]
-    status: in_progress
+    status: merged
     branch: em-workflow/spec-test-name-traceability/task0001
   task0002:
     title: "Revise the target VERIFICATION.md: test names, count claim, AC-1 wording, naming inspection item"
