@@ -122,9 +122,9 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: []
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/tests-ac-reference-alignment/task0001
 
 review:
   status: pending
