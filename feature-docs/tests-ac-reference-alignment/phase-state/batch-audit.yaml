@@ -135,3 +135,41 @@ records:
       (B) を採らなかった代償: 規則 2 が範囲への個別追記を要求するという読みが
       正しかった場合、5212 行への出典追記という手戻りが生じる。実行動作・テスト
       判定には影響しない。
+
+  - phase: verify
+    gate_id: null
+    gate: "verify Expected Result 判定 — TASK.md の『変更ファイルは tests.rs のみ』条項の読み"
+    at: "2026-09-22T00:00:00+09:00"
+    options:
+      - "PASS: 当該条項をコード変更のスコープ制約 + 別 feature の文書保護と読み、自 feature 固有の作業記録は対象外とする"
+      - "FAIL: 当該条項をリポジトリ全体の網羅的な許可リストと読み、test-docs/ の新規ファイルを違反とする"
+    chosen: PASS
+    codex_consulted: true
+    opus_escalation: false
+    freeform: "run_codex_exec.sh readonly による比較判定"
+    normalized_answer: "verify = pass。test-docs/tests-ac-reference-alignment/task0001.tests.yaml の追加は Expected Result に違反しない"
+    resolution_note: >-
+      事実確認: (1) 既定の 3 コマンドは全て成功 — cargo check (default) PASS、
+      cargo test --lib 3523 passed / 0 failed / 3 ignored (ベースラインと同一)、
+      cargo fmt --check PASS。TASK.md が追加で求める
+      cargo check --no-default-features も PASS。
+      (2) tests.rs の変更行は全て `//` / `///` のコメント行で、非コメント行の
+      変更は 0 行。テスト関数名・属性・入力データ・診断文字列・アサーション式・
+      走査処理はいずれも不変。
+      (3) feature-docs/mouse-report-held-callsite-test/ 配下の変更は無い。
+      (4) 自 feature の feature-docs/ 以外で変更されたファイルは 2 件 —
+      src-tauri/src/window_host/tests.rs (意図した変更) と
+      test-docs/tests-ac-reference-alignment/task0001.tests.yaml (新規)。
+      Codex 判定 PASS。採用した読み: 当該条項はコード変更を tests.rs に限定し、
+      別 feature の文書を保護する制約であり、自 feature 専用の作業記録は
+      対象外とする。根拠: (a) test-docs/<feature>/ は main 上に約 77 件の
+      同型ディレクトリを持つリポジトリ全体の既存慣例であり、追加分は本 feature
+      自身の検証証跡 (ベースライン/最終のスイート実行結果) を記録する YAML で、
+      本 feature のディレクトリ配下に閉じている。(b) 網羅的な許可リストと読むと、
+      本ワークフローが必ず書き込む feature-docs/tests-ac-reference-alignment/**
+      (workflow.yaml / TASK.md / phase-state/ / reviews/) も同条項に違反し、
+      いかなる実行でも条項を満たせなくなる。
+      (B) を採らなかった代償: 作業記録ファイルだけを理由に rework ラウンドを
+      1 回消費する。確認済みのコード変更違反も文書保護違反も無い状態での手戻りで
+      あり、実害に見合わない。
+      残存リスク: 条項の文言には作業記録を除外する条件が明記されていない。
