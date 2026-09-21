@@ -113,3 +113,43 @@ records:
     SPEC.md is a judgment call; and a correct extraction condition still does
     not by itself guarantee the two-way set diff comes out empty -- that is
     what this feature's TS-3 checks.
+- question_id: implement.once-boundary-vs-pr-instruction
+  packet_id: null
+  answered_at: '2026-09-21T12:14:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - stop_at_once_boundary_no_pr
+  freeform: null
+  normalized_answer: stop at the implement phase boundary per --once; do not push or open a PR in this launch
+  resolution_note: >-
+    Unlisted-gate fallback (no gate_id at the originating site; raised by the
+    orchestrator, not by a worker packet). Consulted per the user's standing
+    instruction for this run to consult Codex on unclear points and adopt the
+    option judged comparatively better. codex_consulted: true; harness entry:
+    codex (run_codex_exec.sh readonly); turns used: 1; Opus escalation: not
+    run. --- THE POINT: this launch carried `--batch --once --pr` AND a
+    free-text instruction "Once the implementation is finished, push the
+    integration branch to the remote and create a Pull Request against
+    base_branch with gh pr create." `--once` ends the turn at one phase
+    boundary; `--pr` only takes effect in a launch that actually reaches Step
+    C, and review / verify / retrospect had not run. Read one way the
+    free-text asks for a PR immediately after implement; read the other way it
+    merely describes the completion MODE that `--pr` already encodes. ---
+    OPTIONS: (A) stop now at the implement boundary, create no PR, leave
+    review / verify / retrospect to later launches; (B) treat the free-text as
+    overriding `--once` and push + open the PR immediately, skipping review /
+    verify / retrospect. --- ADOPTED: A. Codex judged A comparatively better
+    on three grounds: `--once` is an explicit, unambiguous per-launch
+    instruction and implement had just completed; the free-text reads
+    naturally as the same completion mode `--pr` encodes ("no merge, open a
+    PR, keep the branch") rather than as an instruction to skip defined
+    phases; and merging three tasks into the integration branch does not by
+    itself establish that the artifact is correct, which is what review and
+    verify exist to check. B would publish an unverified artifact and skip
+    defined phases. --- NOT ADOPTED: B. Reversibility was weighed both ways:
+    a push and a PR are undoable, but cleanup after publication costs more
+    than resuming from a preserved local branch. --- CONSEQUENCE: no push, no
+    `gh pr create`, no merge in this launch. The PR is created in the launch
+    that actually reaches Step C, which must itself carry `--pr` (the flag is
+    per-launch and is not carried over).
