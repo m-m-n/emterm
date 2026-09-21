@@ -57,7 +57,7 @@ workflow:
     base_commit: 5bfb3957318973945478d7990e3721712826a91f
     completed_at_commit: fbd0f9c7e741018d7be56ce3988eef6d8e72ca38
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -80,9 +80,17 @@ tasks:
     branch: em-workflow/benign-edit-test-token-rewrite/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
+  plan:
+    floor: [comprehensive, security, architecture, spec]
+    discretionary:
+      - perspective: performance
+        reason: >-
+          diff がテストモジュールへ約700行のトークン走査コードを追加しており、
+          SPEC の NFR4 が「実行コストに影響しない」と宣言しているため、
+          計算量とテスト実行コストを裁量で確認する。
+    cross_validation: true
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
