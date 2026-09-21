@@ -1,0 +1,67 @@
+round: 1
+executed_at: "2026-09-22T00:03:51+09:00"
+scope:
+  review_mode: diff
+  base_commit: 5643e41f5f2b1534ba355470564673d37d21084b
+  head_commit: b74d4af0ab1f9d93ede9f6438efa65d12ab7cabf
+  changed_files:
+    - src-tauri/src/window_host/tests.rs
+    - test-docs/tests-ac-reference-alignment/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security]
+  discretionary: []
+  cross_validation: false
+  notes: >-
+    spec 観点は spec_available=false のため未 dispatch（tier=minimal で SPEC.md は
+    TASK.md に置換）。license / vulnerability は依存マニフェスト・ロックファイル・
+    vendored コードに触れないため非選択。
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed, degraded: false}
+findings: []
+evaluation:
+  round_summary: >-
+    round 1 (diff, cross_validation=false)。dispatch された 2 観点はいずれも findings 空で
+    返り、評価者は Independent Inspection Duty に従って changed_files を独立検証した。
+    カバレッジ: comprehensive#0 = corroborated / security#0 = corroborated。
+    reviewer_outputs にプロンプトインジェクションの試みは検出されなかった。
+    独立検証の要点: (1) 差分の変更行は 57 追加 / 40 削除すべてが // または /// のコメント行で、
+    テスト関数名・#[test] 属性・入力データ・診断文字列・アサーション式・走査ロジックは不変。
+    (2) TASK.md 適用規則 1 の宣言文は 5213-5215 行（5212 行の範囲表記直後、区切り線 5216 の手前）に
+    規定どおり挿入済み。(3) 規則 2 のインライン出典注記は group 内の通常/doc コメント 17 箇所すべてに
+    入り、範囲表記行 5212 は直後の宣言文でカバー = 計 18 行。(4) 規則 3 のアサーション診断文字列
+    31 箇所はすべて未変更。(5) 新規 doctest 発生なし（追加行にコードフェンス 0 件）、E0585 なし
+    （/// は直後の #[test] / pub(super) fn に付随）、deny(warnings) 系なし、追加行最長 74 桁で
+    rustfmt max_width=100 未満かつ wrap_comments=false のため整形ゆらぎなし。
+    (6) test-docs YAML は TASK.md の Expected Result 5 項目に 1:1 対応し、test-docs 配下 140 ファイルの
+    既存慣習と一致。feature-docs/mouse-report-held-callsite-test/ 配下に変更が無いことも確認済み。
+    medium 未満の軽微な指摘 2 件（YAML の AC-1 red_reason が宣言文位置を 5213-5216 と記載しているが
+    実際は 5213-5215、および Expected Result の言い換えが群スコープをファイル全体のように読ませうる）は
+    いずれも TASK.md の文言をそのまま写したもので、報告閾値未満として finding に上げていない。
+  recommended_action: "complete"
+  action_rationale: >-
+    両観点の findings 空を独立検証で裏付け。変更は機械的にコメント行のみ（非コメント変更行 0）で、
+    TASK.md の適用規則 1-3 と Expected Result 5 項目すべてに整合。コメント変更特有の破壊経路
+    （doctest / E0585 / deny(warnings) / rustfmt 整形ゆらぎ）も個別に否定済み。critical/high はもとより
+    medium 以上の指摘も無いため、追加ラウンドや rework の根拠が無い。
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: "tmp/sca-triage-tests-ac-reference-alignment-20260921T150341Z.md"
+  note: >-
+    vulnerability 観点は未選択のため未解決 finding は 0 件。file-tasks は空の findings で実行され、
+    ntd 一覧取得が非ゼロ終了（degraded_reason: listing_exit_nonzero）のため report 分岐に倒れたが、
+    起票対象が無いため実際の起票・追記・重複抑止はいずれも 0 件。
