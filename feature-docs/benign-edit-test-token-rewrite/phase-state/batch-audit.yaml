@@ -1,97 +1,111 @@
 schema_version: 1
 feature: benign-edit-test-token-rewrite
 records:
-  - question_id: requirement.class-n-benign-edit-coverage
-    packet_id: benign-edit-test-token-rewrite-q0001
-    answered_at: "2026-09-22T02:50:39+09:00"
-    source: codex-consultation
-    answer_mode: single_select
-    selected_option_ids: [closed_set_text_anchor]
-    freeform: null
-    normalized_answer: "Two-stage closed-set text anchor for Class A; token-level splice for Class B."
-    resolution_note: |
-      gate: create-spec.requirement-clarification
-      batch policy action: codex_consultation, record_as_assumption: true
-      codex_consulted: true (two rounds, via scripts/run_codex_exec.sh readonly)
-      opus_escalation: not run (Codex reached a decision)
+- question_id: requirement.class-n-benign-edit-coverage
+  packet_id: benign-edit-test-token-rewrite-q0001
+  answered_at: '2026-09-22T02:50:39+09:00'
+  source: codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - closed_set_text_anchor
+  freeform: null
+  normalized_answer: Two-stage closed-set text anchor for Class A; token-level splice for Class B.
+  resolution_note: "gate: create-spec.requirement-clarification\nbatch policy action: codex_consultation,\
+    \ record_as_assumption: true\ncodex_consulted: true (two rounds, via scripts/run_codex_exec.sh readonly)\n\
+    opus_escalation: not run (Codex reached a decision)\n\nOptions offered: closed_set_text_anchor (CHOSEN)\
+    \ / span_carrying_tokenizer /\ndrop_class_n.\n\nRound 1 framed the choice as D1 pure-token / D2 span-carrying\
+    \ tokenizer /\nD3 reconstruct-the-call-text-from-closed-set-names. Codex recommended D2 and\nrejected\
+    \ D3, because reconstructing the call text from closed-set names alone\ncannot reproduce the real\
+    \ argument text or its whitespace. Round 1 also had\nCodex confirm from the source that the Tok enum\
+    \ is Ident|Punct|Literal with no\nbyte spans, and that the Literal variant discards its content, so\
+    \ a token vector\ncannot be rendered back into source text.\n\nRound 2 re-put the decision with the\
+    \ ACTUAL option 1, which round 1 had\nmis-framed: the real proposal SLICES the original bytes, carrying\
+    \ the argument\ntext through verbatim, rather than reconstructing them. Codex's D3 objection\ntherefore\
+    \ did not apply to it. Codex reversed its recommendation to option 1,\nand independently verified\
+    \ the new fact the analyst had surfaced: the production\nfile holds exactly two occurrences of the\
+    \ callee path (the motion path at line\n293, and the target at line 850 inside the enclosing function\
+    \ that begins at\nline 793), so a single-stage text anchor would bind to the wrong call.\n\nCodex's\
+    \ comparative judgement: option 1's edit routine needs no argument count,\nno existing indentation\
+    \ width and no receiver identifier, so it introduces no\ncoupling outside the closed set. Option 2\
+    \ would have to convert Vec<char>\nindices into UTF-8 byte offsets and map body-relative token indices\
+    \ back into\nthe original token vector, adding shared-code maintenance burden for the sake of\na single\
+    \ test, against a scan module whose own SPEC excludes building a\ngeneral-purpose Rust parser.\n\n\
+    Refinement Codex added: searching for the fully-qualified callee path couples to\nthe module segment\
+    \ as well; anchoring on the bare function-name segment avoids\nthat extra name. Noted in response\
+    \ that the existing callee constant already\ncarries the module prefix, so this is a refinement of\
+    \ existing practice rather\nthan a defect introduced by either option.\n\nRisks Codex accepted, carried\
+    \ forward into this feature's edge cases:\n(1) inserting a block comment between the fn keyword and\
+    \ the function name\n    defeats option 1's function-name anchor, where option 2 would survive it;\n\
+    (2) a block comment containing an unbalanced close-paren inside the argument\n    list defeats a naive\
+    \ paren-depth scan;\n(3) the three assertions (text changed / token stream unchanged / judgment still\n\
+    \    Ok) do not by themselves prove the edit landed at the intended call site, so\n    the located\
+    \ span must additionally be checked to have the expected\n    callee-path-plus-N-arguments token shape.\n\
+    \nRationale for adopting: option 1 keeps every benign edit in the merged SPEC's\nAC-5 covered against\
+    \ the real embedded source, binds only to closed-set names,\nrequires no new scan API, and is the\
+    \ better cost/benefit for test-only code.\n"
+- question_id: design-step.recommendation
+  packet_id: benign-edit-test-token-rewrite-q0001
+  answered_at: '2026-09-22T02:50:39+09:00'
+  source: batch-policy
+  answer_mode: single_select
+  selected_option_ids:
+  - skip_design
+  freeform: null
+  normalized_answer: Skip the design step.
+  resolution_note: 'gate: create-spec.design-step
 
-      Options offered: closed_set_text_anchor (CHOSEN) / span_carrying_tokenizer /
-      drop_class_n.
+    batch policy action: select, option_id: decide_autonomously
 
-      Round 1 framed the choice as D1 pure-token / D2 span-carrying tokenizer /
-      D3 reconstruct-the-call-text-from-closed-set-names. Codex recommended D2 and
-      rejected D3, because reconstructing the call text from closed-set names alone
-      cannot reproduce the real argument text or its whitespace. Round 1 also had
-      Codex confirm from the source that the Tok enum is Ident|Punct|Literal with no
-      byte spans, and that the Literal variant discards its content, so a token vector
-      cannot be rendered back into source text.
+    codex_consulted: false (the analyst''s recommendation and the batch policy agree;
 
-      Round 2 re-put the decision with the ACTUAL option 1, which round 1 had
-      mis-framed: the real proposal SLICES the original bytes, carrying the argument
-      text through verbatim, rather than reconstructing them. Codex's D3 objection
-      therefore did not apply to it. Codex reversed its recommendation to option 1,
-      and independently verified the new fact the analyst had surfaced: the production
-      file holds exactly two occurrences of the callee path (the motion path at line
-      293, and the target at line 850 inside the enclosing function that begins at
-      line 793), so a single-stage text anchor would bind to the wrong call.
+    no ambiguity to resolve)
 
-      Codex's comparative judgement: option 1's edit routine needs no argument count,
-      no existing indentation width and no receiver identifier, so it introduces no
-      coupling outside the closed set. Option 2 would have to convert Vec<char>
-      indices into UTF-8 byte offsets and map body-relative token indices back into
-      the original token vector, adding shared-code maintenance burden for the sake of
-      a single test, against a scan module whose own SPEC excludes building a
-      general-purpose Rust parser.
+    Decided autonomously to skip: the change is confined to one inline test module,
 
-      Refinement Codex added: searching for the fully-qualified callee path couples to
-      the module segment as well; anchoring on the bare function-name segment avoids
-      that extra name. Noted in response that the existing callee constant already
-      carries the module prefix, so this is a refinement of existing practice rather
-      than a defect introduced by either option.
+    has no UI surface and introduces no new module boundary.
 
-      Risks Codex accepted, carried forward into this feature's edge cases:
-      (1) inserting a block comment between the fn keyword and the function name
-          defeats option 1's function-name anchor, where option 2 would survive it;
-      (2) a block comment containing an unbalanced close-paren inside the argument
-          list defeats a naive paren-depth scan;
-      (3) the three assertions (text changed / token stream unchanged / judgment still
-          Ok) do not by themselves prove the edit landed at the intended call site, so
-          the located span must additionally be checked to have the expected
-          callee-path-plus-N-arguments token shape.
+    '
+- question_id: create-spec.design-system
+  packet_id: null
+  answered_at: '2026-09-22T02:50:39+09:00'
+  source: batch-policy
+  answer_mode: single_select
+  selected_option_ids:
+  - top_candidate_or_none
+  freeform: null
+  normalized_answer: kind project_native, paths [doc/UI-DESIGN-GUIDELINES.yaml]
+  resolution_note: 'gate: create-spec.design-system
 
-      Rationale for adopting: option 1 keeps every benign edit in the merged SPEC's
-      AC-5 covered against the real embedded source, binds only to closed-set names,
-      requires no new scan API, and is the better cost/benefit for test-only code.
-  - question_id: design-step.recommendation
-    packet_id: benign-edit-test-token-rewrite-q0001
-    answered_at: "2026-09-22T02:50:39+09:00"
-    source: batch-policy
-    answer_mode: single_select
-    selected_option_ids: [skip_design]
-    freeform: null
-    normalized_answer: "Skip the design step."
-    resolution_note: |
-      gate: create-spec.design-step
-      batch policy action: select, option_id: decide_autonomously
-      codex_consulted: false (the analyst's recommendation and the batch policy agree;
-      no ambiguity to resolve)
-      Decided autonomously to skip: the change is confined to one inline test module,
-      has no UI surface and introduces no new module boundary.
-  - question_id: create-spec.design-system
-    packet_id: null
-    answered_at: "2026-09-22T02:50:39+09:00"
-    source: batch-policy
-    answer_mode: single_select
-    selected_option_ids: [top_candidate_or_none]
-    freeform: null
-    normalized_answer: "kind project_native, paths [doc/UI-DESIGN-GUIDELINES.yaml]"
-    resolution_note: |
-      gate: create-spec.design-system
-      batch policy action: select, option_id: top_candidate_or_none
-      codex_consulted: false
-      One candidate was reported (doc/UI-DESIGN-GUIDELINES.yaml, the normative MD3
-      token source mirrored by the native and WebView layers), so kind is
-      project_native. Determined here even though the design step is skipped, per
-      create-spec-phase.md section 11a, which requires design-system determination to
-      run regardless of the design step's status. Not relevant to this feature's own
-      change set.
+    batch policy action: select, option_id: top_candidate_or_none
+
+    codex_consulted: false
+
+    One candidate was reported (doc/UI-DESIGN-GUIDELINES.yaml, the normative MD3
+
+    token source mirrored by the native and WebView layers), so kind is
+
+    project_native. Determined here even though the design step is skipped, per
+
+    create-spec-phase.md section 11a, which requires design-system determination to
+
+    run regardless of the design step''s status. Not relevant to this feature''s own
+
+    change set.
+
+    '
+- question_id: create-spec.command-approval
+  packet_id: null
+  answered_at: '2026-09-22T02:55:55.438931+09:00'
+  source: batch-policy
+  answer_mode: multi_select
+  selected_option_ids: []
+  freeform: null
+  normalized_answer: No new approval required - all 6 command strings were already in the approval store.
+  resolution_note: 'gate: create-spec.command-approval. Ran the approval gate from references/command-execution-protocol.md
+    against workflow.yaml project.components. Resolved 6 command strings; all 6 were already present in
+    the user-owned approval store (~/.claude/em-workflow/approvals.json), so the batch branch auto-approved
+    and auto-recorded NOTHING. The auto-approved-command audit item is therefore empty for this run. Commands
+    verified as already approved: ''CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml'';
+    ''CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib''; ''cargo
+    fmt --manifest-path src-tauri/Cargo.toml --check''; ''bun run build:viewer && bun run build:settings'';
+    ''bun test''; ''bunx biome check .''. codex_consulted: false (nothing unresolved).'

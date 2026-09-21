@@ -1,0 +1,209 @@
+schema_version: 1
+feature: benign-edit-test-token-rewrite
+created: 2026-09-22
+base_branch: main
+parent_branch: em-workflow/benign-edit-test-token-rewrite/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    - basis: description_only
+      probabilities: {"0": 0.07, "1": 0.93, "2": 0.0}
+      expectation_clear: 0.42
+    - basis: description_plus_code
+      probabilities: {"0": 0.02, "1": 0.98, "2": 0.0}
+      expectation_clear: 0.47
+  at: "2026-09-22T02:55:41.588273+09:00"
+  reductions: []
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths: [doc/UI-DESIGN-GUIDELINES.yaml]
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: "bunx biome check ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: bd7244f6eec0330d0f3c7f30b228c7e6303c0950
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      gate create-spec.design-step をバッチポリシー（option skip_design）で解決した。
+      既存のインラインテストモジュール 1 つに閉じたテスト専用の変更であり、UI 表面も
+      視覚的な出力もデザイントークンも新しいモジュール境界も持たないため、design ステップが
+      下すべき視覚的判断が存在しない。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "良性編集テストの結合を閉じた集合のみに限定する"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2, TS-3, TS-4]
+  FR2:
+    title: "Class B の良性編集をトークンレベルで再現する"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2]
+  FR3:
+    title: "すべての良性編集に対する空虚化防止ガード"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2, TS-3, TS-4]
+  FR4:
+    title: "Class A の良性編集をアンカー＋バイト切り出しのソース編集として行う"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-3, TS-4, TS-5, TS-6, TS-7]
+  FR5:
+    title: "すべての良性編集で判定結果が変わらない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2, TS-3, TS-4]
+  NFR1:
+    title: "走査モジュールへの新機能追加・新規依存を行わない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2, TS-3, TS-4]
+  NFR2:
+    title: "変更範囲はテストのみ"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-M1]
+  NFR3:
+    title: "リポジトリのテスト規約"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6, TS-7]
+  NFR4:
+    title: "フィーチャーゲートと実行コストに影響しない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-M1]
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+
+goal: |
+  mouse-report-held-callsite-test: 良性編集耐性テストが NFR8 の閉じた名前集合外の識別子6個をハードコードし false red を招く
+
+  ## 現象 (必須)
+  `button_path_benign_edits_to_the_real_source_are_still_accepted`
+  （`src-tauri/src/window_host/tests.rs:6717-6775`）が、埋め込んだ本番ソースに対する
+  リテラル文字列置換で良性編集を再現しており、SPEC の NFR8 が閉じた集合と宣言した名前の
+  外側にある識別子 6 個をハードコードしている。
+  - `real_call`（6719 行）は `pointer_routing.rs:850` の 1 行そのままの文字列
+  - `stmt_a` / `stmt_b`（6746-6747 行）は `pointer_routing.rs:816-817` そのままの文字列
+  （`let hovered_link = !host.hover.link_cells.is_empty();` /
+  `let middle_click_paste_enabled = app.settings.middle_click_paste;`）
+  いずれも `sanity: ... must match ... verbatim` の assert で守られているため、呼び出しの
+  体裁変更（rustfmt による複数行への折り返し、末尾カンマの追加）や、`hovered_link`・
+  `middle_click_paste_enabled`・`host.hover.link_cells`・`app.settings.middle_click_paste`
+  の無関係なリネームで赤くなる。
+  NFR8 は結合する名前の集合を「2 つの関数名・3 つの呼び先名・`mouse_report_held`」に閉じて
+  宣言している。このテストはそこに 6 個の識別子を追加しており、しかも失敗理由はスイートが
+  固定しようとしている held の受け渡しとは無関係。「良性編集で緑のままであること」を主張する
+  テスト自身が、このバッチで最も良性編集に脆いテストになっている。
+
+  ## 再現手順 (必須)
+  1. `src-tauri/src/window_host/pointer_routing.rs` の `hovered_link` を別名にリネームする
+  （挙動は変えない）
+  1. `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` を実行する
+  2. `button_path_benign_edits_to_the_real_source_are_still_accepted` が verbatim sanity
+  assert で落ちることを確認する
+
+  ## 期待する挙動 (必須)
+  良性編集の再現をリテラル文字列置換ではなくトークン列で行い、NFR8 の閉じた名前集合の外側の
+  識別子に結合しないこと。
+
+  ## 完了の定義 (必須)
+  - [ ] 無関係なローカル変数のリネームや rustfmt の再整形でこのテストが赤くならない
+  - [ ] 結合する名前が NFR8 の閉じた集合に収まっている
+  - [ ] 良性編集耐性の検証能力自体は維持されている
+
+  ## 該当箇所 (任意)
+  - `src-tauri/src/window_host/tests.rs:6717-6775` — 当該テスト
+  - `src-tauri/src/window_host/tests.rs:6719` — `real_call`
+  - `src-tauri/src/window_host/tests.rs:6746-6747` — `stmt_a` / `stmt_b`
+  - `src-tauri/src/window_host/pointer_routing.rs:816-817, 850`
+  - `feature-docs/mouse-report-held-callsite-test/SPEC.md` — NFR8
+
+  レビュアーの提案: 書き換え位置をトークン列から導出する。`find_calls` でトークン化した
+  ソース上の呼び出しを特定してトークン索引で差し替える（AC-6 の変異テストが既に使っている
+  `splice_tokens` の機構）か、`split_arg_spans` / 文のトークン span から並べ替えを駆動する。
+  ソーステキストの編集を残すなら、無関係な 2 文のリテラルを落として並べ替えのみをトークンで
+  表現する。
+
+  ## 実害・発生条件 (任意)
+  テストのみの影響で、失敗は明示的に出る。本番コードへのリスクは無い。実害は、held の
+  受け渡しと無関係な編集で CI が赤くなり、原因調査の手間と「このテストは当てにならない」
+  という不信を生むこと。
+
+  出典: em-workflow review round 1 の comprehensive レビュアー（stable_id
+  `e879433ad6c94644` / severity medium / confidence 60）。Phase R4 の auto-fix ゲートは
+  critical / high のみが対象のため未修正で持ち越された。
+  対象ブランチ: `em-workflow/mouse-report-held-callsite-test/integration`
+
