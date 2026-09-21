@@ -113,7 +113,9 @@ workflow:
     result: pass
     failed_items: []
   - id: retrospect
-    status: pending
+    artifacts: [retrospect.yaml]
+    status: completed
+    completed_at_commit: "e02cab816d55a283474d89c30c0f3eff33143608"
 
 tasks:
   task0001:

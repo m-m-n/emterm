@@ -198,3 +198,36 @@ records:
       既に載っている承認済みリテラルであり、末尾は build_command と同一の
       cargo check。新規のコマンド承認は一切発生していない。実行後は
       cargo check / cargo test --lib / cargo fmt --check のいずれも成功。
+
+  - phase: retrospect
+    gate_id: null
+    gate: "--once と --pr の相互作用 — retrospect 完了と同一ターンで Step C(push + gh pr create) を実行するか"
+    at: "2026-09-22T00:20:00+09:00"
+    options:
+      - "(A) retrospect のみ実行し --once 境界で phase_done を返して終える。PR は Step C を実行する次回起動(--pr 付き)に委ねる"
+      - "(B) 起動時の自由文指示を --once の上書きと解釈し、同一ターンで Step C まで進んで push + gh pr create する"
+    chosen: "(A)"
+    codex_consulted: true
+    opus_escalation: false
+    freeform: "run_codex_exec.sh readonly による比較判定で (A) を採用"
+    normalized_answer: >-
+      retrospect のみを実行し、state=phase_done の構造化結果でターンを終える。
+      push と PR 作成は Step C を実行する次回起動に持ち越す。
+    resolution_note: >-
+      前提: 起動引数は --batch --once --pr。workflow.yaml は retrospect のみ pending で、
+      他は completed / design は skipped、verify は result: pass。起動時の自由文は
+      「実装完了後に integration ブランチを push して gh pr create で PR を作る」と述べている。
+      skills/develop/SKILL.md は (a) --once の retrospect 境界について「Step C(完了処理)は
+      ここでは実行せず、独立した 1 フェーズとして次の起動に持ち越す」と明記し、
+      (b) --pr は Step C を実行する起動でのみ効く起動ごとの設定で、workflow.yaml にも
+      phase-state にも記録しないと定めている。
+      Codex 判定 (A)。理由: 自由文は PR 作成を要求しているが「今回の起動で --once を
+      解除する」とは述べていないため、両方の指示を満たす解釈は「今回は retrospect のみ、
+      PR は次回」になる。仕様忠実性では (A) が優れ、(B) は明記された Step C 持ち越し規定に反する。
+      状態安全性でも (A) が優れる — 再開位置が Step C に保たれるため、外部サービスが
+      Step C 未実行と判断して再起動しても完了処理の重複や PR 作成の再試行が起きない。
+      予測可能性でも phase_done が「1 フェーズ完了」と一致し、外部サービスの解釈が崩れない。
+      (B) を採らなかった代償: 呼び出し側が再起動しない場合、PR が未作成のまま残る。
+      復旧には --pr を付けた次回起動が必要であり、--pr の自動引き継ぎは無い。
+      残存リスク: 次回起動に --pr が付かないと Step C は「ブランチを残す」に倒れ、
+      PR は作られない。
