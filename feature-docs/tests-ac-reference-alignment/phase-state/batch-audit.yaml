@@ -231,3 +231,29 @@ records:
       復旧には --pr を付けた次回起動が必要であり、--pr の自動引き継ぎは無い。
       残存リスク: 次回起動に --pr が付かないと Step C は「ブランチを残す」に倒れ、
       PR は作られない。
+
+  - phase: develop-step-c
+    gate_id: null
+    gate: "Step C 完了処理 — ユーザー散文『integration ブランチをローカルとリモートの両方に残す』が worktree の保持まで要求するか"
+    at: "2026-09-22T09:00:00+09:00"
+    options:
+      - "(A) スキルどおり: push + gh pr create のあと `git worktree remove` で integration worktree を削除し、ローカル/リモートのブランチは残す"
+      - "(B) スキルから逸脱: push + gh pr create のあと integration worktree も残す"
+    chosen: "(A)"
+    codex_consulted: true
+    opus_escalation: false
+    freeform: "run_codex_exec.sh readonly による比較判定で (A) を採用"
+    normalized_answer: >-
+      worktree は削除し、ローカル/リモートの integration ブランチは残す。
+      マージは行わない。
+    resolution_note: >-
+      Codex 判定 (A)。理由: (1) git において branch はコミットを指す参照、worktree は
+      ファイルを展開する場所であり、「ブランチを残す」は worktree の保持まで要求しない。
+      全変更がコミット済みの前提では worktree を削除しても実装成果は失われない。
+      (2) (B) ではブランチが worktree に使用中のままとなり、主作業ツリーからの
+      通常の `git switch` が拒否される。(A) はこの制約を解消する。
+      (3) 無人実行では指示の対象を勝手に広げず、明示されたブランチ保持とスキルの
+      後片付けを両立する判断が妥当。
+      (B) を採らなかった代償: 既存の作業場所と worktree 固有の状態をそのまま使い続ける
+      利便性を失う。ブランチもコミット履歴も失われず、`git worktree add <path> <branch>`
+      で再作成できる。
