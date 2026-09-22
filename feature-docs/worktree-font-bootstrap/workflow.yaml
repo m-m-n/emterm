@@ -134,7 +134,7 @@ tasks:
     domains: [external-io, config-infra]
     complexity: medium
     requirements: [FR6]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/worktree-font-bootstrap/task0002
   task0003:
