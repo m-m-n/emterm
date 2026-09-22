@@ -23,6 +23,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -31,6 +32,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+/** True when this process runs as root, under which chmod 000 does not
+ * block reads — the permission-based unreadable-log cases below cannot be
+ * constructed in that environment and must be skipped rather than
+ * weakened (task0002 test notes). */
+function isRoot(): boolean {
+  return typeof process.getuid === "function" && process.getuid() === 0;
+}
 
 const SCRIPT_DIR = import.meta.dir;
 const REPO_ROOT = join(SCRIPT_DIR, "..");
@@ -47,7 +56,10 @@ const PRIOR_SPEC_PATH = join(
 /** Creates a fresh temp dir holding one log file with the given content,
  * returning its path. Each call gets its own directory so tests never share
  * mutable state. */
-function writeLog(content: string, fileName = "captured.log"): {
+function writeLog(
+  content: string,
+  fileName = "captured.log",
+): {
   dir: string;
   path: string;
 } {
@@ -62,11 +74,19 @@ function cleanup(dir: string) {
 }
 
 /** Runs the shipped helper's classify_unfetched_verdict as a real
- * subprocess, sourcing the file itself (never a copy). */
+ * subprocess, sourcing the file itself (never a copy). `status` accepts a
+ * string too so task0002's non-integer-status cases can be driven without a
+ * cast at every call site. */
 function runClassify(
-  status: number,
+  status: number | string,
   logPath: string,
-): { outcome: string; message: string; stderr: string; exitCode: number } {
+): {
+  outcome: string;
+  message: string;
+  stderr: string;
+  exitCode: number;
+  rawStdout: string;
+} {
   const result = Bun.spawnSync([
     "bash",
     "-c",
@@ -76,8 +96,8 @@ function runClassify(
     String(status),
     logPath,
   ]);
-  const stdout = result.stdout.toString();
-  const line = stdout.replace(/\n$/, "");
+  const rawStdout = result.stdout.toString();
+  const line = rawStdout.replace(/\n$/, "");
   const spaceIndex = line.indexOf(" ");
   const outcome = spaceIndex === -1 ? line : line.slice(0, spaceIndex);
   const message = spaceIndex === -1 ? "" : line.slice(spaceIndex + 1);
@@ -86,6 +106,7 @@ function runClassify(
     message,
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
+    rawStdout,
   };
 }
 
@@ -99,6 +120,32 @@ function runCount(logPath: string): { stdout: string; exitCode: number } {
     HELPER_PATH,
     logPath,
   ]);
+  return {
+    stdout: result.stdout.toString().trim(),
+    exitCode: result.exitCode,
+  };
+}
+
+/** Runs the shipped helper's count_executed_tests as a real subprocess,
+ * with `logPath` resolved relative to `cwd` — used to address a log by a
+ * relative name beginning with `-` or containing `=`, so the argument
+ * genuinely starts with that character rather than being buried after a
+ * directory prefix (task0002 AC-8). */
+function runCountAt(
+  logPath: string,
+  cwd: string,
+): { stdout: string; exitCode: number } {
+  const result = Bun.spawnSync(
+    [
+      "bash",
+      "-c",
+      'source "$1"; count_executed_tests "$2"',
+      "_",
+      HELPER_PATH,
+      logPath,
+    ],
+    { cwd },
+  );
   return {
     stdout: result.stdout.toString().trim(),
     exitCode: result.exitCode,
@@ -179,7 +226,9 @@ describe("classify_unfetched_verdict: no hardcoded counts (AC-4)", () => {
 
 describe("classify_unfetched_verdict: fail outcome with unchanged wording for a clean-exit stall (AC-5)", () => {
   test("no test result line with a zero exit status yields fail with the unchanged literal message", () => {
-    const { dir, path } = writeLog("build_rs.font_missing: bundled font missing\n");
+    const { dir, path } = writeLog(
+      "build_rs.font_missing: bundled font missing\n",
+    );
     try {
       const { outcome, message } = runClassify(0, path);
       expect(outcome).toBe("fail");
@@ -270,6 +319,158 @@ describe("classify_unfetched_verdict: edge cases", () => {
   });
 });
 
+/*
+ * task0002 (verify-font-bootstrap-classification): fail closed when the
+ * executed-test count cannot be derived. AC numbers below refer to
+ * feature-docs/verify-font-bootstrap-classification/tasks/task0002.md, a
+ * separate acceptance list from task0001's above (both feed the same
+ * IMPLEMENTATION.md).
+ */
+
+describe("classify_unfetched_verdict: fails closed when the log cannot be read (task0002 AC-1, AC-2, AC-3, AC-4)", () => {
+  test("a missing log path with a non-zero exit status yields fail, naming the log path and stating no test count (AC-1, AC-2)", () => {
+    const dir = mkdtempSync(
+      join(tmpdir(), "verify-font-bootstrap-verdict-missing-"),
+    );
+    const missingPath = join(dir, "missing.log");
+    try {
+      const { outcome, message } = runClassify(
+        CARGO_FAILURE_STATUS,
+        missingPath,
+      );
+      expect(outcome).toBe("fail");
+      expect(message).toContain(missingPath);
+      expect(message).not.toContain("stopped the build");
+      expect(message).not.toContain(
+        "tests executed and the run reported a failure",
+      );
+      expect(message).not.toContain("tests executed"); // no count field at all, empty or otherwise
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test("a missing log path with a zero exit status still yields fail, never pass (AC-3)", () => {
+    const dir = mkdtempSync(
+      join(tmpdir(), "verify-font-bootstrap-verdict-missing-zero-"),
+    );
+    const missingPath = join(dir, "missing.log");
+    try {
+      const { outcome } = runClassify(0, missingPath);
+      expect(outcome).toBe("fail");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test("an unreadable existing log behaves identically to a missing one, for a non-zero exit status (AC-4)", () => {
+    if (isRoot()) return; // root bypasses permission bits; case cannot be constructed
+    const { dir, path } = writeLog(
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+    );
+    chmodSync(path, 0o000);
+    try {
+      const { outcome, message } = runClassify(CARGO_FAILURE_STATUS, path);
+      expect(outcome).toBe("fail");
+      expect(message).toContain(path);
+    } finally {
+      chmodSync(path, 0o644);
+      cleanup(dir);
+    }
+  });
+
+  test("an unreadable existing log behaves identically to a missing one, for a zero exit status (AC-4)", () => {
+    if (isRoot()) return;
+    const { dir, path } = writeLog(
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+    );
+    chmodSync(path, 0o000);
+    try {
+      const { outcome } = runClassify(0, path);
+      expect(outcome).toBe("fail");
+    } finally {
+      chmodSync(path, 0o644);
+      cleanup(dir);
+    }
+  });
+});
+
+describe("classify_unfetched_verdict: fails closed when the status argument is not an integer (task0002 AC-5)", () => {
+  test("a non-numeric status yields fail naming the uninterpretable status, never pass or warn", () => {
+    const { dir, path } = writeLog(
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+    );
+    try {
+      const { outcome, message } = runClassify("abc", path);
+      expect(outcome).toBe("fail");
+      expect(message).toContain("abc");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test("a non-integer (fractional) status yields fail naming the uninterpretable status, never pass or warn", () => {
+    const { dir, path } = writeLog(
+      "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+    );
+    try {
+      const { outcome, message } = runClassify("12.5", path);
+      expect(outcome).toBe("fail");
+      expect(message).toContain("12.5");
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe("classify_unfetched_verdict: exactly one line, success exit, across every outcome including the new fail-closed ones (task0002 AC-10)", () => {
+  test("the fail-closed branch on an unreadable log still returns success and prints exactly one line", () => {
+    const dir = mkdtempSync(
+      join(tmpdir(), "verify-font-bootstrap-verdict-oneline-"),
+    );
+    const missingPath = join(dir, "missing.log");
+    try {
+      const { exitCode, rawStdout, outcome } = runClassify(
+        CARGO_FAILURE_STATUS,
+        missingPath,
+      );
+      expect(exitCode).toBe(0);
+      expect(rawStdout.split("\n").filter((l) => l.length > 0).length).toBe(1);
+      expect(outcome).toBe("fail");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test("the fail-closed branch on a non-integer status still returns success and prints exactly one line", () => {
+    const { dir, path } = writeLog(
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+    );
+    try {
+      const { exitCode, rawStdout, outcome } = runClassify("abc", path);
+      expect(exitCode).toBe(0);
+      expect(rawStdout.split("\n").filter((l) => l.length > 0).length).toBe(1);
+      expect(outcome).toBe("fail");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test("the pre-existing pass branch still returns success and prints exactly one line", () => {
+    const { dir, path } = writeLog(
+      "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n",
+    );
+    try {
+      const { exitCode, rawStdout, outcome } = runClassify(0, path);
+      expect(exitCode).toBe(0);
+      expect(rawStdout.split("\n").filter((l) => l.length > 0).length).toBe(1);
+      expect(outcome).toBe("pass");
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
 describe("count_executed_tests: unchanged relocation behaviour (AC-10)", () => {
   test("several test result lines are summed (a library suite plus doctests)", () => {
     const { dir, path } = writeLog(
@@ -307,20 +508,116 @@ describe("count_executed_tests: unchanged relocation behaviour (AC-10)", () => {
   });
 });
 
+describe("count_executed_tests: reports failure and prints no count when the log cannot be read (task0002 AC-6)", () => {
+  test("a missing log path reports failure and prints no count", () => {
+    const dir = mkdtempSync(
+      join(tmpdir(), "verify-font-bootstrap-verdict-count-missing-"),
+    );
+    const missingPath = join(dir, "missing.log");
+    try {
+      const { stdout, exitCode } = runCount(missingPath);
+      expect(exitCode).not.toBe(0);
+      expect(stdout).toBe("");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test("an unreadable existing log reports failure and prints no count", () => {
+    if (isRoot()) return; // root bypasses permission bits; case cannot be constructed
+    const { dir, path } = writeLog(
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+    );
+    chmodSync(path, 0o000);
+    try {
+      const { stdout, exitCode } = runCount(path);
+      expect(exitCode).not.toBe(0);
+      expect(stdout).toBe("");
+    } finally {
+      chmodSync(path, 0o644);
+      cleanup(dir);
+    }
+  });
+
+  test("a readable log still reports success and prints exactly the integer it prints today", () => {
+    const { dir, path } = writeLog(
+      "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n",
+    );
+    try {
+      const { stdout, exitCode } = runCount(path);
+      expect(exitCode).toBe(0);
+      expect(stdout).toBe("7");
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe("count_executed_tests: an unusual log path is delivered via standard input, never as a positional argument (task0002 AC-8)", () => {
+  test("a relative path beginning with '-' derives the same count as identical content at an ordinary path", () => {
+    const dir = mkdtempSync(
+      join(tmpdir(), "verify-font-bootstrap-verdict-dash-"),
+    );
+    const content =
+      "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n";
+    writeFileSync(join(dir, "-suspicious.log"), content);
+    writeFileSync(join(dir, "ordinary.log"), content);
+    try {
+      const dash = runCountAt("-suspicious.log", dir);
+      const ordinary = runCountAt("ordinary.log", dir);
+      expect(dash.exitCode).toBe(0);
+      expect(dash.stdout).toBe(ordinary.stdout);
+      expect(dash.stdout).toBe("9");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test("a relative path containing '=' derives the same count as identical content at an ordinary path", () => {
+    const dir = mkdtempSync(
+      join(tmpdir(), "verify-font-bootstrap-verdict-eq-"),
+    );
+    const content =
+      "test result: ok. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n";
+    writeFileSync(join(dir, "var=value.log"), content);
+    writeFileSync(join(dir, "ordinary.log"), content);
+    try {
+      const eq = runCountAt("var=value.log", dir);
+      const ordinary = runCountAt("ordinary.log", dir);
+      expect(eq.exitCode).toBe(0);
+      expect(eq.stdout).toBe(ordinary.stdout);
+      expect(eq.stdout).toBe("5");
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
 describe("Loading the helper is side-effect free (AC-17)", () => {
   test("sourcing the helper produces no stdout/stderr output and exits 0", () => {
-    const result = Bun.spawnSync(["bash", "-c", 'source "$1"', "_", HELPER_PATH]);
+    const result = Bun.spawnSync([
+      "bash",
+      "-c",
+      'source "$1"',
+      "_",
+      HELPER_PATH,
+    ]);
     expect(result.stdout.toString()).toBe("");
     expect(result.stderr.toString()).toBe("");
     expect(result.exitCode).toBe(0);
   });
 
   test("sourcing the helper creates no file or directory in the working directory", () => {
-    const dir = mkdtempSync(join(tmpdir(), "verify-font-bootstrap-verdict-cwd-"));
+    const dir = mkdtempSync(
+      join(tmpdir(), "verify-font-bootstrap-verdict-cwd-"),
+    );
     try {
-      const result = Bun.spawnSync(["bash", "-c", 'source "$1"', "_", HELPER_PATH], {
-        cwd: dir,
-      });
+      const result = Bun.spawnSync(
+        ["bash", "-c", 'source "$1"', "_", HELPER_PATH],
+        {
+          cwd: dir,
+        },
+      );
       expect(result.exitCode).toBe(0); // the source itself must have succeeded
       expect(readdirSync(dir)).toEqual([]);
     } finally {
@@ -376,9 +673,7 @@ describe("verify-font-bootstrap.sh: warn routes through the script's own reporti
 
   test("the un-fetched scenario's verdict block dispatches the helper's warn outcome to report_warn", () => {
     const script = readFileSync(MAIN_SCRIPT_PATH, "utf-8");
-    const match = script.match(
-      /scenario_unfetched\(\)\s*\{[\s\S]*?\n\}\n/,
-    );
+    const match = script.match(/scenario_unfetched\(\)\s*\{[\s\S]*?\n\}\n/);
     expect(match).not.toBeNull();
     const body = match![0];
     expect(body).toContain("classify_unfetched_verdict");
@@ -400,9 +695,7 @@ describe("verify-font-bootstrap.sh: scenario independence is preserved (AC-13)",
 describe("verify-font-bootstrap.sh: the untouched parts of the script (AC-14)", () => {
   test("the fetch-failure scenario's actionable-message assertions are unchanged", () => {
     const script = readFileSync(MAIN_SCRIPT_PATH, "utf-8");
-    expect(script).toContain(
-      "build_rs.font_missing: bundled font missing at",
-    );
+    expect(script).toContain("build_rs.font_missing: bundled font missing at");
     expect(script).toContain(
       "Run `make fetch-fonts` (or `bash scripts/fetch-fonts.sh`) to download bundled fonts.",
     );
@@ -410,7 +703,9 @@ describe("verify-font-bootstrap.sh: the untouched parts of the script (AC-14)", 
 
   test("the already-fetched scenario's acquisition-path recheck is unchanged", () => {
     const script = readFileSync(MAIN_SCRIPT_PATH, "utf-8");
-    expect(script).toContain("acquisition path reported a download after the measured build");
+    expect(script).toContain(
+      "acquisition path reported a download after the measured build",
+    );
   });
 
   test("the exit-time cleanup trap and the scenario invocation order are unchanged", () => {
