@@ -1,0 +1,135 @@
+round: 1
+executed_at: "2026-09-22T11:55:48+09:00"
+scope:
+  review_mode: diff
+  base_commit: 2e726a8e41f2684aa63a8495f569bbc8229f01c0
+  head_commit: 84d5bc1a0759c52901417ea16d7e97e4bb78fecd
+  changed_files:
+    - .github/workflows/ci.yml
+    - ci-workflows.test.ts
+    - scripts/verify-font-bootstrap.sh
+    - src-tauri/build.rs
+    - test-docs/worktree-font-bootstrap/task0001.tests.yaml
+    - test-docs/worktree-font-bootstrap/task0002.tests.yaml
+    - test-docs/worktree-font-bootstrap/task0003.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: a7b9b3b29c8ec135
+    coupling_id: 61c1eb027390a0ad
+    severity: medium
+    category: comprehensive
+    file: scripts/verify-font-bootstrap.sh
+    line: 208
+    title: "un-fetched シナリオが「ビルド停止」と「テスト失敗」を区別せず、CI が偽陽性で赤くなる"
+    description: >-
+      scenario_unfetched は executed=$(count_executed_tests ...) を先に計算しているのに、
+      判定は status -ne 0 を先に見て "the build script stopped the build (exit $status),
+      0 tests executed" と固定文言で報告する。ライブラリテストが実際に走ったうえで 1 件
+      落ちた場合 (status=101, executed>0) も、この分岐に入って事実と違う診断が出る。
+      SPEC の AC1/FR6 が要求しているのは「実行テスト件数が非ゼロであること」であって
+      全テストの成功ではないので、この gate は AC1 より厳しい方に逸脱している。さらに
+      このプロジェクトは cargo test --lib を既定の並列度で回すと非決定的に落ちるテストを
+      抱えている (src-tauri/src/tabs/tests 配下の replay 系、src-tauri/src/tmux_sockets.rs
+      の discover_returns_only_the_live_socket) ため、ci.yml で新設した必須ジョブが
+      font-bootstrap とは無関係な理由で間欠的に赤くなり、しかも原因がフォント取得だと
+      誤って表示される。
+    suggestion: >-
+      executed -eq 0 の判定を status -ne 0 より先に置いて、(a) executed=0 かつ status!=0 なら
+      「ビルドが止まった」、(b) executed>0 かつ status!=0 なら「テストは実行されたが失敗した」と
+      文言を分ける。AC1 に忠実にするなら (b) は un-fetched シナリオの PASS 条件を満たす扱いに
+      するか、少なくとも --test-threads=1 を付けて既知のフレーク源を潰す。
+    sources: [claude:evaluator]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: >-
+      severity medium のため Phase R4 の候補ゲート (critical/high のみ) に乗らず自動修正の
+      対象外。Codex 相談の結論 (option A) に従い、機械ゲートを越えた手動修正はこの run では
+      行わず、フォローアップタスクとして起票して PR マージ前に解消する。
+  - stable_id: 789d3d8a39688036
+    coupling_id: 0f84023894b11e23
+    severity: medium
+    category: performance
+    file: scripts/verify-font-bootstrap.sh
+    line: 342
+    title: "3シナリオの worktree と target ディレクトリが同時に存在し、Rust キャッシュも効かない"
+    description: >-
+      3 つのシナリオは順に実行されるが、worktree の削除は trap EXIT の cleanup() だけで
+      行われるため、最後まで 3 本の worktree とそれぞれの src-tauri/target が同時にディスク上に
+      残る。中身は GUI 既定フィーチャの wgpu/winit/wry スタックで、cargo check 2 本 +
+      cargo test --lib 1 本の debug 成果物なので、ピーク使用量が ubuntu-latest ランナーの
+      ルート FS 空き容量に対して無視できない。加えて ci.yml の Swatinem/rust-cache@v2
+      (workspaces: src-tauri) が復元/保存するのは $GITHUB_WORKSPACE/src-tauri/target だけで、
+      シナリオのビルド先は $SCRATCH_ROOT/<name>/src-tauri/target (mktemp -d 配下) なので
+      コンパイル成果物のキャッシュが 1 バイトも効かない。結果として毎 push / PR で GUI スタックを
+      3 回コールドビルドし、timeout-minutes: 60 に対する余裕も読みにくい。
+    suggestion: >-
+      各シナリオ関数が verdict を記録した直後にその worktree を個別に remove して
+      CREATED_WORKTREES から外し、ピーク時のディスク占有を 1 本分に抑える。あわせて
+      rust-cache ステップを外すか、3 シナリオ共通の CARGO_TARGET_DIR をキャッシュ対象パス配下に
+      置いて依存クレートのビルドを 1 回で済ませるかを選ぶ。
+    sources: [claude:evaluator]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >-
+      severity medium のため Phase R4 の候補ゲート (critical/high のみ) に乗らず自動修正の
+      対象外。Codex 相談の結論 (option A) に従い、フォローアップ対応に回す。
+dropped_findings:
+  - reason: "R3b step 2: severity low は {critical, high, medium} に含まれないため drop"
+    file: src-tauri/build.rs
+    line: 139
+    category: comprehensive
+    title: "パス区切りの書き換えがホストOSに関係なく走る"
+    note: >-
+      comprehensive#0 が medium で報告した内容を評価者が実在確認のうえ low へ降格したもの。
+      Linux 上でディレクトリ名にバックスラッシュを含むパスでのみ踏むため、
+      .claude/worktrees/... 配下という通常運用から外れていると判断された。
+evaluation:
+  round_summary: >-
+    round 1 / cross_validation=true。5 パースペクティブすべて completed、unreviewed なし。
+    レビュアー側の critical/high はゼロ、medium 1 件 (comprehensive#0) のみで、それは実在を
+    確認したうえで low に降格。プロンプトインジェクションの試みは reviewer_outputs のどの
+    エントリにも見つからなかった。独立確認の結果: security corroborated
+    (fetch-fonts.sh は HTTPS 限定・ファイル毎 SHA256 検証後の atomic mv、build.rs は shell を
+    介さず Command::new("bash").arg(script) で呼ぶので引数注入面なし、ci.yml は
+    push/pull_request(main) のみで pull_request_target もシークレット参照もなし)。
+    comprehensive: build.rs:139 の指摘は正確 (low に降格)、加えて verify-font-bootstrap.sh:208 の
+    判定順序バグを自前で検出。performance: 3 シナリオの target 同時存在と rust-cache 不適用を
+    自前で検出。architecture: corroborated。spec: FR1-FR8 / AC3・AC4・AC6・AC10 は差分から
+    追跡でき整合、ただし un-fetched gate が AC1 より厳しい逸脱を検出。AC8 の
+    「feature ブランチでジョブがグリーン」は静的検査では未検証。
+  recommended_action: auto_fix
+  action_rationale: >-
+    critical/high はゼロで、残る finding はいずれも局所的かつ機械的に直せる。ただし
+    finding 1・2 は evaluator 起点 (sources 空) のため、bounded auto-fix の対象に含めるかは
+    review-phase.md の規定に従う旨を評価者自身が付記している。
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-worktree-font-bootstrap-20260922T025529Z.md
+  note: >-
+    vulnerability パースペクティブは Layer 2 のマニフェスト条件に該当しないため未選択で、
+    axis 2 の scan も走らず、未解決の vulnerability finding はゼロ。entry-point は
+    notion-task-dispatch 0.5.0 を渡したが listing_exit_nonzero で degraded し report 分岐に
+    フォールバックした (対象ゼロのため実害なし)。

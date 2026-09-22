@@ -46,3 +46,34 @@ records:
       must be made available first; register the opt-out environment variable
       for cargo rerun tracking and re-check all seven fonts after a successful
       invocation.
+  - question_id: review.medium-findings-disposition
+    packet_id: null
+    answered_at: "2026-09-22T11:56:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: >-
+      Option A — follow the protocol: record both medium findings as
+      `unresolved`, complete the review step, and file finding 1 as an explicit
+      follow-up task to be resolved before the PR is merged.
+    normalized_answer: >-
+      Option A — follow the protocol: record both medium findings as
+      `unresolved`, complete the review step, and file finding 1 as an explicit
+      follow-up task to be resolved before the PR is merged.
+    resolution_note: >-
+      gate: review round 1 の残存 medium 2 件の扱い（Phase R4 の候補ゲートが機械的に
+      critical/high に限定されているため自動修正の対象外になる件）;
+      codex_consulted: true (run_codex_exec.sh readonly, -C = integration worktree);
+      opus_escalation: false.
+      Options considered — A: プロトコルどおり unresolved として記録し review を completed に
+      して、修正は別タスクに回す; B: 機械ゲートを越えてこの run 内で 2 件とも修正する;
+      C: finding 1 だけこの run 内で修正し finding 2 は unresolved のまま残す。
+      Chosen: A。議論の要点 — 新設 CI ジョブが無関係な理由で間欠的に赤くなり、しかも原因が
+      フォント取得だと誤診断される点は重く、マージ後まで残すべきではない。一方
+      `review completed` は「critical/high が残っていない」という判定であって、残存欠陥を
+      許容してマージする判断とは別物。今回は --once で次回起動まで区切れるので、B/C で
+      自動修正の機械的ゲートを独断で越えるより、明示的な別タスクで修正する方が品質と
+      手順の両方を守れる。finding 2 は後続対応に回し、finding 1 を PR マージ前に解消する
+      ことを優先する。
+      Findings left unresolved — a7b9b3b29c8ec135 (scripts/verify-font-bootstrap.sh:208,
+      comprehensive), 789d3d8a39688036 (scripts/verify-font-bootstrap.sh:342, performance).
