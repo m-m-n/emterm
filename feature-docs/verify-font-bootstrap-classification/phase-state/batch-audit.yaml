@@ -15,3 +15,24 @@ records:
     誤った成功判定を防ぐというこの feature の目的に直接含まれる修正、(3) 修正は補助関数と回帰テスト 2 件に限定され影響範囲が小さい、(4) --once の終了境界が変わり実装・レビュー・検証を一巡追加する負担はあるが、正しさのリスクを考えると受け入れる方がよい、(5)
     medium は auto-fix 対象外という規則は守り、正式な差し戻し経路を使う。A の主なリスク: 後続タスクで修正されるまで、テスト未実行を成功として扱う検証スクリプトが残る。起動引数『Consult
     Codex on any unclear points and adopt the option judged to be comparatively better』に従い B を採用。'
+- question_id: develop.once-pr-scope
+  packet_id: null
+  answered_at: '2026-09-22T15:52:00+09:00'
+  source: codex-consultation
+  answer_mode: freeform
+  selected_option_ids: []
+  freeform: 'Option A: honour --once strictly; no PR on this launch'
+  normalized_answer: 'Option A: honour --once strictly; no PR on this launch'
+  resolution_note: 'gate: 未登録ゲート（起動引数が --batch --once --pr で、添えられた散文は「実装が終わったら
+    integration ブランチを push して PR を作成し、ブランチはローカル・リモート両方に残す」と述べている。--once
+    は実装フェーズ境界で走行を終えるため Step C に到達せず、SKILL.md は「--pr は Step C を実行する起動でのみ効き、
+    前の起動からは引き継がれない」と明記している）。codex_consulted: true。選択肢 A = --once を厳守し implement
+    のみ実行して境界で停止、PR は作らず後続起動に委ねる。選択肢 B = 散文を --once の上書きと解釈し、review /
+    verify / retrospect / Step C まで同一走行で走り切って PR を作成。Codex の判定は A。理由: (1) 散文が示すのは
+    「最終的に PR を作りブランチを残す」という終着点であって --once の解除までは明示していない、(2) 仕様がこの
+    フラグの組み合わせを明確に扱っており、implement のみ実行して停止する方が指示全体と整合する、(3) --batch は
+    無人実行の指定であって実行範囲を広げる指定ではなく、B は無人のまま push と PR 作成を含む 4 工程分を依頼範囲を
+    超えて進める危険がある、(4) A なら実装結果を確認できる区切りが保たれる、(5) PR という到達点は後続起動で
+    --pr を再指定すれば引き続き到達可能。B の主なリスク: レビュー・検証が未確認のまま無人でリモートへ push
+    される。起動引数『Consult Codex on any unclear points and adopt the option judged to be comparatively
+    better』に従い A を採用。'
