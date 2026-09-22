@@ -1,0 +1,61 @@
+task_id: task0003
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - "CI workflow: a separate job runs the font bootstrap verification (AC-1) > the verification job exists, is separate from the bun test job, and invokes the entry point verbatim with no arguments"
+      - "CI workflow: a separate job runs the font bootstrap verification (AC-1) > the verification job runs on the same Linux runner family as the bun job"
+      - "CI workflow: a separate job runs the font bootstrap verification (AC-1) > the workflow's trigger block covers push and pull_request to main and gained no new trigger types"
+    red_confirmed: true
+    red_reason: >-
+      Before ci.yml had a second job, `findVerifyStep(doc)` (searching every
+      job's steps for a `bash scripts/verify-font-bootstrap.sh` run line)
+      returned undefined: `expect(found).toBeDefined()` failed with "Received:
+      undefined", and the runner-family test threw "TypeError: Cannot
+      destructure property 'job' from null or undefined value" trying to
+      destructure the same undefined result. The third test in this group
+      (trigger block unchanged) asserts a property of ci.yml's existing
+      top-level `on:` block that this task does not touch, so it passed
+      before and after — it is included here as coverage of AC-1's trigger-
+      inheritance clause, not as a red-to-green proof.
+  AC-2:
+    tests:
+      - "CI workflow: the verification job prepares Rust and system libraries before invoking the script (AC-2) > a Rust toolchain install step precedes the verification step"
+      - "CI workflow: the verification job prepares Rust and system libraries before invoking the script (AC-2) > a system-library install step (apt-get install) precedes the verification step"
+      - "CI workflow: the verification job prepares Rust and system libraries before invoking the script (AC-2) > the installed system libraries include the desktop stack the GUI build links against"
+      - "CI workflow: the verification job prepares Rust and system libraries before invoking the script (AC-2) > the verification job declares a job-level timeout sufficient for real builds plus a real download"
+    red_confirmed: true
+    red_reason: >-
+      All four tests call `findVerifyStep(doc)!` and destructure its result;
+      with no verification job present this threw "TypeError: Cannot
+      destructure property 'job' from null or undefined value" before any
+      Rust-toolchain, apt-get, package-list, or timeout assertion could run.
+  AC-3:
+    tests:
+      - "CI workflow: the verification job restores no font cache and sets no opt-out (AC-3) > no step in the job uses actions/cache or references fetch-fonts.sh"
+      - "CI workflow: the verification job restores no font cache and sets no opt-out (AC-3) > the opt-out switch is never set anywhere in ci.yml"
+    red_confirmed: true
+    red_reason: >-
+      The first test destructures `findVerifyStep(doc)!` and threw the same
+      "Cannot destructure property 'job' from null or undefined value" before
+      the job existed. The second test reads ci.yml's raw text directly (no
+      dependency on the new job) and asserts `EMTERM_SKIP_FONT_FETCH` never
+      appears; that string was absent from ci.yml before this task and stays
+      absent after — it passed from the start as a preventative guard against
+      D3's opt-out being set by this task, not a red-to-green proof.
+  AC-4:
+    tests:
+      - "The existing bun job and release.yml are untouched by task0003 (AC-4) > the bun job's step sequence is unchanged (names and run commands)"
+      - "The existing bun job and release.yml are untouched by task0003 (AC-4) > release.yml is byte-for-byte unmodified"
+    red_confirmed: false
+    red_reason: >-
+      AC-4 is a "must not change" invariant (task0003.md scope: the existing
+      bun job's steps, the trigger block, and release.yml are out of scope).
+      Both assertions were true before this task touched anything (the bun
+      job was already exactly this sequence; release.yml's sha256 was already
+      f59658b3a5702a9f3f06b5dfd3de559e58844b376881ebba4dba6baaadd46b13) and
+      remain true after adding the new job. Forcing them red would require
+      violating the very files this task must leave untouched, so there is no
+      red-to-green transition to observe; their role is a permanent guard
+      against this task (or a future edit) disturbing either file.

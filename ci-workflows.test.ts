@@ -11,6 +11,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -294,5 +295,180 @@ describe("release.yml still runs its bundle builds on both platforms, unmoved (A
       )!;
       expect(step.run).toBe("bun install --frozen-lockfile");
     }
+  });
+});
+
+/**
+ * Structural assertions for task0003 of the `worktree-font-bootstrap`
+ * feature: a CI job that invokes the bootstrap-verification entry point
+ * (`scripts/verify-font-bootstrap.sh`, created by task0002). These parse
+ * `ci.yml` as data, per task0003.md's Test Notes, so the job's presence, its
+ * runner, the absence of any font-cache step, the invoked command and its
+ * arguments, and the declared timeout are all verified structurally rather
+ * than by matching raw text. AC-1..AC-4 map to the describe blocks below.
+ *
+ * A green run of the job against the real script is out of scope here
+ * (task0003.md: "feature-wide verification item (TS7)") — these assertions
+ * only prove the job is wired correctly.
+ */
+
+const CI_YML_PATH = join(WORKFLOWS_DIR, "ci.yml");
+const RELEASE_YML_PATH = join(WORKFLOWS_DIR, "release.yml");
+
+// Matches an invocation of the bootstrap-verification entry point, as a
+// whole shell token rather than a substring of some other command.
+const RUNS_VERIFY_SCRIPT_RE =
+  /(?:^|[\s;&|(])bash\s+scripts\/verify-font-bootstrap\.sh(?:$|[\s;&|)])/;
+
+function loadCiWorkflow(): WorkflowFile {
+  return parseYaml(readFileSync(CI_YML_PATH, "utf-8")) as WorkflowFile;
+}
+
+function findVerifyStep(doc: WorkflowFile) {
+  for (const [jobId, job] of Object.entries(doc.jobs)) {
+    const step = job.steps.find(
+      (s) => typeof s.run === "string" && RUNS_VERIFY_SCRIPT_RE.test(s.run),
+    );
+    if (step) return { jobId, job, step };
+  }
+  return undefined;
+}
+
+describe("CI workflow: a separate job runs the font bootstrap verification (AC-1)", () => {
+  test("the verification job exists, is separate from the bun test job, and invokes the entry point verbatim with no arguments", () => {
+    const doc = loadCiWorkflow();
+    const found = findVerifyStep(doc);
+    expect(found).toBeDefined();
+    const { jobId, step } = found!;
+
+    expect(jobId).not.toBe("test");
+    expect(step.run).toBe("bash scripts/verify-font-bootstrap.sh");
+    expect(step["continue-on-error"]).not.toBe(true);
+  });
+
+  test("the verification job runs on the same Linux runner family as the bun job", () => {
+    const doc = loadCiWorkflow();
+    const { job } = findVerifyStep(doc)!;
+
+    expect(job["runs-on"]).toBe(doc.jobs.test!["runs-on"]);
+  });
+
+  test("the workflow's trigger block covers push and pull_request to main and gained no new trigger types", () => {
+    const doc = loadCiWorkflow();
+
+    expect(Object.keys(doc.on).sort()).toEqual(["pull_request", "push"]);
+    expect(doc.on.push?.branches).toEqual(["main"]);
+    expect(doc.on.pull_request?.branches).toEqual(["main"]);
+  });
+});
+
+describe("CI workflow: the verification job prepares Rust and system libraries before invoking the script (AC-2)", () => {
+  test("a Rust toolchain install step precedes the verification step", () => {
+    const doc = loadCiWorkflow();
+    const { job, step: verifyStep } = findVerifyStep(doc)!;
+    const verifyIndex = job.steps.indexOf(verifyStep);
+    const rustIndex = job.steps.findIndex(
+      (s) =>
+        typeof s.uses === "string" &&
+        s.uses.startsWith("dtolnay/rust-toolchain"),
+    );
+
+    expect(rustIndex).toBeGreaterThanOrEqual(0);
+    expect(rustIndex).toBeLessThan(verifyIndex);
+  });
+
+  test("a system-library install step (apt-get install) precedes the verification step", () => {
+    const doc = loadCiWorkflow();
+    const { job, step: verifyStep } = findVerifyStep(doc)!;
+    const verifyIndex = job.steps.indexOf(verifyStep);
+    const aptIndex = job.steps.findIndex(
+      (s) => typeof s.run === "string" && /apt-get\s+install/.test(s.run),
+    );
+
+    expect(aptIndex).toBeGreaterThanOrEqual(0);
+    expect(aptIndex).toBeLessThan(verifyIndex);
+  });
+
+  test("the installed system libraries include the desktop stack the GUI build links against", () => {
+    const doc = loadCiWorkflow();
+    const { job } = findVerifyStep(doc)!;
+    const aptStep = job.steps.find(
+      (s) => typeof s.run === "string" && /apt-get\s+install/.test(s.run),
+    )!;
+    const run = aptStep.run as string;
+
+    for (const pkg of [
+      "libwebkit2gtk-4.1-dev",
+      "libgtk-3-dev",
+      "libglib2.0-dev",
+      "librsvg2-dev",
+      "libasound2-dev",
+    ]) {
+      expect(run).toContain(pkg);
+    }
+  });
+
+  test("the verification job declares a job-level timeout sufficient for real builds plus a real download", () => {
+    const doc = loadCiWorkflow();
+    const { job } = findVerifyStep(doc)!;
+    const timeout = job["timeout-minutes"];
+
+    expect(typeof timeout).toBe("number");
+    expect(timeout as number).toBeGreaterThanOrEqual(30);
+  });
+});
+
+describe("CI workflow: the verification job restores no font cache and sets no opt-out (AC-3)", () => {
+  test("no step in the job uses actions/cache or references fetch-fonts.sh", () => {
+    const doc = loadCiWorkflow();
+    const { job } = findVerifyStep(doc)!;
+
+    for (const step of job.steps) {
+      if (typeof step.uses === "string") {
+        expect(step.uses.startsWith("actions/cache")).toBe(false);
+      }
+      if (typeof step.run === "string") {
+        expect(step.run).not.toContain("fetch-fonts.sh");
+      }
+    }
+  });
+
+  test("the opt-out switch is never set anywhere in ci.yml", () => {
+    const raw = readFileSync(CI_YML_PATH, "utf-8");
+
+    expect(raw).not.toContain("EMTERM_SKIP_FONT_FETCH");
+  });
+});
+
+describe("The existing bun job and release.yml are untouched by task0003 (AC-4)", () => {
+  test("the bun job's step sequence is unchanged (names and run commands)", () => {
+    const doc = loadCiWorkflow();
+    const steps = doc.jobs.test!.steps;
+
+    expect(steps.map((s) => s.name)).toEqual([
+      "Checkout",
+      "Setup Bun",
+      "Install frontend dependencies",
+      "Run bun test suite",
+    ]);
+    expect(
+      steps.find((s) => s.name === "Install frontend dependencies")!.run,
+    ).toBe("bun install --frozen-lockfile");
+    expect(steps.find((s) => s.name === "Run bun test suite")!.run).toBe(
+      "bun test",
+    );
+    expect(doc.jobs.test!["runs-on"]).toBe("ubuntu-latest");
+  });
+
+  test("release.yml is byte-for-byte unmodified", () => {
+    const raw = readFileSync(RELEASE_YML_PATH, "utf-8");
+    const hash = createHash("sha256").update(raw).digest("hex");
+
+    // Captured from release.yml as it stood before task0003 (NFR7: this
+    // task must never touch it). A legitimate future edit to release.yml
+    // updates this constant deliberately; task0003 itself must not.
+    expect(hash).toBe(
+      "f59658b3a5702a9f3f06b5dfd3de559e58844b376881ebba4dba6baaadd46b13",
+    );
   });
 });
