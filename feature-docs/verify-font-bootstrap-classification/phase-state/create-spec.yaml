@@ -1,12 +1,118 @@
 schema_version: 1
 feature: verify-font-bootstrap-classification
 phase: create-spec
-status: in_progress
+status: awaiting_answers
+generation: 1
+base_revision: "0bebe322d4fb40fb9d5023544edfdfc3542d901c"
 last_input_digest: "sha256:ba905198b2562b5367210e2fa15b106367c25079824b85db301d04123c69a9f1"
-rounds: 0
-answers: []
-assumptions: []
-progress_fingerprint: null
+active_request_id: cs-analyst-001
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-22T13:15:00+09:00"
+    questions:
+      - question_id: requirement.test-threads-vs-literal-repro
+        status: answered
+      - question_id: requirement.prior-spec-amendment
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.test-threads-vs-literal-repro:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-22T13:16:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [classification_only]
+    freeform: >-
+      Codex (run_codex_exec.sh readonly) compared "add -- --test-threads=1 to the
+      un-fetched scenario", "add it to every cargo-test scenario" and "do not add
+      it, rely on the PASS-with-warning classification". It chose the third:
+      worktree-font-bootstrap FR6 pins the literal reproduction command including
+      its default parallelism, only scenario_unfetched runs `cargo test` at all
+      (lines 252 / 307 run `cargo check`), and once executed>0 with a non-zero
+      exit is a warning rather than a failure the known flakes can no longer turn
+      the job red by themselves.
+    normalized_answer: >-
+      Keep the literal reproduction command unchanged. Do not add
+      `-- --test-threads=1`. Flake absorption comes from the classification
+      change (executed>0 + non-zero status = warning + PASS), not from changing
+      the command.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; codex_consulted: true;
+      Codex chose option C of three (no flag); mapped to the packet's
+      `classification_only` option. Options not chosen: add_flag_and_document,
+      add_flag_and_amend_prior_spec, rerun_serially_on_failure. Recorded as an
+      assumption per batch-policies.yaml (record_as_assumption: true).
+  requirement.prior-spec-amendment:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-22T13:17:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [no_prior_spec_edit]
+    freeform: >-
+      Codex (run_codex_exec.sh readonly) read feature-docs/worktree-font-bootstrap/SPEC.md
+      and chose "leave the prior SPEC untouched": AC1 (line 447) already requires
+      only a non-zero executed count and FR6 (line 133) already makes only
+      non-execution a failure, so no wording there is wrong. The Declared Change
+      Set section (line 350, with line 372 stating that not every declared path
+      must change) does not oblige an edit. The actual inconsistency is in
+      scripts/verify-font-bootstrap.sh:208, not in the prior SPEC.
+    normalized_answer: >-
+      Do not edit feature-docs/worktree-font-bootstrap/SPEC.md. Record the AC1/FR6
+      reading in this feature's own SPEC and in the script's comments.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; codex_consulted: true;
+      Codex chose option A. Option not chosen: amend_prior_spec.
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-22T13:17:30+09:00"
+    source: batch-policy
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: >-
+      Accept the analyst's recommendation to skip the design step.
+    resolution_note: >-
+      gate: create-spec.design-step; resolved by references/batch-policies.yaml
+      (action: select, option_id: decide_autonomously). No Codex consultation
+      needed.
+assumptions:
+  - assumption_id: a1
+    statement: >-
+      The classification change is confined to scenario_unfetched; the
+      fetch-failure and already-fetched scenarios' verdict logic is untouched.
+    reversible: true
+  - assumption_id: a2
+    statement: >-
+      A "tests ran but failed" un-fetched scenario counts toward RESULTS_PASS, so
+      the script exits 0 when the other two scenarios pass.
+    reversible: true
+  - assumption_id: a3
+    statement: >-
+      No new cargo flag is added anywhere; the un-fetched scenario keeps running
+      the literal reproduction command that worktree-font-bootstrap FR6 pins.
+    reversible: true
+  - assumption_id: a4
+    statement: >-
+      The regression test drives the shipped script (or a sourceable
+      classification helper extracted from it) as a real subprocess with synthetic
+      logs, following plugins/emterm/hooks/scripts/notify-status.test.ts's
+      Bun.spawnSync precedent, never a real cargo build or a real download.
+    reversible: true
+  - assumption_id: a5
+    statement: >-
+      .github/workflows/release.yml stays byte-for-byte unmodified, and
+      .github/workflows/ci.yml's verify-font-bootstrap step keeps the exact run
+      string `bash scripts/verify-font-bootstrap.sh`.
+    reversible: true
+  - assumption_id: a6
+    statement: >-
+      The aggregate summary line keeps its existing
+      "verify_font_bootstrap.summary: N/M scenarios passed" shape; a warning is
+      surfaced on its own `verify_font_bootstrap.`-prefixed line.
+    reversible: true
+progress_fingerprint: "sha256:round1"
 resolved_input_cache:
   resolved_at: "2026-09-22T13:10:00+09:00"
   e2e: []
