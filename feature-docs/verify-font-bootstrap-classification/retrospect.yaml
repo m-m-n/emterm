@@ -1,0 +1,59 @@
+feature: verify-font-bootstrap-classification
+collected_at: "2026-09-22T16:05:00+09:00"
+session_ids: ["01a0c7d2-b2da-7795-88dc-e065857c3e95"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: >-
+      Both readings evaluated below the reduced row's P(0) floor (0.40), so the
+      full tier (removes nothing) was selected by threshold_rows:full.
+    bases:
+      - basis: description_only
+        probabilities: {"0": 0.24, "1": 0.73, "2": 0.03, "3": 0.0}
+      - basis: description_plus_code
+        probabilities: {"0": 0.0, "1": 0.91, "2": 0.09, "3": 0.0}
+    pre_survey_estimate:
+      files_expected:
+        - scripts/verify-font-bootstrap.sh
+        - scripts/verify-font-bootstrap.test.ts
+        - test-docs/worktree-font-bootstrap/task0002.tests.yaml
+      changed_lines_approx: 150
+      new_functions_needed: 2
+      new_files_needed: 1
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - note: >-
+      pre_survey_estimate が挙げた files_expected 3 件のうち実際に触ったのは
+      scripts/verify-font-bootstrap.sh のみ。実装は新規 helper
+      scripts/verify-font-bootstrap-verdict.sh と
+      scripts/verify-font-bootstrap-verdict.test.ts に分離され、
+      test-docs/worktree-font-bootstrap/task0002.tests.yaml には触れず
+      test-docs/verify-font-bootstrap-classification/ 側に記録された。
+      事前見積りのパス予測は tier 判定には影響しなかったが、外れている。
+  - note: >-
+      round 1 の唯一の指摘 (1f095aa46999c43d) は severity medium で、
+      Phase R4 の auto-fix 候補ゲートが critical/high 限定のため自動修正の対象外だった。
+      内容は fail-open（ログを読めないと 0 件実行の run が PASS になる）で、
+      この feature の目的そのものに触れる誤緑であり、severity 分類と
+      auto-fix ゲートの閾値が噛み合っていない例。
+      Codex 相談で rework path (option B) を採用し task0002 として差し戻して閉じた。
+  - note: >-
+      レビュー観点 4 本のうち architecture / spec は litellm(muse-spark)、
+      comprehensive / security は codex で実行され、2 ラウンドとも全観点 completed。
+      round 2 は 4 観点すべて zero findings。
+  - note: >-
+      起動引数 --batch --once --pr の解釈が仕様上あいまいで、
+      implement フェーズ境界で Codex に諮り option A（--once 厳守、
+      PR は Step C を実行する起動に委ねる）を採用した
+      (batch-audit.yaml: develop.once-pr-scope)。同じ判断が retrospect
+      境界にも適用され、この起動でも PR は作成していない。
