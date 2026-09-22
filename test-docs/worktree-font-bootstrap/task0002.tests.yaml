@@ -1,0 +1,123 @@
+task_id: task0002
+
+# The Rust crate (src-tauri) is not touched by this task at all — the only
+# change is a new, independent bash script. The crate's build already fails
+# in this worktree today because task0001 (the build.rs bootstrap fetch) is
+# a separate, not-yet-merged task: build.rs still just panics on the first
+# missing bundled font. That failure is inherited, unrelated to this task's
+# diff, and unchanged by it — recorded here as a single descriptive entry
+# rather than individual test names, since no test binary is ever produced.
+baseline_failures:
+  - "<build failure: src-tauri fails to compile — build.rs panics with build_rs.font_missing (task0001's font-bootstrap fetch is a separate task, not present in this worktree)>"
+final_failures:
+  - "<build failure: src-tauri fails to compile — build.rs panics with build_rs.font_missing (task0001's font-bootstrap fetch is a separate task, not present in this worktree)>"
+
+# scripts/verify-font-bootstrap.sh is itself the test vehicle (an infra
+# script whose real dependency graph and real network/build behavior is
+# what each Acceptance Criterion is about) — there is no separate unit-test
+# suite to point `tests:` at. Every criterion below was instead verified by
+# actually executing the finished script (twice, end to end, against real
+# isolated git worktrees, real cargo builds, and a real font download) and
+# by exercising specific decision points in the script with synthetic
+# inputs. Full-run logs: /tmp/verify-font-bootstrap-run1.log (pre cleanup
+# fix) and /tmp/verify-font-bootstrap-run2.log (post fix, clean).
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before this task, scripts/verify-font-bootstrap.sh did not exist
+      (invoking it: "No such file or directory"). After implementation,
+      `bash scripts/verify-font-bootstrap.sh` run twice from the repository
+      root with no arguments and no environment variables completes and
+      exits 1, matching "non-zero iff a scenario failed" for the
+      un-fetched-fails case observed in this worktree (run2 summary:
+      "2/3 scenarios passed", EXIT_CODE=1). The zero-exit branch
+      (`[ "$RESULTS_PASS" -eq "$RESULTS_TOTAL" ]`) was additionally
+      confirmed in isolation with synthetic pass/total pairs (3/3 -> 0,
+      2/3 -> 1), since driving all three scenarios to PASS in this
+      worktree requires task0001's build.rs bootstrap, which is out of
+      this task's scope and not present here.
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      No automated reproduction of the un-fetched path existed before this
+      script. Running the finished un-fetched scenario against this
+      worktree (build.rs lacks task0001's bootstrap) reproduces the
+      reported regression and is correctly reported as a failure — observed
+      identically in both full runs:
+      "verify_font_bootstrap.un-fetched: FAIL (the build script stopped the
+      build (exit 101), 0 tests executed)". The zero-executed-tests branch
+      of count_executed_tests() was separately confirmed against a
+      synthetic cargo-test log with no "test result:" line (returns 0) and
+      against one with "2 passed; 1 failed" (returns 3), proving the
+      counter is exercised correctly on both the failure and success shapes
+      of cargo's own output.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Ran twice end to end: the fetch-failure scenario induces failure by
+      shimming curl/wget on PATH only (scripts/fetch-fonts.sh itself is
+      never touched), and reports
+      "verify_font_bootstrap.fetch-failure: PASS" both times, having
+      confirmed the build stopped, both actionable-message lines were
+      present verbatim, and the font directory held no partial file
+      afterward. The "does not pass on a bare non-zero exit alone" clause
+      was confirmed directly: a synthetic log containing an unrelated
+      failure (a fake linker error, no font_missing text) does NOT match
+      either message-line grep, which is exactly the condition the script
+      uses to report FAIL instead of a false PASS — i.e. the scenario is
+      observably unable to pass on message-less failures.
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      No prior verification existed that a fully-populated tree performs no
+      further download or rewrite. The already-fetched scenario populated
+      all seven fonts through scripts/fetch-fonts.sh (real network fetch,
+      since none of the fonts were cached anywhere for this fresh scratch
+      tree), then ran `cargo check` and reported
+      "verify_font_bootstrap.already-fetched: PASS" in both runs, having
+      confirmed via a `find -newer <marker>` check that no font file's
+      mtime changed across the measured build, and via a second
+      scripts/fetch-fonts.sh invocation afterward that every file was
+      reported already up to date (no "downloading" line in its output).
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Demonstrated concretely in this task's own worktree exactly as the
+      plan requires: with task0001's bootstrap absent, both full runs
+      produced "verify_font_bootstrap.un-fetched: FAIL (...)",
+      "verify_font_bootstrap.fetch-failure: PASS",
+      "verify_font_bootstrap.already-fetched: PASS",
+      "verify_font_bootstrap.summary: 2/3 scenarios passed", and a non-zero
+      script exit (EXIT_CODE=1) — each scenario under its own stable
+      identifier on its own line, the aggregate reflecting the one failing
+      scenario while the other two still report their own verdicts, exactly
+      as AC-5 requires.
+  AC-6:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      The first full run (run1) exposed a genuine defect: CREATED_WORKTREES
+      was appended to inside add_scenario_worktree(), which every caller
+      invokes via command substitution (`tree=$(add_scenario_worktree ...)`)
+      — a subshell, so the array mutation never reached the parent shell.
+      The global cleanup() trap therefore found nothing to remove via `git
+      worktree remove`, and only the final blanket `rm -rf
+      "$SCRATCH_ROOT"` deleted the directories, leaving three stale
+      "prunable" entries in the repository's shared
+      .git/worktrees/ metadata after the run — a real, observed AC-6
+      violation (confirmed via `git worktree list` showing
+      .../unfetched, .../fetch-failure, .../already-fetched as
+      "(detached HEAD) prunable" after run1 completed). Moved the
+      CREATED_WORKTREES append to each scenario function's own
+      (non-subshell) scope and re-ran end to end (run2): `git worktree
+      list` afterward shows exactly the pre-existing worktrees with no
+      stale entries, `ls /tmp` shows no leftover verify-font-bootstrap.*
+      scratch directory, and the primary checkout's
+      src-tauri/assets/fonts/ still holds only the three pristine tracked
+      files with a clean `git status`.
