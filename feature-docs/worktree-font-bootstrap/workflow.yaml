@@ -1,0 +1,236 @@
+schema_version: 1
+feature: worktree-font-bootstrap
+created: 2026-09-22
+base_branch: main
+goal: |
+  worktree で src-tauri/assets/fonts/ が空のため build.rs が panic しテストが一切走らない
+
+  種別: バグ
+  指示メモ: em-workflow review 実行中に観測。回避策はメインツリーからフォントをコピー
+
+  ## 現象 (必須)
+  `git worktree add` で作った新しい作業ツリーでは `src-tauri/assets/fonts/` が空になる
+  （gitignore 済みで git 追跡されていないため）。この状態で
+  `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib`
+  を実行すると build.rs がフォント不在で panic し、テストが 1 件も走らない。
+  ## 再現手順 (必須)
+  1. `git worktree add -b tmp/probe <path> main` で新しい worktree を作る
+  2. その worktree で上記の cargo test を実行する
+  3. build.rs が panic し、テストが 1 件も実行されないことを確認する
+  ## 期待する挙動 (必須)
+  新しい worktree でもテストが走ること。少なくとも、build.rs がフォント不在時に
+  「`bash scripts/fetch-fonts.sh` を実行せよ」と読み手が次の手を取れる形で停止すること。
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  ## 該当箇所 (任意)
+  - `src-tauri/build.rs` — フォント不在時に panic する箇所
+  - `src-tauri/assets/fonts/` — gitignore 済みの取得先
+  - `scripts/fetch-fonts.sh`
+  ## 実害・発生条件 (任意)
+  worktree を作って作業するすべての経路で起きる。em-workflow はタスクごとに worktree を
+  作るため、実装エージェントが毎回この壁に当たる。今回は実装エージェントがメインツリーの
+  `src-tauri/assets/fonts/` を worktree 側へコピーして回避した（git 管理外の場所なので
+  差分には現れない）。回避策を知らない場合、build.rs の panic がタスク自体の失敗と
+  誤診される。
+  出典: em-workflow の benign-edit-test-token-rewrite / task0001 実装中に観測。
+parent_branch: em-workflow/worktree-font-bootstrap/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    - basis: description_only
+      probabilities:
+        "0": 0.39
+        "1": 0.61
+        "2": 0.0
+      expectation_clear: 0.77
+    - basis: description_plus_code
+      probabilities:
+        "0": 0.0
+        "1": 0.7
+        "2": 0.3
+      expectation_clear: 0.71
+  at: "2026-09-22T11:26:00+09:00"
+  reductions: []
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "make fmt-check"
+      e2e_test_command: ""
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 5e31fb4ea3c32854ff4f19619d2deab05273f742
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      Answered as skip_design at gate create-spec.design-step (batch policy
+      decide_autonomously, accepting requirements-analyst's recommendation).
+      The change is confined to build-script behavior, a build-output message,
+      a verification script and a CI job — there is no UI, visual or
+      design-token surface.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: 2e726a8e41f2684aa63a8495f569bbc8229f01c0
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: Preserve the GUI-gated bundled-font presence check
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Automatic fetch attempt on detected absence
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Explicit opt-out that forbids the fetch
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Stop with the existing actionable message on failure
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: scripts/fetch-fonts.sh as the single acquisition path
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Bootstrap-verification script
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: CI wiring for the bootstrap-verification script
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: Scope boundary
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Accepted non-hermeticity, stated openly
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: No network when the fonts are already correct
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Supply-chain integrity preserved
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Write containment
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: CLI-only build untouched
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: No rebuild churn
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR7:
+    title: Determinism for packaging and release builds
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
