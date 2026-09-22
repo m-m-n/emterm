@@ -1,0 +1,146 @@
+schema_version: 1
+feature: worktree-font-bootstrap
+phase: create-spec
+status: awaiting_answers
+generation: 1
+base_revision: 043d522d68c8ecf178ad7da21652d3cfa73bce58
+last_input_digest: "sha256:fc74fc73771c14be3598057eb5edf6dc86570acb9ca395e5c07ed209898b999f"
+active_request_id: cs-analyst-001
+packets:
+  worktree-font-bootstrap-q0001:
+    status: answered
+    issued_at: "2026-09-22T11:35:00+09:00"
+    questions:
+      - question_id: requirement.font-bootstrap.target-behavior
+        status: answered
+      - question_id: requirement.font-bootstrap.acquisition-source
+        status: answered
+      - question_id: requirement.font-bootstrap.regression-test
+        status: answered
+      - question_id: requirement.font-bootstrap.scope
+        status: answered
+      - question_id: design.step-decision
+        status: answered
+answers:
+  requirement.font-bootstrap.target-behavior:
+    packet_id: worktree-font-bootstrap-q0001
+    answered_at: "2026-09-22T11:40:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [fetch_then_fail_clearly]
+    freeform: >-
+      build.rs detects the absence under CARGO_FEATURE_GUI, invokes
+      scripts/fetch-fonts.sh once with the destination pinned inside the
+      building worktree, and only on a non-zero exit or a still-missing file
+      stops with the existing actionable message. An explicit opt-out must
+      exist so offline / packaging / sandboxed builds can forbid the fetch and
+      get the stop-with-guidance behavior instead.
+    normalized_answer: >-
+      Try the canonical fetch first, fall back to the actionable stop. Provide
+      an explicit opt-out for offline and packaging builds.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action
+      codex_consultation; codex_consulted: true (2 turns, converging, stopped
+      before the turn-3 trajectory judgement); opus_escalation: not run.
+      Codex chose fetch_then_fail_clearly on both turns. Orchestrator adopted
+      it: the definition of done requires the literal repro command
+      (`CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib` in a fresh worktree) to stop reproducing,
+      and options fail_fast_with_guidance / skip_font_embed_when_absent cannot
+      satisfy that — the first leaves a manual step, the second would need stub
+      font bytes behind include_bytes! and could mask a real packaging
+      regression. Accepted trade-off, raised by Codex and recorded here: a
+      build script that reaches the network is non-hermetic and writes outside
+      OUT_DIR, against Cargo's own guidance. Mitigations required by this
+      answer: scripts/fetch-fonts.sh is already HTTPS-only, per-file
+      SHA256-pinned and idempotent (no network when the hashes already match),
+      and the explicit opt-out above keeps offline and distribution builds
+      deterministic. Options not chosen: skip_font_embed_when_absent,
+      auto_fetch_in_build (unconditional fetch, no clear failure path),
+      fail_fast_with_guidance (already implemented today, leaves the bug).
+  requirement.font-bootstrap.acquisition-source:
+    packet_id: worktree-font-bootstrap-q0001
+    answered_at: "2026-09-22T11:40:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [existing_fetch_script]
+    freeform: >-
+      scripts/fetch-fonts.sh is the single canonical acquisition path for both
+      the automatic attempt and the message shown to a human.
+    normalized_answer: Use the existing scripts/fetch-fonts.sh.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; codex_consulted: true;
+      opus_escalation: not run. Verified by the orchestrator before consulting:
+      scripts/fetch-fonts.sh exists, is HTTPS-only, SHA256-pinned per file,
+      idempotent, atomic, and is already a Makefile target that setup / dev /
+      build / win-build / dpkg depend on; .github/workflows/release.yml already
+      calls it with actions/cache. Options not chosen: new_bootstrap_mechanism
+      (would duplicate existing verification logic), copy_from_main_checkout
+      (does not work on a machine with no main checkout, e.g. CI).
+  requirement.font-bootstrap.regression-test:
+    packet_id: worktree-font-bootstrap-q0001
+    answered_at: "2026-09-22T11:40:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [script_level_check]
+    freeform: >-
+      A bootstrap-verification script, wired into .github/workflows/ci.yml as a
+      new job on the same push / pull_request triggers, running the reported
+      command from an isolated un-fetched state without cache restore.
+    normalized_answer: >-
+      Script-level check, wired into CI as a new job so it actually runs.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; codex_consulted: true (the
+      choice was re-examined on turn 2 against the newly verified fact that
+      ci.yml has no Rust job at all today); opus_escalation: not run.
+      Orchestrator adopted Codex's position: unit_test_on_extracted_fn only
+      exercises the detection predicate, not the fetch -> build -> test path
+      that actually regressed, and with no Rust job in CI it would not run on
+      any push either. The answer therefore carries an obligation the other
+      options do not: the check must be wired into ci.yml, not merely added to
+      the tree. Options not chosen: unit_test_on_extracted_fn,
+      integration_test_real_build (nested cargo, slow, and still needs a CI job
+      to run at all).
+  requirement.font-bootstrap.scope:
+    packet_id: worktree-font-bootstrap-q0001
+    answered_at: "2026-09-22T11:40:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [fonts_only]
+    freeform: null
+    normalized_answer: >-
+      Limit to src-tauri/assets/fonts/; the CI wiring the regression check
+      needs is inside this scope.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; codex_consulted: true;
+      opus_escalation: not run. Verified by the orchestrator: build.rs already
+      degrades gracefully for viewer/dist and settings/dist (a cargo:warning in
+      debug, a panic only in the release profile), so those inputs do not block
+      `cargo test --lib` and are not part of the reported defect. Options not
+      chosen: all_gitignored_build_inputs (would widen the request beyond what
+      was reported).
+  design.step-decision:
+    packet_id: worktree-font-bootstrap-q0001
+    answered_at: "2026-09-22T11:40:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [skip_design]
+    freeform: null
+    normalized_answer: Skip the design step.
+    resolution_note: >-
+      gate: create-spec.design-step; batch policy option_id
+      decide_autonomously, i.e. accept requirements-analyst's
+      design_step_recommendation, which was `skip` because the change is
+      confined to build-script behavior and build output text with no UI,
+      visual or design-token surface.
+worker_runs:
+  - request_id: cs-analyst-001
+    status: needs_user_input
+    input_digest: "sha256:fc74fc73771c14be3598057eb5edf6dc86570acb9ca395e5c07ed209898b999f"
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
