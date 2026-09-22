@@ -1,0 +1,21 @@
+schema_version: 1
+feature: verify-font-bootstrap-classification
+phase: create-spec
+status: in_progress
+last_input_digest: "sha256:ba905198b2562b5367210e2fa15b106367c25079824b85db301d04123c69a9f1"
+rounds: 0
+answers: []
+assumptions: []
+progress_fingerprint: null
+resolved_input_cache:
+  resolved_at: "2026-09-22T13:10:00+09:00"
+  e2e: []
+  design_system_candidates:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/md3.rs
+  package_files:
+    - package.json
+    - Cargo.toml
+    - src-tauri/Cargo.toml
+  reference_scan_targets: []
