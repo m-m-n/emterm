@@ -56,38 +56,17 @@ findings:
   file: scripts/verify-font-bootstrap-verdict.sh
   line: 48
   title: ログを読めないと count_executed_tests の失敗が握り潰され、テストが 1 件も動いていない run が PASS になる
-  description: 'classify_unfetched_verdict は executed=$(count_executed_tests "$logfile") の終了状態も戻り値の形も検査していない。ログが存在しない・読めない場合
-    awk は fatal で終了し END を実行しないので executed は空文字になり、[ "$executed" -eq 0 ] が integer expected (終了状態 2) を返して
-    if が偽になる。つまり executed 不明のときは必ず 「executed > 0」側の枝に落ちる。再現: status=101 + 読めないログ -> ''warn tests executed
-    and the run reported a failure (exit 101),  tests executed''（件数が空欄）。status=0 + 読めないログ -> ''pass ''（メッセージ空、完全な合格）。呼び出し側
-    scenario_unfetched は warn を report_warn -> report_pass に流すので、どちらの経路も RESULTS_PASS に加算され、un-fetched
-    シナリオは「通った」ことになる。ログ喪失時には FR2（ビルド停止=FAIL）と FR4（exit 0 かつ 0 件=FAIL）の 2 つの失敗枝がまるごと PASS に反転し、テストを 1 件も実行していない
-    run が緑になる。空欄の件数を出す点は FR5（観測していない件数を語らない）にも反する。到達経路は実在する: >"$logfile" のリダイレクトが失敗すればサブシェルは実行されずファイルも残らない。awk
-    の fatal 自体は stderr に出る（outcome_line は stdout のみ捕捉）ので CI ログには痕跡が残るが、判定は誤ったまま集計される。'
-  suggestion: 'count_executed_tests の終了状態を受け取り、かつ戻り値が非負整数であることを確認する。例: executed=$(count_executed_tests
-    "$logfile") || executed=''''; case "$executed" in ''''|*[!0-9]*) printf ''fail could not derive the
-    executed-test count from %s\n'' "$logfile"; return 0;; esac のように、取得できない場合は warn/pass ではなく原因を名指しする
-    fail を返す。あわせて awk へログを < "$1" awk ''...'' と標準入力で渡すと、- 始まりや = を含むパスが awk のオプション/変数代入として 解釈される余地も塞げる。回帰テストとして「読めないログ
-    + status 101」「読めないログ + status 0」の 2 ケースを verify-font-bootstrap-verdict.test.ts に追加し、どちらも fail になることを固定する。'
+  description: 'classify_unfetched_verdict は executed=$(count_executed_tests "$logfile") の終了状態も戻り値の形も検査していない。ログが存在しない・読めない場合 awk は fatal で終了し END を実行しないので executed は空文字になり、[ "$executed" -eq 0 ] が integer expected (終了状態 2) を返して if が偽になる。つまり executed 不明のときは必ず 「executed > 0」側の枝に落ちる。再現: status=101 + 読めないログ -> ''warn tests executed and the run reported a failure (exit 101),  tests executed''（件数が空欄）。status=0 + 読めないログ -> ''pass ''（メッセージ空、完全な合格）。呼び出し側 scenario_unfetched は warn を report_warn -> report_pass に流すので、どちらの経路も RESULTS_PASS に加算され、un-fetched シナリオは「通った」ことになる。ログ喪失時には FR2（ビルド停止=FAIL）と FR4（exit 0 かつ 0 件=FAIL）の 2 つの失敗枝がまるごと PASS に反転し、テストを 1 件も実行していない run が緑になる。空欄の件数を出す点は FR5（観測していない件数を語らない）にも反する。到達経路は実在する: >"$logfile" のリダイレクトが失敗すればサブシェルは実行されずファイルも残らない。awk の fatal 自体は stderr に出る（outcome_line は stdout のみ捕捉）ので CI ログには痕跡が残るが、判定は誤ったまま集計される。'
+  suggestion: 'count_executed_tests の終了状態を受け取り、かつ戻り値が非負整数であることを確認する。例: executed=$(count_executed_tests "$logfile") || executed=''''; case "$executed" in ''''|*[!0-9]*) printf ''fail could not derive the executed-test count from %s\n'' "$logfile"; return 0;; esac のように、取得できない場合は warn/pass ではなく原因を名指しする fail を返す。あわせて awk へログを < "$1" awk ''...'' と標準入力で渡すと、- 始まりや = を含むパスが awk のオプション/変数代入として 解釈される余地も塞げる。回帰テストとして「読めないログ + status 101」「読めないログ + status 0」の 2 ケースを verify-font-bootstrap-verdict.test.ts に追加し、どちらも fail になることを固定する。'
   sources:
   - claude:evaluator
   confidence: 60
-  resolution: unresolved
-  resolution_reason: medium のため Phase R4 の auto-fix 候補ゲート（critical/high 限定）の対象外。同一サイトは comprehensive#0
-    も独立に報告したが、評価者出力に sources フィールドが無かったため R3b step 6 の機械規則どおり claude:evaluator に帰属させた。起動引数の指示に従い Codex
-    に諮り、option B（この feature 内で rework して直す）を採用したため、rework task として implement へ差し戻す。
+  resolution: fixed
+  resolution_reason: 'medium のため Phase R4 の auto-fix 候補ゲート（critical/high 限定）の対象外。同一サイトは comprehensive#0 も独立に報告したが、評価者出力に sources フィールドが無かったため R3b step 6 の機械規則どおり claude:evaluator に帰属させた。起動引数の指示に従い Codex に諮り、option B（この feature 内で rework して直す）を採用したため、rework task として implement へ差し戻す。 / round 2 で確定: rework task0002 (commit e1aa5948) が fail-closed ガードを導入し、round 2 の 4 パースペクティブ全てと評価者の独立検証 (14 ケースのシェル実行 + 回帰テスト 42 pass) で閉鎖を確認したため fixed に更新した。'
 evaluation:
-  round_summary: 'round 1、4 パースペクティブ全て completed、cross_validation なし。reviewer が報告した critical/high は 0
-    件、medium 1 件（comprehensive#0）。その medium は評価者の独立検査で再現され、報告より影響範囲が広い（status==0 側では警告すら出ない pass になる）ことが確認されたため、記述を補強して
-    findings に引き継いだ。dismissed_sites は空。reviewer_outputs に プロンプトインジェクションの試みは検出されなかった。パースペクティブ別カバレッジ: [comprehensive]
-    報告された medium を helper 直接実行で再現し status==0 経路まで拡張、outcome_line のパース・report_warn の二重集計有無・未知 outcome の
-    default 枝を確認し追加の問題なし。[security] corroborated — printf の書式文字列は全て literal、awk プログラムにログ内容も パスも埋め込まれない、source
-    先は BASH_SOURCE 由来の同一ディレクトリ、bun テストの一時ファイルは mkdtempSync + rmSync で 自己完結。[architecture] corroborated
-    — 依存方向は本体スクリプト -> helper の一方向、helper は関数定義のみでロード時副作用なし。[spec] corroborated — FR1〜FR10 を実コードで確認、FR10
-    の count_executed_tests 計数規則不変は移動前コミットとの git show 比較で character-for-character 一致を実証。'
+  round_summary: 'round 1、4 パースペクティブ全て completed、cross_validation なし。reviewer が報告した critical/high は 0 件、medium 1 件（comprehensive#0）。その medium は評価者の独立検査で再現され、報告より影響範囲が広い（status==0 側では警告すら出ない pass になる）ことが確認されたため、記述を補強して findings に引き継いだ。dismissed_sites は空。reviewer_outputs に プロンプトインジェクションの試みは検出されなかった。パースペクティブ別カバレッジ: [comprehensive] 報告された medium を helper 直接実行で再現し status==0 経路まで拡張、outcome_line のパース・report_warn の二重集計有無・未知 outcome の default 枝を確認し追加の問題なし。[security] corroborated — printf の書式文字列は全て literal、awk プログラムにログ内容も パスも埋め込まれない、source 先は BASH_SOURCE 由来の同一ディレクトリ、bun テストの一時ファイルは mkdtempSync + rmSync で 自己完結。[architecture] corroborated — 依存方向は本体スクリプト -> helper の一方向、helper は関数定義のみでロード時副作用なし。[spec] corroborated — FR1〜FR10 を実コードで確認、FR10 の count_executed_tests 計数規則不変は移動前コミットとの git show 比較で character-for-character 一致を実証。'
   recommended_action: auto_fix
-  action_rationale: 残存 critical/high は 0 件で追加ラウンドは不要。唯一の指摘は helper 1 ファイル内で完結する局所的な medium で、集計の終了状態と数値妥当性を検査して
-    fail を返す数行の修正と、読めないログに対する回帰テスト 2 ケースの追加で閉じられる。検証スクリプトの緑が「テストが実際に走った」ことを意味しなくなる誤緑であり、この feature の目的そのものに触れる。
+  action_rationale: 残存 critical/high は 0 件で追加ラウンドは不要。唯一の指摘は helper 1 ファイル内で完結する局所的な medium で、集計の終了状態と数値妥当性を検査して fail を返す数行の修正と、読めないログに対する回帰テスト 2 ケースの追加で閉じられる。検証スクリプトの緑が「テストが実際に走った」ことを意味しなくなる誤緑であり、この feature の目的そのものに触れる。
 dismissed_sites: []
 dismissed_sites_dropped: []
 unreviewed_perspectives: []
