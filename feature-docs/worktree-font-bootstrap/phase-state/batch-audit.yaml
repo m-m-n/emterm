@@ -77,3 +77,52 @@ records:
       ことを優先する。
       Findings left unresolved — a7b9b3b29c8ec135 (scripts/verify-font-bootstrap.sh:208,
       comprehensive), 789d3d8a39688036 (scripts/verify-font-bootstrap.sh:342, performance).
+  - question_id: verify.ts8-rebuild-churn-disposition
+    packet_id: null
+    answered_at: "2026-09-22T12:34:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: >-
+      PASS — record TS8 as passed, with the measured one-time post-fetch
+      settling rebuild stated alongside it, and do not send the feature back to
+      implementation.
+    normalized_answer: >-
+      PASS — record TS8 as passed, with the measured one-time post-fetch
+      settling rebuild stated alongside it, and do not send the feature back to
+      implementation.
+    resolution_note: >-
+      gate: verify phase, TS8 ("no rebuild churn") judgment — the staged run
+      showed the build script re-running once on the build immediately after a
+      bootstrap, which contradicts TS8's literal wording "the build script does
+      not re-run" while satisfying the same sentence's convergence property;
+      codex_consulted: true (run_codex_exec.sh readonly, -C = integration
+      worktree); opus_escalation: false.
+      Options considered — A: record TS8 as PASS with the discrepancy stated;
+      B: record TS8 as a verify failed item and send it back to implementation
+      for rework.
+      Chosen: A. Measurements behind it — feature branch, viewer/dist and
+      settings/dist present, fonts absent at first build: build-script ran on
+      builds 1 and 2, then not on builds 3 and 4, with the font files
+      byte-untouched during build 2 and no acquisition attempted. Same branch
+      with fonts pre-populated before the first build: ran on build 1 only,
+      identical to the same measurement taken on main. Separately confirmed
+      pre-existing on main: when viewer/dist or settings/dist is absent,
+      build.rs declares cargo:rerun-if-changed for a non-existent path and the
+      build script re-runs on every build forever — present on main as well and
+      unchanged by this feature.
+      Key points of the discussion — NFR6 forbids a rebuild loop and a rebuild
+      forced on every subsequent invocation (SPEC.md:174-177), neither of which
+      occurs; SPEC.md:294-296 (assumption a7) explicitly anticipates that a
+      single post-fetch settling rebuild may occur and states that TS8 verifies
+      convergence, so option A rests on that stated assumption rather than on
+      the wording being ambiguous; the single extra run is inherent to a build
+      script writing files it declares as its own rerun-if-changed inputs, and
+      removing it would require mtime manipulation of the fetched files for no
+      proportionate gain; the measurement uses the "Compiling emterm" line as an
+      indirect indicator of a build-script execution, and a stricter check would
+      use cargo -vv fingerprint reasons.
+      Recorded alongside the pass: TS8's literal wording does not match the
+      observed behavior, and aligning TS8/NFR6's wording with SPEC.md assumption
+      a7 ("converges after at most one additional run following a fetch") is
+      recommended as a documentation follow-up, not as implementation rework.

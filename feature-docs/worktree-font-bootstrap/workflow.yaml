@@ -108,9 +108,31 @@ workflow:
     status: completed
     completed_at_commit: 84d5bc1a0759c52901417ea16d7e97e4bb78fecd
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: >-
+      Build verification (GUI check / CLI --no-default-features check /
+      bun run typecheck), test verification (cargo test --lib: 3530 executed,
+      0 failed; bun test: 360 pass; bash scripts/verify-font-bootstrap.sh:
+      3/3 scenarios) and make fmt-check all passed in the integration worktree,
+      whose font directory was empty beforehand — the first GUI check bootstrapped
+      all seven fonts, which is AC1/AC2 observed directly.
+      TS2, TS5, TS6, TS8 and D8 failure shapes 1, 2 and 4 were staged in
+      disposable detached worktrees and passed (shape 3 is covered by the
+      verification script's fetch-failure scenario); TS9, TS10 and TS11 passed by
+      inspection (build.rs diff leaves viewer/dist, settings/dist, the Windows
+      icon-resource path, the seven-path set and the GUI gate position untouched;
+      SPEC.md:154-190 states the non-hermeticity trade-off and its four
+      mitigations; release.yml is unmodified).
+      TS8 carries a recorded discrepancy: the build immediately after a bootstrap
+      re-runs the build script once before converging, which does not match TS8's
+      literal "the build script does not re-run" while satisfying NFR6 and
+      SPEC.md assumption a7. Resolved as a pass after Codex consultation — see
+      phase-state/batch-audit.yaml, verify.ts8-rebuild-churn-disposition.
+      TS7 (an actual CI run on the feature branch) is NOT observed: it requires
+      the branch to be pushed and the new job to run, which happens after the PR
+      is opened. It is not a failure, it is unexecuted.
   - id: retrospect
     status: pending
 
