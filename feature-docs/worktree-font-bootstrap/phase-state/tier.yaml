@@ -1,0 +1,42 @@
+schema_version: 1
+feature: worktree-font-bootstrap
+tier: full
+bases:
+  - basis: description_only
+    probabilities:
+      "0": 0.39
+      "1": 0.61
+      "2": 0.0
+    expectation_clear: 0.77
+    confidence: 0.42
+    observed_at: "2026-09-22T11:24:00+09:00"
+  - basis: description_plus_code
+    probabilities:
+      "0": 0.0
+      "1": 0.7
+      "2": 0.3
+    expectation_clear: 0.71
+    confidence: 0.55
+    observed_at: "2026-09-22T11:25:00+09:00"
+pre_survey_estimate:
+  files_expected:
+    - src-tauri/build.rs
+    - src-tauri/tests/font_bootstrap.rs
+    - .github/workflows/ci.yml
+    - test/README.md
+  changed_lines_approx: 200
+  new_functions_needed: 4
+  new_files_needed: 1
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules:
+    - src-tauri/tests
+    - .github/workflows
+    - test
+  work_still_required: true
+rationale: >-
+  decide-tier.py returned full: the two readings evaluate to different
+  tiers (description_only lands on the moderate bucket boundary,
+  description_plus_code puts 30% on the large bucket), so the evaluator
+  resolves to the tier that removes nothing.
+decided_at: "2026-09-22T11:26:00+09:00"
