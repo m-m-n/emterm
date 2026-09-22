@@ -1,0 +1,66 @@
+task_id: task0002
+baseline_failures: []          # bun test: 388 pass, 0 fail, before any change
+final_failures: []             # bun test: 402 pass, 0 fail, after implementation
+acceptance_tests:
+  AC-1:
+    tests:
+      - "classify_unfetched_verdict: fails closed when the log cannot be read (task0002 AC-1, AC-2, AC-3, AC-4) > a missing log path with a non-zero exit status yields fail, naming the log path and stating no test count (AC-1, AC-2)"
+    red_confirmed: true
+    red_reason: "Expected: \"fail\" Received: \"warn\" — the old implementation treated an unreadable log's derivation (a numeric comparison against a non-number) as \"not zero\" and fell through to the executed-greater-than-zero branch."
+  AC-2:
+    tests:
+      - "classify_unfetched_verdict: fails closed when the log cannot be read (task0002 AC-1, AC-2, AC-3, AC-4) > a missing log path with a non-zero exit status yields fail, naming the log path and stating no test count (AC-1, AC-2)"
+    red_confirmed: true
+    red_reason: "Same observation as AC-1 (same test asserts the outcome token and the message content in one case). Before the fix the message was the warn-branch wording, which does contain a (fabricated, empty) count field; after the fix it names only the log path."
+  AC-3:
+    tests:
+      - "classify_unfetched_verdict: fails closed when the log cannot be read (task0002 AC-1, AC-2, AC-3, AC-4) > a missing log path with a zero exit status still yields fail, never pass (AC-3)"
+    red_confirmed: true
+    red_reason: "Expected: \"fail\" Received: \"pass\" — a count that could not be derived, compared against 0 with status 0, fell into the clean-pass branch."
+  AC-4:
+    tests:
+      - "classify_unfetched_verdict: fails closed when the log cannot be read (task0002 AC-1, AC-2, AC-3, AC-4) > an unreadable existing log behaves identically to a missing one, for a non-zero exit status (AC-4)"
+      - "classify_unfetched_verdict: fails closed when the log cannot be read (task0002 AC-1, AC-2, AC-3, AC-4) > an unreadable existing log behaves identically to a missing one, for a zero exit status (AC-4)"
+    red_confirmed: true
+    red_reason: "Both cases (chmod 000, then classify with non-zero and with zero status) reproduced the same \"warn\"/\"pass\" mismatches as the missing-file cases before the fix. Skipped automatically when running as root, per the plan's test notes, since chmod 000 does not block root reads — not applicable in this run (uid 1000, confirmed via `id -u`)."
+  AC-5:
+    tests:
+      - "classify_unfetched_verdict: fails closed when the status argument is not an integer (task0002 AC-5) > a non-numeric status yields fail naming the uninterpretable status, never pass or warn"
+      - "classify_unfetched_verdict: fails closed when the status argument is not an integer (task0002 AC-5) > a non-integer (fractional) status yields fail naming the uninterpretable status, never pass or warn"
+    red_confirmed: true
+    red_reason: "Expected: \"fail\" Received: \"pass\" for both a non-numeric (\"abc\") and a fractional (\"12.5\") status argument — the old code's `[ \"$status\" -ne 0 ]` treated any non-numeric string as equal to 0 without erroring in this shape of input, landing on the pass branch."
+  AC-6:
+    tests:
+      - "count_executed_tests: reports failure and prints no count when the log cannot be read (task0002 AC-6) > a missing log path reports failure and prints no count"
+      - "count_executed_tests: reports failure and prints no count when the log cannot be read (task0002 AC-6) > an unreadable existing log reports failure and prints no count"
+      - "count_executed_tests: reports failure and prints no count when the log cannot be read (task0002 AC-6) > a readable log still reports success and prints exactly the integer it prints today"
+    red_confirmed: false
+    red_reason: "Not observed to fail before implementation: the pre-existing invocation (`awk '...' \"$1\"`) already exited non-zero when awk could not open a missing/unreadable path (a fatal 'awk: can't open file' error), so `count_executed_tests`'s return status was already non-zero for those inputs, and its stdout was already empty. This criterion's observable contract (non-zero return + empty stdout) held before this task; what this task changes is that the failure is now signalled by an explicit readability check before the counting program ever runs, rather than incidentally by awk's own file-open error, and that unreadable-log detection is fully decoupled from how the path is later delivered (AC-8). The readable-log sub-case is an unchanged-behaviour regression guard, also already green."
+  AC-7:
+    tests:
+      - "count_executed_tests: unchanged relocation behaviour (AC-10) > several test result lines are summed (a library suite plus doctests)"
+      - "count_executed_tests: unchanged relocation behaviour (AC-10) > a log with no test result line yields zero"
+      - "count_executed_tests: unchanged relocation behaviour (AC-10) > a suite reporting zero passed and zero failed yields zero"
+    red_confirmed: false
+    red_reason: "Per the task plan's test notes, AC-7 reuses task0001's existing edge-case tests as a regression guard on the invocation change (positional arg -> stdin); it pins behaviour that was already correct and already covered before task0002, so no fresh red observation applies. These tests stayed green throughout this task, which is the assertion AC-7 makes."
+  AC-8:
+    tests:
+      - "count_executed_tests: an unusual log path is delivered via standard input, never as a positional argument (task0002 AC-8) > a relative path beginning with '-' derives the same count as identical content at an ordinary path"
+      - "count_executed_tests: an unusual log path is delivered via standard input, never as a positional argument (task0002 AC-8) > a relative path containing '=' derives the same count as identical content at an ordinary path"
+    red_confirmed: false
+    red_reason: "Mixed: the '=' sub-case genuinely went red before the stdin change (Expected: \"5\" Received: \"0\" — GNU awk treats a bare `name=value` operand as a variable assignment regardless of its position, so the old positional-argument call silently assigned 'var=value' instead of reading the file, and the counting program's END block printed the sum of nothing). The '-' sub-case did NOT go red: GNU awk stops treating arguments as options as soon as it sees the program-text operand, so a leading-dash filename was already read correctly under the old positional-argument invocation (verified directly: `awk 'prog' -- name` vs `awk 'prog' name` both worked). Both sub-cases are still asserted, as the plan requires, and both now go through the same stdin-based path (never a positional argument) so this remains true by construction rather than by awk-specific incidental behaviour — but only the '=' half constitutes an observed red->green transition."
+  AC-9:
+    tests:
+      - "classify_unfetched_verdict: warn outcome (AC-1, AC-2) > a non-zero failed count with a non-zero exit status yields warn, message states the exit status and the derived count"
+      - "classify_unfetched_verdict: fail outcome on a build stop (AC-3) > no test result line with a non-zero exit status yields fail, message names a build stop and states the exit status"
+      - "classify_unfetched_verdict: fail outcome with unchanged wording for a clean-exit stall (AC-5) > no test result line with a zero exit status yields fail with the unchanged literal message"
+      - "classify_unfetched_verdict: pass outcome (AC-6) > a non-zero passed count with a zero exit status yields pass with an empty message"
+    red_confirmed: false
+    red_reason: "AC-9 requires the four already-specified outcomes stay byte-for-byte unchanged. Per the plan's test notes this is best expressed by leaving task0001's existing cases untouched and letting them keep passing — no duplicate was added. These tests were already green before task0002 began (they exercise pre-existing, unmodified wording) and remained green throughout; that continuity is exactly what AC-9 claims, so there is no red to observe here by design."
+  AC-10:
+    tests:
+      - "classify_unfetched_verdict: exactly one line, success exit, across every outcome including the new fail-closed ones (task0002 AC-10) > the fail-closed branch on an unreadable log still returns success and prints exactly one line"
+      - "classify_unfetched_verdict: exactly one line, success exit, across every outcome including the new fail-closed ones (task0002 AC-10) > the fail-closed branch on a non-integer status still returns success and prints exactly one line"
+      - "classify_unfetched_verdict: exactly one line, success exit, across every outcome including the new fail-closed ones (task0002 AC-10) > the pre-existing pass branch still returns success and prints exactly one line"
+    red_confirmed: true
+    red_reason: "The first two sub-tests (the new fail-closed branches) failed before implementation with the same outcome-token mismatches as AC-1..AC-5 (Expected \"fail\", Received \"warn\"/\"pass\"), which is what pins '...including the new one'. The exit-code-0/one-line assertions themselves were never violated (the old code always returned 0 and always printed one line, for every input); the third sub-test (pre-existing pass branch) was already green and is included as a regression guard, not a fresh observation."
