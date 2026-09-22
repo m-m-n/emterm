@@ -23,6 +23,7 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn main() {
     // Windows resource embed runs unconditionally on Windows targets — it
@@ -65,29 +66,161 @@ fn main() {
     );
 }
 
-/// GUI-feature failsafe: every font referenced by `include_bytes!` must
-/// exist on disk before `cargo build` is allowed to proceed. Without this
-/// the developer would see an opaque `couldn't read assets/fonts/...`
-/// error from `rustc`; emit an actionable message instead.
+/// The seven relative paths bundled fonts are `include_bytes!`-ed from
+/// (FR1). This exact set is fixed and must not be edited by any task.
+const REQUIRED_FONTS: [&str; 7] = [
+    "assets/fonts/Noto-COLRv1.ttf",
+    "assets/fonts/NotoSansCJKjp-Regular.otf",
+    "assets/fonts/NotoSansCJKjp-Bold.otf",
+    "assets/fonts/NotoEmoji-Regular.ttf",
+    "assets/fonts/Inconsolata-Regular.otf",
+    "assets/fonts/Inconsolata-Bold.otf",
+    "assets/fonts/NotoSansSymbols2-Regular.ttf",
+];
+
+/// Opt-out switch (FR3): `1` forbids the automatic fetch outright, on every
+/// host. Unset, empty, or any other value: not engaged (D3).
+const SKIP_FETCH_ENV: &str = "EMTERM_SKIP_FONT_FETCH";
+
+/// GUI-feature bootstrap gate (FR2/FR3/FR4/D1-D5/D8): every font referenced
+/// by `include_bytes!` must exist on disk before `cargo build` is allowed to
+/// proceed. On finding any missing, this attempts to fetch the whole set
+/// exactly once through `scripts/fetch-fonts.sh` (the project's single
+/// acquisition path, used unchanged — FR5), unless the opt-out is engaged.
+/// Every stop path ends with the same actionable message, preceded by
+/// diagnostic context naming which of D8's four failure shapes occurred.
 fn check_bundled_fonts() {
-    let required = [
-        "assets/fonts/Noto-COLRv1.ttf",
-        "assets/fonts/NotoSansCJKjp-Regular.otf",
-        "assets/fonts/NotoSansCJKjp-Bold.otf",
-        "assets/fonts/NotoEmoji-Regular.ttf",
-        "assets/fonts/Inconsolata-Regular.otf",
-        "assets/fonts/Inconsolata-Bold.otf",
-        "assets/fonts/NotoSansSymbols2-Regular.ttf",
-    ];
-    for path in required {
-        if !std::path::Path::new(path).exists() {
-            panic!(
-                "build_rs.font_missing: bundled font missing at {path}\n  \
-                 Run `make fetch-fonts` (or `bash scripts/fetch-fonts.sh`) to download bundled fonts."
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"));
+    // D1: destination and script location are derived from the manifest
+    // location, never from the build process's current directory, so a
+    // build driven from an arbitrary cwd still targets this worktree.
+    let worktree_root = manifest_dir
+        .parent()
+        .expect("CARGO_MANIFEST_DIR (src-tauri) has a parent (the worktree root)")
+        .to_path_buf();
+
+    // D5: declare the rerun inputs on every execution that reaches this
+    // check, before any existence check runs, so the declared set never
+    // depends on how far the check gets.
+    for rel in REQUIRED_FONTS {
+        println!("cargo:rerun-if-changed={rel}");
+    }
+    println!("cargo:rerun-if-env-changed={SKIP_FETCH_ENV}");
+
+    let missing = missing_fonts(&manifest_dir);
+    if missing.is_empty() {
+        // Steady state (NFR2): all seven present, no invocation, no
+        // environment inspection beyond the rerun declarations above, no
+        // network access.
+        return;
+    }
+
+    // D3: the opt-out forbids, it does not merely tolerate — stop before
+    // anything that could reach the network is prepared.
+    let skip_fetch = env::var(SKIP_FETCH_ENV).as_deref() == Ok("1");
+    if skip_fetch {
+        stop(
+            &format!(
+                "build_rs.font_fetch_skipped: {SKIP_FETCH_ENV}=1; automatic font fetch is disabled"
+            ),
+            missing[0],
+            None,
+        );
+    }
+
+    // D2/D4: attempt the acquisition exactly once, on every host, with no
+    // interpreter-resolvability preflight.
+    let script = worktree_root.join("scripts").join("fetch-fonts.sh");
+    let dest_dir = manifest_dir.join("assets").join("fonts");
+    // Passed in a representation the host's bash accepts (D1): forward
+    // slashes even on Windows, matching this file's existing convention for
+    // paths handed to external tools (see `emit_bundle_manifest`).
+    let dest_dir_arg = dest_dir.to_string_lossy().replace('\\', "/");
+    let script_arg = script.to_string_lossy().replace('\\', "/");
+
+    match Command::new("bash")
+        .arg(&script_arg)
+        .current_dir(&worktree_root)
+        .env("DEST_DIR", &dest_dir_arg)
+        .output()
+    {
+        // D8 shape 1: the interpreter itself could not be launched. Re-
+        // running the actionable message's command cannot fix this, so it
+        // gets one further line naming the real remedy.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => stop(
+            &format!(
+                "build_rs.font_fetch_launch_failed: could not launch the bash interpreter via PATH: {e}"
+            ),
+            missing[0],
+            Some(
+                "build_rs.font_fetch_launch_failed: bash must be made available on PATH before \
+                 this can succeed; re-running the suggested command will not resolve this.",
+            ),
+        ),
+        // D8 shape 2: some other launch error (permission denied and
+        // similar).
+        Err(e) => stop(
+            &format!(
+                "build_rs.font_fetch_launch_failed: could not launch scripts/fetch-fonts.sh via bash: {e}"
+            ),
+            missing[0],
+            None,
+        ),
+        // D8 shape 3: the script ran and exited non-zero. Its own stderr is
+        // preserved, not swallowed.
+        Ok(output) if !output.status.success() => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            stop(
+                &format!(
+                    "build_rs.font_fetch_failed: scripts/fetch-fonts.sh exited with {}\n{stderr}",
+                    output.status
+                ),
+                missing[0],
+                None,
             );
         }
-        println!("cargo:rerun-if-changed={path}");
+        Ok(_) => {}
     }
+
+    // D8 shape 4: the script exited zero but at least one font is still
+    // absent.
+    if let Some(&path) = missing_fonts(&manifest_dir).first() {
+        stop(
+            "build_rs.font_still_missing: scripts/fetch-fonts.sh exited 0 but a bundled font is \
+             still absent",
+            path,
+            None,
+        );
+    }
+}
+
+/// Returns the entries of [`REQUIRED_FONTS`] not present on disk, checked as
+/// absolute paths derived from `CARGO_MANIFEST_DIR` (D1) so the result never
+/// depends on the build process's current directory.
+fn missing_fonts(manifest_dir: &Path) -> Vec<&'static str> {
+    REQUIRED_FONTS
+        .iter()
+        .copied()
+        .filter(|rel| !manifest_dir.join(rel).exists())
+        .collect()
+}
+
+/// Ends the build: `context` is the D8 failure-shape (or opt-out)
+/// diagnostic, then the actionable message's two lines — unchanged in
+/// wording and order, naming `path` — are emitted verbatim, then `extra`
+/// (shape 1 only) if present.
+fn stop(context: &str, path: &str, extra: Option<&str>) -> ! {
+    let mut msg = format!(
+        "{context}\n\
+         build_rs.font_missing: bundled font missing at {path}\n  \
+         Run `make fetch-fonts` (or `bash scripts/fetch-fonts.sh`) to download bundled fonts."
+    );
+    if let Some(extra) = extra {
+        msg.push('\n');
+        msg.push_str(extra);
+    }
+    panic!("{msg}");
 }
 
 /// Windows-target-only: attach `icons/icon.ico` to the PE resource section
