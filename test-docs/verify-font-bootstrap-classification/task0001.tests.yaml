@@ -1,0 +1,180 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - "classify_unfetched_verdict: warn outcome (AC-1, AC-2) > a non-zero failed count with a non-zero exit status yields warn, message states the exit status and the derived count"
+    red_confirmed: true
+    red_reason: >-
+      Before scripts/verify-font-bootstrap-verdict.sh existed (implementation
+      temporarily moved aside), the subprocess `bash -c 'source "$1";
+      classify_unfetched_verdict ...'` failed to source the missing file, so
+      the test observed `outcome === ""` against `expect(outcome).toBe("warn")`.
+      Green after restoring the helper.
+  AC-2:
+    tests:
+      - "classify_unfetched_verdict: warn outcome (AC-1, AC-2) > the warn message never contains the build-stop wording"
+    red_confirmed: true
+    red_reason: >-
+      Same missing-helper red as AC-1 (same describe block, sourced before
+      each test); `outcome` was empty rather than "warn".
+  AC-3:
+    tests:
+      - "classify_unfetched_verdict: fail outcome on a build stop (AC-3) > no test result line with a non-zero exit status yields fail, message names a build stop and states the exit status"
+    red_confirmed: true
+    red_reason: >-
+      "Expected: fail, Received: ''" — the missing helper produced no
+      classification at all.
+  AC-4:
+    tests:
+      - "classify_unfetched_verdict: no hardcoded counts (AC-4) > two logs with different executed counts produce two warn messages stating those two different counts"
+    red_confirmed: true
+    red_reason: >-
+      Same missing-helper red; both `runClassify` calls returned an empty
+      outcome instead of "warn".
+  AC-5:
+    tests:
+      - "classify_unfetched_verdict: fail outcome with unchanged wording for a clean-exit stall (AC-5) > no test result line with a zero exit status yields fail with the unchanged literal message"
+    red_confirmed: true
+    red_reason: >-
+      "Expected: fail, Received: ''" before the helper existed.
+  AC-6:
+    tests:
+      - "classify_unfetched_verdict: pass outcome (AC-6) > a non-zero passed count with a zero exit status yields pass with an empty message"
+    red_confirmed: true
+    red_reason: >-
+      "Expected: pass, Received: ''" before the helper existed.
+  AC-7:
+    tests:
+      - "classify_unfetched_verdict: branch selected by count before status (AC-7) > the same non-zero exit status yields different outcomes solely because the executed count differs"
+    red_confirmed: true
+    red_reason: >-
+      Both the zero-executed and non-zero-executed cases returned an empty
+      outcome before the helper existed, so neither "fail" nor "warn" was
+      observed; failed on the first assertion.
+  AC-8:
+    tests:
+      - "verify-font-bootstrap.sh: warn routes through the script's own reporting and tally (AC-8, AC-9) > a report_warn helper exists, logs through the script's log() helper, and counts toward the passed tally via report_pass"
+      - "verify-font-bootstrap.sh: warn routes through the script's own reporting and tally (AC-8, AC-9) > the un-fetched scenario's verdict block dispatches the helper's warn outcome to report_warn"
+    red_confirmed: true
+    red_reason: >-
+      Before editing scripts/verify-font-bootstrap.sh: no `report_warn()`
+      function existed (regex match was `null`), and scenario_unfetched's
+      body did not contain "classify_unfetched_verdict" — `expect(body)
+      .toContain("classify_unfetched_verdict")` failed against the
+      original exit-status-then-count block.
+  AC-9:
+    tests:
+      - "verify-font-bootstrap.sh: warn routes through the script's own reporting and tally (AC-8, AC-9) > report_warn emits the captured log's tail on stderr, the same diagnostic a failing scenario produces"
+    red_confirmed: true
+    red_reason: >-
+      `report_warn()` did not exist yet, so the regex match was `null` and
+      the test threw before its assertion could run (TypeError on
+      `match![0]`).
+  AC-10:
+    tests:
+      - "count_executed_tests: unchanged relocation behaviour (AC-10) > several test result lines are summed (a library suite plus doctests)"
+      - "count_executed_tests: unchanged relocation behaviour (AC-10) > a log with no test result line yields zero"
+      - "count_executed_tests: unchanged relocation behaviour (AC-10) > a suite reporting zero passed and zero failed yields zero"
+      - "classify_unfetched_verdict: edge cases > a suite reporting zero passed and zero failed (every test ignored) still selects the zero-executed branch"
+    red_confirmed: true
+    red_reason: >-
+      Before the helper existed, `count_executed_tests` was undefined in the
+      sourced (missing) file, so `runCount` returned empty stdout against
+      expected "16"/"0"/"0"; the all-ignored edge case likewise returned an
+      empty outcome instead of "fail".
+  AC-11:
+    tests:
+      - "verify-font-bootstrap.sh: the un-fetched cargo invocation is the literal reproduction command (AC-11) > the exact command string is present, with no added cargo flag"
+      - "verify-font-bootstrap.sh: the un-fetched cargo invocation is the literal reproduction command (AC-11) > no test-thread-count flag appears anywhere in the script"
+    red_confirmed: false
+    red_reason: >-
+      This criterion asserts the literal reproduction command stays
+      untouched — true before this task's edits (the pre-existing script)
+      and required to remain true after. There is no implementation to make
+      it fail first: D4 explicitly forbids touching the command, so no red
+      state exists for this criterion. Verified instead by the command's
+      exact substring still being present in the diff (git diff --stat shows
+      only the verdict-block and helper-load lines changed) and by the test
+      passing both before and after this task's edits.
+  AC-12:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Diff-shaped criterion (.github/workflows/ci.yml is not modified by
+      this task, per D5/Out of Scope). Already covered by the pre-existing,
+      untouched ci-workflows.test.ts (task0003's AC-1..AC-4), which this
+      task does not duplicate per the plan's Test Notes ("must keep passing
+      rather than being duplicated"). Verified by `git diff --stat
+      .github/workflows/ci.yml` against this task's base commit showing no
+      output, and by the full `bun test` run reporting those pre-existing
+      assertions still green (see AC-16).
+  AC-13:
+    tests:
+      - "verify-font-bootstrap.sh: scenario independence is preserved (AC-13) > the script still sets -uo pipefail and never enables -e"
+    red_confirmed: false
+    red_reason: >-
+      Unchanged-property criterion: `set -uo pipefail` with no `set -e` was
+      already true in the original script and this task's edits do not
+      touch that line. No observable red state exists; the test passed
+      identically before and after this task's edits.
+  AC-14:
+    tests:
+      - "verify-font-bootstrap.sh: the untouched parts of the script (AC-14) > the fetch-failure scenario's actionable-message assertions are unchanged"
+      - "verify-font-bootstrap.sh: the untouched parts of the script (AC-14) > the already-fetched scenario's acquisition-path recheck is unchanged"
+      - "verify-font-bootstrap.sh: the untouched parts of the script (AC-14) > the exit-time cleanup trap and the scenario invocation order are unchanged"
+      - "verify-font-bootstrap.sh: the untouched parts of the script (AC-14) > the summary line's shape is unchanged"
+      - "verify-font-bootstrap.sh: the untouched parts of the script (AC-14) > the prior feature's SPEC.md is byte-for-byte unmodified"
+      - "verify-font-bootstrap.sh: the untouched parts of the script (AC-14) > the CI verification step still has no cache step and no opt-out env var reference near it"
+    red_confirmed: false
+    red_reason: >-
+      Six unchanged-property assertions (fetch-failure, already-fetched,
+      cleanup/order, summary line, SPEC.md content hash, ci.yml cache/opt-out
+      absence). All were already true in the pre-task state and this task's
+      edits do not touch any of them; each passed both before and after this
+      task's edits — there is no red state for a criterion whose entire
+      content is "nothing here changed".
+  AC-15:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      TDD-awkward per the task plan's Test Notes: "no Rust toolchain on
+      PATH" is a property of the environment, not something a test can
+      assert about itself without becoming brittle. Handled by construction
+      instead — scripts/verify-font-bootstrap-verdict.test.ts never
+      references cargo anywhere. Collection under the default invocation is
+      confirmed structurally: `bun test` (no file argument) reports "Ran 388
+      tests across 19 files", i.e. this file's 28 tests are included without
+      being named. The no-toolchain/no-network property itself is a
+      feature-level item verified by the bun CI job (which installs no Rust
+      toolchain) passing.
+  AC-16:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Regression-prevention criterion over a file this task never edits
+      (scripts/ci-workflows.test.ts untouched — confirmed via `git status
+      --short`, which shows no modification to it). Verified by the full
+      `bun test` run: 388 pass / 0 fail, i.e. the pre-task baseline's 360
+      passing tests (which include every ci-workflows.test.ts assertion,
+      the pinned release-workflow digest and the exact CI run string among
+      them) are still passing, with only this task's 28 new tests added.
+  AC-17:
+    tests:
+      - "Loading the helper is side-effect free (AC-17) > sourcing the helper produces no stdout/stderr output and exits 0"
+      - "Loading the helper is side-effect free (AC-17) > sourcing the helper creates no file or directory in the working directory"
+      - "Loading the helper is side-effect free (AC-17) > sourcing the helper installs no trap (no exit-time hook)"
+    red_confirmed: true
+    red_reason: >-
+      Before the helper existed: the first test failed on stderr content
+      ("...そのようなファイルやディレクトリはありません" / no such file)
+      and a non-zero exit code. The other two initially passed trivially
+      (nothing was created / no trap was set — true regardless of whether
+      the source succeeded), which would not have proven the criterion; they
+      were rewritten to require the source itself to have succeeded
+      (asserting exitCode 0, and chaining `&& echo "sourced-ok" &&
+      trap -p` so a failed source short-circuits before "sourced-ok" is
+      printed) before implementing the helper, re-run to confirm genuine red
+      (19/28 failing at that point, including both rewritten tests), and
+      then confirmed green after restoring the implementation.

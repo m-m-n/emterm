@@ -58,6 +58,16 @@ for tool in git cargo bash mktemp find touch; do
     fi
 done
 
+# Resolved relative to this script's own file location, not the working
+# directory, so the script behaves identically however it is invoked (D1).
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+VERDICT_HELPER="$SCRIPT_DIR/verify-font-bootstrap-verdict.sh"
+if [ ! -r "$VERDICT_HELPER" ]; then
+    fail_usage "verdict helper not found or unreadable at $VERDICT_HELPER"
+fi
+# shellcheck source=./verify-font-bootstrap-verdict.sh
+source "$VERDICT_HELPER"
+
 REPO_ROOT="$(pwd)"
 SCRATCH_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/verify-font-bootstrap.XXXXXX")"
 
@@ -104,21 +114,6 @@ add_scenario_worktree() {
         return 0
     fi
     return 1
-}
-
-# count_executed_tests <logfile> -> total `passed + failed` summed across
-# every `test result:` line cargo printed (0 if the build never got that
-# far).
-count_executed_tests() {
-    awk '
-        /^test result:/ {
-            for (i = 1; i <= NF; i++) {
-                if ($i == "passed;") passed += $(i - 1)
-                if ($i == "failed;") failed += $(i - 1)
-            }
-        }
-        END { print passed + failed + 0 }
-    ' "$1"
 }
 
 # font_dir_has_only_pristine_files <font-dir> -> 0 if the directory holds
@@ -177,6 +172,21 @@ report_fail() {
     RESULTS_TOTAL=$((RESULTS_TOTAL + 1))
 }
 
+# report_warn <name> <reason> [logfile] -> a scenario that ran to completion
+# but whose result deserves attention rather than silent acceptance (D3):
+# emits its own prefixed WARN line plus the captured log's tail on stderr —
+# the same diagnostic report_fail produces — then counts toward the passed
+# tally exactly as report_pass does, so the aggregate exit status stays
+# success when the other scenarios pass (FR6, NFR5).
+report_warn() {
+    local name="$1" reason="$2" logfile="${3:-}"
+    log "$name: WARN ($reason)"
+    if [ -n "$logfile" ] && [ -f "$logfile" ]; then
+        tail_log "$logfile" >&2
+    fi
+    report_pass "$name"
+}
+
 # ---------------------------------------------------------------
 # Scenario: un-fetched
 # ---------------------------------------------------------------
@@ -202,19 +212,30 @@ scenario_unfetched() {
     ) >"$logfile" 2>&1
     local status=$?
 
-    local executed
-    executed=$(count_executed_tests "$logfile")
+    # AC1 of the prior feature's SPEC pins the pass condition as a non-zero
+    # executed-test count, not a zero exit status: a run that executed tests
+    # and reported a failure (e.g. a known parallelism-dependent flake in the
+    # library suite) therefore satisfies it, but is not silently folded into
+    # a plain pass — it is surfaced as a warning instead (D3).
+    local outcome_line outcome message
+    outcome_line=$(classify_unfetched_verdict "$status" "$logfile")
+    outcome="${outcome_line%% *}"
+    message="${outcome_line#* }"
 
-    if [ "$status" -ne 0 ]; then
-        report_fail "$name" "the build script stopped the build (exit $status), 0 tests executed" "$logfile"
-        return
-    fi
-    if [ "$executed" -eq 0 ]; then
-        report_fail "$name" "command exited 0 but 0 tests executed" "$logfile"
-        return
-    fi
-
-    report_pass "$name"
+    case "$outcome" in
+        pass)
+            report_pass "$name"
+            ;;
+        warn)
+            report_warn "$name" "$message" "$logfile"
+            ;;
+        fail)
+            report_fail "$name" "$message" "$logfile"
+            ;;
+        *)
+            report_fail "$name" "internal error: verdict helper returned unexpected outcome '$outcome'" "$logfile"
+            ;;
+    esac
 }
 
 # ---------------------------------------------------------------
