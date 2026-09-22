@@ -1,0 +1,48 @@
+schema_version: 1
+feature: worktree-font-bootstrap
+records:
+  - question_id: create-plan.assumption-a4-windows-host
+    packet_id: null
+    answered_at: "2026-09-22T12:05:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: >-
+      Attempt the fetch invocation on every host; no platform-conditional skip
+      and no bash-resolvability preflight.
+    normalized_answer: >-
+      Attempt the fetch invocation on every host; no platform-conditional skip
+      and no bash-resolvability preflight.
+    resolution_note: >-
+      gate: SPEC.md assumption a4, left to the plan — whether a Windows host
+      should implicitly engage the FR3 opt-out instead of attempting the fetch;
+      codex_consulted: true (run_codex_exec.sh readonly, read the repo);
+      opus_escalation: false.
+      Options considered — A: attempt on every host and let a failure produce
+      the FR4 actionable stop; B: implicitly skip on Windows (or when bash is
+      unresolvable) and go straight to the actionable stop; C: something else
+      (native Rust downloader / dependency preflight).
+      Chosen: A. Key points of the discussion — scripts/fetch-fonts.sh has no
+      Windows-specific handling and depends on more than bash (sha256sum, awk,
+      mktemp, mkdir, rm, mv, and curl or wget), so a bash-presence check cannot
+      establish readiness and only adds a branch without closing the gap; a
+      Windows developer with a working Git-Bash environment would be denied
+      automatic bootstrapping under B for no gain; release.yml's windows-latest
+      job already runs bash scripts/fetch-fonts.sh explicitly with a font cache,
+      so the automatic path is a no-op there under either option; C was rejected
+      as scope beyond this decision with no clear advantage over reusing the
+      existing script with precise failure reporting.
+      Conditions attached to A and passed to the planner: fetch only for GUI
+      builds with fonts missing, at most once per build-script execution;
+      EMTERM_SKIP_FONT_FETCH=1 prevents invocation on every host including
+      Windows; resolve bash through the build process PATH and pass the script
+      as an argument with a Windows-compatible path representation; pin the
+      destination to the building worktree, overriding any inherited destination
+      variable; distinguish four failure shapes (bash not launchable, other
+      launch error, script non-zero exit, script exit zero but fonts still
+      missing) carrying the underlying error or exit status and preserving the
+      script's stderr; keep the existing FR4 actionable message after that
+      diagnostic context, with the bash-not-launchable case stating that bash
+      must be made available first; register the opt-out environment variable
+      for cargo rerun tracking and re-check all seven fonts after a successful
+      invocation.
