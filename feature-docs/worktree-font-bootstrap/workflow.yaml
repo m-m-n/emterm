@@ -134,7 +134,8 @@ workflow:
       the branch to be pushed and the new job to run, which happens after the PR
       is opened. It is not a failure, it is unexecuted.
   - id: retrospect
-    status: in_progress
+    status: completed
+    completed_at_commit: 6ee7d9ffad6d35393309549e8fd0d80747fbf377
 
 tasks:
   task0001:

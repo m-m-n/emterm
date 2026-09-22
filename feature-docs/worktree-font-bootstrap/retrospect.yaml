@@ -1,0 +1,88 @@
+feature: worktree-font-bootstrap
+collected_at: "2026-09-22T12:15:00+09:00"
+session_ids:
+  - 01a0c71b-ccfb-72de-9b01-be2efc05044d
+  - 01a0c6ef-df54-751b-ac05-37ab32f868d0
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - test-docs/worktree-font-bootstrap/task0001.tests.yaml
+    - task: task0002
+      files:
+        - test-docs/worktree-font-bootstrap/task0002.tests.yaml
+    - task: task0003
+      files:
+        - test-docs/worktree-font-bootstrap/task0003.tests.yaml
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: >-
+      decide-tier.py returned full: the two readings evaluate to different
+      tiers (description_only lands on the moderate bucket boundary,
+      description_plus_code puts 30% on the large bucket), so the evaluator
+      resolves to the tier that removes nothing.
+    bases:
+      - basis: description_only
+        probabilities:
+          "0": 0.39
+          "1": 0.61
+          "2": 0.0
+        expectation_clear: 0.77
+        confidence: 0.42
+      - basis: description_plus_code
+        probabilities:
+          "0": 0.0
+          "1": 0.7
+          "2": 0.3
+        expectation_clear: 0.71
+        confidence: 0.55
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/build.rs
+        - src-tauri/tests/font_bootstrap.rs
+        - .github/workflows/ci.yml
+        - test/README.md
+      changed_lines_approx: 200
+      new_functions_needed: 4
+      new_files_needed: 1
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules:
+        - src-tauri/tests
+        - .github/workflows
+        - test
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - >-
+    3 タスクすべてが `test-docs/worktree-font-bootstrap/taskNNNN.tests.yaml` を
+    追加したが、どの task の `files` にも宣言が無かった。tdd-testing スキルが生成する
+    テストドキュメントは実質的に必ず生まれる成果物なので、プランナー側で既定の
+    宣言対象に含めるか、file_prediction_misses の対象外にするかの判断が要る。
+  - >-
+    review round 1 の残存 2 件はいずれも severity medium で、Phase R4 の自動修正
+    候補ゲートが critical/high に機械的に限定されているため手付かずのまま completed に
+    到達した。うち a7b9b3b29c8ec135 は「新設 CI ジョブが無関係な理由で間欠的に赤くなり、
+    原因がフォント取得だと誤診断される」という、マージ後に運用コストを生む種類の欠陥。
+    medium でも CI の信頼性に関わるものは自動修正の対象に含めるか、少なくとも完了ゲートで
+    可視化する余地がある。
+  - >-
+    verify の TS8 は文言と実測が食い違ったまま PASS になった（SPEC.md assumption a7 が
+    「fetch 後に最大 1 回の追加実行がありうる」と先に書いていたため）。VERIFICATION.md の
+    シナリオ文言が SPEC の assumption と同期していないと、verify が毎回 Codex 相談を
+    必要とする。計画フェーズで assumption → シナリオ文言の写しを取る規律が要る。
+  - >-
+    TS7（feature ブランチでの実際の CI 実行）は push と PR 作成の後にしか観測できず、
+    verify フェーズの中では構造的に未実行にしかならない。CI ジョブ新設を伴う feature では
+    「verify では観測不能」であることを計画時点で明示しておくと、未実行が失敗と
+    誤読されない。
+  - >-
+    このフィーチャは 3 回の Codex 相談（create-spec の target-behavior 他、review の
+    medium 処理、verify の TS8 判定）で判断を確定させた。いずれも batch の
+    unlisted-gate fallback ではなく明示的な相談で、結論と根拠が batch-audit.yaml に
+    残っている。無人実行の判断根拠としてこの形式は機能した。
