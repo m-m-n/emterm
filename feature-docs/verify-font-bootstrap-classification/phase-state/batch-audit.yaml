@@ -1,3 +1,17 @@
 schema_version: 1
 feature: verify-font-bootstrap-classification
-records: []
+records:
+- question_id: review.medium-finding-disposition
+  packet_id: null
+  answered_at: '2026-09-22T15:04:54+09:00'
+  source: codex-consultation
+  answer_mode: freeform
+  selected_option_ids: []
+  freeform: 'Option B: run the rework path now'
+  normalized_answer: 'Option B: run the rework path now'
+  resolution_note: 'gate: 未登録ゲート（review round 1 の medium finding 1f095aa46999c43d をこの run 内で直すか、別タスクに起票して先へ進むか）。codex_consulted:
+    true。選択肢 A = review を completed にし finding を unresolved として記録し別タスク起票、選択肢 B = rework path を回して implement
+    へ差し戻し、この feature 内で修正。Codex の判定は B。理由: (1) ログを読めない状態で PASS になると「テストが実行された」という検証の保証が崩れ、出荷前に直す価値が高い、(2)
+    誤った成功判定を防ぐというこの feature の目的に直接含まれる修正、(3) 修正は補助関数と回帰テスト 2 件に限定され影響範囲が小さい、(4) --once の終了境界が変わり実装・レビュー・検証を一巡追加する負担はあるが、正しさのリスクを考えると受け入れる方がよい、(5)
+    medium は auto-fix 対象外という規則は守り、正式な差し戻し経路を使う。A の主なリスク: 後続タスクで修正されるまで、テスト未実行を成功として扱う検証スクリプトが残る。起動引数『Consult
+    Codex on any unclear points and adopt the option judged to be comparatively better』に従い B を採用。'

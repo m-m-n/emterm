@@ -107,7 +107,7 @@ workflow:
     base_commit: 2014ddc3db8b6f3523d50e9bd887aec3ca0a7055
     completed_at_commit: a75ff7fde118b91ea851db47701e522d1d8c934f
   - id: review
-    status: in_progress
+    status: pending
   - id: verify
     status: pending
     result: null
@@ -132,15 +132,19 @@ tasks:
     branch: em-workflow/verify-font-bootstrap-classification/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, architecture, spec]
     discretionary: []
     cross_validation: false
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    security: completed
+    architecture: completed
+    spec: completed
   residual_critical_high: 0
-  needs_rework: false
+  needs_rework: true
 
 requirements:
   FR1:
@@ -250,7 +254,7 @@ requirements:
     tests: [TS-4]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework:
     rounds: 0
     failed_id_counts: {}
