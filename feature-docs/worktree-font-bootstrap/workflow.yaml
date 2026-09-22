@@ -124,7 +124,7 @@ tasks:
     requirements: [FR1, FR2, FR3, FR4, FR5, FR8, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6, NFR7]
     status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/worktree-font-bootstrap/task0001
   task0002:
     title: Bootstrap-verification script
     plan: tasks/task0002.md
@@ -136,7 +136,7 @@ tasks:
     requirements: [FR6]
     status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/worktree-font-bootstrap/task0002
   task0003:
     title: CI job that runs the bootstrap verification
     plan: tasks/task0003.md
