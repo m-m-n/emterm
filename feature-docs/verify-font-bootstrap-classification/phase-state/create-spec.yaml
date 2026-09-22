@@ -1,11 +1,11 @@
 schema_version: 1
 feature: verify-font-bootstrap-classification
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: "0bebe322d4fb40fb9d5023544edfdfc3542d901c"
 last_input_digest: "sha256:ba905198b2562b5367210e2fa15b106367c25079824b85db301d04123c69a9f1"
-active_request_id: cs-analyst-001
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
