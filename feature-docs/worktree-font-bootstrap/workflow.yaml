@@ -142,11 +142,12 @@ tasks:
     plan: tasks/task0003.md
     files:
       - .github/workflows/ci.yml
+      - ci-workflows.test.ts
     skills: [infra-impl]
     domains: [config-infra]
     complexity: low
     requirements: [FR7]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/worktree-font-bootstrap/task0003
 
