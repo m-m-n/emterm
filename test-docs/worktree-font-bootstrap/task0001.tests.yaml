@@ -1,0 +1,161 @@
+task_id: task0001
+# The build script is not reachable from the crate's own test harness (see
+# task plan Test Notes), so acceptance criteria are verified behaviorally:
+# driving `cargo check`/`cargo test` under controlled conditions (PATH
+# manipulation, env overrides, arbitrary cwd, moving font files) inside this
+# worktree's own tree, and asserting on the build's captured output, on the
+# contents of the font directory, and on whether the build script re-ran.
+# No new test files were added (task plan: Files to Create: None).
+baseline_failures:
+  - "build: `cargo test --manifest-path src-tauri/Cargo.toml --lib` does not
+     run any test — the build fails outright at src-tauri/build.rs:84
+     (`build_rs.font_missing: bundled font missing at
+     assets/fonts/Noto-COLRv1.ttf`) because this fresh worktree's
+     src-tauri/assets/fonts/ is empty. This is exactly the defect the
+     feature fixes (SPEC's 'zero tests run in a fresh worktree' regression)."
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: "Preservation criterion, not new behavior: the GUI feature
+      gate, the seven-path set, and the viewer/dist|settings/dist|icon
+      handling were already exactly this way before the diff (git diff shows
+      no line touching them). There is no prior state where this criterion
+      was false, so there is nothing to observe going red. Verified by
+      execution instead: `cargo check --no-default-features` (CLI-only)
+      succeeds with all seven fonts absent AND with the acquisition script's
+      required tooling (curl/wget/sha256sum/bash) stripped from PATH,
+      proving no font check and no network reachability on that path; `git
+      diff -- src-tauri/build.rs` confirms `emit_bundle_manifest`,
+      `embed_windows_icon_resource`, `collect`, and `content_type` are
+      byte-identical to before."
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: "Before this task's change, `cargo check` with a font
+      missing and no opt-out never invoked the acquisition script at all —
+      it panicked immediately at src-tauri/build.rs:84 with the plain
+      'font_missing' message (observed in 4a's baseline run). After the
+      change, the same command invokes `scripts/fetch-fonts.sh` exactly once
+      and the build succeeds, with all seven fonts landing under
+      CARGO_MANIFEST_DIR/assets/fonts. Also verified: (a) driven from an
+      arbitrary cwd (`cd tmp/arbitrary-cwd && cargo check --manifest-path
+      ../../src-tauri/Cargo.toml`) — fonts still land in the correct
+      worktree directory, none created under tmp/; (b) with an unrelated
+      DEST_DIR already exported (pointing at a nonexistent sibling
+      directory) — the bogus directory is never created, the correct
+      manifest-derived directory receives the fonts, proving the build
+      script's own `.env(\"DEST_DIR\", ...)` override wins."
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: "First half (opt-out + missing font -> stop, zero attempts,
+      no network): staged with EMTERM_SKIP_FONT_FETCH=1 and one font moved
+      out — build stopped immediately with the
+      'build_rs.font_fetch_skipped' context plus both actionable-message
+      lines verbatim; distinguishing evidence that no attempt occurred: a
+      second run of the same scenario with bash additionally removed from
+      PATH still produced the SAME opt-out diagnostic (not shape 1's
+      bash-missing diagnostic), which could only happen if the opt-out
+      branch returns before the interpreter is ever touched. Pre-change,
+      this env var had no code path reading it at all, so 'stop before any
+      attempt' was unobservable/undefined behavior, not a passing case —
+      red confirmed in that sense. Second half (opt-out + all fonts present
+      -> succeeds): staged EMTERM_SKIP_FONT_FETCH=1 with all seven fonts
+      present — `cargo check` finished successfully (exit 0)."
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: "Pre-change, build.rs contained a single undifferentiated
+      panic with no child-process invocation at all, so none of the four
+      shapes could ever be produced or distinguished — confirmed structurally
+      (the old code never reads PATH or spawns a process) and empirically via
+      the 4a baseline run. Post-change, three shapes were staged as real
+      failing builds and each showed its own diagnostic context plus both
+      actionable-message lines verbatim: shape 1 (PATH search space built
+      with every /usr/bin,/bin entry symlinked except `bash` -> 'could not
+      launch the bash interpreter via PATH: No such file or directory (os
+      error 2)' + the extra bash-availability line, present only here);
+      shape 2 (a non-executable stub named `bash` placed first on PATH ->
+      'could not launch scripts/fetch-fonts.sh via bash: Permission denied
+      (os error 13)', no extra line); shape 3 (bash present, curl/wget/
+      sha256sum stripped from PATH -> 'scripts/fetch-fonts.sh exited with
+      exit status: 2' with the script's own
+      'fetch_fonts.tool_missing: sha256sum not found in PATH' preserved
+      verbatim). Shape 4 (script exits 0 yet a font is still missing) could
+      not be staged as a real build without modifying fetch-fonts.sh, which
+      FR5 forbids (the script's own contract ties exit 0 to all-present) —
+      per the task plan's explicit fallback for this shape, it was instead
+      verified via a standalone decision-table check mirroring build.rs's
+      exact branch structure (Ok(output) if !success -> shape 3; Ok(_) ->
+      recheck; still-missing -> shape 4), compiled and run with rustc,
+      covering all four (success, still-missing)/(failure) combinations."
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: "Guaranteed by fetch-fonts.sh's own unmodified atomic-write
+      contract (mktemp + trap cleanup + atomic mv), which this task does not
+      touch (FR5), so there is no code path in this diff that could leave a
+      partial file — nothing to observe red for. Verified by execution: after
+      the staged shape-3 failure (script exits 2 partway through, before any
+      download of the still-missing font begins), `ls
+      src-tauri/assets/fonts/` showed only the six already-fetched fonts and
+      no `.NotoSansSymbols2-Regular.ttf.XXXXXX`-style temp file."
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: "Steady-state criterion already true in the pre-change code
+      for the specific case of 'all seven present' (the old loop's `.exists()`
+      check for every path succeeds and no panic/attempt occurs either way) —
+      the meaningful new-code path (attempt-avoidance now sits behind an
+      early return before the opt-out read and before any Command
+      construction) has no prior state where an attempt WOULD have happened
+      when all fonts are present, so nothing to observe red for. Verified by
+      execution: forced a rebuild (`touch build.rs`) with all seven fonts
+      present AND curl/wget/sha256sum stripped from PATH — the build
+      succeeded, which is only possible if the acquisition script was never
+      invoked (invoking it would have hit the exact shape-3 tool_missing
+      failure demonstrated for AC-4)."
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: "This criterion is only meaningful once D5's rerun
+      declarations exist; pre-change the seven rerun-if-changed lines were
+      only ever emitted for paths that had already been found present (the
+      loop panicked before reaching the println for a missing path), so a
+      freshly-fetched tree's *first* subsequent build could re-declare a
+      different input set than its prior run — an unconverged case that
+      cannot be demonstrated pre-change at all since the old code could never
+      reach a 'freshly fetched, about to rebuild' state (it never fetched
+      anything). Verified post-change by execution, in a tree that had just
+      fetched via this task's own bootstrap path: with the confounding
+      viewer/dist and settings/dist rerun-if-changed sources also stabilized
+      (see notes), a second `cargo check -v` reported the emterm package
+      'Fresh' with no build-script re-run; a third run with
+      EMTERM_SKIP_FONT_FETCH=1 newly exported reported 'Dirty ... the env
+      variable EMTERM_SKIP_FONT_FETCH changed' and did re-run the build
+      script."
+notes:
+  - "No files outside src-tauri/build.rs were changed in the final commit.
+     Scratch verification artifacts (PATH shadow directories, a bogus
+     DEST_DIR target, an rustc-compiled decision-table check, temporary
+     placeholder viewer/dist and settings/dist directories used briefly to
+     isolate AC-7 from an unrelated, pre-existing 'dist directory missing'
+     rerun-if-changed trigger) were created under this worktree's gitignored
+     tmp/ during testing and removed before the final commit; they never
+     affected the crate's tracked files."
+  - "The AC-7 confounder: src-tauri/build.rs already declares
+     `cargo:rerun-if-changed=viewer/dist` and `=settings/dist`
+     unconditionally (pre-existing, out of this task's scope per FR8).
+     Cargo always reruns a build script when a declared rerun-if-changed
+     path does not exist, so in this fresh worktree (no bun bundles built)
+     the build script reruns on every invocation regardless of font state.
+     This is not a regression introduced here; it was isolated for the AC-7
+     measurement by temporarily creating empty viewer/dist and settings/dist
+     directories (removed afterward) so only the font-related and
+     opt-out-related rerun conditions this task adds were under test."
+  - "All 7 pinned fonts were fetched for real over HTTPS during
+     implementation and verified hash-matching by fetch-fonts.sh itself
+     (unmodified); they are gitignored (src-tauri/assets/fonts/.gitignore)
+     and are not part of any commit."
