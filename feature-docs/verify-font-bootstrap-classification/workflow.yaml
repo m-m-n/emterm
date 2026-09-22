@@ -103,7 +103,7 @@ workflow:
     status: completed
     completed_at_commit: 7d5f27f139ac61077bf211eec45922ef5464b0d9
   - id: implement
-    status: completed
+    status: pending
     base_commit: 2014ddc3db8b6f3523d50e9bd887aec3ca0a7055
     completed_at_commit: a75ff7fde118b91ea851db47701e522d1d8c934f
   - id: review
@@ -130,6 +130,23 @@ tasks:
     status: merged
     notes: null
     branch: em-workflow/verify-font-bootstrap-classification/task0001
+  task0002:
+    title: Fail closed when the executed-test count cannot be derived
+    plan: tasks/task0002.md
+    files:
+      - scripts/verify-font-bootstrap-verdict.sh
+      - scripts/verify-font-bootstrap-verdict.test.ts
+    skills: [infra-impl]
+    domains: [config-infra, input-handling, api-contract]
+    complexity: low
+    requirements: [FR2, FR4, FR5]
+    status: pending
+    notes: null
+    branch: null
+    provenance:
+      source: review
+      source_ids: [1f095aa46999c43d]
+      review_round: 1
 
 review:
   status: pending
@@ -159,8 +176,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS-2]
+    tasks: [task0001, task0002]
+    tests: [TS-2, TS-9]
   FR3:
     title: Test-failure classification
     status: ok
@@ -173,15 +190,15 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS-3]
+    tasks: [task0001, task0002]
+    tests: [TS-3, TS-10]
   FR5:
     title: No hardcoded count in any message
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS-1, TS-2]
+    tasks: [task0001, task0002]
+    tests: [TS-1, TS-2, TS-9, TS-10]
   FR6:
     title: Aggregate outcome of a warned scenario
     status: ok
