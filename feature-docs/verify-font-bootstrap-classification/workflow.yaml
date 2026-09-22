@@ -115,7 +115,8 @@ workflow:
     result: pass
     failed_items: []
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 331b86a353a6278e80be8e33576a39b96c16f645
 
 tasks:
   task0001:
