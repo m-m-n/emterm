@@ -105,7 +105,8 @@ workflow:
     completed_at_commit: a1d3e8174a4ea5ab1c6b4305976ca84559897e8f
     base_commit: 2e726a8e41f2684aa63a8495f569bbc8229f01c0
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 84d5bc1a0759c52901417ea16d7e97e4bb78fecd
   - id: verify
     status: pending
     result: null
@@ -153,8 +154,9 @@ tasks:
     branch: em-workflow/worktree-font-bootstrap/task0003
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, performance, architecture, spec]
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
