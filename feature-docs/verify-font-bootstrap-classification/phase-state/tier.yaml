@@ -1,0 +1,30 @@
+schema_version: 1
+feature: verify-font-bootstrap-classification
+tier: full
+bases:
+  - basis: description_only
+    probabilities: {"0": 0.24, "1": 0.73, "2": 0.03, "3": 0.0}
+    expectation_clear: 0.7
+    confidence: 0.73
+    observed_at: "2026-09-22T13:05:00+09:00"
+  - basis: description_plus_code
+    probabilities: {"0": 0.0, "1": 0.91, "2": 0.09, "3": 0.0}
+    expectation_clear: 0.61
+    confidence: 0.91
+    observed_at: "2026-09-22T13:05:05+09:00"
+pre_survey_estimate:
+  files_expected:
+    - scripts/verify-font-bootstrap.sh
+    - scripts/verify-font-bootstrap.test.ts
+    - test-docs/worktree-font-bootstrap/task0002.tests.yaml
+  changed_lines_approx: 150
+  new_functions_needed: 2
+  new_files_needed: 1
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules: []
+  work_still_required: true
+rationale: >-
+  Both readings evaluated below the reduced row's P(0) floor (0.40), so the
+  full tier (removes nothing) was selected by threshold_rows:full.
+decided_at: "2026-09-22T13:05:10+09:00"
