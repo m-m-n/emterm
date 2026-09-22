@@ -7,7 +7,8 @@
 **IMPLEMENTATION.md**: `feature-docs/verify-font-bootstrap-classification/IMPLEMENTATION.md`
 
 This document covers the INTEGRATED verification of the feature. Task-level
-acceptance criteria live in `feature-docs/verify-font-bootstrap-classification/tasks/task0001.md`.
+acceptance criteria live in `feature-docs/verify-font-bootstrap-classification/tasks/task0001.md`
+and `feature-docs/verify-font-bootstrap-classification/tasks/task0002.md`.
 
 ## Build Verification
 
@@ -47,6 +48,8 @@ Rust component (regression only; this feature changes no Rust source):
 | TS-6 | Exercise the executed-count derivation on edge-case logs: two `test result:` lines, a log with none, a suite reporting zero passed and zero failed, and a non-cargo exit status alongside a non-zero count | The two lines are summed; the other two logs derive zero and take the zero-executed branch; the non-cargo exit status with a non-zero count still takes the test-failure branch with cause-neutral wording | Unit |
 | TS-7 | Inspect the script for the untouched surface | The fetch-failure scenario, the already-fetched scenario, the exit-time cleanup, the counting rule, the scenario invocation order and the summary line are unchanged; the unset-variable and pipeline-failure options are still set and exit-on-error is still not enabled; `feature-docs/worktree-font-bootstrap/SPEC.md` and `.github/workflows/release.yml` are unmodified | Static |
 | TS-8 | Run the default test invocation with no argument naming the new test file, in an environment with no Rust toolchain on PATH and no network access | The regression test is collected, runs and passes; the per-task record exists under `test-docs/verify-font-bootstrap-classification/` | Integration |
+| TS-9 | Feed the classification a log path that names no readable file — once absent, once present but unreadable — together with a non-zero exit status | The failing outcome in both cases, with a message naming the log path and the fact that the executed count could not be derived, stating no test count at all (in particular no empty count field) and containing neither the build-stop wording nor the executed-and-failed wording | Unit |
+| TS-10 | Feed the classification the same unreadable log paths together with a zero exit status, and separately an exit-status argument that is not an integer | The failing outcome in every case — never the passed and never the warned outcome — with a message naming the input that could not be interpreted | Unit |
 
 ## Code Quality Verification
 
@@ -64,7 +67,7 @@ Rust component (regression only; this feature changes no Rust source):
 |----|-----------|---------------|
 | AC1 | An executed-but-failing run is reported as a test failure, never as a stopped build | TS-1 |
 | AC2 | A run that stopped before any test ran is reported as a FAIL naming a build stop and the observed exit status | TS-2 |
-| AC3 | No verdict message contains a hardcoded test count | TS-1, TS-2, TS-6 |
+| AC3 | No verdict message contains a hardcoded test count, and none states a count that was not derived for that run | TS-1, TS-2, TS-6, TS-9, TS-10 |
 | AC4 | With the AC1 situation and the other two scenarios passing, the summary reports every scenario passed and the script exits 0 | TS-4, plus the manual end-to-end run |
 | AC5 | Zero exit status with zero executed tests still reports FAIL | TS-3 |
 | AC6 | The cargo invocation is the literal reproduction command with no added flag, and the CI step's command string is unchanged | TS-5 |
@@ -75,10 +78,10 @@ Rust component (regression only; this feature changes no Rust source):
 | Requirement | Tasks | Verification |
 |-------------|-------|--------------|
 | FR1 | task0001 | TS-1, TS-2 |
-| FR2 | task0001 | TS-2 |
+| FR2 | task0001, task0002 | TS-2, TS-9 |
 | FR3 | task0001 | TS-1 |
-| FR4 | task0001 | TS-3 |
-| FR5 | task0001 | TS-1, TS-2 |
+| FR4 | task0001, task0002 | TS-3, TS-10 |
+| FR5 | task0001, task0002 | TS-1, TS-2, TS-9, TS-10 |
 | FR6 | task0001 | TS-4 |
 | FR7 | task0001 | TS-5 |
 | FR8 | task0001 | TS-5 |
@@ -136,7 +139,7 @@ side effects, invoked once per script run.
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build | 2 | 2 | 0 | 0 |
-| Test scenarios | 8 | 8 | 0 | 0 |
+| Test scenarios | 10 | 10 | 0 | 0 |
 | Code quality | 2 | 2 | 0 | 0 |
 | Success criteria | 7 | 7 | 0 | 1 (AC4 also confirmed end to end) |
 | Manual checks | 5 | 0 | 0 | 5 |

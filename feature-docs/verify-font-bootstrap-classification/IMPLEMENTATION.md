@@ -58,21 +58,25 @@ Rust toolchain (NFR1).
 
 | Component | Responsibility | Contract (pre/postcondition) | Used by tasks |
 |-----------|----------------|------------------------------|---------------|
-| `count_executed_tests` (relocated into the verdict helper) | Derive the number of tests cargo actually executed from a captured log | **Pre**: exactly one argument, a readable path to a captured log file. **Post**: prints exactly one non-negative integer on stdout — the sum, across every `test result:` line in the log, of that line's passed count plus its failed count; prints 0 when the log holds no such line. The counting rule is preserved exactly as it stands today (FR10); only its location changes. | task0001 |
-| `classify_unfetched_verdict` (new, in the verdict helper) | Classify the un-fetched scenario's outcome, evaluating the executed count before the exit status | **Pre**: exactly two arguments — the reproduction command's exit status as an integer, and a readable path to the captured log. **Post**: prints exactly one line on stdout and returns success. The line's first whitespace-delimited token is the outcome, one of `pass`, `warn`, `fail`; the remainder of the line is the message (empty for `pass`). Selects the branch from the derived executed count first, per the classification table below. No file is written, no process is spawned, no global state is mutated. | task0001 |
+| `count_executed_tests` (relocated into the verdict helper) | Derive the number of tests cargo actually executed from a captured log | **Pre**: exactly one argument, a path to a captured log file. **Post**: when that path is readable, reports success and prints exactly one non-negative integer on stdout — the sum, across every `test result:` line in the log, of that line's passed count plus its failed count; prints 0 when the log holds no such line. When the path is not readable, reports failure to its caller and prints no count (D8). The counting rule is preserved exactly as it stands today (FR10); only its location, its intake of the log's bytes and its failure signalling change. | task0001, task0002 |
+| `classify_unfetched_verdict` (new, in the verdict helper) | Classify the un-fetched scenario's outcome, evaluating the executed count before the exit status | **Pre**: exactly two arguments — the reproduction command's exit status, and a path to the captured log. Neither argument is trusted to be well-formed: an unreadable log and a non-integer status are inputs the function handles, not preconditions it may assume (D8). **Post**: prints exactly one line on stdout and returns success. The line's first whitespace-delimited token is the outcome, one of `pass`, `warn`, `fail`; the remainder of the line is the message (empty for `pass`). Selects the branch from the derived executed count first, per the classification table below, after that table's derivation-failure row has been ruled out. No file is written, no process is spawned, no global state is mutated. | task0001, task0002 |
 | Outcome-to-report mapping (in the script) | Turn an outcome token into reported lines and tally movement | **Pre**: one outcome line as produced above, plus the scenario name and the captured log's path. **Post**: `pass` → one PASS line, tally +1 pass; `warn` → one WARN line carrying the message, then the same PASS line and tally +1 pass, and the captured log's tail on stderr; `fail` → one FAIL line carrying the message, tally records a failure, and the captured log's tail on stderr. Total scenario count advances by exactly one in every case. | task0001 |
 
 ## Classification table (the decision the helper owns)
 
 | Derived executed count | Exit status | Outcome token | Message content requirement | Requirement |
 |---|---|---|---|---|
+| not derivable (the captured log is absent or unreadable, or the derivation yielded no non-negative integer) | any, including one that is not an integer | `fail` | Names the input that could not be interpreted — the log's path, or the status argument — and states no test count at all; carries neither the build-stop wording nor the executed-and-failed wording | FR2, FR4, FR5 |
 | 0 | non-zero | `fail` | Names a build stop, and states both the observed exit status and the derived executed count | FR2, FR5 |
 | greater than 0 | non-zero | `warn` | States that tests executed and the run reported a failure; states both the observed exit status and the derived executed count; must not contain the build-stop wording | FR3, FR5 |
 | 0 | 0 | `fail` | The existing wording `command exited 0 but 0 tests executed`, unchanged | FR4 |
 | greater than 0 | 0 | `pass` | Empty | — |
 
 The branch is selected by the derived executed count before the exit status is
-consulted (FR1): the count, not the status, decides which row applies.
+consulted (FR1): the count, not the status, decides which row applies. The
+first row is ruled out before any of the others is considered — a count that
+was never derived cannot select a row, and must never be allowed to fall
+through into one (D8).
 
 ## Conventions
 
@@ -207,6 +211,31 @@ repository (`plugins/emterm/hooks/scripts/notify-status.test.ts`).
 the test a regression test rather than a test of a re-implementation.
 
 **Affected tasks**: task0001.
+
+### D8 — A value that was never derived never selects a classification branch
+
+**Decision**: the executed count's derivability is part of the decision
+contract, not an assumption about the caller. The counting component signals
+to its caller whether it could read the log at all, rather than leaving that to
+be inferred from its output; the classification treats "no non-negative integer
+was derived" — and, by the same rule, a status argument that is not an
+integer — as the classification table's first row: a `fail` naming the input
+that could not be interpreted, stating no count. The captured log's bytes reach
+the counting program through its standard input, so a path beginning with `-`
+or containing `=` cannot be reinterpreted as an option or an assignment.
+
+**Rationale**: a numeric comparison against a value that is not a number
+answers neither yes nor no; treating it as "not zero" hands every un-derivable
+run to the executed-greater-than-zero branch, which turns FR2's build-stop
+failure into a warning the script tallies as a pass and FR4's zero-executed
+failure into a clean pass — a run that executed no test at all reported as
+green — while printing an empty count where FR5 requires an observed one. The
+guard restores the fail-closed direction the whole feature depends on: a
+verdict that could not be reached is a failure, never a pass. The counting
+program's own text is untouched, so D6 and FR10 stand — only how the bytes
+reach it, and whether an unreadable path is reported, change.
+
+**Affected tasks**: task0002.
 
 ## Risk Assessment
 
