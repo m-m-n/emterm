@@ -1,0 +1,113 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::anchor_locate_call_raw_identifier_callee_counted_as_ambiguous
+      - window_host::tests::anchor_locate_call_single_raw_identifier_callee_anchors_cleanly
+    red_confirmed: true
+    red_reason: >-
+      raw_identifier_callee_counted_as_ambiguous: assertion failed (result
+      was Ok, expected Err) — the old step 2 comparison matched raw
+      identifier text only, so `r#probe_call(...)` was never counted
+      alongside `probe_call(...)`.
+      single_raw_identifier_callee_anchors_cleanly: .expect() panicked with
+      "anchor: expected exactly one call to `probe_call` inside `fn
+      probe_fn`, found 0 — explicit failure, never a silent wrong pick".
+  AC-2:
+    tests:
+      - window_host::tests::anchor_locate_call_callee_after_range_dotdot_counted_as_ambiguous
+      - window_host::tests::anchor_locate_call_callee_after_field_then_method_dot_counted_as_ambiguous
+      - window_host::tests::anchor_locate_call_callee_after_range_dotdot_eq_counted_as_ambiguous
+    red_confirmed: true
+    red_reason: >-
+      callee_after_range_dotdot_counted_as_ambiguous and
+      callee_after_field_then_method_dot_counted_as_ambiguous: assertion
+      failed (result was Ok, expected Err) — the old numeric-literal scan
+      consumed `.` unconditionally, swallowing `probe_call` into the digit
+      literal so step 2 never saw it as an identifier token.
+      callee_after_range_dotdot_eq_counted_as_ambiguous (EC-1) was already
+      green before any implementation change (documented in the task plan's
+      Test Notes as a guard: today's scanner already ends the literal at
+      `=`), so this sub-case does not itself prove FR2 — the other two
+      sub-cases do.
+  AC-3:
+    tests:
+      - window_host::tests::anchor_locate_call_float_suffix_and_hex_arguments_anchor_cleanly
+      - window_host::tests::anchor_locate_call_tuple_index_argument_anchors_cleanly
+    red_confirmed: false
+    red_reason: >-
+      Both sub-cases were already green before any implementation change.
+      Per the task plan's Test Notes, AC-3 is a guard against a boundary
+      rule that breaks floats/suffixes/tuple indices, not a red test — the
+      numeric-literal scan boundary change (FR2) does not alter behavior
+      for a `.` followed by a digit, so these cases have no observable
+      before/after difference.
+  AC-4:
+    tests:
+      - window_host::tests::anchor_locate_call_turbofish_callee_counted_as_ambiguous
+      - window_host::tests::anchor_locate_call_turbofish_with_nested_generics_counted_as_ambiguous
+      - window_host::tests::anchor_locate_call_turbofish_with_comments_counted_as_ambiguous
+    red_confirmed: true
+    red_reason: >-
+      All three sub-cases (basic turbofish, nested generics EC-3, comments
+      EC-5) failed with assertion failed (result was Ok, expected Err) — the
+      old step 2 only recognized the plain `identifier` + `(` shape, so a
+      turbofish-form call to the callee was never counted alongside the
+      plain call.
+  AC-5:
+    tests:
+      - window_host::tests::anchor_locate_call_bare_turbofish_reference_not_counted
+      - window_host::tests::anchor_locate_call_sole_turbofish_call_returns_err
+    red_confirmed: false
+    red_reason: >-
+      Both sub-cases were already green before any implementation change.
+      Per the task plan's Test Notes, AC-5 guards against counting a
+      non-call turbofish reference and against anchoring from `::` — the
+      pre-existing step 2 never recognized the turbofish shape at all, so a
+      bare `probe_call::<u8>;` reference was already not counted (0 hits
+      either way) and a sole turbofish-only call already produced 0 hits
+      and thus Err, for the same reason and not for the reason FR3
+      introduces (the new step 3/4 turbofish guard added by this task).
+  AC-6:
+    tests:
+      - window_host::tests::anchor_locate_call_raw_identifier_fn_name_counted_as_ambiguous
+      - window_host::tests::anchor_locate_call_sole_raw_identifier_fn_name_anchors_cleanly
+      - window_host::tests::anchor_locate_call_r_hash_fn_is_not_treated_as_keyword
+    red_confirmed: true
+    red_reason: >-
+      raw_identifier_fn_name_counted_as_ambiguous: assertion failed (result
+      was Ok, expected Err) — the old step 1 comparison matched raw
+      identifier text only, so `fn r#probe_fn` was never counted as a
+      candidate alongside `fn probe_fn`.
+      sole_raw_identifier_fn_name_anchors_cleanly: .expect() panicked with
+      "anchor: expected exactly one brace-depth-0 `fn probe_fn` definition,
+      found 0 — explicit failure, never an ambiguous or missing pick
+      (FR3)". r_hash_fn_is_not_treated_as_keyword (as-1) was already green
+      before any implementation change (the `fn` keyword check always used
+      raw text, so `r#fn` was never mistaken for the keyword even before
+      this task) — it is a guard against a regression this task could have
+      introduced, not itself a red test.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a new test. Verified by re-running the pre-existing
+      anchor_locate_call and button_path_ filters (36 and 5 tests, all
+      passing, including button_path_rewrapped_argument_list_edit_is_accepted
+      and button_path_call_with_inserted_comment_edit_is_accepted with
+      unmodified bodies) and the full --lib suite (3613 passed, 0 failed, 3
+      ignored — 15 more than the 3598-passed baseline, all newly added by
+      this task), plus `git diff --stat` / hunk review confirming the diff
+      touches only src-tauri/src/window_host/tests.rs, only inside the
+      anchor_scan module and the anchor_locate_call_* test group.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a unit test (comment-only change). Verified by text search: `grep
+      -n "doc/tasks/anchor-scan-false-success" src-tauri/src/window_host/tests.rs`
+      returns no matches, and the comment block right before `mod
+      anchor_scan` now reads "See Design in
+      `feature-docs/anchor-scan-false-success/tasks/task0001.md`."
