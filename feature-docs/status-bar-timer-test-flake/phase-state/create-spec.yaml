@@ -1,29 +1,128 @@
 schema_version: 1
 feature: status-bar-timer-test-flake
 phase: create-spec
-status: in_progress
+status: awaiting_answers
 generation: 1
-base_revision: "d269a3a7b613d45b09c8056c34f48676913fbbdf"
-last_input_digest: "sha256:66d085ad9752eafd411a49852c143ff94372a1adb23c6b8bff4116842e31e8a9"
+base_revision: d269a3a7b613d45b09c8056c34f48676913fbbdf
+last_input_digest: sha256:66d085ad9752eafd411a49852c143ff94372a1adb23c6b8bff4116842e31e8a9
 active_request_id: cs-analyst-001
-packets: {}
-answers: {}
-assumptions: []
-progress_fingerprint: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-09-23T18:40:00+09:00'
+    questions:
+    - question_id: requirement.fix-approach
+      status: answered
+    - question_id: requirement.scope-sibling-tests
+      status: answered
+    - question_id: requirement.recurrence-test
+      status: answered
+    - question_id: design.step.recommendation
+      status: answered
+answers:
+  requirement.fix-approach:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-23T18:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - inject_tick_source
+    freeform: 'Codex chose inject_tick_source: deadline polling and a longer fixed sleep only lower the
+      failure probability and still depend on real elapsed time. The seam to replace is the wait in time.rs:158
+      (Condvar::wait_timeout), not the display-only SystemTime. Keep the seam internal; production wait,
+      version bump, wake and shutdown behaviour and the public API stay the same; std primitives suffice
+      to synchronize manual ticks with their completion.'
+    normalized_answer: Make the TimeProvider timer loop's tick source injectable through an internal (crate/test-visible)
+      seam. Tests drive ticks manually and assert exact wake/version counts synchronously. The production
+      path keeps Condvar::wait_timeout with the configured interval, the version-then-wake order, and
+      the Drop notify_all+join behaviour; no public API change beyond what the seam needs.
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted: true (1 turn, harness
+      entry: codex via run_codex_exec.sh readonly, batched with the packet''s other requirement questions);
+      Codex chose inject_tick_source over the worker''s tentative deadline_poll; orchestrator adopted
+      it because the task''s expected behaviour requires not depending on real elapsed time, which deadline_poll
+      does not satisfy. Options not chosen: deadline_poll, longer_fixed_sleep. Recorded as an assumption
+      (record_as_assumption: true).'
+  requirement.scope-sibling-tests:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-23T18:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - named_plus_time_siblings
+    freeform: 'Codex: time.rs:381 (120ms) and time.rs:449 (160ms) share the same defect; fixing only the
+      named test leaves the same flake in the repeated --lib run. Use the same seam for all three.'
+    normalized_answer: Fix runtime_time_provider_timer_fires_wake plus time.rs's time_provider_timer_thread_calls_wake_on_interval
+      and time_provider_timer_thread_bumps_version_per_tick_without_get_value with the same injectable
+      tick seam.
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted: true (1 turn, harness
+      entry: codex via run_codex_exec.sh readonly, batched with the packet''s other requirement questions);
+      Codex chose named_plus_time_siblings (matches worker recommendation). Option not chosen: named_only.
+      Recorded as an assumption.'
+  requirement.recurrence-test:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-23T18:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - delayed_tick_regression
+    freeform: 'Codex: detecting broken wake wiring alone does not verify the fixed-sleep flake cannot
+      recur. Control the delay synchronously via manual ticks through the shared wait/verify helper; do
+      not actually sleep past 120ms. Confirm that reverting to a fixed-sleep check makes the added test
+      fail.'
+    normalized_answer: Add a regression test in which ticks are withheld/delayed via the manual tick seam
+      (no real sleeping) and the check still passes deterministically once ticks are delivered; the test
+      must fail if the check reverts to counting within a fixed real-time window.
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted: true (1 turn, harness
+      entry: codex via run_codex_exec.sh readonly, batched with the packet''s other requirement questions);
+      Codex chose delayed_tick_regression (matches worker recommendation) with the refinement that delay
+      is simulated through the manual tick seam rather than real sleeps. Option not chosen: rewritten_tests_suffice.
+      Recorded as an assumption.'
+  design.step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-23T18:45:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: Accept the analyst's recommendation to skip the design step.
+    resolution_note: 'gate: create-spec.design-step; resolved by references/batch-policies.yaml (action:
+      select, option_id: decide_autonomously). No Codex consultation needed.'
+assumptions:
+- assumption_id: a1
+  statement: The timer tick source becomes injectable through an internal seam; production TimeProvider
+    behaviour (default 1000ms interval, version-then-wake order, Drop notify_all+join returning promptly)
+    is unchanged.
+  reversible: true
+- assumption_id: a2
+  statement: The two same-shaped time.rs tests are fixed with the same seam as the named runtime test.
+  reversible: true
+- assumption_id: a3
+  statement: A dedicated regression test simulates delayed ticks via the manual tick seam (no real sleep)
+    and fails if the check reverts to a fixed real-time window.
+  reversible: true
+- assumption_id: a4
+  statement: The stale comment about the git worker's initial wake in runtime_time_provider_timer_fires_wake
+    is corrected.
+  reversible: true
+- assumption_id: a5
+  statement: No new crates (including dev-dependencies) are added.
+  reversible: true
+progress_fingerprint: sha256:round1
 resolved_input_cache:
-  resolved_at: "2026-09-23T18:34:28+09:00"
+  resolved_at: '2026-09-23T18:34:28+09:00'
   e2e: []
   design_system_candidates:
-    - doc/UI-DESIGN-GUIDELINES.yaml
-    - src-tauri/web-shared/styles.css
-    - src-tauri/src/ui/md3.rs
+  - doc/UI-DESIGN-GUIDELINES.yaml
+  - src-tauri/web-shared/styles.css
+  - src-tauri/src/ui/md3.rs
   package_files:
-    - package.json
-    - Cargo.toml
-    - src-tauri/Cargo.toml
+  - package.json
+  - Cargo.toml
+  - src-tauri/Cargo.toml
   reference_scan_targets:
-    - src-tauri/src/status_bar/runtime.rs
-    - src-tauri/src/status_bar/providers/time.rs
-    - src-tauri/src/status_bar/providers/mod.rs
-    - src-tauri/src/status_bar/providers/worker.rs
-    - src-tauri/src/status_bar/providers/git_branch.rs
+  - src-tauri/src/status_bar/runtime.rs
+  - src-tauri/src/status_bar/providers/time.rs
+  - src-tauri/src/status_bar/providers/mod.rs
+  - src-tauri/src/status_bar/providers/worker.rs
+  - src-tauri/src/status_bar/providers/git_branch.rs
