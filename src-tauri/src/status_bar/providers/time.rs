@@ -27,6 +27,16 @@
 //! trait contract honored by every other provider) and removes the
 //! `SystemTime::now()` syscall from `version()`'s hot path — both
 //! `version()` and `get_value()` stay side-effect-free reads.
+//!
+//! ## Tick source seam (task0001)
+//!
+//! Where the next tick comes from is decoupled from the loop body
+//! (stop check → version bump → wake → completion notice) behind the
+//! private [`TickSource`] contract. [`with_wake`](TimeProvider::with_wake)
+//! uses [`ProductionTickSource`], an exact reproduction of the timed
+//! `Condvar::wait_timeout` above. Test code (`cfg(test)`) can instead
+//! drive the loop with a manual tick source so the timer tests assert
+//! exact counts without depending on real time.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -55,6 +65,78 @@ impl Default for RefreshConfig {
     }
 }
 
+/// Outcome of asking a [`TickSource`] for the next tick.
+#[derive(Debug, PartialEq, Eq)]
+enum TickOutcome {
+    Tick,
+    Stop,
+}
+
+/// Decouples "where does the next tick come from" from the timer loop
+/// body (stop check → version bump → wake → completion notice). The
+/// loop body itself is the single copy in [`timer_loop`], shared by
+/// every source, so production and manually-driven tests exercise the
+/// exact same bump/wake ordering.
+///
+/// `next_tick` and `tick_done` are called only by the timer thread
+/// that owns this source.
+trait TickSource: Send {
+    /// Returns `Stop` whenever the provider's stop flag is set at
+    /// decision time, even if a tick is available.
+    fn next_tick(&self) -> TickOutcome;
+    /// Called by the loop after `wake()` returns for the tick just
+    /// obtained.
+    fn tick_done(&self);
+}
+
+/// Lets `Drop` unblock a timer thread parked inside a `TickSource`
+/// implementation. Held by the provider (not by the timer thread), so
+/// it must be independently shareable with whichever source is
+/// active.
+trait TickInterrupt: Send + Sync {
+    /// Called after the stop flag is set. A blocked `next_tick`
+    /// re-evaluates the stop flag and returns `Stop` promptly.
+    fn interrupt(&self);
+}
+
+/// Reproduces today's timing behaviour exactly (one timed wait per
+/// tick on the provider's existing `(Mutex<()>, Condvar)` pair).
+struct ProductionTickSource {
+    stop: Arc<AtomicBool>,
+    cv: Arc<(Mutex<()>, Condvar)>,
+    interval: Duration,
+}
+
+impl TickSource for ProductionTickSource {
+    fn next_tick(&self) -> TickOutcome {
+        let (m, cond) = &*self.cv;
+        // Drop the guard immediately after `wait_timeout` returns so
+        // the next iteration can re-acquire it without holding the
+        // lock during `wake()`.
+        let guard = m.lock().unwrap();
+        let (_g, _res) = cond.wait_timeout(guard, self.interval).unwrap();
+        if self.stop.load(Ordering::Relaxed) {
+            TickOutcome::Stop
+        } else {
+            // An early or spurious `wait_timeout` return counts as a
+            // tick whenever stop is not set -- identical to the
+            // pre-seam loop.
+            TickOutcome::Tick
+        }
+    }
+
+    fn tick_done(&self) {}
+}
+
+/// No-op: `Drop`'s existing `notify_all` on the provider's `cv` pair
+/// (the same pair `ProductionTickSource` waits on) already unblocks a
+/// parked production wait, so there is nothing extra to do here.
+struct NoopInterrupt;
+
+impl TickInterrupt for NoopInterrupt {
+    fn interrupt(&self) {}
+}
+
 /// Provider that exposes the local wall clock under `{time}`.
 pub struct TimeProvider {
     /// User-supplied format spec. Shared with the cache so callers
@@ -67,15 +149,18 @@ pub struct TimeProvider {
     /// `get_value()` never touches this counter.
     version: Arc<AtomicU64>,
     /// Timer-thread coordination. `stop` is flipped to `true` by the
-    /// `Drop` impl; the timer wakes from `Condvar::wait_timeout` and
-    /// exits the loop. `cv` is the matching `(Mutex<()>, Condvar)`
-    /// pair shared with the worker.
+    /// `Drop` impl. `cv` is the provider's own `(Mutex<()>, Condvar)`
+    /// pair; `Drop` always notifies it (unchanged), and the
+    /// production tick source waits on this same pair.
     stop: Arc<AtomicBool>,
     cv: Arc<(Mutex<()>, Condvar)>,
     /// `JoinHandle` for the timer thread. `Drop` takes the handle out
     /// of the `Option` and joins it so the test runner can verify
     /// `TimeProvider` does not leak threads (TS-perf-3).
     join: Mutex<Option<JoinHandle<()>>>,
+    /// Handle used by `Drop` to unblock whichever tick source is
+    /// active. `None` when no timer thread was spawned (`Self::new`).
+    interrupt: Option<Arc<dyn TickInterrupt>>,
 }
 
 impl TimeProvider {
@@ -92,6 +177,7 @@ impl TimeProvider {
             stop: Arc::new(AtomicBool::new(false)),
             cv: Arc::new((Mutex::new(()), Condvar::new())),
             join: Mutex::new(None),
+            interrupt: None,
         }
     }
 
@@ -101,18 +187,45 @@ impl TimeProvider {
     /// frame schedules a redraw and `get_value` recomputes the wall
     /// clock. `Drop` stops + joins the thread.
     pub fn with_wake(format: impl Into<String>, wake: WakeFn, refresh: RefreshConfig) -> Self {
-        let provider = Self::new(format);
-        provider.spawn_timer(wake, refresh.interval);
+        let mut provider = Self::new(format);
+        let source = ProductionTickSource {
+            stop: provider.stop.clone(),
+            cv: provider.cv.clone(),
+            interval: refresh.interval,
+        };
+        provider.interrupt = Some(Arc::new(NoopInterrupt));
+        provider.spawn_timer(wake, source);
         provider
     }
 
-    fn spawn_timer(&self, wake: WakeFn, interval: Duration) {
+    /// Construct with a self-owned timer thread driven by the
+    /// test-only manual tick source instead of real time. Returns the
+    /// provider plus the [`ManualTickController`] that drives it.
+    #[cfg(test)]
+    pub(crate) fn with_manual_source(
+        format: impl Into<String>,
+        wake: WakeFn,
+    ) -> (Self, ManualTickController) {
+        let mut provider = Self::new(format);
+        let shared = Arc::new(ManualShared::default());
+        let source = ManualTickSource {
+            stop: provider.stop.clone(),
+            shared: shared.clone(),
+        };
+        let controller = ManualTickController {
+            shared: shared.clone(),
+        };
+        provider.interrupt = Some(Arc::new(ManualInterrupt { shared }));
+        provider.spawn_timer(wake, source);
+        (provider, controller)
+    }
+
+    fn spawn_timer<S: TickSource + 'static>(&self, wake: WakeFn, source: S) {
         let stop = self.stop.clone();
-        let cv = self.cv.clone();
         let version = self.version.clone();
         let handle = std::thread::Builder::new()
             .name("time-provider-timer".into())
-            .spawn(move || timer_loop(stop, cv, interval, wake, version))
+            .spawn(move || timer_loop(stop, source, wake, version))
             .expect("failed to spawn time-provider-timer");
         *self.join.lock().unwrap() = Some(handle);
     }
@@ -136,27 +249,32 @@ impl Drop for TimeProvider {
         self.stop.store(true, Ordering::Relaxed);
         let (_, cv) = &*self.cv;
         cv.notify_all();
+        // Interrupt whichever tick source is active: for the
+        // production source this adds nothing beyond the notify_all
+        // above; for the manual source it is what lets a thread
+        // parked on a tick that never comes exit.
+        if let Some(interrupt) = &self.interrupt {
+            interrupt.interrupt();
+        }
         if let Some(handle) = self.join.lock().unwrap().take() {
             let _ = handle.join();
         }
     }
 }
 
-fn timer_loop(
+/// Single loop body shared by every tick source: ask for the next
+/// tick, leave without effect on `Stop` (or if stop was set while the
+/// outcome was pending), otherwise bump `version` then `wake()`, then
+/// tell the source the tick is done.
+fn timer_loop<S: TickSource>(
     stop: Arc<AtomicBool>,
-    cv: Arc<(Mutex<()>, Condvar)>,
-    interval: Duration,
+    source: S,
     wake: WakeFn,
     version: Arc<AtomicU64>,
 ) {
-    let (m, cond) = &*cv;
     while !stop.load(Ordering::Relaxed) {
-        // Drop the guard immediately after `wait_timeout` returns so
-        // the next iteration can re-acquire it without holding the
-        // lock during `wake()`.
-        let guard = m.lock().unwrap();
-        let (_g, _res) = cond.wait_timeout(guard, interval).unwrap();
-        if stop.load(Ordering::Relaxed) {
+        let outcome = source.next_tick();
+        if matches!(outcome, TickOutcome::Stop) || stop.load(Ordering::Relaxed) {
             break;
         }
         // Bump first, then wake: when the main thread services the
@@ -167,7 +285,210 @@ fn timer_loop(
         // returning the previous tick's formatted string forever.
         version.fetch_add(1, Ordering::Relaxed);
         wake();
+        source.tick_done();
     }
+}
+
+/// Test-only manual tick source / controller pair (task0001). Lets a
+/// test deliver ticks and wait for their completion instead of
+/// relying on real time (NFR2).
+///
+/// The pair shares one mutex-protected [`ManualState`] and one
+/// condition variable. `ManualTickSource` (this module) is owned
+/// solely by the timer thread; `ManualTickController` is owned by
+/// test code; `ManualInterrupt` is the handle the provider's `Drop`
+/// holds to unblock a parked source.
+#[cfg(test)]
+#[derive(Default)]
+struct ManualState {
+    /// Ticks staged by `hold` but not yet released -- invisible to
+    /// the timer thread.
+    held: u64,
+    /// Ticks released and available for `next_tick` to consume.
+    available: u64,
+    /// Running count of completed ticks (`tick_done` calls).
+    completed_total: u64,
+    /// True while `next_tick` is blocked with nothing available.
+    parked: bool,
+    /// True once the source side has dropped (timer-thread exit,
+    /// including unwinding).
+    closed: bool,
+}
+
+#[cfg(test)]
+struct ManualShared {
+    state: Mutex<ManualState>,
+    cv: Condvar,
+}
+
+#[cfg(test)]
+impl Default for ManualShared {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(ManualState::default()),
+            cv: Condvar::new(),
+        }
+    }
+}
+
+/// Source side: owned solely by the timer thread. Its `Drop` marks
+/// the shared state closed and wakes every controller waiter -- this
+/// runs whenever the timer thread's loop exits, including unwinding,
+/// since it is a local of `timer_loop`'s stack frame.
+#[cfg(test)]
+struct ManualTickSource {
+    stop: Arc<AtomicBool>,
+    shared: Arc<ManualShared>,
+}
+
+#[cfg(test)]
+impl TickSource for ManualTickSource {
+    fn next_tick(&self) -> TickOutcome {
+        let mut guard = self.shared.state.lock().unwrap();
+        loop {
+            // Stop takes priority even if a tick is available, and is
+            // re-checked under the shared mutex every time round this
+            // loop -- this is what makes `ManualInterrupt::interrupt`
+            // race-free (no lost wake-up).
+            if self.stop.load(Ordering::Relaxed) {
+                return TickOutcome::Stop;
+            }
+            if guard.available > 0 {
+                guard.available -= 1;
+                return TickOutcome::Tick;
+            }
+            guard.parked = true;
+            self.shared.cv.notify_all();
+            guard = self.shared.cv.wait(guard).unwrap();
+            guard.parked = false;
+        }
+    }
+
+    fn tick_done(&self) {
+        let mut guard = self.shared.state.lock().unwrap();
+        guard.completed_total += 1;
+        drop(guard);
+        self.shared.cv.notify_all();
+    }
+}
+
+#[cfg(test)]
+impl Drop for ManualTickSource {
+    fn drop(&mut self) {
+        let mut guard = self.shared.state.lock().unwrap();
+        guard.closed = true;
+        drop(guard);
+        self.shared.cv.notify_all();
+    }
+}
+
+/// Interrupt handle held by the provider (not the timer thread) so
+/// `Drop` can unblock a source parked in `next_tick` even though the
+/// `ManualTickSource` value itself is owned by the timer thread.
+#[cfg(test)]
+struct ManualInterrupt {
+    shared: Arc<ManualShared>,
+}
+
+#[cfg(test)]
+impl TickInterrupt for ManualInterrupt {
+    fn interrupt(&self) {
+        // Take the shared mutex before notifying: `next_tick`
+        // re-checks stop under the same mutex before blocking, so
+        // there is no window where a notify can be sent between that
+        // check and the blocking wait (no lost wake-up).
+        let guard = self.shared.state.lock().unwrap();
+        drop(guard);
+        self.shared.cv.notify_all();
+    }
+}
+
+/// Controller side: owned by test code, drives the manual tick
+/// source and waits for its effects.
+#[cfg(test)]
+pub(crate) struct ManualTickController {
+    shared: Arc<ManualShared>,
+}
+
+#[cfg(test)]
+impl ManualTickController {
+    /// Stage `k` ticks the timer thread cannot see yet. No effect on
+    /// counts until [`Self::release_and_wait`].
+    pub(crate) fn hold(&self, k: u64) {
+        let mut guard = self.shared.state.lock().unwrap();
+        guard.held += k;
+    }
+
+    /// Make every held tick available, then block without any
+    /// timeout until each released tick has been recorded as
+    /// completed or the state is closed. Returns the number
+    /// completed.
+    ///
+    /// Because completion is recorded under the shared mutex after
+    /// `wake()` returns, once this returns the caller observes the
+    /// version bump and every effect of `wake()` for each completed
+    /// tick.
+    pub(crate) fn release_and_wait(&self) -> u64 {
+        let mut guard = self.shared.state.lock().unwrap();
+        let released = guard.held;
+        guard.available += released;
+        guard.held = 0;
+        let baseline = guard.completed_total;
+        drop(guard);
+        self.shared.cv.notify_all();
+
+        let mut guard = self.shared.state.lock().unwrap();
+        loop {
+            let done = guard.completed_total - baseline;
+            if done >= released || guard.closed {
+                return done.min(released);
+            }
+            guard = self.shared.cv.wait(guard).unwrap();
+        }
+    }
+
+    /// Block until the timer thread is parked or the state is closed.
+    pub(crate) fn wait_parked(&self) {
+        let mut guard = self.shared.state.lock().unwrap();
+        while !guard.parked && !guard.closed {
+            guard = self.shared.cv.wait(guard).unwrap();
+        }
+    }
+
+    /// Whether the timer-thread side is gone.
+    pub(crate) fn closed(&self) -> bool {
+        self.shared.state.lock().unwrap().closed
+    }
+}
+
+/// Shared wait-and-check helper (test-only): the single place the
+/// timer tests wait for progress and assert exact counts. Contains no
+/// sleep, no deadline and no timeout (NFR2) -- progress depends only
+/// on `release_and_wait`'s handshake.
+#[cfg(test)]
+pub(crate) fn release_and_assert_ticks(
+    controller: &ManualTickController,
+    wake_count: impl Fn() -> u64,
+    version: impl Fn() -> u64,
+    wake_baseline: u64,
+    version_baseline: u64,
+    n: u64,
+) {
+    let completed = controller.release_and_wait();
+    assert_eq!(
+        completed, n,
+        "expected {n} ticks completed, got {completed}"
+    );
+    assert_eq!(
+        wake_count(),
+        wake_baseline + n,
+        "wake count mismatch after {n} ticks"
+    );
+    assert_eq!(
+        version(),
+        version_baseline + n,
+        "version mismatch after {n} ticks"
+    );
 }
 
 impl VariableProvider for TimeProvider {
@@ -364,26 +685,33 @@ mod tests {
         (wake, count)
     }
 
-    /// TS-29: TimeProvider's timer thread fires `WakeFn` on the
-    /// configured interval. We use a short 25 ms interval and wait
-    /// long enough for at least two ticks.
+    /// TS-29 (task0001 rewrite, FR5): TimeProvider's timer thread
+    /// calls `wake()` exactly once per delivered tick. Driven through
+    /// the manual tick source so the count is exact and independent
+    /// of real time (NFR2) -- no sleep, no fixed window.
     #[test]
     fn time_provider_timer_thread_calls_wake_on_interval() {
         let (wake, count) = counter_wake();
-        let p = TimeProvider::with_wake(
-            "HH:mm:ss",
-            wake,
-            RefreshConfig {
-                interval: Duration::from_millis(25),
-            },
-        );
-        // Sleep long enough for ≥ 2 intervals to elapse.
-        std::thread::sleep(Duration::from_millis(120));
-        let observed = count.load(Ordering::Relaxed);
-        assert!(
-            observed >= 2,
-            "expected ≥2 wake calls, got {observed} in 120ms with 25ms interval"
-        );
+        let (p, ctrl) = TimeProvider::with_manual_source("HH:mm:ss", wake);
+        assert_eq!(count.load(Ordering::Relaxed), 0, "no wake before delivery");
+        let v0 = p.version(None);
+        const N: u64 = 3;
+        let mut wake_baseline = 0u64;
+        let mut version_baseline = v0;
+        for _ in 0..N {
+            ctrl.hold(1);
+            release_and_assert_ticks(
+                &ctrl,
+                || count.load(Ordering::Relaxed) as u64,
+                || p.version(None),
+                wake_baseline,
+                version_baseline,
+                1,
+            );
+            wake_baseline += 1;
+            version_baseline += 1;
+        }
+        assert_eq!(count.load(Ordering::Relaxed) as u64, N);
         drop(p);
     }
 
@@ -431,26 +759,93 @@ mod tests {
     /// status-bar clock froze on an idle PTY because the cache hit
     /// kept returning the previous tick's run-list and `get_value`
     /// (the only bump site at the time) was never reached.
+    ///
+    /// (task0001 rewrite, FR6): driven through the manual tick source
+    /// for an exact count (NFR2) -- no sleep, no fixed window. We
+    /// never call `get_value` -- the only bump site under test is the
+    /// timer thread.
     #[test]
     fn time_provider_timer_thread_bumps_version_per_tick_without_get_value() {
-        let (wake, _count) = counter_wake();
-        let p = TimeProvider::with_wake(
-            "HH:mm:ss",
-            wake,
-            RefreshConfig {
-                interval: Duration::from_millis(25),
-            },
-        );
+        let (wake, count) = counter_wake();
+        let (p, ctrl) = TimeProvider::with_manual_source("HH:mm:ss", wake);
         let v0 = p.version(None);
-        // Wait long enough for ≥ 3 ticks (25 ms × 3 = 75 ms, give
-        // 160 ms of slack for slow CI runners). CRUCIALLY we never
-        // call `get_value` here — the only bump site under test is
-        // the timer thread.
-        std::thread::sleep(Duration::from_millis(160));
-        let v1 = p.version(None);
-        assert!(
-            v1 >= v0 + 3,
-            "expected ≥3 version bumps from timer alone (no get_value), got v0={v0} v1={v1}"
+        const N: u64 = 3;
+        ctrl.hold(N);
+        release_and_assert_ticks(
+            &ctrl,
+            || count.load(Ordering::Relaxed) as u64,
+            || p.version(None),
+            0,
+            v0,
+            N,
+        );
+        drop(p);
+    }
+
+    /// New for task0001 (AC-3, FR4): dropping a provider whose timer
+    /// thread is parked in the manual source returns; the controller
+    /// then reports closed and neither the wake count nor the
+    /// retained version counter moved. A tick released after the drop
+    /// reports zero completed, does not block, and causes no further
+    /// wake or version bump.
+    #[test]
+    fn time_provider_drop_while_parked_reports_closed_without_wake_or_version_bump() {
+        let (wake, count) = counter_wake();
+        let (p, ctrl) = TimeProvider::with_manual_source("HH:mm:ss", wake);
+        ctrl.wait_parked();
+        // Keep our own handle to the version counter -- `p` is about
+        // to be dropped and we still need to read it afterwards.
+        let version = p.version.clone();
+        let v0 = version.load(Ordering::Relaxed);
+        let w0 = count.load(Ordering::Relaxed);
+
+        drop(p);
+
+        assert!(ctrl.closed(), "controller must report closed after drop");
+        assert_eq!(count.load(Ordering::Relaxed), w0, "no wake from drop");
+        assert_eq!(
+            version.load(Ordering::Relaxed),
+            v0,
+            "no version bump from drop"
+        );
+
+        // A tick released after the drop reports zero completed, does
+        // not block, and causes no wake or version bump.
+        ctrl.hold(1);
+        let completed = ctrl.release_and_wait();
+        assert_eq!(completed, 0, "no one is left to complete a post-drop tick");
+        assert_eq!(count.load(Ordering::Relaxed), w0);
+        assert_eq!(version.load(Ordering::Relaxed), v0);
+    }
+
+    /// New for task0001 (AC-6, FR8, D4): regression test for the
+    /// delayed-tick handshake. Ticks held while the timer thread is
+    /// parked must NOT advance wake/version until the controller
+    /// explicitly releases and waits for them -- there is no sleep
+    /// here, and there must not be one. If the shared helper's
+    /// handshake ever regresses to "sleep, then check counts", the
+    /// held ticks are never released and this test fails regardless
+    /// of how long the sleep is, because nothing here delivers a tick
+    /// except `release_and_wait`.
+    #[test]
+    fn time_provider_delayed_ticks_only_progress_via_release_and_wait_handshake() {
+        let (wake, count) = counter_wake();
+        let (p, ctrl) = TimeProvider::with_manual_source("HH:mm:ss", wake);
+        ctrl.wait_parked();
+        let v0 = p.version(None);
+        const N: u64 = 3;
+        ctrl.hold(N);
+        // No sleep: immediately after holding, nothing has been
+        // released yet, so wake/version must still be at baseline.
+        assert_eq!(count.load(Ordering::Relaxed) as u64, 0);
+        assert_eq!(p.version(None), v0);
+        release_and_assert_ticks(
+            &ctrl,
+            || count.load(Ordering::Relaxed) as u64,
+            || p.version(None),
+            0,
+            v0,
+            N,
         );
         drop(p);
     }
