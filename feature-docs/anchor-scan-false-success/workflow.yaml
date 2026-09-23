@@ -59,7 +59,16 @@ workflow:
     status: completed
     completed_at_commit: a4ac45939656ef394fb0aabe5d0ced1a1b658db2
   - id: verify
-    status: in_progress
+    status: completed
+    completed_at_commit: 135ce6a8d9a4fe83aa7c6276d65659caebcfbfec
+    result: pass
+    failed_items: []
+    summary: >-
+      build (cargo check) exit 0; test (cargo test --lib) 3549 passed / 0 failed / 3 ignored,
+      TS-1..TS-7 and EC-1..EC-6 mapped anchor_locate_call_* tests all pass; format check exit 0;
+      SC-3 diff limited to src-tauri/src/window_host/tests.rs + test-docs/, no hunk inside
+      mod call_site_scan, Cargo.toml / pointer_routing.rs unchanged. web component not run (out of scope).
+    excluded: []
   - id: retrospect
     artifacts: [retrospect.yaml]
     status: pending
