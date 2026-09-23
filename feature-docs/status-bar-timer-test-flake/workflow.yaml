@@ -93,9 +93,21 @@ workflow:
     status: completed
     completed_at_commit: 1e251461505c29088024d906493c3fd5e1d07048
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 611de885e92eab39f6eaebec0e2659a5cb98600d
+    result: pass
     failed_items: []
+    summary: >-
+      Build: cargo check (default / --no-default-features) exit 0, no warnings from
+      the two changed files. Format: cargo fmt --check clean. Tests: --lib serial x3
+      and parallel x3 all 3532 passed; status_bar:: parallel x20, serial x20,
+      --test-threads=64 x5 all 130 passed. TS-4 fixed-window mutation (120 ms sleep
+      in release_and_assert_ticks) made the regression test fail; source restored,
+      git diff clean, re-run passed. Inspection: FR5-FR8 tests have no sleep or
+      real-time window; production keeps one wait_timeout per tick, bump before wake,
+      Drop notify_all + join; seam items are cfg(test) pub(crate) only; no Cargo.toml
+      or lockfile change. Manual check (production clock liveness in a GUI build) is
+      left to the user. Excluded requirements: none.
   - id: retrospect
     status: pending
 
