@@ -6839,7 +6839,7 @@ fn wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted()
 // now returns `Result` and fails explicitly on an unclosed literal or an
 // unclassifiable `'`, and `locate_call`'s function search requires
 // exactly one brace-depth-0 `fn fn_name` candidate. See Design in
-// `doc/tasks/anchor-scan-false-success/`.
+// `feature-docs/anchor-scan-false-success/tasks/task0001.md`.
 mod anchor_scan {
     /// anchor-scan-false-success/task0001: token kinds this scanner
     /// distinguishes. Opaque literals and lifetime/label markers are
@@ -7196,10 +7196,29 @@ mod anchor_scan {
             if c.is_ascii_digit() {
                 let start_byte = pos;
                 i += 1;
-                while i < n
-                    && (chars[i].1.is_alphanumeric() || chars[i].1 == '_' || chars[i].1 == '.')
-                {
-                    i += 1;
+                // anchor-scan-callee-miscount/task0001 (FR2): a `.` stays
+                // in the literal only when a digit follows it (`1.5`,
+                // `1.0f32`, the `0.1` of `x.0.1`). A following `.` or an
+                // identifier-start character ends the literal before this
+                // `.` (`0..x`, `0.method`), freeing the callee after it
+                // to be scanned as its own identifier token. Anything
+                // else (whitespace, other punctuation, end of input) is
+                // unchanged from before.
+                while i < n {
+                    let ch = chars[i].1;
+                    if ch == '.' {
+                        match chars.get(i + 1).map(|(_, c)| *c) {
+                            Some(next) if next.is_ascii_digit() => {}
+                            Some('.') => break,
+                            Some(next) if is_ident_start(next) => break,
+                            _ => {}
+                        }
+                        i += 1;
+                    } else if ch.is_alphanumeric() || ch == '_' {
+                        i += 1;
+                    } else {
+                        break;
+                    }
                 }
                 out.push(PosTok {
                     start: start_byte,
@@ -7228,6 +7247,18 @@ mod anchor_scan {
             Kind::Ident(s) => Some(s.as_str()),
             Kind::Punct(_) | Kind::Literal | Kind::Lifetime => None,
         }
+    }
+
+    /// anchor-scan-callee-miscount/task0001 (FR1, FR4, FR5): an
+    /// identifier token's bare name — its raw text with a leading `r#`
+    /// removed, used only for name comparisons (`fn_name` in step 1,
+    /// `callee_last_segment` in step 2). Token byte ranges are still
+    /// computed from the raw text elsewhere (FR5); this accessor never
+    /// changes them. The `fn` keyword check keeps using [`ident_text`]
+    /// on the raw text, so `r#fn` is never treated as the keyword
+    /// (as-1).
+    fn bare_ident_text(tok: &PosTok) -> Option<&str> {
+        ident_text(tok).map(|s| s.strip_prefix("r#").unwrap_or(s))
     }
 
     fn is_punct(tok: &PosTok, c: char) -> bool {
@@ -7333,6 +7364,31 @@ mod anchor_scan {
         ArgCount::Count(count)
     }
 
+    /// anchor-scan-callee-miscount/task0001 (FR3): from the index right
+    /// after a turbofish's opening `<`, walks to the `>` that balances
+    /// it — each `<` opens one level and each `>` closes one, and since
+    /// the scanner emits each `>` as its own punctuation token, `>>`
+    /// closes two levels (EC-3). Tokens other than `<` / `>` are
+    /// skipped. Returns the index of the balancing `>`, or `None` when
+    /// the walk reaches `end` without finding it — the walk never goes
+    /// past the body end.
+    fn find_balancing_angle_close(toks: &[PosTok], after_open: usize, end: usize) -> Option<usize> {
+        let mut depth = 1i32;
+        let mut m = after_open;
+        while m < end {
+            if is_punct(&toks[m], '<') {
+                depth += 1;
+            } else if is_punct(&toks[m], '>') {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(m);
+                }
+            }
+            m += 1;
+        }
+        None
+    }
+
     /// A located call's byte range, decomposed into the pieces the
     /// benign edits below need (Design, アンカールーチンの責務と契約,
     /// 事後条件（成功時）): the callee's own bare-name end (to insert
@@ -7395,7 +7451,7 @@ mod anchor_scan {
                 depth -= 1;
             } else if depth == 0 && ident_text(&toks[idx]) == Some("fn") {
                 if let Some(name_tok) = toks.get(idx + 1) {
-                    if ident_text(name_tok) == Some(fn_name) {
+                    if bare_ident_text(name_tok) == Some(fn_name) {
                         candidates.push(idx);
                     }
                 }
@@ -7425,16 +7481,43 @@ mod anchor_scan {
             )
         })?;
 
-        // Step 2 (FR4a-2): every occurrence of the callee's bare name,
-        // immediately followed by `(`, inside that body — exactly one
-        // is required.
-        let mut hits = Vec::new();
+        // Step 2 (FR4a-2, anchor-scan-callee-miscount/task0001 FR1/FR3):
+        // every occurrence of the callee's bare name inside that body,
+        // in either call shape, is counted — exactly one is required:
+        //   - Plain: bare name immediately followed by `(`.
+        //   - Turbofish: bare name, `::`, a balanced `<`…`>`
+        //     generic-argument list, then `(` (Design, 3). A
+        //     turbofish-shaped reference not followed by `(` after the
+        //     balancing `>` is not a call and is not counted (EC-4).
+        // `hits` pairs each counted occurrence's callee-token index with
+        // whether it was the turbofish shape.
+        let mut hits: Vec<(usize, bool)> = Vec::new();
         let mut j = body_start;
         while j < body_end {
-            if ident_text(&toks[j]) == Some(callee_last_segment) {
+            if bare_ident_text(&toks[j]) == Some(callee_last_segment) {
+                let mut is_plain = false;
                 if let Some(open) = toks.get(j + 1) {
                     if is_punct(open, '(') {
-                        hits.push(j);
+                        is_plain = true;
+                    }
+                }
+                if is_plain {
+                    hits.push((j, false));
+                } else if let (Some(c1), Some(c2), Some(lt)) =
+                    (toks.get(j + 1), toks.get(j + 2), toks.get(j + 3))
+                {
+                    if is_punct(c1, ':') && is_punct(c2, ':') && is_punct(lt, '<') {
+                        if let Some(gt_idx) = find_balancing_angle_close(&toks, j + 4, body_end) {
+                            let mut has_call_paren = false;
+                            if let Some(open) = toks.get(gt_idx + 1) {
+                                if is_punct(open, '(') {
+                                    has_call_paren = true;
+                                }
+                            }
+                            if has_call_paren {
+                                hits.push((j, true));
+                            }
+                        }
                     }
                 }
             }
@@ -7447,7 +7530,18 @@ mod anchor_scan {
                 hits.len()
             ));
         }
-        let callee_idx = hits[0];
+        let (callee_idx, is_turbofish) = hits[0];
+        if is_turbofish {
+            // Design, 4 / SPEC as-2: steps 3/4 anchor only the plain
+            // shape. When the single counted occurrence is turbofish,
+            // fail explicitly rather than start the paren walk from a
+            // token other than the callee's own `(`.
+            return Err(format!(
+                "anchor: the only call to `{callee_last_segment}` inside `fn {fn_name}` is \
+                 turbofish-form — explicit failure, anchoring only the plain call shape \
+                 (SPEC as-2)"
+            ));
+        }
         let open_idx = callee_idx + 1;
 
         // Step 3 (FR4a-3 / EC-2): paren-depth walk from the call's own
@@ -7870,6 +7964,271 @@ fn anchor_locate_call_generic_argument_comma_is_indeterminate() {
         result.is_err(),
         "AC-6(b)/anchor-scan-false-success: a top-level generic argument list must make \
          the argument count indeterminate"
+    );
+}
+
+// ── AC-1 to AC-6 (anchor-scan-callee-miscount/task0001): closing the
+// callee / fn-name miscount paths in `locate_call` ──────────────────
+
+/// AC-1(a)/TS-1 (FR1; anchor-scan-callee-miscount): a raw-identifier
+/// callee call must be counted alongside a plain-identifier call to
+/// the same name, so a body with both is rejected as ambiguous.
+#[test]
+fn anchor_locate_call_raw_identifier_callee_counted_as_ambiguous() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { r#probe_call(w, x, y, z); \
+               probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-1(a)/TS-1/anchor-scan-callee-miscount: a raw-identifier callee call must be \
+         counted, rejecting the body as ambiguous"
+    );
+}
+
+/// AC-1(b)/TS-6 (FR1, FR5; anchor-scan-callee-miscount): a single
+/// raw-identifier callee call anchors cleanly — the returned range's
+/// bytes are unaffected by the `r#` stripping used only for the name
+/// comparison.
+#[test]
+fn anchor_locate_call_single_raw_identifier_callee_anchors_cleanly() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { r#probe_call(a, b, c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-1(b)/TS-6/anchor-scan-callee-miscount: a single raw-identifier callee call must \
+         anchor cleanly",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, c, d",
+        "AC-1(b)/TS-6/anchor-scan-callee-miscount: the argument text must be exactly the \
+         four plain arguments"
+    );
+    assert!(
+        src[..anchored.callee_end].ends_with("r#probe_call"),
+        "AC-1(b)/TS-6/anchor-scan-callee-miscount: callee_end must fall right after the \
+         raw-identifier callee text"
+    );
+}
+
+/// AC-2(a)/TS-2 (FR2; anchor-scan-callee-miscount): a callee call
+/// written right after `0..` must be counted alongside a second plain
+/// call, so the body is rejected as ambiguous.
+#[test]
+fn anchor_locate_call_callee_after_range_dotdot_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { let r = 0..probe_call(k); \
+               probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-2(a)/TS-2/anchor-scan-callee-miscount: a callee call right after `0..` must be \
+         counted, rejecting the body as ambiguous"
+    );
+}
+
+/// AC-2(b)/TS-3 (FR2; anchor-scan-callee-miscount): a callee call
+/// written right after a tuple-index-shaped receiver (`self.0.`) must
+/// be counted alongside a second plain call, so the body is rejected
+/// as ambiguous.
+#[test]
+fn anchor_locate_call_callee_after_field_then_method_dot_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { self.0.probe_call(x); \
+               probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-2(b)/TS-3/anchor-scan-callee-miscount: a callee call right after `self.0.` must \
+         be counted, rejecting the body as ambiguous"
+    );
+}
+
+/// AC-2(c)/EC-1 (FR2; anchor-scan-callee-miscount): a callee call
+/// written right after `0..=` must also be counted — a guard against a
+/// boundary rule that stops one `.` too early or too late (today's
+/// scanner already frees this callee at the `=`, so this case does not
+/// regress).
+#[test]
+fn anchor_locate_call_callee_after_range_dotdot_eq_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { let r = 0..=probe_call(k); \
+               probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-2(c)/EC-1/anchor-scan-callee-miscount: a callee call right after `0..=` must be \
+         counted, rejecting the body as ambiguous"
+    );
+}
+
+/// AC-3(a)/TS-7 (FR2; anchor-scan-callee-miscount): float / suffixed /
+/// hex numeric-literal arguments must still anchor cleanly — a guard
+/// against a boundary rule that breaks the numeric-literal scan.
+#[test]
+fn anchor_locate_call_float_suffix_and_hex_arguments_anchor_cleanly() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call(1.5, 1.0f32, 1e10, 0x1F); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-3(a)/TS-7/anchor-scan-callee-miscount: float/suffix/hex arguments must anchor \
+         cleanly",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "1.5, 1.0f32, 1e10, 0x1F",
+        "AC-3(a)/TS-7/anchor-scan-callee-miscount: the argument text must be exactly the \
+         four numeric-literal arguments"
+    );
+}
+
+/// AC-3(b)/EC-2 (FR2; anchor-scan-callee-miscount): a tuple-index
+/// argument (`x.0.1`) must still anchor cleanly and keep its
+/// identifier — a guard against a boundary rule that breaks tuple
+/// indices.
+#[test]
+fn anchor_locate_call_tuple_index_argument_anchors_cleanly() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { probe_call(x.0.1, b, c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-3(b)/EC-2/anchor-scan-callee-miscount: a tuple-index argument must anchor \
+         cleanly",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "x.0.1, b, c, d",
+        "AC-3(b)/EC-2/anchor-scan-callee-miscount: the argument text must be exactly the \
+         tuple-index argument plus the three plain arguments"
+    );
+}
+
+/// AC-4(a)/TS-4 (FR3; anchor-scan-callee-miscount): a turbofish-form
+/// callee call must be counted alongside a plain call to the same
+/// name, so the body is rejected as ambiguous.
+#[test]
+fn anchor_locate_call_turbofish_callee_counted_as_ambiguous() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { probe_call::<u8>(w, x, y, z); \
+               probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4(a)/TS-4/anchor-scan-callee-miscount: a turbofish-form callee call must be \
+         counted, rejecting the body as ambiguous"
+    );
+}
+
+/// AC-4(b)/EC-3 (FR3; anchor-scan-callee-miscount): a turbofish call
+/// with nested generics (`::<Vec<u8>>`) must still be recognized as one
+/// call — the scanner emits each `>` as its own token, so the doubled
+/// `>>` must close two levels, not desync the balancing walk.
+#[test]
+fn anchor_locate_call_turbofish_with_nested_generics_counted_as_ambiguous() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { \
+               probe_call::<Vec<u8>>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4(b)/EC-3/anchor-scan-callee-miscount: a turbofish call with nested generics \
+         must be counted, rejecting the body as ambiguous"
+    );
+}
+
+/// AC-4(c)/EC-5 (FR3; anchor-scan-callee-miscount): block comments
+/// between the callee name and `::`, and between the closing `>` and
+/// `(`, must not stop the turbofish call from being recognized — the
+/// scanner already discards comment tokens.
+#[test]
+fn anchor_locate_call_turbofish_with_comments_counted_as_ambiguous() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { \
+               probe_call/* c1 */::<u8>/* c2 */(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4(c)/EC-5/anchor-scan-callee-miscount: a turbofish call with intervening \
+         comments must be counted, rejecting the body as ambiguous"
+    );
+}
+
+/// AC-5(a)/EC-4 (FR3; anchor-scan-callee-miscount, SPEC as-2): a bare
+/// turbofish-form reference that is not itself shaped as a call (no
+/// `(` after the balancing `>`) must not be counted — the single real
+/// call still anchors cleanly.
+#[test]
+fn anchor_locate_call_bare_turbofish_reference_not_counted() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { let f = probe_call::<u8>; \
+               probe_call(a, b, c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-5(a)/EC-4/anchor-scan-callee-miscount: a bare turbofish reference must not be \
+         counted, leaving the plain call to anchor",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, c, d",
+        "AC-5(a)/EC-4/anchor-scan-callee-miscount: the argument text must be exactly the \
+         plain call's four arguments"
+    );
+}
+
+/// AC-5(b) (FR3; anchor-scan-callee-miscount, SPEC as-2): a body whose
+/// only call is turbofish-form must still return `Err` — steps 3/4
+/// never anchor a turbofish call, so the sole counted occurrence
+/// cannot be anchored.
+#[test]
+fn anchor_locate_call_sole_turbofish_call_returns_err() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { probe_call::<u8>(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-5(b)/anchor-scan-callee-miscount: a body whose only call is turbofish-form must \
+         return Err, never anchoring from `::`"
+    );
+}
+
+/// AC-6(a)/TS-5 (FR4; anchor-scan-callee-miscount): depth-0
+/// definitions of both `fn r#probe_fn` and `fn probe_fn` must be
+/// counted as candidates for the same bare name, so the source is
+/// rejected as ambiguous.
+#[test]
+fn anchor_locate_call_raw_identifier_fn_name_counted_as_ambiguous() {
+    let src = "fn r#probe_fn(a: i32, b: i32, c: i32, d: i32) { probe_call(a, b, c, d); } \
+               fn probe_fn(w: i32, x: i32, y: i32, z: i32) { probe_call(w, x, y, z); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-6(a)/TS-5/anchor-scan-callee-miscount: a depth-0 `fn r#probe_fn` alongside `fn \
+         probe_fn` must be counted, rejecting the source as ambiguous"
+    );
+}
+
+/// AC-6(b) (FR4, FR5; anchor-scan-callee-miscount): a source whose only
+/// depth-0 definition is `fn r#probe_fn` must anchor cleanly — the
+/// bare-name comparison finds it even though the raw text carries the
+/// `r#` prefix.
+#[test]
+fn anchor_locate_call_sole_raw_identifier_fn_name_anchors_cleanly() {
+    let src = "fn r#probe_fn(a: i32, b: i32, c: i32, d: i32) { probe_call(a, b, c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-6(b)/anchor-scan-callee-miscount: a sole depth-0 `fn r#probe_fn` must anchor \
+         cleanly",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, c, d",
+        "AC-6(b)/anchor-scan-callee-miscount: the argument text must be exactly the four \
+         plain arguments"
+    );
+}
+
+/// AC-6(c)/as-1 (FR4; anchor-scan-callee-miscount): `r#fn` must never
+/// be treated as the `fn` keyword — a guard against removing `r#`
+/// before the keyword check. The real `fn probe_fn` definition still
+/// anchors cleanly.
+#[test]
+fn anchor_locate_call_r_hash_fn_is_not_treated_as_keyword() {
+    let src = "r#fn probe_fn(w, x, y, z) { probe_call(w, x, y, z); } \
+               fn probe_fn(a, b, c, d) { probe_call(a, b, c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-6(c)/as-1/anchor-scan-callee-miscount: `r#fn` must not be treated as the `fn` \
+         keyword, leaving the real `fn probe_fn` to anchor",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, c, d",
+        "AC-6(c)/as-1/anchor-scan-callee-miscount: the argument text must be exactly the \
+         real definition's four arguments"
     );
 }
 
