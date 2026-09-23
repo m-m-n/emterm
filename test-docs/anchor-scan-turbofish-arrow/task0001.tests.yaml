@@ -1,0 +1,114 @@
+task_id: task0001
+baseline_failures:
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::anchor_locate_call_turbofish_arrow_return_type_counted_as_ambiguous
+    red_confirmed: true
+    red_reason: >-
+      panicked: "AC-1/anchor-scan-turbofish-arrow: a turbofish call whose
+      generic argument contains `->` must be counted, rejecting the body as
+      ambiguous" — before the fix, find_balancing_angle_close returned the
+      arrow's own `>` as the balancing close, the token after it (`u8`) was
+      not `(`, so the turbofish call was left uncounted and locate_call
+      wrongly returned Ok.
+  AC-2:
+    tests:
+      - window_host::tests::anchor_locate_call_turbofish_arrow_return_type_reversed_order_counted_as_ambiguous
+    red_confirmed: true
+    red_reason: >-
+      panicked: "AC-2/anchor-scan-turbofish-arrow: reversing the call order
+      must not change the ambiguous verdict" — same root cause as AC-1 with
+      the plain call written first.
+  AC-3:
+    tests:
+      - window_host::tests::anchor_locate_call_turbofish_arrow_nested_in_dyn_fn_counted_as_ambiguous
+      - window_host::tests::anchor_locate_call_turbofish_double_arrow_counted_as_ambiguous
+      - window_host::tests::anchor_locate_call_turbofish_arrow_then_nested_generic_counted_as_ambiguous
+    red_confirmed: true
+    red_reason: >-
+      All three panicked before the fix (Box<dyn Fn(u8) -> u8>>, the
+      double-arrow fn() -> fn(u8) -> u8, and fn() -> Vec<u8>): the arrow's
+      `>` was consumed as a depth-closing token regardless of nesting depth
+      or how many arrows/nested generics followed, so the outer list's real
+      close was found at the wrong (too-early) index and the call went
+      uncounted.
+  AC-4:
+    tests:
+      - window_host::tests::anchor_locate_call_turbofish_arrow_with_comments_counted_as_ambiguous
+    red_confirmed: true
+    red_reason: >-
+      panicked: "AC-4/anchor-scan-turbofish-arrow: comments around the arrow
+      and after the list's close must not stop the call from being counted"
+      — comments do not change the arrow's own byte-adjacency, so the same
+      early-close bug applied.
+  AC-5:
+    tests:
+      - window_host::tests::anchor_locate_call_sole_turbofish_arrow_call_returns_err
+    red_confirmed: false
+    red_reason: >-
+      Already passed before the fix. Old code: the arrow's `>` is
+      misidentified as the close, the token after it (`u8`) is not `(`, so
+      the occurrence is never counted -> hits.len() == 0 -> Err ("found 0").
+      New code: the real closing `>` is found, followed by `(`, so the
+      occurrence is counted and is_turbofish is true -> the pre-existing
+      turbofish-sole-call branch returns Err ("is turbofish-form"). Both
+      paths return Err via `result.is_err()`, so this assertion cannot
+      distinguish buggy from fixed behavior with this fixture; it verifies
+      the pre-existing turbofish-sole-call contract still holds with a `->`
+      in the generic argument, not the bug fix itself.
+  AC-6:
+    tests:
+      - window_host::tests::anchor_locate_call_bare_turbofish_arrow_reference_not_counted
+    red_confirmed: false
+    red_reason: >-
+      Already passed before the fix. Old code: the arrow's `>` is
+      misidentified as the close; the token after it (`u8`, the return
+      type) is not `;` either, so the reference is uncounted. New code: the
+      real closing `>` is found; the token after it is `;`, not `(`, so the
+      reference is uncounted for the correct reason. Both leave only the
+      plain call counted -> Ok with the same args. This assertion verifies
+      the non-call-reference contract, not the bug fix.
+  AC-7:
+    tests:
+      - window_host::tests::anchor_locate_call_hyphen_space_before_angle_close_not_treated_as_arrow
+      - window_host::tests::anchor_locate_call_hyphen_comment_before_angle_close_not_treated_as_arrow
+    red_confirmed: false
+    red_reason: >-
+      Already passed before the fix. The bug only affects a `>` that is
+      byte-adjacent to a preceding `-` token; `<- >` and `<-/*c*/>` each
+      contain exactly one `>` in the generic list, which both the old
+      (always-decrement) and new (adjacency-gated) code close at depth 0
+      identically. These assertions guard against over-broadening the
+      arrow check to non-adjacent `-`, not the reported bug.
+  AC-8:
+    tests:
+      - window_host::tests::anchor_locate_call_negative_const_generic_closes_normally
+    red_confirmed: false
+    red_reason: >-
+      Already passed before the fix. The token immediately before `>` in
+      `::<-1>` is the numeric literal `1`, not `-`, so the arrow check
+      never applies in either version; both close the list normally. This
+      assertion guards the negative-const-generic case, not the reported
+      bug.
+  AC-9:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Verified by outcome, not a dedicated test: `CARGO_TARGET_DIR=src-tauri/target
+      cargo test --manifest-path src-tauri/Cargo.toml --lib` run after the
+      fix reports 3624 passed, 0 failed, 3 ignored — every pre-existing
+      anchor_scan test (>> two-level close, nested generics, comment
+      insertion, benign-edit tests, etc.) stayed green alongside the new
+      tests above.
+  AC-10:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Verified by outcome: `CARGO_TARGET_DIR=src-tauri/target cargo test
+      --manifest-path src-tauri/Cargo.toml --lib` exits 0 with 3624 passed,
+      0 failed after the fix (baseline had exactly one unrelated pre-existing
+      failure, mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master,
+      which is not present in final_failures).
