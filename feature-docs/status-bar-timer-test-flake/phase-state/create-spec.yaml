@@ -1,0 +1,29 @@
+schema_version: 1
+feature: status-bar-timer-test-flake
+phase: create-spec
+status: in_progress
+generation: 1
+base_revision: "d269a3a7b613d45b09c8056c34f48676913fbbdf"
+last_input_digest: "sha256:66d085ad9752eafd411a49852c143ff94372a1adb23c6b8bff4116842e31e8a9"
+active_request_id: cs-analyst-001
+packets: {}
+answers: {}
+assumptions: []
+progress_fingerprint: null
+resolved_input_cache:
+  resolved_at: "2026-09-23T18:34:28+09:00"
+  e2e: []
+  design_system_candidates:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/md3.rs
+  package_files:
+    - package.json
+    - Cargo.toml
+    - src-tauri/Cargo.toml
+  reference_scan_targets:
+    - src-tauri/src/status_bar/runtime.rs
+    - src-tauri/src/status_bar/providers/time.rs
+    - src-tauri/src/status_bar/providers/mod.rs
+    - src-tauri/src/status_bar/providers/worker.rs
+    - src-tauri/src/status_bar/providers/git_branch.rs
