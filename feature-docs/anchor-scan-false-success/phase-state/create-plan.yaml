@@ -1,0 +1,20 @@
+schema_version: 1
+feature: anchor-scan-false-success
+phase: create-plan
+status: dispatching
+generation: 1
+mode: batch
+base_revision: 5dd9c53bbc864fa378fce45426b1857e34c2ca4c
+last_input_digest: sha256:827b8ca23030c5a22dec24cfe4541450c2be719dec044836c09043874ee15f51
+active_request_id: cp-planner-001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: cp-planner-001
+  status: dispatched
+  input_digest: sha256:827b8ca23030c5a22dec24cfe4541450c2be719dec044836c09043874ee15f51
+artifacts: []
+patches: []
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
