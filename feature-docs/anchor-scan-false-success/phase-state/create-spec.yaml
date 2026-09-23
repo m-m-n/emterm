@@ -1,0 +1,14 @@
+schema_version: 1
+feature: anchor-scan-false-success
+phase: create-spec
+status: in_progress
+generation: 1
+mode: batch
+last_input_digest: null
+active_request_id: cs-analyst-001
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+stale_redispatch_count: 0
