@@ -1,0 +1,43 @@
+schema_version: 1
+feature: anchor-scan-false-success
+phase: create-spec
+status: completed
+generation: 1
+mode: batch
+last_input_digest: sha256:013a21795af4e0aa94fa08661ffbd0d3a5d0b61790c1e20e17acfcc068e3f24c
+active_request_id: null
+packets: {}
+answers:
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-23T21:15:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: doc/UI-DESIGN-GUIDELINES.yaml (top candidate
+      of 3 detected)'
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-09-23T21:15:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: 'skipped: test-only change in #[cfg(test)] scan logic, no UI;
+      also removed by tier reduced'
+worker_runs:
+- request_id: cs-analyst-001
+  status: completed
+  input_digest: sha256:efd10d3d444345b4bb2746c443fcb525cb866e1aabce5a93aee033029a9ad1dd
+- request_id: cs-specwriter-001
+  status: completed
+  input_digest: sha256:013a21795af4e0aa94fa08661ffbd0d3a5d0b61790c1e20e17acfcc068e3f24c
+artifacts:
+- path: feature-docs/anchor-scan-false-success/SPEC.md
+  sha256: sha256:df6fb008085e5c425b8ea43a522dba408169d0ea00f63b87f424653339821ed7
+  produced_by: cs-specwriter-001
+patches: []
+stale_redispatch_count: 0

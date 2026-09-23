@@ -1,0 +1,30 @@
+feature: anchor-scan-false-success
+collected_at: "2026-09-23T22:01:00+09:00"
+session_ids: [01a0ce5a-6170-7380-8e53-110337a97e54]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: reduced
+    rationale: "score.probabilities['0']=0.52 >= 0.4 (p0_floor) and score.probabilities['0'] + score.probabilities['1']=1.0 >= 0.85 (bucket_sum_floor)"
+    bases:
+      - basis: description_only
+        probabilities: {"0": 0.52, "1": 0.48, "2": 0.0}
+      - basis: description_plus_code
+        probabilities: {"0": 0.56, "1": 0.44, "2": 0.0}
+    pre_survey_estimate:
+      files_expected: [src-tauri/src/window_host/tests.rs]
+      changed_lines_approx: 150
+      new_functions_needed: 5
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1 で評価者起点の medium 2 件（生識別子 r#callee の一意性チェック漏れ、数値リテラル走査が '.' 後の識別子を飲み込む件）と low 1 件が、file に絶対パスが入っていたため R3b step 1 で落ち、findings 0 件扱いになった。評価者出力のパス正規化が無いことで実在の指摘が失われている"
