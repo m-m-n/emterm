@@ -1,0 +1,40 @@
+schema_version: 1
+feature: mux-snapshot-ring-wrap-restore
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: "bbd3055277df761a93855f7d7e460581ab7c924e"
+last_input_digest: "sha256:e3945cc0ff30fc129ce04272d5376a25d0a86e6a66cef2eda086d74a653ab222"
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: "sha256:e3945cc0ff30fc129ce04272d5376a25d0a86e6a66cef2eda086d74a653ab222"
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  resolved_at: "2026-09-23T18:37:00+09:00"
+  e2e: []
+  design_system_candidates:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/md3.rs
+  package_files:
+    - package.json
+    - Cargo.toml
+    - src-tauri/Cargo.toml
+  reference_scan_targets:
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/session/pane/output_target.rs
+    - src-tauri/src/mux/session/pane/mod.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/ipc/handlers/mod.rs
+    - src-tauri/src/mux/snapshot.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+last_error: null
