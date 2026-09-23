@@ -1,5 +1,5 @@
 feature: anchor-scan-false-success
-collected_at: "2026-09-23T22:30:00+09:00"
+collected_at: "2026-09-23T22:01:00+09:00"
 session_ids: [01a0ce5a-6170-7380-8e53-110337a97e54]
 signals:
   review_critical_high: []
