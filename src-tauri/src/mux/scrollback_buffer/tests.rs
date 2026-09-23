@@ -752,3 +752,119 @@ fn capture_then_load_snapshot_round_trips_bytes_containing_invalid_utf8_and_nuls
     let restored = ScrollbackRingBuffer::load_snapshot(&snap);
     assert_eq!(restored.read_all(), data);
 }
+
+// ── mux-snapshot-ring-wrap-restore task0001: read_segments_with_wrap_state
+// (AC-2, NFR4, NFR7) ─────────────────────────────────────────────────────
+
+/// NFR4: the default scrollback capacity is pinned at 2 MiB. A change to
+/// `DEFAULT_SCROLLBACK_CAPACITY` is out of scope for this task (task plan
+/// "Out of Scope") — this test exists to catch an accidental drift, not to
+/// bless a deliberate change.
+#[test]
+fn default_scrollback_capacity_is_pinned_at_2_mib() {
+    assert_eq!(DEFAULT_SCROLLBACK_CAPACITY, 2 * 1024 * 1024);
+}
+
+/// AC-2: cumulative writes that exceed capacity report `wrapped == true`.
+#[test]
+fn read_segments_with_wrap_state_reports_wrapped_when_cumulative_writes_exceed_capacity() {
+    let mut rb = ScrollbackRingBuffer::new(8);
+    rb.write(b"ABCDEF"); // 6, under capacity
+    rb.write(b"GHIJ"); // total 10 > capacity 8: wrapped
+    let (_, _, wrapped) = rb.read_segments_with_wrap_state();
+    assert!(
+        wrapped,
+        "cumulative writes past capacity must report wrapped"
+    );
+}
+
+/// AC-2: a single write strictly larger than capacity reports
+/// `wrapped == true` (the "keep only the tail" branch in `write`).
+#[test]
+fn read_segments_with_wrap_state_reports_wrapped_for_a_single_oversize_write() {
+    let mut rb = ScrollbackRingBuffer::new(4);
+    rb.write(b"ABCDEFGH"); // 8 > capacity 4
+    let (_, _, wrapped) = rb.read_segments_with_wrap_state();
+    assert!(
+        wrapped,
+        "a single write larger than capacity must report wrapped"
+    );
+}
+
+/// AC-2: a total written EXACTLY equal to capacity must NOT report
+/// wrapped — the ring is exactly full, but nothing has been evicted yet
+/// (FR3 governs the exactly-capacity boundary).
+#[test]
+fn read_segments_with_wrap_state_exact_capacity_is_not_wrapped() {
+    let mut rb = ScrollbackRingBuffer::new(4);
+    rb.write(b"ABCD"); // exactly capacity
+    let (bytes, _, wrapped) = rb.read_segments_with_wrap_state();
+    assert!(!wrapped, "exactly-capacity total must not report wrapped");
+    assert_eq!(bytes, b"ABCD");
+}
+
+/// AC-2: `clear()` resets the wrap trigger — a ring that had wrapped
+/// reports `wrapped == false` again immediately after `clear()`, even
+/// before any new bytes are written.
+#[test]
+fn read_segments_with_wrap_state_clear_after_wrap_resets_to_not_wrapped() {
+    let mut rb = ScrollbackRingBuffer::new(4);
+    rb.write(b"ABCDEFGH"); // wraps
+    assert!(rb.read_segments_with_wrap_state().2);
+    rb.clear();
+    let (bytes, segments, wrapped) = rb.read_segments_with_wrap_state();
+    assert!(!wrapped, "clear() must reset the wrap trigger");
+    assert!(bytes.is_empty());
+    assert!(segments.is_empty());
+}
+
+/// AC-2 / NFR7: a ring rebuilt via `load_snapshot` from a WRAPPED ring's
+/// handoff capture is never itself wrapped — this is the NFR7 known limit
+/// (a handoff-restored pane does not get the post-wrap dump restore this
+/// feature adds), pinned at the ring level.
+#[test]
+fn read_segments_with_wrap_state_ring_rebuilt_from_a_wrapped_rings_capture_is_not_wrapped() {
+    let mut rb = ScrollbackRingBuffer::new(4);
+    rb.write(b"ABCDEFGH"); // wraps; retained content is exactly capacity (4B)
+    assert!(
+        rb.read_segments_with_wrap_state().2,
+        "test prerequisite: original ring wrapped"
+    );
+    let snap = rb.capture();
+    let restored = ScrollbackRingBuffer::load_snapshot(&snap);
+    let (bytes, _, wrapped) = restored.read_segments_with_wrap_state();
+    assert!(
+        !wrapped,
+        "a ring rebuilt from a wrapped ring's handoff capture must not be wrapped (NFR7)"
+    );
+    assert_eq!(bytes, b"EFGH");
+}
+
+/// AC-2: the combined read's bytes and segments equal what `read_segments`
+/// reports for the SAME ring state (this is a superset read, not a
+/// different path).
+#[test]
+fn read_segments_with_wrap_state_bytes_and_segments_match_read_segments() {
+    let mut rb = ScrollbackRingBuffer::new(4096);
+    rb.write_resize_marker(80, 24);
+    rb.write(b"before-resize");
+    rb.write_resize_marker(120, 40);
+    rb.write(b"after-resize");
+
+    let (plain_bytes, plain_segments) = rb.read_segments();
+    let (combined_bytes, combined_segments, wrapped) = rb.read_segments_with_wrap_state();
+    assert_eq!(combined_bytes, plain_bytes);
+    assert_eq!(combined_segments, plain_segments);
+    assert!(!wrapped, "test prerequisite: this ring never wrapped");
+}
+
+/// AC-2: when the flag is set, the returned bytes length equals capacity
+/// (a wrapped ring's retained window is always exactly full).
+#[test]
+fn read_segments_with_wrap_state_wrapped_bytes_length_equals_capacity() {
+    let mut rb = ScrollbackRingBuffer::new(16);
+    rb.write(b"this stream is longer than sixteen bytes");
+    let (bytes, _, wrapped) = rb.read_segments_with_wrap_state();
+    assert!(wrapped);
+    assert_eq!(bytes.len(), 16);
+}

@@ -138,8 +138,11 @@ pub struct ScrollbackRingBuffer {
 /// this trivially-lossless regime, because it is the wire budget's
 /// ceiling: `crates/mux_ipc::protocol::MAX_SEGMENTS` (64) minus one slot
 /// for a synthesized head segment (single-eviction case) and one for a
-/// trailing alt-screen dump segment (`build_snapshot_bytes_with_layout`'s
-/// D7'' segment) — see `mux::session::pane::MAX_DAEMON_SNAPSHOT_SEGMENTS`.
+/// trailing dump segment (`build_snapshot_bytes_with_layout`'s D7''
+/// segment for an alt-screen pane, or the wrap-restore dump-block segment
+/// mux-snapshot-ring-wrap-restore task0001 adds for a wrapped main-buffer
+/// pane — the two are mutually exclusive per pane, so this slot is shared,
+/// not additive) — see `mux::session::pane::MAX_DAEMON_SNAPSHOT_SEGMENTS`.
 /// AC-1's "resize storm of any length up to the wire ceiling" is this
 /// exact regime: storms recording at most 62 distinct dimensions never
 /// need the 2+-eviction fallback, so they always match full attribution;
@@ -500,6 +503,46 @@ impl ScrollbackRingBuffer {
         }
         segments.extend(mid);
         (raw, segments)
+    }
+
+    /// Combined read exposing the wrap state together with the retained
+    /// bytes and dimension segments (mux-snapshot-ring-wrap-restore
+    /// task0001, D1): the sole way callers observe "has this ring evicted
+    /// bytes" so the flag and the bytes always describe ONE ring state —
+    /// two separate calls (`is_wrapped()` then `read_segments()`) could
+    /// observe the ring at two different moments if a write landed between
+    /// them.
+    ///
+    /// `bytes` and `segments` are byte-for-byte and entry-for-entry
+    /// identical to what [`Self::read_segments`] returns for the same ring
+    /// state — this is a strict superset, not a different read path.
+    ///
+    /// `wrapped` is `true` iff the content bytes written since construction
+    /// or the last [`Self::clear`] exceed `capacity` — i.e. `total_written >
+    /// capacity`, strictly greater:
+    /// - a cumulative total exactly equal to `capacity` is NOT wrapped (the
+    ///   ring is exactly full, but nothing has been evicted yet);
+    /// - a single write strictly larger than `capacity` (the "keep only the
+    ///   tail" branch in [`Self::write`]) IS wrapped, because that write's
+    ///   own length already exceeds `capacity` once added to
+    ///   `total_written`;
+    /// - [`Self::clear`] resets `total_written` to 0, so a ring is never
+    ///   wrapped immediately after a clear regardless of history;
+    /// - a ring rebuilt via [`Self::load_snapshot`] starts a fresh
+    ///   `total_written` at the captured data's length (at most
+    ///   `capacity`), so it is never wrapped immediately after a handoff
+    ///   restore even if the ORIGINAL ring it was captured from had wrapped
+    ///   (the NFR7 known limit — handoff-restored panes do not get the
+    ///   post-wrap dump restore this feature adds).
+    ///
+    /// When `wrapped` is true, `bytes.len() == capacity` — a wrapped ring's
+    /// retained window is always exactly full ([`Self::len`] is
+    /// `min(total_written, capacity)` by construction, so `total_written >
+    /// capacity` implies `len == capacity`).
+    pub fn read_segments_with_wrap_state(&self) -> (Vec<u8>, Vec<(usize, u16, u16)>, bool) {
+        let (bytes, segments) = self.read_segments();
+        let wrapped = self.total_written > self.capacity as u64;
+        (bytes, segments, wrapped)
     }
 
     /// The dimensions the MOST RECENTLY recorded [`Self::write_resize_marker`]

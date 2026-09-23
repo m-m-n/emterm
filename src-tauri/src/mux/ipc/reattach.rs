@@ -12,7 +12,7 @@ use crate::mux::session::pane::{
     DetachReason, PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
     lock_shadow_parser,
 };
-use crate::mux::snapshot_bytes::build_snapshot_bytes;
+use crate::mux::snapshot_bytes::{build_snapshot_bytes, build_snapshot_bytes_for_ring};
 use mux_ipc::protocol::{MAX_SNAPSHOT_FRAME_PAYLOAD, MessageType, MuxMessage};
 
 /// Build a self-contained ANSI byte sequence that reproduces the current
@@ -72,6 +72,40 @@ pub(super) fn build_shadow_parser_snapshot(
         scrollback_segments,
         &screen_data,
         alt_screen,
+        current_dims,
+    )
+}
+
+/// Wrap-aware counterpart of [`build_shadow_parser_snapshot`]
+/// (mux-snapshot-ring-wrap-restore task0001, D2). Used by the on-demand
+/// `RequestPaneSnapshot` path (`mux::ipc::handlers::handle_request_pane_snapshot`),
+/// which reads the scrollback ring's wrap state via
+/// `ScrollbackRingBuffer::read_segments_with_wrap_state` and passes it
+/// through as `ring_wrapped`. Same shadow-parser locking and dims capture as
+/// `build_shadow_parser_snapshot`; only the trailing builder call differs
+/// (`build_snapshot_bytes_for_ring` instead of `build_snapshot_bytes`).
+pub(super) fn build_shadow_parser_snapshot_for_ring(
+    shadow_parser: &SharedShadowParser,
+    scrollback: &[u8],
+    scrollback_segments: &[(usize, u16, u16)],
+    ring_wrapped: bool,
+) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
+    let (screen_data, alt_screen, current_dims) = {
+        let parser = lock_shadow_parser(shadow_parser);
+        let screen = parser.screen();
+        let (rows, cols) = screen.size();
+        (
+            screen.contents_formatted(),
+            screen.alternate_screen(),
+            (cols, rows),
+        )
+    };
+    build_snapshot_bytes_for_ring(
+        scrollback,
+        scrollback_segments,
+        &screen_data,
+        alt_screen,
+        ring_wrapped,
         current_dims,
     )
 }
@@ -189,8 +223,11 @@ pub(super) async fn collect_reattach_data(
                             (cols, rows),
                         )
                     };
-                    let (scrollback_data, scrollback_segments) =
-                        pane.scrollback.lock().unwrap().read_segments();
+                    let (scrollback_data, scrollback_segments, ring_wrapped) = pane
+                        .scrollback
+                        .lock()
+                        .unwrap()
+                        .read_segments_with_wrap_state();
 
                     let mut target = pane.output_target.lock().unwrap();
                     let target_was = match &*target {
@@ -226,12 +263,19 @@ pub(super) async fn collect_reattach_data(
                     );
 
                     // Shared layout: ESC[3J ESC[H ESC[2J + scrollback (rich
-                    // content stripped) + screen + alt-mode.
-                    let (combined, combined_segments) = build_snapshot_bytes(
+                    // content stripped) + screen + alt-mode. Wrap-aware
+                    // (mux-snapshot-ring-wrap-restore task0001, D2): a
+                    // wrapped main-buffer pane's ring has evicted bytes the
+                    // plain builder needs to reconstruct the visible
+                    // viewport, so this routes through the wrap-aware
+                    // counterpart, which appends a dump block sourced from
+                    // the shadow parser when `ring_wrapped` is true.
+                    let (combined, combined_segments) = build_snapshot_bytes_for_ring(
                         &scrollback_data,
                         &scrollback_segments,
                         &screen_data,
                         is_alternate_screen,
+                        ring_wrapped,
                         current_dims,
                     );
 
