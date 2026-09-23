@@ -93,7 +93,11 @@ workflow:
   status: completed
   completed_at_commit: 47ea032381078fa1ddf610a56489a39ae66ca025
 - id: verify
-  status: in_progress
+  status: completed
+  completed_at_commit: 7a92cfbc3f16c1d8a6a3b9307adaeadbbc07b580
+  result: pass
+  failed_items: []
+  summary: 'build (cargo check) ok; cargo test --lib 3624 passed / 0 failed / 3 ignored; all TASK.md Expected Result cases covered by passing anchor_locate_call tests (47 passed)'
 - id: retrospect
   status: pending
 tasks:
