@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-snapshot-ring-wrap-restore
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: f24917a3c5c3cf4fc95bd44d0476327760b56d74
+last_input_digest: sha256:8d22513e0614edcb3e39481083170646de6788128818ea9b3b1ae1fec880d4bb
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:8d22513e0614edcb3e39481083170646de6788128818ea9b3b1ae1fec880d4bb
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
