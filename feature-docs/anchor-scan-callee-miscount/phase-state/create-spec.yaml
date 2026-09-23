@@ -1,0 +1,15 @@
+schema_version: 1
+feature: anchor-scan-callee-miscount
+phase: create-spec
+status: initialized
+generation: 1
+mode: batch
+base_revision: 66d69a8a49480fa5170be9c3a583ac3d150b5a25
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+stale_redispatch_count: 0
