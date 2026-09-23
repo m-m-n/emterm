@@ -1,7 +1,7 @@
 schema_version: 1
 feature: anchor-scan-false-success
 phase: create-spec
-status: in_progress
+status: completed
 generation: 1
 mode: batch
 last_input_digest: sha256:013a21795af4e0aa94fa08661ffbd0d3a5d0b61790c1e20e17acfcc068e3f24c
