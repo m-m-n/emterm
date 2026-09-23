@@ -1,0 +1,7 @@
+schema_version: 1
+feature: anchor-scan-turbofish-arrow
+phase: create-spec
+status: in_progress
+last_input_digest: f8b7c0a641820d8b09a96fa3f242c7b70a8cf9a1ea77416f27bf064b87c9c8bd
+answers: []
+written_artifacts: []
