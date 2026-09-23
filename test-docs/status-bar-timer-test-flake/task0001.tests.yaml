@@ -1,0 +1,118 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Not a red/green test criterion (signature preservation + production
+      source behaviour identity). Verified by: both `cargo check` runs
+      (default features and --no-default-features) succeeding with no new
+      warnings; diff inspection of the two modified files confirming
+      TimeProvider::new/with_wake/set_format, RefreshConfig and
+      StatusBarRuntime::new signatures are byte-identical to before, and that
+      every added item is private or cfg(test) pub(crate) (never plain
+      `pub`); and by the rewritten FR5/FR6 timer tests plus
+      time_provider_drop_joins_timer_thread /
+      time_provider_without_timer_does_not_spawn_thread /
+      time_provider_version_is_pure_load passing unchanged, which exercises
+      ProductionTickSource end-to-end.
+  AC-2:
+    tests:
+      - status_bar::providers::time::tests::time_provider_timer_thread_calls_wake_on_interval
+      - status_bar::providers::time::tests::time_provider_timer_thread_bumps_version_per_tick_without_get_value
+      - status_bar::providers::time::tests::time_provider_delayed_ticks_only_progress_via_release_and_wait_handshake
+    red_confirmed: true
+    red_reason: >
+      Before the manual tick source existed, `cargo test --lib
+      status_bar::providers::time` failed to compile with
+      `error[E0599]: no associated function or constant named
+      \`with_manual_source\` found for struct \`providers::time::TimeProvider\`
+      and `error[E0425]: cannot find function \`release_and_assert_ticks\` in
+      this scope` for every one of these tests (all three call
+      TimeProvider::with_manual_source + hold/release_and_wait). After
+      implementing ManualTickSource/ManualTickController/ManualShared and
+      TimeProvider::with_manual_source, all three pass and assert wake count
+      and version each advance by exactly k on release_and_wait's return, 0
+      before any delivery.
+  AC-3:
+    tests:
+      - status_bar::providers::time::tests::time_provider_drop_while_parked_reports_closed_without_wake_or_version_bump
+    red_confirmed: true
+    red_reason: >
+      Same compile failure batch as AC-2/AC-4/AC-6 (E0599 with_manual_source
+      not found, E0425 release_and_assert_ticks not found) -- this test was
+      written before ManualTickSource/ManualTickController/ManualInterrupt
+      and the Drop-step-3 interrupt call existed. After implementing them,
+      the test passes: dropping a provider whose timer thread is parked
+      returns; the controller reports closed; the retained version handle
+      and wake count are unchanged; a tick released after the drop reports 0
+      completed, does not block, and causes no further wake or version bump.
+  AC-4:
+    tests:
+      - status_bar::providers::time::tests::time_provider_timer_thread_calls_wake_on_interval
+      - status_bar::providers::time::tests::time_provider_timer_thread_bumps_version_per_tick_without_get_value
+    red_confirmed: true
+    red_reason: >
+      Same compile-failure evidence as AC-2. Both tests keep their original
+      names, now drive ticks through the manual source + the shared
+      release_and_assert_ticks helper, contain no sleep and no fixed
+      real-time window, and assert exact equality (wake count = N, version =
+      v0 + N). The second test never calls get_value -- confirmed by
+      inspection, only `p.version(None)` is used.
+  AC-5:
+    tests:
+      - status_bar::runtime::tests::runtime_time_provider_timer_fires_wake
+    red_confirmed: false
+    red_reason: >
+      The runtime-side internal constructor (new_internal) plus the
+      cfg(test) manual-source builder (new_with_manual_time_source) and the
+      test rewrite were implemented together in one pass, after the
+      providers/time.rs seam was already proven by its own red-green cycle
+      (AC-2/AC-4/AC-6). The rewritten test was not separately observed
+      failing to compile/run against a not-yet-existing runtime API on its
+      own before new_internal/new_with_manual_time_source landed, so this
+      entry cannot honestly claim an observed red. Carried into the report's
+      unconfirmed_reds. Post-implementation the test passes deterministically
+      (no sleep): it builds the runtime through the test-only manual-source
+      builder, delivers N ticks through the same shared helper used by
+      AC-2/AC-4/AC-6, and asserts wake count = N exactly using the runtime's
+      own TimeProvider version as the version reader.
+  AC-6:
+    tests:
+      - status_bar::providers::time::tests::time_provider_delayed_ticks_only_progress_via_release_and_wait_handshake
+    red_confirmed: true
+    red_reason: >
+      Same compile-failure batch as AC-2/AC-3/AC-4 (E0599 with_manual_source
+      not found, E0425 release_and_assert_ticks not found). After
+      implementing the seam, the test passes: it waits until the timer
+      thread is parked, holds N ticks, asserts wake=0/version=baseline with
+      no sleep, then passes through the same release_and_assert_ticks helper
+      used by AC-4/AC-5. Per the task plan, the "fails under a fixed
+      real-time window" regression property itself is checked once during
+      the verify phase (VERIFICATION.md TS-4), not by the implementer.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Regression-preservation criterion, not a single red/green test.
+      Verified by: the full existing status_bar suite (147 tests, including
+      time_provider_drop_joins_timer_thread,
+      time_provider_version_is_pure_load,
+      time_provider_without_timer_does_not_spawn_thread and
+      provider_set_format_bumps_version) passing with their assertions
+      byte-unchanged; both cargo check runs (default features and
+      --no-default-features) succeeding with no new warnings; `git diff
+      --stat` confirming only the two expected files changed (Cargo.toml /
+      Cargo.lock untouched); and the status_bar suite run repeatedly --
+      5 consecutive parallel runs and 3 consecutive --test-threads=1 runs,
+      all 147/147 passing with no flakiness observed.
+notes: >
+  Full-crate baseline (cargo test --lib --test-threads=1) before any change:
+  3530 passed, 0 failed, 3 ignored -- baseline_failures is empty. After
+  implementation: 3532 passed (the two new task0001 tests), 0 failed, 3
+  ignored (same three, unrelated to this task) -- final_failures is empty,
+  so final_failures ⊆ baseline_failures trivially. AC-5's red was not
+  separately observed (see its red_reason) -- also recorded in the report's
+  unconfirmed_reds per the workflow's honesty requirement.
