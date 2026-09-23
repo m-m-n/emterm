@@ -70,7 +70,8 @@ workflow:
   completed_at_commit: 7f96fc31893fb12fc41d3df8ef54251395e9cc1a
   base_commit: 47aed326c1614e3c6577caf2cea8ddc3070df8f7
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: a249ae52519ff21792c3689a8fcc7083248fe01e
 - id: verify
   status: pending
 - id: retrospect
@@ -98,7 +99,14 @@ tasks:
     status: merged
     branch: em-workflow/anchor-scan-callee-miscount/task0001
 review:
-  status: in_progress
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - spec
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive
