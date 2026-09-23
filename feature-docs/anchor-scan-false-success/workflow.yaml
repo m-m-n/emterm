@@ -56,7 +56,8 @@ workflow:
     completed_at_commit: 709ee79888654d7ff7fe5fab7f1caa33046c83b6
     base_commit: f1b3832320dda58fed2153846b7ef0bb2ab16a37
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: a4ac45939656ef394fb0aabe5d0ced1a1b658db2
   - id: verify
     status: pending
   - id: retrospect
@@ -76,7 +77,7 @@ tasks:
     branch: em-workflow/anchor-scan-false-success/task0001
 
 review:
-  status: in_progress
+  status: completed
   plan:
     floor: [comprehensive, security, spec]
     discretionary: []
