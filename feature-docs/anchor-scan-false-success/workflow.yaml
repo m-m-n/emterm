@@ -71,7 +71,8 @@ workflow:
     excluded: []
   - id: retrospect
     artifacts: [retrospect.yaml]
-    status: pending
+    status: completed
+    completed_at_commit: 0c88c8ee4b4cc4c8546d01e09320e5e6db8f6cca
 
 tasks:
   task0001:
