@@ -1,0 +1,39 @@
+feature: status-bar-timer-test-flake
+collected_at: "2026-09-23T19:54:33+09:00"
+session_ids:
+  - 01a0cdb4-361e-7263-858f-c00e108c532d
+  - 01a0cde6-82aa-768f-9d3b-969b0f6613ff
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: >-
+      Both readings evaluated below the reduced row's P(0) floor (0.40 for
+      description_plus_code, and P(0)+P(1) 0.76 < 0.85 for description_only), so
+      the full tier (removes nothing) was selected by threshold_rows:full.
+    bases:
+      - basis: description_only
+        probabilities: {"0": 0.34, "1": 0.42, "2": 0.24, "3": 0.0}
+      - basis: description_plus_code
+        probabilities: {"0": 0.0, "1": 0.5, "2": 0.5, "3": 0.0}
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/status_bar/runtime.rs
+        - src-tauri/src/status_bar/providers/time.rs
+      changed_lines_approx: 120
+      new_functions_needed: 3
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules:
+        - status_bar::providers::time
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1 medium cefb06b4dcbe5c31 (test builder bypasses StatusBarRuntime::new time-provider wiring) left unresolved; follow-up task to be filed"
+  - "review gate_dropped low: ProductionTickSource Tick path untested while task0001.tests.yaml AC-1 claims end-to-end coverage"
