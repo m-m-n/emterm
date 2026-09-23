@@ -3,39 +3,99 @@ feature: mux-snapshot-ring-wrap-restore
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: "bbd3055277df761a93855f7d7e460581ab7c924e"
-last_input_digest: "sha256:ebf4a318d747e5f89efc9501fed8e7e85560393aae8b44b1d5b5066d48f8e865"
+base_revision: bbd3055277df761a93855f7d7e460581ab7c924e
+last_input_digest: sha256:ebf4a318d747e5f89efc9501fed8e7e85560393aae8b44b1d5b5066d48f8e865
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-09-23T18:42:00+09:00'
+    questions:
+    - question_id: requirement.fix-approach
+      status: answered
+    - question_id: design-step.decision
+      status: answered
+answers:
+  requirement.fix-approach:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-23T18:50:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - plan_a
+    freeform: 'Codex (run_codex_exec.sh readonly, 1 turn) chose plan_a. Reasons: the evicted header cannot
+      be recovered from the remaining history, only from the daemon vt100 screen (scrollback_buffer.rs:223,
+      snapshot_bytes.rs:235); the trigger total_written > capacity keeps non-wrapped bytes identical (scrollback_buffer.rs:221);
+      the dump goes after the history replay with a current_dims DimSegment at its start (snapshot_bytes.rs:248,
+      :283), within the existing 64-segment budget (session/pane/mod.rs:171). Refinement: contents_formatted()
+      emits clear+CRLF and no scroll region (vt100 grid.rs:221, term.rs:374), so a DECSTBM left by the
+      replay could distort the dump; drawing the dump under a full-screen region / absolute origin and
+      then restoring the replayed region, origin mode and cursor reduces that (term_core csi_scroll.rs:20,
+      csi_cursor.rs:16). Residual: cells already trashed inside the daemon vt100 are not repaired, so
+      the 22cea6f leak path reopens for wrapped panes until clear(); DimSegment does not restore lost
+      rows or daemon cells; hot-upgrade handoff loses the wrap fact and the main-buffer screen, so plan
+      A alone does not cover it. Existing apt/wrap tests pass an empty dump and so do not prove safety;
+      add screen-comparison tests for header restore, apt+resize+wrap, and continued output after restore.
+      Rejected: plan_b removes the 22cea6f protection for every non-wrapped pane; plan_c only delays the
+      loss.'
+    normalized_answer: 'Adopt plan A: only when a main-buffer pane''s ring has evicted bytes (total_written
+      > capacity), append the daemon vt100 contents_formatted() dump after the stripped scrollback, positioned
+      by a trailing current_dims segment, at every snapshot assembly site. Non-wrapped panes stay byte-identical.
+      The dump is drawn so that a scroll region / origin mode left by the replay does not distort it,
+      and the replayed region, origin mode and cursor state are restored afterwards. The residual apt-debris
+      risk for wrapped panes and the hot-upgrade gap are recorded as known limits.'
+    resolution_note: 'gate: create-spec.requirement-clarification; policy action codex_consultation (batch-policies.yaml);
+      codex_consulted: true; harness: codex; turns: 1; Codex CHOICE plan_a mapped by the orchestrator
+      to option plan_a. Options not chosen: plan_b (always dump), plan_c (bigger ring). Recorded as an
+      assumption per record_as_assumption: true.'
+  design-step.decision:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-23T18:50:30+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: Accept the analyst's recommendation to skip the design step.
+    resolution_note: 'gate: create-spec.design-step; resolved by references/batch-policies.yaml (action:
+      select, option_id: decide_autonomously). No Codex consultation needed.'
 worker_runs:
-  - request_id: create-spec-run-0001
-    status: dispatched
-    input_digest: "sha256:ebf4a318d747e5f89efc9501fed8e7e85560393aae8b44b1d5b5066d48f8e865"
-    output_digest: null
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:ebf4a318d747e5f89efc9501fed8e7e85560393aae8b44b1d5b5066d48f8e865
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache:
-  resolved_at: "2026-09-23T18:37:00+09:00"
+  resolved_at: '2026-09-23T18:37:00+09:00'
   e2e: []
   design_system_candidates:
-    - doc/UI-DESIGN-GUIDELINES.yaml
-    - src-tauri/web-shared/styles.css
-    - src-tauri/src/ui/md3.rs
+  - doc/UI-DESIGN-GUIDELINES.yaml
+  - src-tauri/web-shared/styles.css
+  - src-tauri/src/ui/md3.rs
   package_files:
-    - package.json
-    - Cargo.toml
-    - src-tauri/Cargo.toml
+  - package.json
+  - Cargo.toml
+  - src-tauri/Cargo.toml
   reference_scan_targets:
-    - src-tauri/src/mux/snapshot_bytes.rs
-    - src-tauri/src/mux/scrollback_buffer.rs
-    - src-tauri/src/mux/session/pane/output_target.rs
-    - src-tauri/src/mux/session/pane/mod.rs
-    - src-tauri/src/mux/ipc/reattach.rs
-    - src-tauri/src/mux/ipc/handlers/mod.rs
-    - src-tauri/src/mux/snapshot.rs
-    - src-tauri/src/mux/scrollback_filter.rs
-    - /home/sakura/src/my_projects/tauri/emterm/tmp/apt-progress-bar-regression-2026-07-09.md
+  - src-tauri/src/mux/snapshot_bytes.rs
+  - src-tauri/src/mux/scrollback_buffer.rs
+  - src-tauri/src/mux/session/pane/output_target.rs
+  - src-tauri/src/mux/session/pane/mod.rs
+  - src-tauri/src/mux/ipc/reattach.rs
+  - src-tauri/src/mux/ipc/handlers/mod.rs
+  - src-tauri/src/mux/snapshot.rs
+  - src-tauri/src/mux/scrollback_filter.rs
+  - /home/sakura/src/my_projects/tauri/emterm/tmp/apt-progress-bar-regression-2026-07-09.md
 last_error: null
+assumptions:
+- assumption_id: a-fix-1
+  statement: Plan A is adopted (see requirement.fix-approach). The dump is added only for main-buffer
+    panes whose ring has evicted bytes.
+  reversible: true
+- assumption_id: a-fix-2
+  statement: The dump is drawn under a full-screen scroll region / absolute origin, and the scroll region,
+    origin mode and cursor that the scrollback replay established are restored afterwards.
+  reversible: true
