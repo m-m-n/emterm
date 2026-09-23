@@ -89,7 +89,8 @@ workflow:
 - id: retrospect
   artifacts:
   - retrospect.yaml
-  status: in_progress
+  status: completed
+  completed_at_commit: 8f0cc74443475f9e669e1b9753732e2c8110e934
 tasks:
   task0001:
     title: 'anchor_scan: close the callee / fn-name miscount paths in locate_call'

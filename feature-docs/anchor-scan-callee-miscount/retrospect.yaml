@@ -1,0 +1,30 @@
+feature: anchor-scan-callee-miscount
+collected_at: "2026-09-24T00:01:29+09:00"
+session_ids: [01a0cec7-dfd8-73e6-8274-7918211d79e2]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: reduced
+    rationale: "score.probabilities['0']=0.51 >= 0.4 (p0_floor) and score.probabilities['0'] + score.probabilities['1']=1.0 >= 0.85 (bucket_sum_floor)"
+    bases:
+      - basis: description_only
+        probabilities: {'0': 0.51, '1': 0.49, '2': 0.0}
+      - basis: description_plus_code
+        probabilities: {'0': 0.42, '1': 0.58, '2': 0.0}
+    pre_survey_estimate:
+      files_expected: [src-tauri/src/window_host/tests.rs]
+      changed_lines_approx: 50
+      new_functions_needed: 2
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1 の medium 1 件（stable_id 2504a44086ff5f89、turbofish の山括弧対応付けが const ブロック内の > を閉じ括弧と誤認）は deferred として別タスクに起票済み。anchor_scan の手書きトークナイザは経路ごとに取りこぼしが見つかり続けている"
