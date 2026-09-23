@@ -1,0 +1,31 @@
+schema_version: 1
+feature: status-bar-timer-test-flake
+tier: full
+bases:
+  - basis: description_only
+    probabilities: {"0": 0.34, "1": 0.42, "2": 0.24, "3": 0.0}
+    expectation_clear: 0.75
+    confidence: 0.41
+    observed_at: "2026-09-23T18:32:24+09:00"
+  - basis: description_plus_code
+    probabilities: {"0": 0.0, "1": 0.5, "2": 0.5, "3": 0.0}
+    expectation_clear: 0.81
+    confidence: 0.5
+    observed_at: "2026-09-23T18:33:30+09:00"
+pre_survey_estimate:
+  files_expected:
+    - src-tauri/src/status_bar/runtime.rs
+    - src-tauri/src/status_bar/providers/time.rs
+  changed_lines_approx: 120
+  new_functions_needed: 3
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules:
+    - status_bar::providers::time
+  work_still_required: true
+rationale: >-
+  Both readings evaluated below the reduced row's P(0) floor (0.40 for
+  description_plus_code, and P(0)+P(1) 0.76 < 0.85 for description_only), so
+  the full tier (removes nothing) was selected by threshold_rows:full.
+decided_at: "2026-09-23T18:33:45+09:00"
