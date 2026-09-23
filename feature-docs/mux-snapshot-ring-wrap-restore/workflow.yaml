@@ -149,7 +149,7 @@ workflow:
   completed_at_commit: 0c39db4364b2d77ad99366ac170ebdf1e009dfe7
   base_commit: d0ca401a84e296adc29af23bd4253f0a99b8e76d
 - id: review
-  status: in_progress
+  status: pending
 - id: verify
   status: pending
 - id: retrospect
@@ -201,8 +201,8 @@ tasks:
     status: merged
     branch: em-workflow/mux-snapshot-ring-wrap-restore/task0001
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
   plan:
     floor:
     - comprehensive
@@ -212,9 +212,14 @@ review:
     - spec
     discretionary: []
     cross_validation: true
-  perspectives: {}
-  residual_critical_high: 0
-  needs_rework: false
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+  residual_critical_high: 2
+  needs_rework: true
 requirements:
   FR1:
     title: Reproduction test first

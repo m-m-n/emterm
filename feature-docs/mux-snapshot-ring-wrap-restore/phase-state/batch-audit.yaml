@@ -1,0 +1,20 @@
+schema_version: 1
+feature: mux-snapshot-ring-wrap-restore
+records:
+- question_id: review.rework-scope
+  packet_id: null
+  answered_at: '2026-09-23T20:36:15+09:00'
+  source: batch-codex-consultation
+  answer_mode: freeform
+  selected_option_ids: []
+  freeform: rework input = 9f886c96758d210d, 1c848b3a5a9705ba, 49de28d0b2157829, 831dbe5c0ce653d8; f97af05084b88302
+    filed as follow-up
+  normalized_answer: include medium comprehensive findings C/D in the round-1 rework; defer performance
+    finding E to a measure-first follow-up task
+  resolution_note: 'gate: review round 1 rework scope (unlisted, no gate_id); options: (a) rework only
+    residual critical/high A+B per protocol, mediums stay unresolved; (b) A+B+C+D, E filed separately;
+    (c) A..E all in rework. chosen: (b). not chosen: (a), (c). key points: D (zero-scrollback probe) can
+    make the new real mid-run resize test for A fail, and C (pending wrap) can break the continued-output
+    equality B verifies at the last column, so both are directly tied to restore correctness; rework cap
+    is 1 so there is no second chance this run; E is unmeasured and not needed for A-D, so measure first
+    in a separate task. codex_consulted: true; opus_escalation: false'
