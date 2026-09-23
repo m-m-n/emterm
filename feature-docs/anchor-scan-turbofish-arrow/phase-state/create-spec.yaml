@@ -1,7 +1,18 @@
 schema_version: 1
 feature: anchor-scan-turbofish-arrow
 phase: create-spec
-status: in_progress
+status: completed
 last_input_digest: f8b7c0a641820d8b09a96fa3f242c7b70a8cf9a1ea77416f27bf064b87c9c8bd
 answers: []
-written_artifacts: []
+written_artifacts:
+- path: feature-docs/anchor-scan-turbofish-arrow/TASK.md
+notes: 'minimal tier: spec-writer not dispatched; orchestrator wrote TASK.md directly.
+  requirements-analyst cs-analyst-001 completed with no questions; assumptions as-1
+  (byte-adjacent -> only), as-2 (other >-bearing constructs out of scope), as-3 (sole-turbofish
+  Err unchanged). Codex consulted on -> detection: option A (byte adjacency) adopted.'
+assumptions:
+- 'as-1: Only a byte-adjacent - > pair is treated as ->; whitespace/comment-separated
+  - > keeps current > handling.'
+- 'as-2: Other >-bearing constructs in a turbofish (const-generic blocks, =>, >=)
+  are out of scope.'
+- 'as-3: The sole-turbofish-call Err contract is unchanged.'
