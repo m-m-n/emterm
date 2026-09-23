@@ -1,0 +1,43 @@
+schema_version: 1
+feature: mux-snapshot-ring-wrap-restore
+tier: full
+bases:
+  - basis: description_only
+    probabilities: {"0": 0.0, "1": 0.01, "2": 0.99, "3": 0.0}
+    expectation_clear: 0.85
+    confidence: 0.99
+    observed_at: "2026-09-23T18:33:40+09:00"
+  - basis: description_plus_code
+    probabilities: {"0": 0.0, "1": 0.0, "2": 0.56, "3": 0.44}
+    expectation_clear: 0.86
+    confidence: 0.55
+    observed_at: "2026-09-23T18:34:40+09:00"
+pre_survey_estimate:
+  files_expected:
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/scrollback_buffer/tests.rs
+    - src-tauri/src/mux/session/pane/output_target.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/ipc/reattach/tests.rs
+    - src-tauri/src/mux/ipc/handlers/mod.rs
+    - src-tauri/src/mux/ipc/handlers/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+  changed_lines_approx: 400
+  new_functions_needed: 10
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules:
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/ipc/handlers
+    - src-tauri/src/mux/ipc/pty_spawn
+    - src-tauri/src/mux/scrollback_filter
+  work_still_required: true
+rationale: >-
+  Both readings put P(0) at 0.0, below the reduced row's P(0) floor (0.40),
+  so both evaluated to full and the full tier (removes nothing) was selected
+  by threshold_rows:full.
+decided_at: "2026-09-23T18:34:51+09:00"
