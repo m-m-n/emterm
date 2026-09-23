@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: bbd3055277df761a93855f7d7e460581ab7c924e
 last_input_digest: sha256:6fa5c3c1ca944ad7c7a2df968076afc0ebe338669b68d954e63ed68605a7c020
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -69,10 +69,16 @@ worker_runs:
   input_digest: sha256:228a015978e69d770aea8c29d482c26f8ab28bce7e349a5cc47bb9ead7985602
   output_digest: sha256:23ced9096f94e7e3177eed943ae7d1cb0640ea66ecacc2aaad6451da3bbb6da1
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:6fa5c3c1ca944ad7c7a2df968076afc0ebe338669b68d954e63ed68605a7c020
   output_digest: null
-artifacts: []
+artifacts:
+- path: feature-docs/mux-snapshot-ring-wrap-restore/REQUIREMENTS.md
+  sha256: sha256:7673e364f63a0ddda68fe203adcd265c513fa5829602f410cf0ce8f9f797d7db
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-snapshot-ring-wrap-restore/SPEC.md
+  sha256: sha256:520f15a68b822533eb8829eb092aa7e9681fed7998365bae2b9302f7429c51c6
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: sha256:6294588b9cc9df792036c4e3514aaf95203bdf9cf324beecb35d362e058147bc
 stale_redispatch_count: 0
