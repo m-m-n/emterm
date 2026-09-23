@@ -6831,10 +6831,30 @@ fn wheel_path_real_body_mutations_are_rejected_and_the_unmutated_body_accepted()
 // discards byte positions and stays frozen). It exists only so the
 // benign-edit tests below can slice the embedded production source by
 // structural byte range instead of matching its text (AC-2).
+//
+// anchor-scan-false-success/task0001: every literal (numeric / string /
+// char / byte-char / raw, any hash count) becomes exactly one opaque
+// token instead of contributing zero, and a `'` is classified as a char
+// literal or a lifetime/label marker — never silently ignored. `scan`
+// now returns `Result` and fails explicitly on an unclosed literal or an
+// unclassifiable `'`, and `locate_call`'s function search requires
+// exactly one brace-depth-0 `fn fn_name` candidate. See Design in
+// `doc/tasks/anchor-scan-false-success/`.
 mod anchor_scan {
+    /// anchor-scan-false-success/task0001: token kinds this scanner
+    /// distinguishes. Opaque literals and lifetime/label markers are
+    /// never identifiers (they can never match `fn_name` or a callee
+    /// name) and never structural punctuation (they never change
+    /// paren/bracket/brace depth and never act as a comma).
     enum Kind {
         Ident(String),
         Punct(char),
+        /// One opaque token per literal: numeric, string (plain / byte
+        /// / C / raw, any hash count), or char / byte-char literal.
+        Literal,
+        /// One token per `'name` that is not a char literal — a
+        /// lifetime or a loop/block label.
+        Lifetime,
     }
 
     struct PosTok {
@@ -6843,12 +6863,185 @@ mod anchor_scan {
         kind: Kind,
     }
 
-    /// Tokenizes `src`, tracking byte offsets and stripping whitespace,
-    /// line/nested-block comments, and string-literal contents (opaque,
-    /// contributing zero tokens — same effect as a comment). Enough
-    /// structure for the anchor routine below, no more (Out of Scope:
-    /// not a general Rust parser).
-    fn scan(src: &str) -> Vec<PosTok> {
+    fn is_ident_start(c: char) -> bool {
+        c.is_alphabetic() || c == '_'
+    }
+
+    fn is_ident_continue(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
+    fn byte_at(chars: &[(usize, char)], idx: usize, src: &str) -> usize {
+        chars.get(idx).map(|(b, _)| *b).unwrap_or(src.len())
+    }
+
+    /// Scans one scalar — a plain character, or a backslash escape (one
+    /// char; `\x` plus two chars; `\u{...}` through its closing `}`) —
+    /// starting at `chars[j]` for a char / byte-char literal. Returns
+    /// the index right after the scalar, or `None` when the input ends
+    /// before the scalar completes (Design, 4).
+    fn scan_char_scalar_end(chars: &[(usize, char)], j: usize) -> Option<usize> {
+        let n = chars.len();
+        if j >= n {
+            return None;
+        }
+        if chars[j].1 == '\\' {
+            let k = j + 1;
+            if k >= n {
+                return None;
+            }
+            match chars[k].1 {
+                'u' if k + 1 < n && chars[k + 1].1 == '{' => {
+                    let mut m = k + 2;
+                    while m < n && chars[m].1 != '}' {
+                        m += 1;
+                    }
+                    if m >= n { None } else { Some(m + 1) }
+                }
+                'x' => {
+                    let mut m = k + 1;
+                    for _ in 0..2 {
+                        if m >= n {
+                            return None;
+                        }
+                        m += 1;
+                    }
+                    Some(m)
+                }
+                _ => Some(k + 1),
+            }
+        } else {
+            Some(j + 1)
+        }
+    }
+
+    /// Classifies a `'`-introduced token starting at `chars[i]` (the
+    /// opening `'`) as a char literal or a lifetime/label marker
+    /// (Design, 4): if the one scalar right after the quote closes with
+    /// another `'`, it is a char literal; otherwise, if the character
+    /// right after the opening `'` starts an identifier, it is a
+    /// lifetime/label marker spanning that identifier run; otherwise an
+    /// explicit failure. Returns the number of chars consumed and
+    /// whether it is a lifetime.
+    fn scan_quote_or_lifetime(chars: &[(usize, char)], i: usize) -> Result<(usize, bool), String> {
+        let n = chars.len();
+        let after_quote = i + 1;
+        if after_quote >= n {
+            return Err(format!(
+                "`'` at byte {} has no content following it",
+                chars[i].0
+            ));
+        }
+        let first = chars[after_quote].1;
+        if let Some(scalar_end) = scan_char_scalar_end(chars, after_quote) {
+            if scalar_end < n && chars[scalar_end].1 == '\'' {
+                return Ok((scalar_end + 1 - i, false));
+            }
+        }
+        if is_ident_start(first) {
+            let mut m = after_quote;
+            while m < n && is_ident_continue(chars[m].1) {
+                m += 1;
+            }
+            Ok((m - i, true))
+        } else {
+            Err(format!(
+                "`'` at byte {} is neither a closed char literal nor a lifetime/label marker",
+                chars[i].0
+            ))
+        }
+    }
+
+    /// Scans a byte char literal `b'...'` starting at `chars[quote_i]`
+    /// (the `'` right after the already-consumed `b` prefix) — commits
+    /// to a char literal, never falls back to a lifetime, since the `b`
+    /// prefix is unambiguous (Design, 3).
+    fn scan_byte_char_literal(chars: &[(usize, char)], quote_i: usize) -> Result<usize, String> {
+        let n = chars.len();
+        if let Some(scalar_end) = scan_char_scalar_end(chars, quote_i + 1) {
+            if scalar_end < n && chars[scalar_end].1 == '\'' {
+                return Ok(scalar_end + 1 - quote_i);
+            }
+        }
+        Err(format!(
+            "`b'` at byte {} is not closed by a matching `'`",
+            chars[quote_i].0
+        ))
+    }
+
+    /// Scans a plain-escaping string's content starting right after its
+    /// opening `"` at `chars[j]` (used for plain, byte and C strings —
+    /// Design, 2 and 3): a backslash escapes the one character after
+    /// it; the literal ends at the first unescaped `"`. Returns the
+    /// index right after the closing `"`, or an explicit failure when
+    /// there is none.
+    fn scan_plain_string_content(
+        chars: &[(usize, char)],
+        j: usize,
+        quote_pos: usize,
+    ) -> Result<usize, String> {
+        let n = chars.len();
+        let mut k = j;
+        while k < n {
+            if chars[k].1 == '\\' {
+                k += 2;
+                continue;
+            }
+            if chars[k].1 == '"' {
+                return Ok(k + 1);
+            }
+            k += 1;
+        }
+        Err(format!(
+            "string literal starting at byte {quote_pos} is never closed"
+        ))
+    }
+
+    /// Scans a raw string's content starting right after its opening
+    /// `"` at `chars[j]` (Design, 3): no escapes; ends at the first `"`
+    /// followed by `hash_count` `#` characters. Returns the index right
+    /// after the closing delimiter, or an explicit failure when there
+    /// is none.
+    fn scan_raw_string_content(
+        chars: &[(usize, char)],
+        j: usize,
+        hash_count: usize,
+        quote_pos: usize,
+    ) -> Result<usize, String> {
+        let n = chars.len();
+        let mut k = j;
+        while k < n {
+            if chars[k].1 == '"' {
+                let mut m = k + 1;
+                let mut cnt = 0usize;
+                while cnt < hash_count && m < n && chars[m].1 == '#' {
+                    m += 1;
+                    cnt += 1;
+                }
+                if cnt == hash_count {
+                    return Ok(m);
+                }
+            }
+            k += 1;
+        }
+        Err(format!(
+            "raw string literal starting at byte {quote_pos} is never closed"
+        ))
+    }
+
+    /// anchor-scan-false-success/task0001: tokenizes `src`, tracking
+    /// byte offsets and stripping whitespace and line / nested-block
+    /// comments. Numeric and string-like literals, char literals and
+    /// lifetime / label markers each become exactly one opaque token
+    /// (never zero, never an identifier, never structural punctuation)
+    /// so a trailing literal argument or a literal containing `)` /
+    /// `,` / `"` is still counted and never desyncs paren/bracket/brace
+    /// depth. An explicit failure — never a partial token list — is
+    /// returned when a string-like literal is never closed or a `'` is
+    /// neither a char literal nor a lifetime/label marker (Design:
+    /// Scanner contract). Enough structure for the anchor routine
+    /// below, no more (Out of Scope: not a general Rust parser).
+    fn scan(src: &str) -> Result<Vec<PosTok>, String> {
         let chars: Vec<(usize, char)> = src.char_indices().collect();
         let n = chars.len();
         let mut out = Vec::new();
@@ -6883,44 +7076,139 @@ mod anchor_scan {
                 continue;
             }
             if c == '"' {
-                i += 1;
-                while i < n {
-                    if chars[i].1 == '\\' && i + 1 < n {
-                        i += 2;
-                        continue;
-                    }
-                    if chars[i].1 == '"' {
-                        i += 1;
-                        break;
-                    }
-                    i += 1;
-                }
+                let end_i = scan_plain_string_content(&chars, i + 1, pos)?;
+                let end_byte = byte_at(&chars, end_i, src);
+                out.push(PosTok {
+                    start: pos,
+                    end: end_byte,
+                    kind: Kind::Literal,
+                });
+                i = end_i;
+                continue;
+            }
+            if c == '\'' {
+                let (consumed, is_lifetime) = scan_quote_or_lifetime(&chars, i)?;
+                let end_i = i + consumed;
+                let end_byte = byte_at(&chars, end_i, src);
+                out.push(PosTok {
+                    start: pos,
+                    end: end_byte,
+                    kind: if is_lifetime {
+                        Kind::Lifetime
+                    } else {
+                        Kind::Literal
+                    },
+                });
+                i = end_i;
                 continue;
             }
             if c.is_alphabetic() || c == '_' {
                 let start_byte = pos;
+                let ident_start_i = i;
                 i += 1;
-                while i < n && (chars[i].1.is_alphanumeric() || chars[i].1 == '_') {
+                while i < n && is_ident_continue(chars[i].1) {
                     i += 1;
                 }
-                let end_byte = if i < n { chars[i].0 } else { src.len() };
+                let word: String = chars[ident_start_i..i].iter().map(|(_, ch)| *ch).collect();
+
+                // Raw identifier: `r` followed by exactly one `#` then
+                // an identifier-start character — never a raw string
+                // (Design, 3).
+                if word == "r"
+                    && i < n
+                    && chars[i].1 == '#'
+                    && i + 1 < n
+                    && is_ident_start(chars[i + 1].1)
+                {
+                    i += 1; // consume '#'
+                    while i < n && is_ident_continue(chars[i].1) {
+                        i += 1;
+                    }
+                    let end_byte = byte_at(&chars, i, src);
+                    out.push(PosTok {
+                        start: start_byte,
+                        end: end_byte,
+                        kind: Kind::Ident(src[start_byte..end_byte].to_string()),
+                    });
+                    continue;
+                }
+
+                // Byte char literal: `b'...'` (Design, 3).
+                if word == "b" && i < n && chars[i].1 == '\'' {
+                    let consumed = scan_byte_char_literal(&chars, i)?;
+                    let end_i = i + consumed;
+                    let end_byte = byte_at(&chars, end_i, src);
+                    out.push(PosTok {
+                        start: start_byte,
+                        end: end_byte,
+                        kind: Kind::Literal,
+                    });
+                    i = end_i;
+                    continue;
+                }
+
+                // Byte / C / raw string forms (Design, 3): the whole
+                // identifier run must be exactly the prefix, immediately
+                // followed by the delimiter.
+                let raw_prefix = matches!(word.as_str(), "r" | "br" | "cr");
+                let plain_prefix = matches!(word.as_str(), "b" | "c");
+                if raw_prefix {
+                    let mut p = i;
+                    let mut hash_count = 0usize;
+                    while p < n && chars[p].1 == '#' {
+                        hash_count += 1;
+                        p += 1;
+                    }
+                    if p < n && chars[p].1 == '"' {
+                        let quote_pos = chars[p].0;
+                        let content_start = p + 1;
+                        let end_i =
+                            scan_raw_string_content(&chars, content_start, hash_count, quote_pos)?;
+                        let end_byte = byte_at(&chars, end_i, src);
+                        out.push(PosTok {
+                            start: start_byte,
+                            end: end_byte,
+                            kind: Kind::Literal,
+                        });
+                        i = end_i;
+                        continue;
+                    }
+                } else if plain_prefix && i < n && chars[i].1 == '"' {
+                    let quote_pos = chars[i].0;
+                    let end_i = scan_plain_string_content(&chars, i + 1, quote_pos)?;
+                    let end_byte = byte_at(&chars, end_i, src);
+                    out.push(PosTok {
+                        start: start_byte,
+                        end: end_byte,
+                        kind: Kind::Literal,
+                    });
+                    i = end_i;
+                    continue;
+                }
+
                 out.push(PosTok {
                     start: start_byte,
-                    end: end_byte,
-                    kind: Kind::Ident(src[start_byte..end_byte].to_string()),
+                    end: byte_at(&chars, i, src),
+                    kind: Kind::Ident(word),
                 });
                 continue;
             }
             if c.is_ascii_digit() {
+                let start_byte = pos;
                 i += 1;
                 while i < n
                     && (chars[i].1.is_alphanumeric() || chars[i].1 == '_' || chars[i].1 == '.')
                 {
                     i += 1;
                 }
+                out.push(PosTok {
+                    start: start_byte,
+                    end: byte_at(&chars, i, src),
+                    kind: Kind::Literal,
+                });
                 continue;
             }
-            let end_byte = if i + 1 < n { chars[i + 1].0 } else { src.len() };
+            let end_byte = byte_at(&chars, i + 1, src);
             out.push(PosTok {
                 start: pos,
                 end: end_byte,
@@ -6928,7 +7216,7 @@ mod anchor_scan {
             });
             i += 1;
         }
-        out
+        Ok(out)
     }
 
     fn is_whitespace_only(src: &str, start: usize, end: usize) -> bool {
@@ -6938,7 +7226,7 @@ mod anchor_scan {
     fn ident_text(tok: &PosTok) -> Option<&str> {
         match &tok.kind {
             Kind::Ident(s) => Some(s.as_str()),
-            Kind::Punct(_) => None,
+            Kind::Punct(_) | Kind::Literal | Kind::Lifetime => None,
         }
     }
 
@@ -7002,7 +7290,25 @@ mod anchor_scan {
         Some((body_start, e))
     }
 
-    fn count_top_level_args(toks: &[PosTok], start: usize, end: usize) -> usize {
+    /// anchor-scan-false-success/task0001: the top-level argument count
+    /// of a call's argument-list token range, or [`ArgCount::Indeterminate`]
+    /// when a `<` or `|` punctuation token appears at the list's own
+    /// depth 0 — its commas may belong to generic arguments (`::<A,
+    /// B>`) or closure parameters (`|x, y|`), which this brace/paren/
+    /// bracket depth model does not nest (Design: counter contract,
+    /// FR4).
+    enum ArgCount {
+        Count(usize),
+        Indeterminate,
+    }
+
+    /// Depth counting is unchanged: `(` / `[` / `{` against `)` / `]` /
+    /// `}`. A comma at depth 0 separates arguments; a non-empty final
+    /// segment is one argument; a trailing comma adds none; an empty
+    /// list is 0. Because every literal now yields a token (`scan`), a
+    /// literal-only segment — including the final one — is non-empty
+    /// and counts.
+    fn count_top_level_args(toks: &[PosTok], start: usize, end: usize) -> ArgCount {
         let mut depth = 0i32;
         let mut count = 0usize;
         let mut seg_start = start;
@@ -7013,6 +7319,8 @@ mod anchor_scan {
             } else if is_punct(&toks[i], ')') || is_punct(&toks[i], ']') || is_punct(&toks[i], '}')
             {
                 depth -= 1;
+            } else if depth == 0 && (is_punct(&toks[i], '<') || is_punct(&toks[i], '|')) {
+                return ArgCount::Indeterminate;
             } else if depth == 0 && is_punct(&toks[i], ',') {
                 count += 1;
                 seg_start = i + 1;
@@ -7022,7 +7330,7 @@ mod anchor_scan {
         if seg_start < end {
             count += 1;
         }
-        count
+        ArgCount::Count(count)
     }
 
     /// A located call's byte range, decomposed into the pieces the
@@ -7048,40 +7356,72 @@ mod anchor_scan {
     /// followed by `(`, with exactly `expected_arg_count` top-level
     /// arguments) and fails explicitly on any mismatch, never silently
     /// returning the wrong range.
+    ///
+    /// anchor-scan-false-success/task0001: step 1 requires exactly one
+    /// brace-depth-0 `fn fn_name` candidate — zero or more than one is
+    /// an explicit failure, never a first-match guess (FR3) — and a
+    /// scanner failure or an indeterminate top-level argument count
+    /// (FR4, a `<` / `|` at the argument list's own depth 0) are new
+    /// `Err` sources alongside the pre-existing ones.
     pub(super) fn locate_call(
         src: &str,
         fn_name: &str,
         callee_last_segment: &str,
         expected_arg_count: usize,
     ) -> Result<AnchoredCall, String> {
-        let toks = scan(src);
+        let toks = scan(src).map_err(|e| {
+            format!(
+                "anchor: `fn {fn_name}` / `{callee_last_segment}`: tokenizing the source \
+                 failed: {e} — explicit failure, never a silently wrong range"
+            )
+        })?;
         let n = toks.len();
 
-        // Step 1 (FR4a-1 / EC-1): `fn` keyword directly (whitespace-only
-        // gap — never a comment) adjacent to `fn_name`, then that
-        // function's own body braces.
-        let mut body_range: Option<(usize, usize)> = None;
-        let mut i = 0usize;
-        while i < n {
-            if ident_text(&toks[i]) == Some("fn") {
-                if let Some(name_tok) = toks.get(i + 1) {
-                    if ident_text(name_tok) == Some(fn_name)
-                        && is_whitespace_only(src, toks[i].end, name_tok.start)
-                    {
-                        if let Some(range) = find_body_braces(&toks, i + 2) {
-                            body_range = Some(range);
-                            break;
-                        }
+        // Step 1 (FR3, FR4a-1 / EC-1): every `fn` identifier token at
+        // brace depth 0 whose very next token is the identifier
+        // `fn_name` is a candidate (a comment between the two does not
+        // stop it from being one, since scan already discarded the
+        // comment's tokens) — exactly one is required; the single
+        // candidate must still pass the whitespace-only name gap and
+        // locatable body braces checks, with no fallback to any other
+        // occurrence.
+        let mut candidates = Vec::new();
+        let mut depth = 0i32;
+        let mut idx = 0usize;
+        while idx < n {
+            if is_punct(&toks[idx], '{') {
+                depth += 1;
+            } else if is_punct(&toks[idx], '}') {
+                depth -= 1;
+            } else if depth == 0 && ident_text(&toks[idx]) == Some("fn") {
+                if let Some(name_tok) = toks.get(idx + 1) {
+                    if ident_text(name_tok) == Some(fn_name) {
+                        candidates.push(idx);
                     }
                 }
             }
-            i += 1;
+            idx += 1;
         }
-        let (body_start, body_end) = body_range.ok_or_else(|| {
-            format!(
+        if candidates.len() != 1 {
+            return Err(format!(
+                "anchor: expected exactly one brace-depth-0 `fn {fn_name}` definition, \
+                 found {} — explicit failure, never an ambiguous or missing pick (FR3)",
+                candidates.len()
+            ));
+        }
+        let fn_idx = candidates[0];
+        let name_tok = &toks[fn_idx + 1];
+        if !is_whitespace_only(src, toks[fn_idx].end, name_tok.start) {
+            return Err(format!(
                 "anchor: `fn {fn_name}` not found with its name directly (whitespace-only) \
                  adjacent to the `fn` keyword — explicit failure, never a wrong-function \
                  anchor (EC-1)"
+            ));
+        }
+        let (body_start, body_end) = find_body_braces(&toks, fn_idx + 2).ok_or_else(|| {
+            format!(
+                "anchor: `fn {fn_name}` found but its body braces could not be located — \
+                 explicit failure, never a wrong-function anchor"
             )
         })?;
 
@@ -7136,8 +7476,18 @@ mod anchor_scan {
         }
         let close_idx = k;
 
-        // Step 4 (FR4c): verify the token shape before returning.
-        let arg_count = count_top_level_args(&toks, open_idx + 1, close_idx);
+        // Step 4 (FR4c, FR4): verify the token shape before returning.
+        let arg_count = match count_top_level_args(&toks, open_idx + 1, close_idx) {
+            ArgCount::Indeterminate => {
+                return Err(format!(
+                    "anchor: `{callee_last_segment}` inside `fn {fn_name}`: a top-level `<` \
+                     or `|` makes the argument count indeterminate (commas may belong to \
+                     generic arguments or closure parameters) — explicit failure (FR4), \
+                     never a silently wrong count"
+                ));
+            }
+            ArgCount::Count(count) => count,
+        };
         if arg_count != expected_arg_count {
             return Err(format!(
                 "anchor: `{callee_last_segment}` inside `fn {fn_name}`: expected \
@@ -7230,6 +7580,296 @@ fn anchor_locate_call_unbalanced_paren_inside_a_comment_still_returns_the_correc
         &src[anchored.args_start..anchored.args_end],
         "a, b, /* a stray ) inside a comment */ c, d",
         "AC-4/TS-7: the returned argument-text range must span exactly the real arguments"
+    );
+}
+
+// ── anchor-scan-false-success/task0001: closing anchor_scan's own
+// false-success paths (literal args, char/raw strings, fn depth gate) ──
+
+/// AC-1(a) (FR1, FR4, FR5; TS-1; anchor-scan-false-success): a trailing
+/// numeric-literal argument must be counted — a call with 5 real
+/// arguments must not be accepted when only 4 are expected.
+#[test]
+fn anchor_locate_call_trailing_numeric_literal_argument_is_counted() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { probe_call(a, b, c, d, 0); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-1(a)/anchor-scan-false-success: a trailing numeric literal argument must be \
+         counted, rejecting a mismatched expected_arg_count of 4 against 5 real arguments"
+    );
+}
+
+/// AC-1(b) (FR1, FR4, FR5; TS-2; anchor-scan-false-success): a trailing
+/// string-literal argument must be counted — a call with 4 real
+/// arguments must not be accepted when only 3 are expected.
+#[test]
+fn anchor_locate_call_trailing_string_literal_argument_is_counted() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32) { probe_call(a, b, c, \"s\"); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 3);
+    assert!(
+        result.is_err(),
+        "AC-1(b)/anchor-scan-false-success: a trailing string literal argument must be \
+         counted, rejecting a mismatched expected_arg_count of 3 against 4 real arguments"
+    );
+}
+
+/// AC-1(c) (FR1, FR5; anchor-scan-false-success): the same source as
+/// AC-1(b), with the correct expected_arg_count, must anchor cleanly
+/// and return the exact argument-list text including the trailing
+/// string literal.
+#[test]
+fn anchor_locate_call_trailing_string_literal_argument_is_included_in_range() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32) { probe_call(a, b, c, \"s\"); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4)
+        .expect("AC-1(c)/anchor-scan-false-success: 4 real arguments must anchor cleanly");
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, c, \"s\"",
+        "AC-1(c)/anchor-scan-false-success: the argument text must include the trailing \
+         string literal exactly"
+    );
+}
+
+/// AC-2(a) (FR2, FR4, FR5; TS-3; anchor-scan-false-success): a char
+/// literal argument containing `)` must be scanned as one opaque
+/// token, never as real parenthesis punctuation that would desync the
+/// paren-depth walk.
+#[test]
+fn anchor_locate_call_char_literal_argument_containing_close_paren_is_opaque() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32) { probe_call(a, b, c, ')'); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-2(a)/anchor-scan-false-success: a char literal containing `)` must not desync \
+         the paren-depth walk",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, c, ')'",
+        "AC-2(a)/anchor-scan-false-success: the argument text must include the char \
+         literal exactly"
+    );
+}
+
+/// AC-2(b) (FR2, FR4, FR5; TS-4; anchor-scan-false-success): a raw
+/// string argument containing an embedded `"` must be scanned as one
+/// opaque token, closing only at its real `"#` delimiter.
+#[test]
+fn anchor_locate_call_raw_string_argument_containing_quote_is_opaque() {
+    let src = r###"fn probe_fn(a: i32, b: i32, c: i32) { probe_call(a, b, c, r#"contains a " quote"#); }"###;
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-2(b)/anchor-scan-false-success: a raw string containing an embedded `\"` must \
+         not desync the scanner",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        r###"a, b, c, r#"contains a " quote"#"###,
+        "AC-2(b)/anchor-scan-false-success: the argument text must include the raw string \
+         exactly"
+    );
+}
+
+/// AC-3(a) (FR2, FR5; TS-5; anchor-scan-false-success): a lifetime
+/// parameter (`<'a>`, `&'a i32`) must not be mistaken for a char
+/// literal or otherwise disrupt anchoring.
+#[test]
+fn anchor_locate_call_lifetime_parameter_does_not_disrupt_anchoring() {
+    let src = "fn probe_fn<'a>(a: &'a i32, b: i32, c: i32, d: i32) { probe_call(a, b, c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-3(a)/anchor-scan-false-success: a lifetime parameter must not disrupt anchoring",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, c, d",
+        "AC-3(a)/anchor-scan-false-success: the argument text must be exactly the four \
+         plain arguments"
+    );
+}
+
+/// AC-3(b) (FR2, FR5; TS-5; anchor-scan-false-success): a labeled loop
+/// (`'outer: ... break 'outer`) inside the function body must not be
+/// mistaken for a char literal or otherwise disrupt anchoring.
+#[test]
+fn anchor_locate_call_labeled_loop_does_not_disrupt_anchoring() {
+    let src = "fn probe_fn(a: &'static str, b: i32, c: i32, d: i32) { \
+               'outer: loop { break 'outer; } \
+               probe_call(a, b, c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4)
+        .expect("AC-3(b)/anchor-scan-false-success: a labeled loop must not disrupt anchoring");
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, c, d",
+        "AC-3(b)/anchor-scan-false-success: the argument text must be exactly the four \
+         plain arguments"
+    );
+}
+
+/// AC-4(a) (FR1, FR2, FR4, FR5; anchor-scan-false-success): an escaped
+/// single-quote char literal, a double-quote char literal, a byte char
+/// literal, and a string containing an escaped double quote must all
+/// be scanned as opaque single tokens.
+#[test]
+fn anchor_locate_call_escaped_char_and_byte_char_literals_are_opaque() {
+    let src = r#"fn probe_fn(a: i32, b: i32, c: i32, d: i32) { probe_call('\'', '"', b'x', "esc\"aped"); }"#;
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-4(a)/anchor-scan-false-success: escaped char/byte-char/string literals must \
+         not desync the scanner",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        r#"'\'', '"', b'x', "esc\"aped""#,
+        "AC-4(a)/anchor-scan-false-success: the argument text must include all four \
+         literals exactly"
+    );
+}
+
+/// AC-4(b) (FR1, FR2, FR4, FR5; anchor-scan-false-success): a byte
+/// string, a hashed raw byte string, a C string, and a hashed raw C
+/// string — each containing `)`, `,` or `"` — must all be scanned as
+/// opaque single tokens.
+#[test]
+fn anchor_locate_call_byte_and_c_string_forms_are_opaque() {
+    let src = r##"fn probe_fn(a: i32, b: i32, c: i32, d: i32) { probe_call(b")", br#","#, c"a\"b", cr#")"#); }"##;
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-4(b)/anchor-scan-false-success: byte/C/raw string forms must not desync the \
+         scanner",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        r##"b")", br#","#, c"a\"b", cr#")"#"##,
+        "AC-4(b)/anchor-scan-false-success: the argument text must include all four \
+         literals exactly"
+    );
+}
+
+/// AC-4(c) (FR1, FR5; anchor-scan-false-success): a raw identifier
+/// (`r#type`) argument must be scanned as one identifier token — never
+/// misclassified as a raw string — and counted normally.
+#[test]
+fn anchor_locate_call_raw_identifier_argument_is_scanned_as_identifier() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { probe_call(r#type, b, c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4)
+        .expect("AC-4(c)/anchor-scan-false-success: a raw identifier argument must anchor cleanly");
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "r#type, b, c, d",
+        "AC-4(c)/anchor-scan-false-success: the argument text must include the raw \
+         identifier exactly"
+    );
+}
+
+/// AC-4(d) (FR2, FR5; anchor-scan-false-success): a non-ASCII char
+/// literal must be scanned without panicking on a byte-boundary slice
+/// (every token boundary is a character boundary).
+#[test]
+fn anchor_locate_call_non_ascii_char_literal_does_not_panic() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { probe_call(a, 'あ', c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4)
+        .expect("AC-4(d)/anchor-scan-false-success: a non-ASCII char literal must anchor cleanly");
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, 'あ', c, d",
+        "AC-4(d)/anchor-scan-false-success: the argument text must include the non-ASCII \
+         char literal exactly"
+    );
+}
+
+/// AC-4(e) (FR2, FR4, FR5; anchor-scan-false-success): an unterminated
+/// raw string literal must fail the whole scan explicitly, never
+/// silently returning a wrong or partial range.
+#[test]
+fn anchor_locate_call_unterminated_raw_string_returns_err() {
+    let src = r#"fn probe_fn(a: i32) { probe_call(a, r#"never closed"); }"#;
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 2);
+    assert!(
+        result.is_err(),
+        "AC-4(e)/anchor-scan-false-success: an unterminated raw string must fail explicitly"
+    );
+}
+
+/// AC-4(f) (FR2, FR4, FR5; anchor-scan-false-success): a `'` that
+/// closes neither as a char literal nor as a lifetime/label marker
+/// must fail the whole scan explicitly.
+#[test]
+fn anchor_locate_call_malformed_quote_returns_err() {
+    let src = "fn probe_fn(a: i32, b: i32) { probe_call(a, '-, b); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 3);
+    assert!(
+        result.is_err(),
+        "AC-4(f)/anchor-scan-false-success: a malformed `'` must fail explicitly"
+    );
+}
+
+/// AC-5(a) (FR3, FR4, FR5; TS-6; anchor-scan-false-success): a
+/// same-named `fn` nested inside an `impl` block (brace depth > 0)
+/// must not be mistaken for the depth-0 definition — the depth-0
+/// `probe_fn` must be the one anchored.
+#[test]
+fn anchor_locate_call_same_named_fn_inside_impl_is_ignored() {
+    let src = "impl Probe { fn probe_fn(&self, a: i32, b: i32, c: i32, d: i32) { \
+               probe_call(a, b, c, d); } } \
+               fn probe_fn(w: i32, x: i32, y: i32, z: i32) { probe_call(w, x, y, z); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4)
+        .expect("AC-5(a)/anchor-scan-false-success: the depth-0 `probe_fn` must anchor cleanly");
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "w, x, y, z",
+        "AC-5(a)/anchor-scan-false-success: the returned call must be the depth-0 \
+         definition's own call, not the one nested inside `impl`"
+    );
+    let depth0_fn_offset = src.rfind("fn probe_fn").expect(
+        "AC-5(a) precondition: the depth-0 `fn probe_fn` must be found by text search for \
+         this sanity check only",
+    );
+    assert!(
+        anchored.callee_end > depth0_fn_offset,
+        "AC-5(a)/anchor-scan-false-success: callee_end must lie after the depth-0 \
+         `fn probe_fn`"
+    );
+}
+
+/// AC-5(b) (FR3, FR4, FR5; TS-6; anchor-scan-false-success): two
+/// depth-0 `fn probe_fn` definitions must be rejected as ambiguous —
+/// never a first-match guess — even when one of them has a comment
+/// between `fn` and the name.
+#[test]
+fn anchor_locate_call_two_depth_zero_fn_definitions_returns_err() {
+    let src = "fn /* c */ probe_fn(a: i32, b: i32, c: i32, d: i32) { probe_call(a, b, c, d); } \
+               fn probe_fn(w: i32, x: i32, y: i32, z: i32) { probe_call(w, x, y, z); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-5(b)/anchor-scan-false-success: two depth-0 `fn probe_fn` definitions must be \
+         rejected as ambiguous"
+    );
+}
+
+/// AC-6(a) (FR4; anchor-scan-false-success): a top-level `|...|`
+/// closure-parameter list makes the argument count indeterminate —
+/// its internal comma must never be miscounted as a top-level
+/// argument separator.
+#[test]
+fn anchor_locate_call_closure_parameter_comma_is_indeterminate() {
+    let src = "fn probe_fn(a: i32, b: i32) { probe_call(a, |x, y| x + y); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 3);
+    assert!(
+        result.is_err(),
+        "AC-6(a)/anchor-scan-false-success: a top-level closure parameter list must make \
+         the argument count indeterminate"
+    );
+}
+
+/// AC-6(b) (FR4; anchor-scan-false-success): a top-level `::<A, B>`
+/// generic-argument list makes the argument count indeterminate — its
+/// internal comma must never be miscounted as a top-level argument
+/// separator.
+#[test]
+fn anchor_locate_call_generic_argument_comma_is_indeterminate() {
+    let src = "fn probe_fn(a: i32, b: i32) { probe_call(a, convert::<X, Y>(b)); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 3);
+    assert!(
+        result.is_err(),
+        "AC-6(b)/anchor-scan-false-success: a top-level generic argument list must make \
+         the argument count indeterminate"
     );
 }
 

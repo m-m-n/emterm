@@ -1,0 +1,12 @@
+schema_version: 1
+feature: anchor-scan-false-success
+records:
+  - question_id: review.evaluator-absolute-path-findings
+    packet_id: null
+    answered_at: "2026-09-23T21:54:40+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "A: R3b step 1 を字義どおり適用し、絶対パスの finding を落として round 記録の findings_dropped_by_gate に開示する"
+    normalized_answer: "A: drop absolute-path findings per R3b step 1 and disclose them in the round record"
+    resolution_note: "gate: review round 1 の evaluator が file に絶対パスを返した findings の扱い（gate_id 無し）; options: A=字義どおり落として開示 / B=project_root 接頭辞を取り除いて相対化し残す; choice: A; codex_consulted: true; 要点: R3b step 1 は絶対パスを明示的に拒否し相対化の例外が無い、R0 step 3 の never sanitize も同じ方針、完了条件も自動修正対象も変わらない（medium のみ）、監査性は除外した内容・元パス・重大度・評価者由来・除外理由を採用済み指摘と区別して残すことで確保する; opus_escalation: false"

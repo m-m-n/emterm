@@ -1,0 +1,254 @@
+schema_version: 1
+feature: anchor-scan-false-success
+created: 2026-09-23
+base_branch: main
+parent_branch: em-workflow/anchor-scan-false-success/integration
+tier: reduced
+tier_decision:
+  by: orchestrator
+  confidence:
+    - basis: description_only
+      probabilities: {"0": 0.52, "1": 0.48, "2": 0.0}
+      expectation_clear: 0.94
+    - basis: description_plus_code
+      probabilities: {"0": 0.56, "1": 0.44, "2": 0.0}
+      expectation_clear: 0.94
+  at: "2026-09-23T21:02:00+09:00"
+  reductions: [REQUIREMENTS.md, design, IMPLEMENTATION.md]
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths: [doc/UI-DESIGN-GUIDELINES.yaml]
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: "bunx biome check ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: a05583ddc6edcb04b0e4b9d64b66706d1f6f5f2c
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      tier reduced により design ステップを削減した。requirements-analyst の推奨も skip で、
+      gate create-spec.design-step をバッチポリシー（decide_autonomously）で解決した。
+      #[cfg(test)] の走査ロジックの修正であり、UI・画面・ビジュアルの変更が無い。
+  - id: create-plan
+    artifacts: [VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 30f1cdfea2e3191eaa2534b8bb312a2469bf2fe5
+  - id: implement
+    status: completed
+    completed_at_commit: 709ee79888654d7ff7fe5fab7f1caa33046c83b6
+    base_commit: f1b3832320dda58fed2153846b7ef0bb2ab16a37
+  - id: review
+    status: completed
+    completed_at_commit: a4ac45939656ef394fb0aabe5d0ced1a1b658db2
+  - id: verify
+    status: completed
+    completed_at_commit: 135ce6a8d9a4fe83aa7c6276d65659caebcfbfec
+    result: pass
+    failed_items: []
+    summary: >-
+      build (cargo check) exit 0; test (cargo test --lib) 3549 passed / 0 failed / 3 ignored,
+      TS-1..TS-7 and EC-1..EC-6 mapped anchor_locate_call_* tests all pass; format check exit 0;
+      SC-3 diff limited to src-tauri/src/window_host/tests.rs + test-docs/, no hunk inside
+      mod call_site_scan, Cargo.toml / pointer_routing.rs unchanged. web component not run (out of scope).
+    excluded: []
+  - id: retrospect
+    artifacts: [retrospect.yaml]
+    status: completed
+    completed_at_commit: 0c88c8ee4b4cc4c8546d01e09320e5e6db8f6cca
+
+tasks:
+  task0001:
+    title: "Close anchor_scan false-success paths (literal args, char/raw strings, fn depth gate)"
+    plan: tasks/task0001.md
+    files: [src-tauri/src/window_host/tests.rs]
+    skills: []
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2, NFR3, NFR4]
+    status: merged
+    branch: em-workflow/anchor-scan-false-success/task0001
+
+review:
+  status: completed
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary: []
+    cross_validation: false
+  rounds_completed: 1
+  perspectives: [comprehensive, security, spec]
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "末尾リテラル引数を引数カウントに含める"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2]
+  FR2:
+    title: "文字リテラルと生文字列を不透明スパンとして扱う"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-3, TS-4, TS-5]
+  FR3:
+    title: "関数探索に波括弧深さのゲートを入れる"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-6]
+  FR4:
+    title: "誤った成功を返さない不変条件"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-3, TS-4, TS-6, TS-7]
+  FR5:
+    title: "負のテストを追加する"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6]
+  NFR1:
+    title: "変更範囲"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-7]
+  NFR2:
+    title: "call_site_scan を凍結したまま保つ"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-7]
+  NFR3:
+    title: "依存を追加しない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-7]
+  NFR4:
+    title: "汎用パーサーは作らない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+
+goal: |
+  # benign-edit-test-token-rewrite: anchor_scan が未対応構文で誤った範囲を成功として返す（末尾リテラル引数の数え落とし / 文字・生文字列 / 関数探索深度）
+
+  ## 現象 (必須)
+  `benign-edit-test-token-rewrite` で追加されたテスト専用モジュール `anchor_scan`
+  （`src-tauri/src/window_host/tests.rs`）は、未対応の構文や探索条件に遭遇したとき、
+  エラーを返さずに **誤った範囲を正常な結果として返す**。`locate_call` が自ら掲げる
+  「静かに誤った範囲を返す経路は許容しない」という不変条件に反する。
+  具体的な経路は 3 つある。いずれも同じ不変条件の違反で、現在の
+  `src-tauri/src/window_host/pointer_routing.rs` では発現しない。
+  ### 1. 末尾のリテラル引数が引数カウントから落ちる（最も影響が大きい）
+  `anchor_scan::scan` が数値リテラルと素の文字列リテラルをトークンを一切吐かずに
+  消費する。`count_top_level_args` は深さ 0 のカンマを数え、最後の 1 区間を
+  `seg_start < end` のときだけ足す。そのため `probe_call(a, b, c, d, 0)` の
+  トークン列は `a , b , c , d ,` となり、カンマ 4 個・`seg_start` が `close_idx`
+  と一致するので引数 4 個と報告される。5 引数の呼び出しが `expected_arg_count` 4 を
+  満たし、`locate_call` が `Ok` を返す。末尾が素の文字列引数でも同じで、
+  `probe_call(0, 1, 2, 3)` は 3 と数えられる。
+  これは SPEC FR4c / AC-6 のトークン形状ガードを直接弱める。held 対応の呼び出しに
+  リテラル値の引数を 1 個足すリファクタリングが、この機能がまさに追加したはずの
+  ガードをすり抜ける。
+  ### 2. 文字リテラル・生文字列が不透明スパンとして扱われない
+  `scan` は行コメント・入れ子ブロックコメント・素のダブルクォート文字列は扱うが、
+  文字リテラルと生文字列を扱わない。`probe_call(a, b, c, ')')` では `'` が Punct
+  になり、内側の `)` が構造上の Punct として扱われるため、括弧深さの走査がそこで
+  終端する。続く引数カウントは truncate された範囲に対して `a , b , c , '` = 4 と
+  なり、`locate_call` は本当の閉じ括弧より手前で止まった範囲を持って `Ok` を返す。
+  同様に `r#"contains a " quote"#` は文字列スキップを脱同期させ、後続のテキストが
+  コードとして走査される。
+  ### 3. `locate_call` の関数探索に波括弧深さのゲートが無い
+  `anchor_scan::locate_call` の step 1 はブレース深さを追わずに全トークンを走査して
+  `fn` + `fn_name` を探すが、対になる `call_site_scan::extract_function` は同じ照合を
+  `depth == 0` に限定している。2 つは対で使われる（`locate_call` が差し替える
+  バイト範囲を選び、`extract_function` が編集結果を再抽出する）ため、同名メソッドが
+  `impl` や入れ子ブロック内にファイルの先頭寄りで現れると、両者が別の定義に解決する。
+  ## 再現手順 (必須)
+  1. `src-tauri/src/window_host/tests.rs` の `anchor_scan` に対して、
+  `probe_call(a, b, c, d, 0)` を 4 引数期待で `locate_call` に通す単体テストを
+  追加する
+  1. `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` を実行する
+  2. 5 引数の呼び出しが `Err` ではなく `Ok` で返り、テストが（落ちてほしいのに）
+  通ることを確認する
+  1. 同様に `probe_call(a, b, c, ')')` を通すと、閉じ括弧より手前で truncate された
+  範囲が `Ok` で返ることを確認する
+  ## 期待する挙動 (必須)
+  `anchor_scan` が、対象を正しく処理するか、明示的に失敗（`Err`）するかのどちらかで
+  あり、**誤った範囲を成功として返さない**こと。各構文形式を網羅的にサポートすること
+  自体は目的ではない。
+  ## 完了の定義 (必須)
+  - [ ] 末尾の数値・文字列リテラル引数が引数カウントに含まれる（あるいは明示的に
+  `Err` になる）。`probe_call(a, b, c, d, 0)` が 4 引数期待で拒否される負の
+  テストがある
+  - [ ] 文字リテラル・生文字列が不透明スパンとして扱われる（あるいは明示的に `Err`
+  になる）。末尾引数が `')'` の負のテストがある。ライフタイム注釈 `'a` を
+  巻き込まないこと
+  - [ ] `locate_call` の step 1 が `extract_function` と同じ深さゲートを持つ
+  （あるいは明示的に `Err` になる）。同名の入れ子メソッドが対象より前に現れる
+  負のテストがある
+  - [ ] 既存の 4 本の良性編集テストが緑のままである
+  ## 該当箇所 (任意)
+  - `src-tauri/src/window_host/tests.rs:6885-6899` — 文字列リテラルの消費
+  - `src-tauri/src/window_host/tests.rs:6914-6922` — 数値リテラルの消費
+  - `src-tauri/src/window_host/tests.rs:7005-7026` — `count_top_level_args`
+  - `src-tauri/src/window_host/tests.rs:7063-7079` — `locate_call` step 1
+  - `src-tauri/src/window_host/tests.rs:7118-7137` — 括弧深さの走査
+  - `src-tauri/src/window_host/tests.rs:5619-5637` — `call_site_scan::extract_function`（深さゲートの参照実装）
+  - `src-tauri/src/window_host/pointer_routing.rs:793, 850` — 現在の実呼び出し側
+  ## 実害・発生条件 (任意)
+  **現在は未発現。** 優先度は低い。`anchor_scan` は `#[cfg(test)]` ゲート下にあり
+  本番コードは一切通らない。実際の呼び出し側 `pointer_routing.rs:850` は識別子・式の
+  4 引数で、文字リテラルも生文字列も含まず、`run_button_decision` はトップレベルに
+  1 回だけ定義されている。
+  一方で、単なる将来互換性の話ではない。失敗が「落ちる」ではなく「誤って成功する」
+  形で出るため、ガードが効かなくなったことに気づけない。良性編集耐性を主張する
+  テストが、主張している保証を静かに失う経路になる。
+  出典: em-workflow `benign-edit-test-token-rewrite` review round 1。
+  comprehensive レビュアー（codex）が medium 3 件として報告し、評価者が 1 件を
+  medium（stable_id `5ca53d4f98ce3d6f`、confidence 85）、2 件を low に格下げした。
+  3 件を 1 チケットに統合する判断は Codex への相談結果による（同一の不変条件に属し、
+  完了条件も 1 つにまとまるため）。
+  対象ブランチ: `em-workflow/benign-edit-test-token-rewrite/integration`
