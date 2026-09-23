@@ -1,0 +1,58 @@
+feature: mux-snapshot-ring-wrap-restore
+collected_at: "2026-09-23T21:05:00+09:00"
+session_ids:
+  - 01a0ce5b-4a97-729c-857f-0147f06ad475
+  - 01a0ce5c-c94f-716d-b7b6-7036213cabdf
+signals:
+  review_critical_high:
+    - stable_id: 9f886c96758d210d
+      category: spec
+      file: src-tauri/src/mux/ipc/pty_spawn/tests.rs
+      title: "AC5/TS3 apt+resize+wrap scenario not exercised: no mid-run resize and no snapshot while the scroll region is active"
+      resolution: "unresolved in round 1; addressed by batch auto-rework task0002 (merged), not re-raised in round 2"
+    - stable_id: 1c848b3a5a9705ba
+      category: spec
+      file: src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+      title: "AC6/TS4 continued-output check omits the apt-log-plus-bar-under-region half"
+      resolution: "unresolved in round 1; addressed by batch auto-rework task0002 (merged), not re-raised in round 2"
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: >-
+      Both readings put P(0) at 0.0, below the reduced row's P(0) floor (0.40),
+      so both evaluated to full and the full tier (removes nothing) was selected
+      by threshold_rows:full.
+    bases:
+      - basis: description_only
+        probabilities: {"0": 0.0, "1": 0.01, "2": 0.99, "3": 0.0}
+      - basis: description_plus_code
+        probabilities: {"0": 0.0, "1": 0.0, "2": 0.56, "3": 0.44}
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/mux/snapshot_bytes.rs
+        - src-tauri/src/mux/scrollback_buffer.rs
+        - src-tauri/src/mux/scrollback_buffer/tests.rs
+        - src-tauri/src/mux/session/pane/output_target.rs
+        - src-tauri/src/mux/session/pane/tests.rs
+        - src-tauri/src/mux/ipc/reattach.rs
+        - src-tauri/src/mux/ipc/reattach/tests.rs
+        - src-tauri/src/mux/ipc/handlers/mod.rs
+        - src-tauri/src/mux/ipc/handlers/tests.rs
+        - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+        - src-tauri/src/mux/scrollback_filter/tests.rs
+      changed_lines_approx: 400
+      new_functions_needed: 10
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "Round 1 high findings were both test-coverage gaps against VERIFICATION scenarios (TS-3 / TS-4); the first implementer covered the fix but not the apt resize / region-active halves."
+  - "Round 2 left four medium findings unresolved (d80313b063a88627, ea0ba0ab7c534abe, 4f8c52aa920ad351, 3b5bbd839c74d67b), including probe replay under the global SessionManager lock."
+  - "Pre-survey expected no new files; the implementation added snapshot_bytes/dump_block.rs and snapshot_bytes/wrap_restore_tests.rs and touched crates/term_core."
+  - "TS-11 (manual on-device check) remains pending."
