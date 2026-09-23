@@ -94,7 +94,7 @@ tasks:
     - FR5
     - NFR1
     - NFR2
-    status: in_progress
+    status: merged
     branch: em-workflow/anchor-scan-callee-miscount/task0001
 review:
   status: pending
