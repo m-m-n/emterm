@@ -1,0 +1,114 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::anchor_locate_call_trailing_numeric_literal_argument_is_counted
+      - window_host::tests::anchor_locate_call_trailing_string_literal_argument_is_counted
+      - window_host::tests::anchor_locate_call_trailing_string_literal_argument_is_included_in_range
+    red_confirmed: true
+    red_reason: >
+      Confirmed by temporarily reverting only the scanner implementation
+      (scan/count_top_level_args/locate_call) back to the pre-change version
+      while keeping the new tests. anchor_locate_call_trailing_numeric_literal_argument_is_counted
+      and anchor_locate_call_trailing_string_literal_argument_is_counted panicked with
+      "a trailing ... literal argument must be counted" (result was Ok instead of Err,
+      since the old scanner emitted zero tokens for numeric/string literals, undercounting
+      real arguments). anchor_locate_call_trailing_string_literal_argument_is_included_in_range
+      also failed pre-change with "expected 4 top-level arguments, found 3" (also red,
+      though only AC-1(a)/(b) were required to be confirmed red by the task plan).
+  AC-2:
+    tests:
+      - window_host::tests::anchor_locate_call_char_literal_argument_containing_close_paren_is_opaque
+      - window_host::tests::anchor_locate_call_raw_string_argument_containing_quote_is_opaque
+    red_confirmed: true
+    red_reason: >
+      Confirmed via the same temporary revert. anchor_locate_call_char_literal_argument_containing_close_paren_is_opaque
+      failed because the old scanner tokenized `'` and the `)` inside the char literal
+      `')'` as raw punctuation, desyncing the paren-depth walk. anchor_locate_call_raw_string_argument_containing_quote_is_opaque
+      failed with "anchor: `fn probe_fn` not found with its name directly (whitespace-only)
+      adjacent to the `fn` keyword" because the old scanner had no raw-string handling at
+      all, so `r#"..."#` content was mis-tokenized and desynced the whole scan.
+  AC-3:
+    tests:
+      - window_host::tests::anchor_locate_call_lifetime_parameter_does_not_disrupt_anchoring
+      - window_host::tests::anchor_locate_call_labeled_loop_does_not_disrupt_anchoring
+    red_confirmed: false
+    red_reason: >
+      Over-correction guard per Test Notes ("AC-3 ... already green before the change").
+      Both tests passed against the pre-change scanner too (confirmed during the same
+      temporary revert: 9 tests passed pre-change, including these two) because the old
+      scanner's fallback punctuation handling for `'` happened to consume lifetime-shaped
+      content without desyncing paren depth for these two particular inputs. They still
+      guard the fixed behavior (lifetime/label tokens are now explicitly classified,
+      Kind::Lifetime) and are kept per the task plan's instruction to place them alongside
+      the red-confirmed tests.
+  AC-4:
+    tests:
+      - window_host::tests::anchor_locate_call_escaped_char_and_byte_char_literals_are_opaque
+      - window_host::tests::anchor_locate_call_byte_and_c_string_forms_are_opaque
+      - window_host::tests::anchor_locate_call_raw_identifier_argument_is_scanned_as_identifier
+      - window_host::tests::anchor_locate_call_non_ascii_char_literal_does_not_panic
+      - window_host::tests::anchor_locate_call_unterminated_raw_string_returns_err
+      - window_host::tests::anchor_locate_call_malformed_quote_returns_err
+    red_confirmed: true
+    red_reason: >
+      Confirmed via the same temporary revert. AC-4(e) (unterminated raw string) and
+      AC-4(f) (malformed `'`) were required to be red and were: both previously returned
+      Ok (the old scanner has no raw-string or char-literal failure path) instead of the
+      required Err. AC-4(a) (escaped char/byte-char/string literals) also failed
+      pre-change (not required by the task plan but observed anyway) because the old
+      scanner had no byte-char-literal or char-literal handling. AC-4(b), (c) and (d)
+      were "over-correction guard" tests per Test Notes and were already green
+      pre-change: byte/C/raw string forms with `#` happened to still balance under the
+      old scanner's coarse handling for these specific inputs, `r#type` was already
+      tokenized as one identifier run (the old scanner had no separate raw-string path
+      to misfire on it), and the non-ASCII char literal input didn't hit the old
+      scanner's (absent) char-literal path in a way that broke paren-depth counting for
+      this specific source. All are still meaningful regression guards for the new
+      scanner.
+  AC-5:
+    tests:
+      - window_host::tests::anchor_locate_call_same_named_fn_inside_impl_is_ignored
+      - window_host::tests::anchor_locate_call_two_depth_zero_fn_definitions_returns_err
+    red_confirmed: true
+    red_reason: >
+      Confirmed via the same temporary revert. anchor_locate_call_same_named_fn_inside_impl_is_ignored
+      failed with the wrong text returned ("a, b, c, d" instead of "w, x, y, z") because
+      the pre-change step 1 walked every `fn` occurrence without a brace-depth-0 gate and
+      matched the first (nested, inside `impl`) definition. anchor_locate_call_two_depth_zero_fn_definitions_returns_err
+      failed because the pre-change step 1 had no ambiguity check and silently picked the
+      first of the two depth-0 definitions instead of returning Err.
+  AC-6:
+    tests:
+      - window_host::tests::anchor_locate_call_closure_parameter_comma_is_indeterminate
+      - window_host::tests::anchor_locate_call_generic_argument_comma_is_indeterminate
+    red_confirmed: true
+    red_reason: >
+      Confirmed via the same temporary revert. Both failed because the pre-change
+      count_top_level_args had no `<`/`|` indeterminacy guard, so it miscounted the
+      closure parameter list's and the generic argument list's internal comma as a
+      top-level argument separator, producing an argument count that happened to match
+      expected_arg_count and returning Ok instead of the required Err.
+  AC-7:
+    tests:
+      - window_host::tests::button_path_rewrapped_argument_list_edit_is_accepted
+      - window_host::tests::button_path_call_with_inserted_comment_edit_is_accepted
+      - window_host::tests::button_path_trailing_comma_edit_is_accepted
+      - window_host::tests::button_path_independent_statement_reorder_edit_is_accepted
+      - window_host::tests::anchor_locate_call_wrong_argument_count_returns_err
+      - window_host::tests::anchor_locate_call_callee_not_shaped_as_a_call_returns_err
+      - window_host::tests::anchor_locate_call_fn_name_separated_by_a_comment_returns_err
+      - window_host::tests::anchor_locate_call_unbalanced_paren_inside_a_comment_still_returns_the_correct_range
+    red_confirmed: false
+    red_reason: >
+      Not a red/green criterion: AC-7 requires these 8 pre-existing tests to keep
+      passing with their bodies unmodified (a non-regression guard on the shared
+      anchor_scan::locate_call API), plus that the full approved test command passes,
+      plus that the diff touches only src-tauri/src/window_host/tests.rs with no line
+      inside mod call_site_scan changed. Verified: all 8 tests pass in the final run
+      (cargo test --lib, 3549 passed / 0 failed / 3 ignored), git diff --stat shows only
+      src-tauri/src/window_host/tests.rs changed, and git diff hunk line ranges are all
+      at or after the pre-existing line 6833 (the start of the "Class A anchor routine"
+      section), well after mod call_site_scan's own range (lines 5226-6223).
