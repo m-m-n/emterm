@@ -4,7 +4,7 @@
 
 **Feature**: mux-snapshot-ring-wrap-restore / **SPEC.md**: `feature-docs/mux-snapshot-ring-wrap-restore/SPEC.md` / **IMPLEMENTATION.md**: `feature-docs/mux-snapshot-ring-wrap-restore/IMPLEMENTATION.md`
 
-This is the integrated verification of the post-wrap main-buffer snapshot restore. Scenario IDs TS-1 to TS-11 map one-to-one to SPEC.md TS1 to TS11. This plan adds TS-12 to TS-15 so that NFR3 to NFR7 each have an explicit verification item.
+This is the integrated verification of the post-wrap main-buffer snapshot restore. Scenario IDs TS-1 to TS-11 map one-to-one to SPEC.md TS1 to TS11. This plan adds TS-12 to TS-15 so that NFR3 to NFR7 each have an explicit verification item. Review round 1 rework (task0002) adds TS-16 and TS-17 for FR9's pending-wrap and grow-resize cases.
 
 ## Build Verification
 
@@ -38,6 +38,8 @@ This is the integrated verification of the post-wrap main-buffer snapshot restor
 | TS-13 | Capacity unchanged (plan-added, NFR4) | A unit test asserts that `DEFAULT_SCROLLBACK_CAPACITY` equals 2 MiB | Unit |
 | TS-14 | Build and platforms (plan-added, NFR5, SPEC AC8) | The lib test command passes and the CLI-only check compiles. No platform-specific code is added | Build |
 | TS-15 | Known limits (plan-added, NFR6, NFR7) | (a) A unit test shows that a ring rebuilt from a wrapped ring's handoff capture reports not wrapped. (b) The layout SSOT docs state the NFR6 and NFR7 limits | Unit + Inspection |
+| TS-16 | Pending wrap after a post-wrap snapshot (rework-added, FR9). The wrapped stream's last output exactly fills a row. Variants: inside a narrowed region with origin mode on; a row ending with a double-width character; a control case where the cursor sits at the last column with no pending wrap. After replay, one more printable character goes to the client and to a whole-stream reference | The client's pending-wrap flag and cursor equal the probe's. After the extra character, the visible rows and cursor equal the reference: it wraps to the next row when a wrap was pending and overwrites the last column in the control case. The dump block has no DECSC, DECRC, ED 3, alt-screen toggle or autowrap change | Edge |
+| TS-17 | Probe across grow resizes (rework-added, FR9). A multi-segment pre-dump payload accumulates history, then grows rows only, rows and columns together, and to current_dims larger than the last segment | The probe's scroll region, origin mode, cursor position, SGR and pending-wrap flag equal an oracle with 10,000 history lines replayed on the same payload | Unit |
 
 ## Code Quality Verification
 
@@ -56,7 +58,7 @@ This is the integrated verification of the post-wrap main-buffer snapshot restor
 | AC3 | Non-wrapped byte identity; existing layout and omission tests unchanged | TS-6 |
 | AC4 | Alt-screen byte identity | TS-9 |
 | AC5 | apt + resize + wrap replays with zero mixed rows | TS-3 |
-| AC6 | Continued output matches the reference terminal | TS-4, TS-5 |
+| AC6 | Continued output matches the reference terminal | TS-4, TS-5, TS-16 |
 | AC7 | No duplicated history | TS-8 |
 | AC8 | The lib tests pass and the CLI-only check compiles | TS-14 |
 | AC9 | Manual top check | TS-11 |
@@ -66,15 +68,15 @@ This is the integrated verification of the post-wrap main-buffer snapshot restor
 | Requirement | Tasks | Verification |
 |-------------|-------|--------------|
 | FR1 | task0001 | TS-1 |
-| FR2 | task0001 | TS-2, TS-3, TS-8, TS-11 |
+| FR2 | task0001, task0002 | TS-2, TS-3, TS-8, TS-11 |
 | FR3 | task0001 | TS-6 |
 | FR4 | task0001 | TS-9 |
 | FR5 | task0001 | TS-2 |
 | FR6 | task0001 | TS-2, TS-7 |
-| FR7 | task0001 | TS-2, TS-3 |
-| FR8 | task0001 | TS-3, TS-5 |
-| FR9 | task0001 | TS-4, TS-5 |
-| FR10 | task0001 | TS-1, TS-2, TS-3, TS-4, TS-6 |
+| FR7 | task0001, task0002 | TS-2, TS-3 |
+| FR8 | task0001, task0002 | TS-3, TS-5 |
+| FR9 | task0001, task0002 | TS-4, TS-5, TS-16, TS-17 |
+| FR10 | task0001, task0002 | TS-1, TS-2, TS-3, TS-4, TS-6 |
 | NFR1 | task0001 | TS-6 |
 | NFR2 | task0001 | TS-10 |
 | NFR3 | task0001 | TS-12 |
@@ -106,7 +108,7 @@ Not applicable. The project has no E2E framework configured (`e2e_test_command` 
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build | TS-14 | 1 | 0 | 0 |
-| Unit | TS-1, TS-7, TS-13, TS-15(a) | 4 | 0 | 0 |
-| Integration / Edge | TS-2, TS-3, TS-4, TS-5, TS-6, TS-8, TS-9, TS-10 | 8 | 0 | 0 |
+| Unit | TS-1, TS-7, TS-13, TS-15(a), TS-17 | 5 | 0 | 0 |
+| Integration / Edge | TS-2, TS-3, TS-4, TS-5, TS-6, TS-8, TS-9, TS-10, TS-16 | 9 | 0 | 0 |
 | Inspection | TS-12, TS-15(b) | 0 | 0 | 2 |
 | Manual | TS-11 | 0 | 0 | 1 |
