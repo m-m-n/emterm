@@ -49,7 +49,8 @@ workflow:
       #[cfg(test)] の走査ロジックの修正であり、UI・画面・ビジュアルの変更が無い。
   - id: create-plan
     artifacts: [VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 30f1cdfea2e3191eaa2534b8bb312a2469bf2fe5
   - id: implement
     status: pending
   - id: review
@@ -60,7 +61,16 @@ workflow:
     artifacts: [retrospect.yaml]
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Close anchor_scan false-success paths (literal args, char/raw strings, fn depth gate)"
+    plan: tasks/task0001.md
+    files: [src-tauri/src/window_host/tests.rs]
+    skills: []
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2, NFR3, NFR4]
+    status: pending
 
 review:
   status: pending
@@ -74,63 +84,63 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2]
   FR2:
     title: "文字リテラルと生文字列を不透明スパンとして扱う"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3, TS-4, TS-5]
   FR3:
     title: "関数探索に波括弧深さのゲートを入れる"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-6]
   FR4:
     title: "誤った成功を返さない不変条件"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3, TS-4, TS-6, TS-7]
   FR5:
     title: "負のテストを追加する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6]
   NFR1:
     title: "変更範囲"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-7]
   NFR2:
     title: "call_site_scan を凍結したまま保つ"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-7]
   NFR3:
     title: "依存を追加しない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-7]
   NFR4:
     title: "汎用パーサーは作らない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
 
 batch:
