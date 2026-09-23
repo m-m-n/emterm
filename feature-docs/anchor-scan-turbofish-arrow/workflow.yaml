@@ -1,0 +1,110 @@
+schema_version: 1
+feature: anchor-scan-turbofish-arrow
+created: '2026-09-24'
+base_branch: main
+parent_branch: em-workflow/anchor-scan-turbofish-arrow/integration
+goal: |
+  # anchor_scan: turbofish のジェネリック引数に -> を含む型があると > で閉じたと誤判定し callee 呼び出しを数え落とす
+
+  Source: Notion task https://www.notion.so/3e43509ec8ee81f28cc7c3407f55394b (種別: バグ)
+
+  ## 現象
+  `src-tauri/src/window_host/tests.rs` のテスト専用モジュール `anchor_scan` で、`locate_call` の step 2 がターボフィッシュ形の呼び出し（`callee::<...>(...)`）を数えるとき、ジェネリック引数の中に `->` を含む型（例: 関数ポインタ型 `fn(u8) -> u8`）があると、`->` の `>` でジェネリック引数リストが閉じたと判定する。その結果、呼び出しを数え落とし、呼び出しが 2 つある本体でも `locate_call` が `Err` ではなく `Ok` を返す経路が残る。「誤った範囲を成功として返さない」不変条件の残り経路。
+
+  ## 再現手順
+  1. `anchor_scan::locate_call` に、本体が `probe_call::<fn(u8) -> u8>(w, x, y, z); probe_call(a, b, c, d);` の関数を 4 引数期待で通す
+  2. `Err` ではなく `Ok` が返ることを確認する
+
+  ## 期待する挙動
+  `locate_call` が `Err` を返す。
+
+  ## 完了の定義
+  - 再現手順で現象が起きない
+  - 再発を検出するテストがある
+
+  ## 該当箇所
+  - `src-tauri/src/window_host/tests.rs` の `anchor_scan` モジュール、`locate_call` step 2 のターボフィッシュ形の認識
+  - em-workflow `anchor-scan-callee-miscount` の実装計画（`feature-docs/anchor-scan-callee-miscount/tasks/task0001.md` の Out of Scope）で対象外とした
+
+  ## 実害・発生条件
+  現在は未発現。`anchor_scan` は `#[cfg(test)]` 下で本番コードは通らない。出典: em-workflow `anchor-scan-callee-miscount` の create-plan（SPEC FR3 は入れ子の `<` / `>` の対応だけを求めるため対象外とした）。
+tier: minimal
+tier_decision:
+  by: orchestrator
+  confidence:
+  - basis: description_only
+    probabilities:
+      '0': 0.91
+      '1': 0.09
+      '2': 0.0
+    expectation_clear: 0.92
+  - basis: description_plus_code
+    probabilities:
+      '0': 0.83
+      '1': 0.17
+      '2': 0.0
+    expectation_clear: 0.92
+  at: '2026-09-24T08:02:21+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - IMPLEMENTATION.md
+  - design
+  - SPEC.md (replaced by TASK.md)
+  - task splitting
+  - VERIFICATION.md
+  - task-level parallelism
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - TASK.md
+  status: completed
+  completed_at_commit: ce160634e6d7e57b2bdf1d24053ffe9647175673
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'minimal tier subtracts the design step; requirements-analyst also recommended skip:
+    test-only token-scanning logic inside a #[cfg(test)] module with no UI or visual surface.'
+- id: create-plan
+  artifacts:
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  perspectives: []
+  residual_critical_high: 0
+  needs_rework: false
+requirements: {}
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
