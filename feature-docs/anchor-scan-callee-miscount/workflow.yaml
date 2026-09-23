@@ -73,7 +73,19 @@ workflow:
   status: completed
   completed_at_commit: a249ae52519ff21792c3689a8fcc7083248fe01e
 - id: verify
-  status: in_progress
+  status: completed
+  completed_at_commit: 0423f238e9a5604b0d99dcaa3dfa57dbb35f25f9
+  result: pass
+  failed_items: []
+  summary: >-
+    build (cargo check) exit 0; test (cargo test --lib) 3613 passed / 0 failed / 3 ignored;
+    --lib --no-run reports no new warnings from anchor_scan; format check exit 0.
+    TS-1..TS-7, EC-1..EC-5 and as-1..as-3 each map to a named anchor_locate_call_* test and
+    all 36 anchor_locate_call tests pass; TS-8 button_path_* 5 passed. Change scope limited to
+    src-tauri/src/window_host/tests.rs (header comment + mod anchor_scan + anchor_locate_call_*
+    tests), no hunk inside mod call_site_scan; header comment check passes.
+    web component not run (untouched; out of scope per VERIFICATION.md).
+  excluded: []
 - id: retrospect
   artifacts:
   - retrospect.yaml
