@@ -1,0 +1,202 @@
+schema_version: 1
+feature: status-bar-timer-test-flake
+created: 2026-09-23
+base_branch: main
+goal: |
+  Notion task 3e23509ec8ee818f97d8e9da4f959aa4 —
+  status_bar::runtime::tests::runtime_time_provider_timer_fires_wake がタイミング依存で不安定に落ちる
+
+  指示メモ: em-workflow のベースライン失敗として観測。window_host とは無関係
+
+  ## 現象 (必須)
+  `status_bar::runtime::tests::runtime_time_provider_timer_fires_wake` が実行ごとに
+  結果が変わる。同一ツリー・同一コミットで、ベースライン実行と最終のフルスイート実行では
+  赤、その間の 1 回は緑になった。タイマー発火待ちの実時間依存が原因と見られる。
+
+  ## 再現手順 (必須)
+  1. `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` を複数回実行する
+  2. 同一コミットで結果が緑と赤に振れることを確認する
+
+  ## 期待する挙動 (必須)
+  実時間の経過に依存せず決定的に判定すること。時刻源を注入可能にするか、待ち時間に
+  十分な余裕を取るかのいずれか。
+
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所 (任意)
+  - `status_bar::runtime::tests::runtime_time_provider_timer_fires_wake`
+
+  ## 実害・発生条件 (任意)
+  無関係な変更の検証時に false red を出し、原因調査の手間を生む。差分の良否を判定する
+  ベースラインとして信用できなくなる。em-workflow の implementer は baseline_failures と
+  final_failures の差分で退行を判定するため、振れるテストはその判定精度を直接下げる。
+  出典: em-workflow の benign-edit-test-token-rewrite / task0001 実装中に、当該タスクとは
+  無関係なベースライン失敗として観測。
+parent_branch: em-workflow/status-bar-timer-test-flake/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    - basis: description_only
+      probabilities: {"0": 0.34, "1": 0.42, "2": 0.24, "3": 0.0}
+      expectation_clear: 0.75
+    - basis: description_plus_code
+      probabilities: {"0": 0.0, "1": 0.5, "2": 0.5, "3": 0.0}
+      expectation_clear: 0.81
+  at: "2026-09-23T18:33:45+09:00"
+  reductions: []
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+  components:
+    typescript:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: "bunx biome check ."
+      e2e_test_command: ""
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 4dbaf8519f59c5ded581e80acff1640a470b2bbb
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      Only test code and an internal Rust seam in the status-bar TimeProvider change.
+      There is no UI, visual or design-token surface.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: Injectable tick source for the TimeProvider timer loop
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Production timer behaviour unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Synchronous manual-tick delivery
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Seam-driven shutdown
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: Rewrite time_provider_timer_thread_calls_wake_on_interval
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Rewrite time_provider_timer_thread_bumps_version_per_tick_without_get_value
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: Rewrite runtime_time_provider_timer_fires_wake
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: Delayed-tick regression test
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: No new crates
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: No dependence on real time in the timer tests
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Platform and feature-gate compatibility
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Seam hidden from the public API
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
