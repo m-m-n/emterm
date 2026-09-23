@@ -1,14 +1,18 @@
 schema_version: 1
 feature: anchor-scan-turbofish-arrow
 phase: create-plan
-status: initialized
+status: dispatching
 generation: 1
 base_revision: bd27fee9a496dffa91a0f6e1c06e4bf7c6521e06
-last_input_digest: null
-active_request_id: null
+last_input_digest: sha256:edaf55c3c2fd9947fd31891289211e360da05625b746bb755b8a6afe622e7e90
+active_request_id: create-plan-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:edaf55c3c2fd9947fd31891289211e360da05625b746bb755b8a6afe622e7e90
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
