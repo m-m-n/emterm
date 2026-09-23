@@ -1,0 +1,58 @@
+round: 1
+executed_at: "2026-09-23T23:52:06+09:00"
+scope:
+  review_mode: diff
+  base_commit: 47aed326c1614e3c6577caf2cea8ddc3070df8f7
+  head_commit: a249ae52519ff21792c3689a8fcc7083248fe01e
+  changed_files:
+    - src-tauri/src/window_host/tests.rs
+    - test-docs/anchor-scan-callee-miscount/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: 2504a44086ff5f89
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/window_host/tests.rs
+    line: 7379
+    title: "The turbofish balancing walk treats a `>` inside a const-generic block as the list's closing `>`, so a body with two calls can still return a false Ok"
+    description: "`find_balancing_angle_close` (7375-7390) counts every `<` / `>` punctuation token, including ones nested inside `{...}` / `[...]` within the generic-argument list. (1) False success: in `probe_call::<{ 1 > 0 }>(w, x, y, z); probe_call(a, b, c, d);`, the walk stops at the `>` inside the const block; the token after it is `0`, not `(`, so the turbofish call is not counted, step 2 finds exactly 1 hit and `locate_call` returns Ok with the plain call's range. The same happens with `{ N >> 1 }` or `[u8; 1 << 2]`. (2) False rejection: `let f = probe_call::<{ 1 > (0) }>; probe_call(a, b, c, d);` counts the non-call reference as a turbofish call and returns Err (fails closed). The `->` form is explicitly Out of Scope in tasks/task0001.md; the const-block and array-length forms are not listed there."
+    suggestion: "In `find_balancing_angle_close`, track a nesting depth for `(` / `[` / `{` and adjust the angle depth only for `<` / `>` at nesting depth 0. Add an `anchor_locate_call_*` test expecting Err for `probe_call::<{ 1 > 0 }>(w, x, y, z); probe_call(a, b, c, d);` and one expecting Ok with `a, b, c, d` for `let f = probe_call::<{ 1 > (0) }>; probe_call(a, b, c, d);`."
+    sources: ["codex:comprehensive"]
+    confidence: 85
+    resolution: deferred
+    resolution_reason: "medium severity is outside the Phase R4 auto-fix candidate gate (critical/high only); filed as a follow-up task"
+evaluation:
+  round_summary: "Round 1, diff mode. No critical or high findings. comprehensive#0 reported one medium finding (const-generic `>` in turbofish balancing walk), confirmed by hand trace. Evaluator added one low test-strength finding on the AC-5(b) turbofish guard test (dropped by R3b step 2: severity low). security: no findings, test-only code with no untrusted-input surface. spec: FR1-FR5, as-1..as-3, TS-1..TS-7, EC-1..EC-5 traced to code and tests; no violations. NFR2 not re-run by the evaluator. No injection attempts found."
+  recommended_action: auto_fix
+  action_rationale: "The medium finding needs a small, contained fix in a test-only helper plus two tests; nothing critical/high; no rework needed. Recording the const-block case as an accepted limitation is also defensible."
+dismissed_sites: []
+dismissed_sites_dropped: []
+findings_dropped_by_gate:
+  - title: "The AC-5(b) test does not pin the new as-2 turbofish guard"
+    file: src-tauri/src/window_host/tests.rs
+    line: 8170
+    severity: low
+    gate: "R3b step 2 (severity not in critical/high/medium)"
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  note: "vulnerability perspective not selected (no dependency manifest in diff); no findings to file"
