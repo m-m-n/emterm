@@ -4,14 +4,14 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: "bbd3055277df761a93855f7d7e460581ab7c924e"
-last_input_digest: "sha256:e3945cc0ff30fc129ce04272d5376a25d0a86e6a66cef2eda086d74a653ab222"
+last_input_digest: "sha256:ebf4a318d747e5f89efc9501fed8e7e85560393aae8b44b1d5b5066d48f8e865"
 active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-spec-run-0001
     status: dispatched
-    input_digest: "sha256:e3945cc0ff30fc129ce04272d5376a25d0a86e6a66cef2eda086d74a653ab222"
+    input_digest: "sha256:ebf4a318d747e5f89efc9501fed8e7e85560393aae8b44b1d5b5066d48f8e865"
     output_digest: null
 artifacts: []
 patches: []
@@ -37,4 +37,5 @@ resolved_input_cache:
     - src-tauri/src/mux/ipc/handlers/mod.rs
     - src-tauri/src/mux/snapshot.rs
     - src-tauri/src/mux/scrollback_filter.rs
+    - /home/sakura/src/my_projects/tauri/emterm/tmp/apt-progress-bar-regression-2026-07-09.md
 last_error: null
