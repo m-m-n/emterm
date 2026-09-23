@@ -1,0 +1,59 @@
+round: 1
+executed_at: "2026-09-23T19:28:15+09:00"
+scope:
+  review_mode: diff
+  base_commit: 1a2ea42f223b85d1c88a594e1487741947c9487e
+  head_commit: 1e251461505c29088024d906493c3fd5e1d07048
+  changed_files:
+    - src-tauri/src/status_bar/providers/time.rs
+    - src-tauri/src/status_bar/runtime.rs
+    - test-docs/status-bar-timer-test-flake/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: cefb06b4dcbe5c31
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/status_bar/runtime.rs
+    line: 110
+    title: "テスト専用ビルダーが TimeProvider の生成と WakeFn の配線を複製しているため、StatusBarRuntime::new の時刻タイマーへの WakeFn 配線を検証するテストが無くなった"
+    description: "new_with_manual_time_source (runtime.rs:110-122) は TimeProvider::with_manual_source を自前で呼び、生成済みの Arc<TimeProvider> を new_internal に渡している。時刻プロバイダの配線 (format, wake.clone(), refresh_rates[\"time\"] から interval への変換、runtime.rs:92-99) は本番の new にしか無く、書き直した runtime_time_provider_timer_fires_wake (runtime.rs:546) はテスト用ビルダー側の配線だけを検証する。new が何もしない wake を渡しても、refresh_rates[\"time\"] を無視しても、どのテストも落ちない。FR7 はテスト用ビルダー経由でしか満たされていない。ビルダーの doc コメント「swaps only the time provider's tick source」も実際の動作と合わない。"
+    suggestion: "時刻プロバイダの生成を new_internal に移し、呼び出し側から変わるのは tick 源だけにする (例: new_internal に FnOnce(String, WakeFn, Duration) -> Arc<TimeProvider> のファクトリを渡し、format の clone・wake.clone()・refresh_rates[\"time\"].unwrap_or(1000) の解決は new_internal に置く)。StatusBarRuntime::new の公開シグネチャは変えない。doc コメントを実際の動作に合わせる。"
+    sources: [claude:evaluator]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "severity medium は auto-fix 候補外 (critical/high のみ)。evaluator 単独ソース。evaluator が file を project_root 配下の絶対パスで返したため、project_root 接頭辞を外した相対パスで記録した。後続タスクとして起票する"
+evaluation:
+  round_summary: "5観点とも findings は空。evaluator が変更3ファイルと関連ファイル10件を独自に確認し、プロンプトインジェクションの試みは無し。手動 tick 源の wake 取りこぼし無し・Drop 時の停止保証・本番経路の等価性 (FR2)・runtime テストの wake 回数の前提を確認。evaluator 自身の指摘は2件: runtime.rs:110 のテスト用ビルダーが本番 new の時刻配線を迂回している件 [medium]、ProductionTickSource の Tick 経路が無検証なのに tests.yaml AC-1 が検証済みと記載している件 [low]。security / performance / architecture は corroborated。spec は FR7 が medium 指摘と同根。"
+  recommended_action: "auto_fix"
+  action_rationale: "critical/high は無い。medium 1件は runtime.rs 内の小さなリファクタ、low 1件は主に tests.yaml の記述修正。いずれも evaluator 自身の指摘。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+gate_dropped:
+  - title: "ProductionTickSource が Tick を返す経路を通るテストが無くなったのに、task0001.tests.yaml の AC-1 は本番 tick 源を端から端まで検証済みと記載している"
+    file: src-tauri/src/status_bar/providers/time.rs
+    line: 110
+    reason: "R3b step 2: severity low は記録対象外のため除外 (内容は後続タスクに含める)"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
