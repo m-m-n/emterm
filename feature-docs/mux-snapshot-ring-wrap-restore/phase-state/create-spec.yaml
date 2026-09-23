@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-snapshot-ring-wrap-restore
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: bbd3055277df761a93855f7d7e460581ab7c924e
 last_input_digest: sha256:6fa5c3c1ca944ad7c7a2df968076afc0ebe338669b68d954e63ed68605a7c020
