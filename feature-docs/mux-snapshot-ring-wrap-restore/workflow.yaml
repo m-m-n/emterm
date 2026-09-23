@@ -343,6 +343,8 @@ requirements:
     tests:
     - TS-4
     - TS-5
+    - TS-16
+    - TS-17
   FR10:
     title: Regression tests
     status: ok
