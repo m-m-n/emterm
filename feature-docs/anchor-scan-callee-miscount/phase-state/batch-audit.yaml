@@ -29,3 +29,31 @@ records:
     / include_no_test / callee_only; choice: include_with_test; codex_consulted: true
     (harness codex, 1 turn); 要点: 深さ 0 の r#probe_fn と probe_fn を別名扱いすると曖昧な入力で Ok を返せてしまう。worker
     推奨と Codex の結論が一致; opus_escalation: false'
+- question_id: create-plan.owner-comment-scope
+  packet_id: null
+  answered_at: '2026-09-23T23:31:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - include_as_ac
+  freeform: null
+  normalized_answer: 'include_as_ac: タスク所有者のチケットコメントにある anchor_scan ヘッダーコメントの参照先修正（doc/tasks/anchor-scan-false-success/
+    → feature-docs/anchor-scan-false-success/tasks/task0001.md）を task0001 の AC-8（NFR1
+    配下）として取り込む。SPEC.md は変更しない'
+  resolution_note: 'gate: create-plan.owner-comment-scope (unlisted, orchestrator-raised);
+    options: A 計画に AC として取り込む / B 別タスクに起票 / C create-spec に差し戻して要件化; choice: A; codex_consulted:
+    true (harness codex, 1 turn); 要点: 依頼主が同時修正を明示しており勝手な追加ではない。同じモジュールのコメント1行で NFR1
+    の範囲、FR1〜FR5 は変わらない。AC として残せば完了確認できる; opus_escalation: false'
+- question_id: create-plan.task-plan-files-format
+  packet_id: null
+  answered_at: '2026-09-23T23:36:00+09:00'
+  source: orchestrator-fallback
+  answer_mode: single_select
+  selected_option_ids:
+  - orchestrator_reformat
+  freeform: null
+  normalized_answer: 'orchestrator_reformat: validate-worker-output.py が task0001.md
+    の Files to Modify の書式（入れ子の箇条書き）を拒否したため、内容を変えずに単一のパス箇条書き＋説明段落へ整形した'
+  resolution_note: 'gate: create-plan validation (unlisted); options: planner 再 dispatch
+    / オーケストレーターが書式だけ整形; choice: 書式整形（最小の副作用、内容不変）; codex_consulted: false; opus_escalation:
+    false'
