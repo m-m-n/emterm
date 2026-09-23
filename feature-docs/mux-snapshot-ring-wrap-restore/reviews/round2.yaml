@@ -1,0 +1,194 @@
+round: 2
+executed_at: '2026-09-23T21:58:00+09:00'
+scope:
+  review_mode: diff
+  base_commit: d0ca401a84e296adc29af23bd4253f0a99b8e76d
+  head_commit: cd700108b4f5c00b8e495915c6959a1ca1085fbb
+  changed_files:
+  - src-tauri/src/mux/ipc/handlers/mod.rs
+  - src-tauri/src/mux/ipc/handlers/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/reattach.rs
+  - src-tauri/src/mux/ipc/reattach/tests.rs
+  - src-tauri/src/mux/scrollback_buffer.rs
+  - src-tauri/src/mux/scrollback_buffer/tests.rs
+  - src-tauri/src/mux/session/pane/mod.rs
+  - src-tauri/src/mux/session/pane/output_target.rs
+  - src-tauri/src/mux/session/pane/tests.rs
+  - src-tauri/src/mux/snapshot_bytes.rs
+  - src-tauri/src/mux/snapshot_bytes/dump_block.rs
+  - src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+  - test-docs/mux-snapshot-ring-wrap-restore/task0001.tests.yaml
+  - test-docs/mux-snapshot-ring-wrap-restore/task0002.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: d80313b063a88627
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/session/pane/output_target.rs
+  line: 407
+  title: Snapshot reads the ring and the shadow parser outside the PTY reader's update boundary. The race
+    class predates this feature and now also tears the wrapped dump block
+  description: 'The PTY reader (pty_spawn/mod.rs, unchanged by this diff) feeds the shadow parser (~352),
+    writes the ring (~423), and only then takes output_target (~501) to route the chunk. resume_pane_with_permit
+    holds output_target but reads the ring (411) and then the shadow parser. Neither read excludes a reader
+    that is partway through those steps. collect_reattach_data reads both before it takes output_target.
+    (a) A chunk in the ring/snapshot can be forwarded again once the target is Connected (pre-existing
+    double-apply race). (b) New with this feature: a chunk missing from the ring but present in the shadow
+    dump makes the restored cursor/region predate it while the screen includes it, and the chunk (e.g.
+    ESC[L) is applied a second time. Demoted from high by the evaluator: race class predates this feature,
+    one in-flight chunk window, transient glitch fixed by the next redraw.'
+  suggestion: 'Follow-up outside this feature: stamp ring and shadow updates with a per-pane output sequence
+    number (or feed ring+shadow and route in one critical section); the snapshot records the last included
+    sequence and the reader skips chunks at or below it. Add a concurrency test pausing the reader between
+    shadow feed and routing.'
+  sources:
+  - codex:comprehensive
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: medium; not an auto-fix candidate; filed as follow-up
+- stable_id: ea0ba0ab7c534abe
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  line: 1378
+  title: The AC6 region-continuation test is masked because the continuation re-issues DECSTBM and CUP
+    home
+  description: The continuation is built with synth_apt_region_stream, which starts with ESC[1;{rows-1}r
+    ESC[1;1H, so it overwrites any wrong restored region/cursor before the assertion. Ring capacity len/3
+    evicts the fixture's only DECSTBM, so the probe's region is full screen. The test never exercises
+    FR9's region restore for the apt case (weakens round-1 1c848b3a5a9705ba) and hides the limit that
+    a region program writing >2 MiB after its DECSTBM gets a full-screen region restored.
+  suggestion: Split setup (DECSTBM + home) from the continuation body; size the ring so DECSTBM is retained;
+    assert region, origin mode, cursor and wrap_pending right after the snapshot replay against a whole-stream
+    reference; then feed the continuation without setup bytes. Record the evicted-DECSTBM case as a known
+    limit next to NFR6/NFR7.
+  sources:
+  - codex:comprehensive
+  confidence: 80
+  resolution: unresolved
+  resolution_reason: medium; not an auto-fix candidate; filed as follow-up
+- stable_id: 4f8c52aa920ad351
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/snapshot_bytes/dump_block.rs
+  line: 109
+  title: The probe's history depth is fixed at 10,000 lines, while the client replays with its configured
+    scrollback capacity
+  description: PROBE_SCROLLBACK_LINES is 10,000 while the client builds its replay core with its own scrollback_capacity
+    (tabs/replay.rs:303-325). With a small or zero setting, a grow-resize segment can pull rows back from
+    history on only one side; the probe cursor then diverges and the absolute CUP forces continued output
+    onto the wrong row. All tests use 10,000 on both sides. Left over from round-1 831dbe5c0ce653d8.
+  suggestion: Send the client's scrollback capacity to the daemon and pass it into the probe, or derive
+    restore state on the client. At minimum document as known limit and add a small-capacity + grow-resize
+    test.
+  sources:
+  - codex:comprehensive
+  confidence: 70
+  resolution: unresolved
+  resolution_reason: medium; not an auto-fix candidate; filed as follow-up
+- stable_id: 3b5bbd839c74d67b
+  severity: medium
+  category: security
+  file: src-tauri/src/mux/snapshot_bytes/dump_block.rs
+  line: 109
+  title: The wrapped-ring probe replay runs under the global SessionManager lock with a 10,000-line scratch
+    history
+  description: collect_reattach_data holds session_manager.lock() (reattach.rs:147) across every pane's
+    build_snapshot_bytes_for_ring, and resume_pane_with_permit holds output_target; both run probe_replay_state
+    over up to 2 MiB of attacker-influenceable PTY output. task0002 raised the scratch depth from 0 to
+    10,000, raising per-line-feed cost with pane width; newline-heavy output on a very wide pane can stall
+    reattach for all sessions. catch_unwind bounds panics, not time/memory. Overlaps round-1 f97af05084b88302.
+  suggestion: 'Fold into the f97af05 follow-up: copy ring bytes and dump under the lock, run the probe
+    outside the SessionManager/output_target critical sections (e.g. spawn_blocking), cap probe work (history
+    depth or cell budget) and fall back to the non-wrapped layout when exceeded.'
+  sources:
+  - codex:security
+  confidence: 70
+  resolution: unresolved
+  resolution_reason: medium; not an auto-fix candidate; filed as follow-up
+evaluation:
+  round_summary: 'Round 2 (diff mode, cross_validation=true). Five primary runs, all completed. No injection
+    attempts in reviewer outputs. Findings: 4 medium and 2 low, no critical and no high. The one high
+    this round (comprehensive#0, output_target.rs:407) is carried forward as medium: the double-apply
+    race predates this feature (pty_spawn/mod.rs unchanged, writes the ring before taking output_target);
+    only the ring vs shadow-parser mismatch in the wrapped dump block is new. The pty_spawn/tests.rs:1378
+    medium weakens round-1 high 1c848b3a5a9705ba: the region-continuation test cannot detect a wrong region
+    or cursor restore and its fixture evicts the DECSTBM. The dump_block.rs:109 medium (probe depth vs
+    client scrollback capacity) is left over from round-1 831dbe5c0ce653d8. Round-1 pending-wrap finding
+    49de28d0b2157829 is implemented (reestablish_pending_wrap_bytes). Round-1 AC5 finding 9f886c96758d210d
+    looks addressed (rows_a x rows_b x region_active matrix vs oracle incl. wrap_pending; partly read).
+    Dropped: architecture#0 snapshot_bytes.rs:395 (design preference). Coverage: performance - reviewer''s
+    empty result not corroborated; the 10,000-line probe depth raises probe cost under locks, merged into
+    the security dump_block.rs:109 finding. spec - spec#0 reported every round-1 item resolved, but AC6
+    continuation evidence is masked. TS5/TS8 coverage in wrap_restore_tests.rs not verified - read budget
+    exhausted. Evaluator read budget 10/10 used; not read: handlers/mod.rs, handlers/tests.rs, reattach/tests.rs,
+    scrollback_buffer.rs, scrollback_buffer/tests.rs, pane/mod.rs, pane/tests.rs, wrap_restore_tests.rs,
+    test-docs yamls.'
+  recommended_action: auto_fix
+  action_rationale: No critical or high findings. The AC6 test-masking medium has a clear local fix; remaining
+    findings should be filed as follow-ups (pre-existing reader/snapshot race, client-capacity mismatch
+    needing a protocol decision, probe cost under locks belonging with the deferred f97af05 follow-up).
+dismissed_sites: []
+dismissed_sites_dropped: []
+gate_notes:
+- 'R3b step 2 dropped 2 evaluator findings with severity low: snapshot_bytes.rs:335 (architecture, plain
+  builders crate-visible / stale doc on build_shadow_parser_snapshot) and dump_block.rs:281 (security,
+  evaluator-originated: pending-wrap scratch replay outside catch_unwind).'
+- Evaluator dropped architecture#0 snapshot_bytes.rs:395 (medium, bool-flag propagation) as a design preference.
+- 'R3b step 7: +15 confidence to both dump_block.rs:109 findings (flagged by comprehensive and security).'
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
