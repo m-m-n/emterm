@@ -33,8 +33,10 @@ project:
   components:
     main:
       language: rust
-      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
-      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+        src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
       format_command: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       e2e_test_command: ''
     web:
@@ -54,7 +56,9 @@ workflow:
   - DESIGN.md
   - design/
   status: skipped
-  skipped_reason: tier reduced により design ステップを削減した。requirements-analyst の推奨も skip で、gate create-spec.design-step をバッチポリシー（decide_autonomously）で解決した。#[cfg(test)] の走査ロジックの修正であり、UI・画面・ビジュアルの変更が無い。
+  skipped_reason: tier reduced により design ステップを削減した。requirements-analyst の推奨も skip
+    で、gate create-spec.design-step をバッチポリシー（decide_autonomously）で解決した。#[cfg(test)]
+    の走査ロジックの修正であり、UI・画面・ビジュアルの変更が無い。
 - id: create-plan
   artifacts:
   - VERIFICATION.md
@@ -70,7 +74,25 @@ workflow:
   artifacts:
   - retrospect.yaml
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: 'anchor_scan: close the callee / fn-name miscount paths in locate_call'
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/window_host/tests.rs
+    skills: []
+    domains:
+    - input-handling
+    complexity: medium
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - NFR1
+    - NFR2
+    status: pending
 review:
   status: pending
 requirements:
@@ -79,50 +101,69 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-6
+    - TS-8
   FR2:
     title: 数値リテラルの走査を .. と .識別子 の手前で止める
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-3
+    - TS-7
+    - TS-8
   FR3:
     title: turbofish 形式の callee 呼び出しを step 2 で数える
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   FR4:
     title: 生識別子の関数名を step 1 で数える
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
   FR5:
     title: トークンのバイト範囲は変えない
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-6
   NFR1:
     title: 変更範囲を anchor_scan とそのテストに限る
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-8
   NFR2:
     title: 既存テストを緑のまま保つ
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-8
 batch:
   review_rework_count: 0
   verify_rework:
@@ -131,38 +172,81 @@ batch:
   infra_resume:
     rounds: 0
     cap: 2
+goal: '# anchor_scan: locate_call の一意性チェックが生識別子 r#callee と数値リテラル内の callee を数え落とし、呼び出しが
+  2 つでも Ok を返す
 
-goal: |
-  # anchor_scan: locate_call の一意性チェックが生識別子 r#callee と数値リテラル内の callee を数え落とし、呼び出しが 2 つでも Ok を返す
 
   ## 現象 (必須)
-  `src-tauri/src/window_host/tests.rs` のテスト専用モジュール `anchor_scan` で、`locate_call` の step 2（呼び出しの一意性チェック）が callee の呼び出しを数え落とす経路が 2 つ残っている。呼び出しが 2 つある本体でも hits が 1 件になり、`locate_call` が `Err` ではなく `Ok` を返す。「誤った範囲を成功として返さない」という不変条件（anchor-scan-false-success の SPEC FR4）の残り経路。
+
+  `src-tauri/src/window_host/tests.rs` のテスト専用モジュール `anchor_scan` で、`locate_call` の
+  step 2（呼び出しの一意性チェック）が callee の呼び出しを数え落とす経路が 2 つ残っている。呼び出しが 2 つある本体でも hits が 1 件になり、`locate_call`
+  が `Err` ではなく `Ok` を返す。「誤った範囲を成功として返さない」という不変条件（anchor-scan-false-success の SPEC
+  FR4）の残り経路。
+
   ### 1. 生識別子の callee を数えない
-  生識別子の分岐は `r#` 接頭辞込みのテキスト（例: `r#probe_call`）を `Kind::Ident` として持つ。step 2 は `ident_text(&toks[j]) == Some(callee_last_segment)` の完全一致で呼び出しを探すため、`r#probe_call(...)` を `probe_call` の呼び出しとして数えない。Rust では両者は同じ名前。anchor-scan-false-success の変更前は `r` / `#` / `probe_call` が別トークンだったため hits が 2 件になり `Err` だった。この変更で `Err` から `Ok` に変わった入力。
+
+  生識別子の分岐は `r#` 接頭辞込みのテキスト（例: `r#probe_call`）を `Kind::Ident` として持つ。step 2 は `ident_text(&toks[j])
+  == Some(callee_last_segment)` の完全一致で呼び出しを探すため、`r#probe_call(...)` を `probe_call`
+  の呼び出しとして数えない。Rust では両者は同じ名前。anchor-scan-false-success の変更前は `r` / `#` / `probe_call`
+  が別トークンだったため hits が 2 件になり `Err` だった。この変更で `Err` から `Ok` に変わった入力。
+
   ### 2. 数値リテラル走査が `.` の後ろの識別子を飲み込む
-  数値リテラル走査は ASCII 数字から始まり、英数字・`_`・`.` が続くかぎりを 1 個の不透明トークンにする。`0..probe_call(k)` の `0..probe_call` や `self.0.probe_call(x)` の `0.probe_call` が 1 個のリテラルになり、callee の識別子トークンが消える。こちらは変更前からある経路。
+
+  数値リテラル走査は ASCII 数字から始まり、英数字・`_`・`.` が続くかぎりを 1 個の不透明トークンにする。`0..probe_call(k)` の
+  `0..probe_call` や `self.0.probe_call(x)` の `0.probe_call` が 1 個のリテラルになり、callee の識別子トークンが消える。こちらは変更前からある経路。
+
   ## 再現手順 (必須)
-  1. `anchor_scan::locate_call` に、本体が `r#probe_call(w, x, y, z); probe_call(a, b, c, d);` の関数を 4 引数期待で通す
+
+  1. `anchor_scan::locate_call` に、本体が `r#probe_call(w, x, y, z); probe_call(a, b,
+  c, d);` の関数を 4 引数期待で通す
+
   2. `Err` ではなく `Ok` が返ることを確認する
+
   3. 同様に本体が `let r = 0..probe_call(k); probe_call(a, b, c, d);` の関数を通すと `Ok` が返ることを確認する
+
   ## 期待する挙動 (必須)
+
   どちらの本体でも `locate_call` が `Err` を返す。
+
   ## 完了の定義 (必須)
+
   - [ ] 再現手順で現象が起きない
+
   - [ ] 再発を検出するテストがある
+
   - [ ] `r#probe_call(...)` と `probe_call(...)` を両方含む本体で `Err` を期待する負のテストがある
+
   - [ ] `0..probe_call(k)` と `probe_call(a, b, c, d)` を両方含む本体で `Err` を期待する負のテストがある
+
   - [ ] 既存の良性編集テストと anchor_scan の負のテストが緑のまま
+
   ## 該当箇所 (任意)
+
   - `src-tauri/src/window_host/tests.rs:7117-7134` — 生識別子の分岐
+
   - `src-tauri/src/window_host/tests.rs:7434` — `locate_call` step 2 の名前比較
+
   - `src-tauri/src/window_host/tests.rs:7196-7209` — 数値リテラルの走査
+
   - 行番号は `em-workflow/anchor-scan-false-success/integration` ブランチ時点
+
   修正案:
-  - 1 は、名前を比較する前に `r#` 接頭辞を取り除く（`ident_text` が `r#` を除いた名前を返す、または step 1 / step 2 で比較前に `strip_prefix("r#")` を適用する）
-  - 2 は、`.` の直後が `.` または識別子開始文字のときに数値リテラルの走査を止める（`1.5` や `1.0f32` は続け、`0..x` や `0.method` はそこで区切る）。あるいは数値リテラルの中に `.` と英字が続いたら `Err` にする
+
+  - 1 は、名前を比較する前に `r#` 接頭辞を取り除く（`ident_text` が `r#` を除いた名前を返す、または step 1 / step 2
+  で比較前に `strip_prefix("r#")` を適用する）
+
+  - 2 は、`.` の直後が `.` または識別子開始文字のときに数値リテラルの走査を止める（`1.5` や `1.0f32` は続け、`0..x` や `0.method`
+  はそこで区切る）。あるいは数値リテラルの中に `.` と英字が続いたら `Err` にする
+
   ## 実害・発生条件 (任意)
-  現在は未発現。`anchor_scan` は `#[cfg(test)]` 下で本番コードは通らない。実際の呼び出し側 `pointer_routing.rs` に生識別子は無く、`0..capped` の `capped` は callee ではない。
-  出典: em-workflow `anchor-scan-false-success` の review round 1。評価者が medium 2 件として挙げたが、報告の file が絶対パスだったためレビューの機械的な検査（R3b step 1）で除外した。除外は「解決済み」「問題なし」を意味しない。内容は同ブランチの `feature-docs/anchor-scan-false-success/reviews/round1.yaml` の `findings_dropped_by_gate` に残してある。
+
+  現在は未発現。`anchor_scan` は `#[cfg(test)]` 下で本番コードは通らない。実際の呼び出し側 `pointer_routing.rs`
+  に生識別子は無く、`0..capped` の `capped` は callee ではない。
+
+  出典: em-workflow `anchor-scan-false-success` の review round 1。評価者が medium 2 件として挙げたが、報告の
+  file が絶対パスだったためレビューの機械的な検査（R3b step 1）で除外した。除外は「解決済み」「問題なし」を意味しない。内容は同ブランチの `feature-docs/anchor-scan-false-success/reviews/round1.yaml`
+  の `findings_dropped_by_gate` に残してある。
+
   関連タスク: https://www.notion.so/3e23509ec8ee8189ba2cdef440521636
 
+  '
