@@ -89,7 +89,7 @@ workflow:
 - id: retrospect
   artifacts:
   - retrospect.yaml
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: 'anchor_scan: close the callee / fn-name miscount paths in locate_call'
