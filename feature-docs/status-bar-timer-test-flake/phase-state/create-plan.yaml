@@ -1,0 +1,21 @@
+schema_version: 1
+feature: status-bar-timer-test-flake
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: a9f2750ba084fea15a31024c0b3dc66c0df7d2c8
+last_input_digest: sha256:4e2bedd6a4b6be75adfa29e9c685bde672cbf9405a95f0a0b732ca503058e76f
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:4e2bedd6a4b6be75adfa29e9c685bde672cbf9405a95f0a0b732ca503058e76f
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
