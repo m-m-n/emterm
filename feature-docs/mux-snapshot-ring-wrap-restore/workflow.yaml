@@ -165,7 +165,8 @@ workflow:
   - 'TS-2: the four assembly-path tests check the header row; full row equality and the trailing dump segment are checked at builder level.'
   evidence: rust build check ok, CLI-only check ok, lib tests 3579 passed 0 failed 3 ignored, cargo fmt --check ok, bun test 402 pass, biome check clean
 - id: retrospect
-  status: pending
+  status: completed
+  completed_at_commit: feb1069879c8405c5c22c02153f6c5d0e27c464b
 tasks:
   task0001:
     title: Post-wrap main-buffer snapshot restore (reproduction test first)
