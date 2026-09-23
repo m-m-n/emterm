@@ -149,7 +149,7 @@ workflow:
   completed_at_commit: 0c39db4364b2d77ad99366ac170ebdf1e009dfe7
   base_commit: d0ca401a84e296adc29af23bd4253f0a99b8e76d
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -201,9 +201,17 @@ tasks:
     status: merged
     branch: em-workflow/mux-snapshot-ring-wrap-restore/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
