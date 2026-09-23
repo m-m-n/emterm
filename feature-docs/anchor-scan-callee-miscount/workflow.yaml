@@ -70,7 +70,7 @@ workflow:
   completed_at_commit: 7f96fc31893fb12fc41d3df8ef54251395e9cc1a
   base_commit: 47aed326c1614e3c6577caf2cea8ddc3070df8f7
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -98,7 +98,14 @@ tasks:
     status: merged
     branch: em-workflow/anchor-scan-callee-miscount/task0001
 review:
-  status: pending
+  status: in_progress
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
 requirements:
   FR1:
     title: 生識別子の callee を step 2 で数える
