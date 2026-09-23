@@ -19,8 +19,31 @@
 //! caller can carry the returned segments alongside the payload
 //! (`mux_ipc::protocol::DimSegment` / `encode_snapshot_payload`) with
 //! confidence they still point at the right bytes.
+//!
+//! mux-snapshot-ring-wrap-restore task0001 (D2): a WRAPPED main-buffer
+//! pane's ring has evicted some of the byte history the plain builders
+//! below rely on to reconstruct the visible viewport, so `build_snapshot_bytes`
+//! / `build_resume_snapshot_bytes` alone are lossy for that one case (the
+//! byte-identity contract they document above still holds for every OTHER
+//! case: non-wrapped main-buffer panes and alt-screen panes, wrapped or
+//! not). [`build_snapshot_bytes_for_ring`] / [`build_resume_snapshot_bytes_for_ring`]
+//! are the wrap-aware counterparts every call site now uses: for a wrapped
+//! main-buffer pane they append a dump block (composed by the private
+//! [`dump_block`] child module) sourced from the daemon shadow parser's
+//! visible-screen dump, drawn under a normalized scroll region / origin
+//! mode and then restoring the state the client's own replay of the
+//! pre-dump payload established. Known limits (NFR6/NFR7): the shadow
+//! parser can itself carry residual trashed cells from unrelated bugs (not
+//! repaired by this feature), and a pane restored from a hot-upgrade
+//! handoff document never reports wrapped (its ring is rebuilt fresh from
+//! the handoff capture — see `ScrollbackRingBuffer::read_segments_with_wrap_state`),
+//! so it does not get this restore either.
 
 use crate::mux::scrollback_filter::strip_rich_content_and_remap;
+
+mod dump_block;
+#[cfg(test)]
+mod wrap_restore_tests;
 
 /// The clear-and-home prefix every snapshot starts with:
 /// `ESC[3J ESC[H ESC[2J`. `ESC[3J` (ED 3) clears the client's existing
@@ -60,6 +83,18 @@ const SNAPSHOT_CLEAR_HOME: &[u8] = b"\x1b[3J\x1b[H\x1b[2J";
 ///   client's view does not pick up trashed cells produced by the daemon's
 ///   shadow parser — a real-world symptom was apt's progress bar landing on
 ///   log-line rows after a tab round-trip.
+///
+///   **Wrapped-ring exception** (mux-snapshot-ring-wrap-restore task0001):
+///   this scrollback-only reconstruction is lossy once the ring has
+///   evicted bytes — content this function relies on to reconstruct the
+///   visible viewport (e.g. a header row drawn once, long before the
+///   ring's retained window begins) is gone. [`build_snapshot_bytes_for_ring`]
+///   is the wrap-aware counterpart: for a wrapped main-buffer pane it
+///   appends a dump block, sourced from the shadow parser, after this
+///   function's own (unchanged) output. Known limits: the shadow parser's
+///   own state can itself carry residual trashed cells from unrelated bugs
+///   (NFR6), and a hot-upgrade-restored pane's ring never reports wrapped
+///   so it does not get this restore (NFR7).
 /// - **Alt-screen panes** are the opposite: alt-buffer output is *not*
 ///   written to scrollback (see `pty_spawn.rs:373`), so the daemon vt100
 ///   dump is the only source for the visible TUI surface. It is appended
@@ -285,6 +320,127 @@ fn build_snapshot_bytes_with_layout(
     }
 
     (combined, combined_segments)
+}
+
+/// Wrap-aware reattach / on-demand layout SSOT (mux-snapshot-ring-wrap-restore
+/// task0001, D2). Every reattach / on-demand call site
+/// (`mux::ipc::reattach::collect_reattach_data`,
+/// `mux::ipc::handlers::handle_request_pane_snapshot`) routes through this
+/// function instead of [`build_snapshot_bytes`] directly.
+///
+/// `ring_wrapped` is `ScrollbackRingBuffer::read_segments_with_wrap_state`'s
+/// third return value — the combined read is the caller's job so the flag
+/// and the bytes/segments always describe ONE ring state.
+///
+/// - When `ring_wrapped` is `false`, or `alt_screen` is `true`: exactly
+///   [`build_snapshot_bytes`]'s output for the same inputs (byte-identical,
+///   no dump block — AC-4).
+/// - When `ring_wrapped` is `true`, `alt_screen` is `false`, and `screen`
+///   (the shadow parser's dump) is non-empty: the delegated non-wrapped
+///   main-buffer payload, followed by a dump block composed by
+///   [`dump_block::compose_wrapped_dump_block`]. The delegated segments are
+///   followed by one more segment for `(dump block start, current_dims)`
+///   when the delegated segments are non-empty (mirroring the existing
+///   D7'' trailing-segment rule: an empty scrollback_segments means the
+///   caller never tracked dims for this snapshot at all).
+/// - On a probe failure, or an empty `screen`: degrades to the delegated
+///   output (D6 — a hostile PTY stream must never take the daemon down;
+///   an empty shadow dump has nothing to restore anyway).
+pub(in crate::mux) fn build_snapshot_bytes_for_ring(
+    scrollback: &[u8],
+    scrollback_segments: &[(usize, u16, u16)],
+    screen: &[u8],
+    alt_screen: bool,
+    ring_wrapped: bool,
+    current_dims: (u16, u16),
+) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
+    let (payload, segments) = build_snapshot_bytes(
+        scrollback,
+        scrollback_segments,
+        screen,
+        alt_screen,
+        current_dims,
+    );
+    append_wrapped_dump_block_if_applicable(
+        payload,
+        segments,
+        screen,
+        alt_screen,
+        ring_wrapped,
+        current_dims,
+    )
+}
+
+/// Wrap-aware visibility-resume layout SSOT (mux-snapshot-ring-wrap-restore
+/// task0001, D2). Both visibility-resume sites
+/// (`mux::session::pane::output_target::resume_pane_with_permit`, the
+/// `evaluate_output_target` resume branch) route through this function
+/// instead of [`build_resume_snapshot_bytes`] directly.
+///
+/// Same contract as [`build_snapshot_bytes_for_ring`], relative to
+/// [`build_resume_snapshot_bytes`] instead of [`build_snapshot_bytes`] —
+/// there is no trailing main-buffer normalization toggle on this path, so
+/// the dump block simply follows the stripped scrollback.
+pub(in crate::mux) fn build_resume_snapshot_bytes_for_ring(
+    scrollback: &[u8],
+    scrollback_segments: &[(usize, u16, u16)],
+    screen: &[u8],
+    alt_screen: bool,
+    ring_wrapped: bool,
+    current_dims: (u16, u16),
+) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
+    let (payload, segments) = build_resume_snapshot_bytes(
+        scrollback,
+        scrollback_segments,
+        screen,
+        alt_screen,
+        current_dims,
+    );
+    append_wrapped_dump_block_if_applicable(
+        payload,
+        segments,
+        screen,
+        alt_screen,
+        ring_wrapped,
+        current_dims,
+    )
+}
+
+/// Shared tail of [`build_snapshot_bytes_for_ring`] /
+/// [`build_resume_snapshot_bytes_for_ring`]: given the DELEGATED (pre-fix)
+/// `payload`/`segments` already assembled by the plain builder, append the
+/// wrap-restore dump block when applicable.
+fn append_wrapped_dump_block_if_applicable(
+    payload: Vec<u8>,
+    segments: Vec<(usize, u16, u16)>,
+    screen: &[u8],
+    alt_screen: bool,
+    ring_wrapped: bool,
+    current_dims: (u16, u16),
+) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
+    if !ring_wrapped || alt_screen || screen.is_empty() {
+        return (payload, segments);
+    }
+    match dump_block::compose_wrapped_dump_block(&payload, &segments, screen, current_dims) {
+        Some(block) => {
+            let dump_start = payload.len();
+            let mut out_payload = payload;
+            out_payload.extend_from_slice(&block);
+            let mut out_segments = segments;
+            if !out_segments.is_empty() {
+                out_segments.push((dump_start, current_dims.0, current_dims.1));
+            }
+            (out_payload, out_segments)
+        }
+        None => {
+            log::warn!(
+                "mux snapshot wrap-restore: probe failed for a wrapped main-buffer \
+                 pane; degrading to the non-wrapped layout ({}B pre-dump payload)",
+                payload.len()
+            );
+            (payload, segments)
+        }
+    }
 }
 
 #[cfg(test)]

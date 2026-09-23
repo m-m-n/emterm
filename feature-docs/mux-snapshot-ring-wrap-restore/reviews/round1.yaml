@@ -1,0 +1,201 @@
+round: 1
+executed_at: '2026-09-23T20:36:15+09:00'
+scope:
+  review_mode: diff
+  base_commit: d0ca401a84e296adc29af23bd4253f0a99b8e76d
+  head_commit: 9ce73d840e6026c3810900a3a0bdd593c254dc17
+  changed_files:
+  - src-tauri/src/mux/ipc/handlers/mod.rs
+  - src-tauri/src/mux/ipc/handlers/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/reattach.rs
+  - src-tauri/src/mux/ipc/reattach/tests.rs
+  - src-tauri/src/mux/scrollback_buffer.rs
+  - src-tauri/src/mux/scrollback_buffer/tests.rs
+  - src-tauri/src/mux/session/pane/mod.rs
+  - src-tauri/src/mux/session/pane/output_target.rs
+  - src-tauri/src/mux/session/pane/tests.rs
+  - src-tauri/src/mux/snapshot_bytes.rs
+  - src-tauri/src/mux/snapshot_bytes/dump_block.rs
+  - src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+  - test-docs/mux-snapshot-ring-wrap-restore/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: 9f886c96758d210d
+  severity: high
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  line: 955
+  title: 'AC5/TS3 apt+resize+wrap scenario not exercised: no mid-run resize and no snapshot while the
+    scroll region is active'
+  description: SPEC AC5/TS3 require an apt-style stream with a mid-run resize (ring and shadow resized
+    at the resize point), forced past ring capacity, snapshotted while apt's DECSTBM region is still active,
+    and repeated with a snapshot taken after apt's stop sequence. The test apt_style_recording_past_a_wrapped_ring_restores_the_shadow_parsers_screen_faithfully
+    calls synth_apt_bytes_with_midrun_resize(cols, rows, rows), so the resize is a same-dims no-op, and
+    the single snapshot is taken after the stop sequence. The region-active snapshot (the core FR8 case)
+    is never taken with the apt fixture. task0001.tests.yaml AC-5 red_reason discloses the narrowing.
+  suggestion: Add a synth variant that stops before apt's stop sequence and snapshot while the region
+    is active; keep the after-stop snapshot as a second case. Use rows_a != rows_b with ring and shadow
+    resized at the segment boundary. Keep the client-vs-shadow row equality and client_mixed == shadow_mixed
+    assertions for both snapshots.
+  sources:
+  - litellm:muse-spark:spec
+  confidence: 90
+  resolution: unresolved
+  resolution_reason: batch auto-rework round 1 (rework-planner dispatched)
+- stable_id: 1c848b3a5a9705ba
+  severity: high
+  category: spec
+  file: src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+  line: 430
+  title: AC6/TS4 continued-output check omits the apt-log-plus-bar-under-region half
+  description: SPEC AC6/TS4 require that PTY output continuing after a post-wrap snapshot yields the same
+    visible region as a reference terminal fed the whole stream, for both more top frames and apt log
+    lines plus bar redraws under the active region, comparing scroll region, origin mode and cursor state.
+    Only the synthetic top-like stream (no DECSTBM) is exercised; task0001.tests.yaml AC-6 red_reason
+    says the apt half was deliberately not exercised.
+  suggestion: Add a TS4 continuation using an apt-like region stream both engines render identically (DECSTBM
+    region, log lines scrolling inside it, bar redraws at the pinned row, no cursor-up short-line pattern).
+    After the post-wrap replay, feed further log lines and bar redraws to the client and a whole-stream
+    term_core reference; compare visible region, scroll region, origin mode and cursor position.
+  sources:
+  - litellm:muse-spark:spec
+  confidence: 75
+  resolution: unresolved
+  resolution_reason: batch auto-rework round 1 (rework-planner dispatched)
+- stable_id: 49de28d0b2157829
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/snapshot_bytes/dump_block.rs
+  line: 245
+  title: Pending-wrap (last-column) cursor state is lost by the unconditional CUP restore
+  description: ProbeState captures region, origin mode, cursor row/col and SGR but not the pending-wrap
+    flag. compose_wrapped_dump_block always ends with an absolute CUP, which clears pending wrap. If the
+    snapshot is taken right after output that exactly filled a row, the next printed character overwrites
+    the last column instead of wrapping (contradicts FR9). Regression limited to wrapped main-buffer panes.
+  suggestion: 'Add pending wrap to ProbeState (term_core accessor if needed). When set, re-establish it
+    after the restore CUP: position at the last column and re-emit that cell''s character with its attrs,
+    then apply the SGR restore. Add a test that snapshots right after a row-filling write, appends one
+    character, and compares against a whole-stream reference.'
+  sources:
+  - codex:comprehensive
+  confidence: 70
+  resolution: unresolved
+  resolution_reason: included in batch auto-rework round 1 (Codex-consulted scope decision, batch-audit
+    review.rework-scope)
+- stable_id: 831dbe5c0ce653d8
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/snapshot_bytes/dump_block.rs
+  line: 67
+  title: Zero-scrollback probe can diverge from the client's replay when a segment resize reflows
+  description: probe_replay_state builds its scratch TerminalCore with PROBE_SCROLLBACK_LINES = 0. The
+    client replays the same payload with real scrollback and term_core's resize_reflow can pull rows back
+    from history on a grow; the probe has none, so its cursor row can diverge and the composer places
+    the cursor at the probe's position rather than the replay-established one (FR9). Both probe-equality
+    tests use empty segment lists with no resize.
+  suggestion: Give the probe a scrollback at least as large as needed for any pull-back (or otherwise
+    match the client's resize behaviour). Extend the probe-equality test with a multi-segment payload
+    that accumulates history and then grows rows and cols, comparing against an oracle with generous scrollback.
+  sources:
+  - codex:comprehensive
+  confidence: 55
+  resolution: unresolved
+  resolution_reason: included in batch auto-rework round 1 (Codex-consulted scope decision, batch-audit
+    review.rework-scope)
+- stable_id: f97af05084b88302
+  severity: medium
+  category: performance
+  file: src-tauri/src/mux/session/pane/output_target.rs
+  line: 432
+  title: Full-ring term_core probe replay runs inside the pane's output_target critical section
+  description: resume_pane_with_permit holds pane.output_target for the build-send-swap sequence; build_resume_snapshot_bytes_for_ring
+    now runs compose_wrapped_dump_block inside it, and probe_replay_state copies and replays the full
+    (2 MiB when wrapped) pre-dump payload through a fresh TerminalCore while the pane's PTY reader is
+    blocked. collect_reattach_data and handle_request_pane_snapshot run the same probe on tokio worker
+    threads. Cost not measured. Evaluator-originated.
+  suggestion: Measure the probe on a 2 MiB top-like wrapped ring in a release build. If material, move
+    it out of the output_target section (e.g. derive replay state incrementally on the write path, or
+    build before the lock and re-validate ring generation under it), move reattach/on-demand probes to
+    spawn_blocking, and drop the payload to_vec copy.
+  sources:
+  - claude:evaluator
+  confidence: 70
+  resolution: unresolved
+  resolution_reason: not in rework scope; filed as a measure-first follow-up task (Codex-consulted, batch-audit
+    review.rework-scope)
+evaluation:
+  round_summary: 'Round 1 (diff mode, cross_validation=true; five primary runs, all completed). No injection
+    attempts in reviewer outputs. architecture#0''s summary drifted to performance content, so architecture
+    relies on the evaluator''s own inspection (dump_block is a leaf depending only on term_core; wrap-aware
+    wrappers delegate to unchanged builders; all four sites use read_segments_with_wrap_state; no medium+
+    issue). Findings: 2 high spec (AC5/TS3 fixture gaps, AC6/TS4 apt-continuation gap), 2 medium comprehensive
+    (pending wrap lost on restore; zero-scrollback probe diverges on resize reflow), 1 evaluator-originated
+    medium performance (full-ring probe replay under the output_target lock). spec#0''s AC5 description
+    corrected: the missing apt snapshot is the region-active one. Evaluator read budget 10/10 used; not
+    read: wrap_restore_tests.rs, handlers/tests.rs, reattach/tests.rs, pane/mod.rs, pane/tests.rs, scrollback_buffer/tests.rs.
+    Coverage: comprehensive corroborated; security corroborated (release panic strategy for catch_unwind
+    not checked); performance findings; architecture corroborated; spec corroborated (TS5/TS8 coverage
+    in wrap_restore_tests.rs not verified - read budget exhausted).'
+  recommended_action: auto_fix
+  action_rationale: No critical findings. Both highs are test-coverage gaps against explicit SPEC acceptance
+    criteria with clear local fixes; the two comprehensive mediums are contained dump_block.rs changes
+    and the probe-divergence fix should land with the resize test; the performance medium may need a lock-scope
+    design choice and can be deferred.
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 2
+rework_required: true
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-mux-snapshot-ring-wrap-restore-20260923T113538Z.md
