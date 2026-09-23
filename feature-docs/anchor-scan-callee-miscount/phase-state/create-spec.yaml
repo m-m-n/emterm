@@ -1,11 +1,11 @@
 schema_version: 1
 feature: anchor-scan-callee-miscount
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 mode: batch
 base_revision: 66d69a8a49480fa5170be9c3a583ac3d150b5a25
-last_input_digest: sha256:3ae39b78d9f2f605a2df08f39ece6607227a951b5db27d983292cdd19b5e35bf
+last_input_digest: sha256:fe9eabcf312772523a887e0a86866bd98fe9a90dd2f3fd2571a5119a235fc611
 active_request_id: null
 packets:
   create-spec-q0001:
@@ -47,10 +47,41 @@ answers:
       / include_no_test / callee_only; choice: include_with_test; codex_consulted:
       true (harness codex, 1 turn); 要点: 深さ 0 の r#probe_fn と probe_fn を別名扱いすると曖昧な入力で
       Ok を返せてしまう。worker 推奨と Codex の結論が一致; opus_escalation: false'
+  create-spec.design-system:
+    question_id: create-spec.design-system
+    packet_id: null
+    answered_at: '2026-09-23T23:16:57+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: doc/UI-DESIGN-GUIDELINES.yaml (top candidate
+      of 3 detected)'
+  create-spec.design-step:
+    question_id: create-spec.design-step
+    packet_id: null
+    answered_at: '2026-09-23T23:16:57+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: 'skipped: test-only change in #[cfg(test)] anchor_scan, no
+      UI; also removed by tier reduced'
 worker_runs:
 - request_id: cs-analyst-001
   status: needs_user_input
   input_digest: sha256:3ae39b78d9f2f605a2df08f39ece6607227a951b5db27d983292cdd19b5e35bf
-artifacts: []
+- request_id: cs-analyst-002
+  status: completed
+  input_digest: sha256:b9b708546d581aaaca589305cf98c5ae99495bb6df69ecaf302e8352d3dee40f
+- request_id: cs-specwriter-001
+  status: completed
+  input_digest: sha256:fe9eabcf312772523a887e0a86866bd98fe9a90dd2f3fd2571a5119a235fc611
+artifacts:
+- path: feature-docs/anchor-scan-callee-miscount/SPEC.md
+  sha256: sha256:fe9bffe2b8c0d6d3568fef525404952c553de5495dfdc9188b1356610f48de26
+  produced_by: cs-specwriter-001
 patches: []
 stale_redispatch_count: 0
