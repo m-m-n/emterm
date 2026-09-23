@@ -145,7 +145,7 @@ workflow:
   status: completed
   completed_at_commit: ce2fed2cbb22662faffac7c54d8aa42f290f4ee4
 - id: implement
-  status: completed
+  status: pending
   completed_at_commit: 0c39db4364b2d77ad99366ac170ebdf1e009dfe7
   base_commit: d0ca401a84e296adc29af23bd4253f0a99b8e76d
 - id: review
@@ -200,6 +200,36 @@ tasks:
     - NFR7
     status: merged
     branch: em-workflow/mux-snapshot-ring-wrap-restore/task0001
+  task0002:
+    title: apt resize / region-active and continuation coverage, pending-wrap and probe-history fixes
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/mux/snapshot_bytes/dump_block.rs
+    - src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - crates/term_core/src/terminal_core.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    - concurrency
+    complexity: high
+    requirements:
+    - FR2
+    - FR7
+    - FR8
+    - FR9
+    - FR10
+    status: pending
+    provenance:
+      source: review
+      source_ids:
+      - 9f886c96758d210d
+      - 1c848b3a5a9705ba
+      - 49de28d0b2157829
+      - 831dbe5c0ce653d8
+      review_round: 1
 review:
   status: pending
   rounds_completed: 1
@@ -237,6 +267,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-2
     - TS-3
@@ -286,6 +317,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-2
     - TS-3
@@ -296,6 +328,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-3
     - TS-5
@@ -306,6 +339,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-4
     - TS-5
@@ -316,6 +350,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-1
     - TS-2
@@ -386,7 +421,7 @@ requirements:
     tests:
     - TS-15
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework:
     rounds: 0
     failed_id_counts: {}
