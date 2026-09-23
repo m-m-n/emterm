@@ -2,44 +2,82 @@ schema_version: 1
 feature: mux-snapshot-ring-wrap-restore
 created: 2026-09-23
 base_branch: main
-goal: |
-  Notion task 3e23509ec8ee81dbb1c4dbf69d8c26bc —
+goal: 'Notion task 3e23509ec8ee81dbb1c4dbf69d8c26bc —
+
   mux: snapshot が scrollback リング一周後に画面上部を復元できず top の列見出しが消える
+
 
   指示メモ: まず再現テストから着手する。修正方針は未決で、案A（リング一周時のみ daemon vt100 グリッドダンプを併用）が有力。apt 進捗バー残骸の既知課題と関わるため慎重に。
 
+
   ## 現象 (必須)
-  eMterm の mux タブで `top` を長時間（13 分程度以上）表示したあとタブを切り替えて戻ると、列見出し行 `    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND` が消えたまま復帰しない。
+
+  eMterm の mux タブで `top` を長時間（13 分程度以上）表示したあとタブを切り替えて戻ると、列見出し行 `    PID USER      PR  NI    VIRT    RES    SHR
+  S  %CPU  %MEM     TIME+ COMMAND` が消えたまま復帰しない。
+
   原因の連鎖:
-  1. top は列見出し行を初回 1 回しか描画しない。実測で 6 フレーム描画させても `ESC[7m    PID USER...` の出力は 1 回のみで、以降はプロセス行だけを更新する。一度失われても top 自身は書き直さない
-  2. main-buffer pane の snapshot は daemon の scrollback 生バイトの再生だけで組み立てられ、daemon vt100 の `contents_formatted()` ダンプは意図的に省略されている（apt 進捗バー残骸の対策）
+
+  1. top は列見出し行を初回 1 回しか描画しない。実測で 6 フレーム描画させても `ESC[7m    PID USER...` の出力は 1 回のみで、以降はプロセス行だけを更新する。一度失われても
+  top 自身は書き直さない
+
+  2. main-buffer pane の snapshot は daemon の scrollback 生バイトの再生だけで組み立てられ、daemon vt100 の `contents_formatted()`
+  ダンプは意図的に省略されている（apt 進捗バー残骸の対策）
+
   3. その scrollback は 2 MiB のリングバッファで、あふれた古いバイトは上書きされる
+
   4. top の出力量は実測 2579 バイト/フレーム（80x24 相当）。1 秒間隔なら 2 MiB を約 813 秒、およそ 13 分で使い切る。画面が広いほど短くなる
+
   5. リングが一周すると、先頭にあった唯一の列見出し行が消滅する。以降タブ切り替えで snapshot を再生しても、その行を含まない履歴が再生される
+
   alt-screen の TUI（htop 等）は `contents_formatted()` ダンプが載るため影響を受けない。mux を介さない通常タブは snapshot 再生自体が無いため発生しない。
+
   ## 再現手順 (必須)
+
   1. eMterm の mux タブで `top` を起動する
+
   2. 13 分以上放置する（ウィンドウが広いほど短時間で足りる）
+
   3. 別のタブへ切り替えてから top のタブへ戻る
+
   4. 列見出し行が消えていることを確認する
+
   ## 期待する挙動 (必須)
+
   タブを切り替えて戻っても、pane の可視領域が切り替え前と同じ内容で復元されること。特に、再描画しないアプリケーションが一度だけ出力した行が失われないこと。
+
   ## 完了の定義 (必須)
+
   - [ ] 再現手順で現象が起きない
+
   - [ ] 再発を検出するテストがある
+
   着手順序: まず再現テスト（リングが一周したあとの snapshot に当該行が含まれないことを固定するテスト）を用意してから修正に入る。
+
   ## 該当箇所 (任意)
+
   - `src-tauri/src/mux/snapshot_bytes.rs:39` — main-buffer 分岐が scrollback 生バイトのみで可視領域を復元する前提
+
   - `src-tauri/src/mux/scrollback_buffer.rs:22` — `DEFAULT_SCROLLBACK_CAPACITY = 2 * 1024 * 1024`
+
   - `src-tauri/src/mux/session/pane/mod.rs` — snapshot 組み立て
+
   ## 実害・発生条件 (任意)
+
   発生条件: mux の main-buffer pane で再描画頻度の低い行を持つアプリを長時間動かし、リングが一周したあとにタブ切り替え・reattach・可視復帰のいずれかが起きること。
+
   実害: 画面の一部が欠落したまま復帰不能になる。top の列見出しのように、その行を再描画しないアプリでは永久に戻らない。
+
   修正方針の候補（未決）:
+
   - 案 A: リングが一周している（`total_written > capacity`）ときだけ daemon vt100 のグリッドダンプを併用する
+
   - 案 B: main-buffer でも常にグリッドダンプを併用する（apt 進捗バー残骸の再発リスクが高い）
+
   - 案 C: scrollback 容量を増やす（発生までの時間が延びるだけで解決しない）
+
   修正方針は apt 進捗バー残骸の既知課題と正面から関わるため、再現テストを先に固定する。
+
+  '
 parent_branch: em-workflow/mux-snapshot-ring-wrap-restore/integration
 tier: full
 tier_decision:
@@ -113,7 +151,51 @@ workflow:
   status: pending
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Post-wrap main-buffer snapshot restore (reproduction test first)
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/scrollback_buffer/tests.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/snapshot_bytes/dump_block.rs
+    - src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/ipc/reattach/tests.rs
+    - src-tauri/src/mux/ipc/handlers/mod.rs
+    - src-tauri/src/mux/ipc/handlers/tests.rs
+    - src-tauri/src/mux/session/pane/output_target.rs
+    - src-tauri/src/mux/session/pane/mod.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - crates/term_core/src/terminal_core.rs
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    - input-handling
+    - api-contract
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - FR8
+    - FR9
+    - FR10
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    - NFR7
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -127,120 +209,165 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
   FR2:
     title: Post-wrap main-buffer restore (plan A)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-3
+    - TS-8
+    - TS-11
   FR3:
     title: Non-wrapped main-buffer unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-6
   FR4:
     title: Alt-screen unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-9
   FR5:
     title: All assembly sites covered
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
   FR6:
     title: Consistent wrap-state read
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-7
   FR7:
     title: Dump dimension segment
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-3
   FR8:
     title: Dump is not distorted by replay-left terminal state
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+    - TS-5
   FR9:
     title: Replay-established state restored after the dump
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
+    - TS-5
   FR10:
     title: Regression tests
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+    - TS-4
+    - TS-6
   NFR1:
     title: apt progress-bar debris constraint
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-6
   NFR2:
     title: Wire limits
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-10
   NFR3:
     title: Lock hold
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-12
   NFR4:
     title: Capacity unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-13
   NFR5:
     title: Platforms
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-14
   NFR6:
     title: 'Known limit: residual daemon vt100 debris for wrapped panes'
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-15
   NFR7:
     title: 'Known limit: hot-upgrade handoff out of scope'
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-15
 batch:
   review_rework_count: 0
   verify_rework:
