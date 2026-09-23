@@ -1,11 +1,11 @@
 schema_version: 1
 feature: status-bar-timer-test-flake
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: d269a3a7b613d45b09c8056c34f48676913fbbdf
 last_input_digest: sha256:66d085ad9752eafd411a49852c143ff94372a1adb23c6b8bff4116842e31e8a9
-active_request_id: cs-analyst-001
+active_request_id: cs-writer-001
 packets:
   create-spec-q0001:
     status: answered
