@@ -1,21 +1,31 @@
 schema_version: 1
 feature: anchor-scan-turbofish-arrow
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
 base_revision: bd27fee9a496dffa91a0f6e1c06e4bf7c6521e06
 last_input_digest: sha256:edaf55c3c2fd9947fd31891289211e360da05625b746bb755b8a6afe622e7e90
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
 - request_id: create-plan-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:edaf55c3c2fd9947fd31891289211e360da05625b746bb755b8a6afe622e7e90
-  output_digest: null
+  output_digest: sha256:5e5fa8f20fcb6c94c59bd27c410ef9948750ff5f5aa92f88a1f63577101f7a79
 artifacts: []
-patches: []
+patches:
+- patch_id: anchor-scan-turbofish-arrow-p0001
+  status: applied
+  base_input_digest: sha256:edaf55c3c2fd9947fd31891289211e360da05625b746bb755b8a6afe622e7e90
+  base_workflow_blob: 8f240a79a17771ff5f971173867f9674f26e4769
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
 last_error: null
+notes: 'minimal tier: IMPLEMENTATION.md / VERIFICATION.md / task splitting are subtracted,
+  so the planner wrote no artifacts and returned only the replace_planning patch registering
+  task0001 with plan: TASK.md. Validation layers 1/2/3/6 passed via validate-worker-output.py
+  (--registries / --workflow / --feature-dir / --phase-state / --digest-source / --dry-run-apply);
+  layers 4/5/7 verified by the orchestrator (worktree clean, no declared artifacts,
+  input_digest unchanged on return).'

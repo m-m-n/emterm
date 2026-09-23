@@ -83,7 +83,8 @@ workflow:
 - id: create-plan
   artifacts:
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: 507e25d8ede0cba1ddb5e7dac5cfce4c27132077
 - id: implement
   status: pending
 - id: review
@@ -92,7 +93,20 @@ workflow:
   status: pending
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: 'anchor_scan: treat byte-adjacent ''->'' as an arrow (not a closing ''>'') when balancing turbofish generic arguments'
+    plan: TASK.md
+    files:
+    - src-tauri/src/window_host/tests.rs
+    skills: []
+    domains:
+    - input-handling
+    complexity: low
+    requirements: []
+    status: pending
+    branch: null
+    notes: null
 review:
   status: pending
   rounds_completed: 0
