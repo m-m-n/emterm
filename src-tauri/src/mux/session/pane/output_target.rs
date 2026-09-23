@@ -10,7 +10,7 @@ use super::handles::lock_shadow_parser;
 use super::output_queue::PtyOutputChunk;
 use super::{MuxPane, encode_snapshot_segments};
 use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
-use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
+use crate::mux::snapshot_bytes::build_resume_snapshot_bytes_for_ring;
 
 /// Why a pane is currently detached. Combines `NetworkDetach`
 /// (no client connected / kicked / explicit detach) with
@@ -209,35 +209,48 @@ pub fn evaluate_output_target(
                     EvalResult::Unchanged
                 }
                 None => {
-                    // Phase C FR5 order: clear → scrollback → (alt-only) shadow.
-                    // Routes through `build_resume_snapshot_bytes` so the
-                    // strip + main/alt split logic stays in lockstep with the
-                    // visibility-resume SSOT (`resume_pane_with_permit` uses
-                    // the same helper). Scrollback is read WITHOUT clearing
-                    // (FR6: the buffer lives for the lifetime of the pane);
-                    // the helper passes it through
+                    // Phase C FR5 order: clear → scrollback → (alt-only, or
+                    // wrapped-ring) shadow. Routes through
+                    // `build_resume_snapshot_bytes_for_ring` so the strip +
+                    // main/alt split + wrap-restore dump-block logic stays in
+                    // lockstep with the visibility-resume SSOT
+                    // (`resume_pane_with_permit` uses the same helper).
+                    // Scrollback is read WITHOUT clearing (FR6: the buffer
+                    // lives for the lifetime of the pane), via the combined
+                    // `read_segments_with_wrap_state` so the wrap flag and
+                    // the bytes/segments always describe ONE ring state; the
+                    // helper passes the bytes through
                     // `strip_replayable_rich_content` so the resume does not
-                    // re-spawn viewers / re-render inline images. Skip
-                    // `contents_formatted()` entirely for main-buffer panes:
-                    // the helper would drop the slice anyway, so we avoid
-                    // both the computation and the longer shadow-parser
-                    // lock hold.
+                    // re-spawn viewers / re-render inline images.
                     //
                     // NOTE: this branch is currently unreachable in
                     // production — `handle_set_visibility` is the only
                     // production caller of `evaluate_output_target` and it
                     // always passes `visible == false`. Kept on the SSOT so a
                     // future `visible == true` call site picks up the
-                    // strip / main-alt-split contract for free.
+                    // strip / main-alt-split / wrap-restore contract for free.
                     // D7'' (task0005 rework, review round-4 finding
                     // `5ba2063e993baf6c`): the shadow parser's own size
                     // tracks every `MuxPane::resize` call, so it is the
                     // pane's dims AT THE MOMENT this snapshot is assembled
                     // — what `screen_bytes` was actually produced at.
+                    let (buffered, buffered_segments, ring_wrapped) = pane
+                        .scrollback
+                        .lock()
+                        .unwrap()
+                        .read_segments_with_wrap_state();
+                    // mux-snapshot-ring-wrap-restore task0001 (D2): the
+                    // shadow dump is needed not only for alt-screen panes
+                    // but also for a WRAPPED main-buffer pane (the
+                    // wrap-aware builder's dump-block source). Non-wrapped
+                    // main-buffer panes still skip `contents_formatted()`
+                    // entirely — the helper would drop the slice anyway, so
+                    // this avoids both the computation and the longer
+                    // shadow-parser lock hold in the common case.
                     let (screen_bytes, alt_screen, current_dims) = {
                         let parser = lock_shadow_parser(&pane.shadow_parser);
                         let alt = parser.screen().alternate_screen();
-                        let screen_bytes = if alt {
+                        let screen_bytes = if alt || ring_wrapped {
                             parser.screen().contents_formatted()
                         } else {
                             Vec::new()
@@ -245,8 +258,6 @@ pub fn evaluate_output_target(
                         let (rows, cols) = parser.screen().size();
                         (screen_bytes, alt, (cols, rows))
                     };
-                    let (buffered, buffered_segments) =
-                        pane.scrollback.lock().unwrap().read_segments();
                     {
                         // raw_passthrough is drained + cleared (so it does
                         // not leak across detach cycles) but NOT concatenated
@@ -256,11 +267,12 @@ pub fn evaluate_output_target(
                         let _ = buf.read_all();
                         buf.clear();
                     }
-                    let (snapshot, snapshot_segments) = build_resume_snapshot_bytes(
+                    let (snapshot, snapshot_segments) = build_resume_snapshot_bytes_for_ring(
                         &buffered,
                         &buffered_segments,
                         &screen_bytes,
                         alt_screen,
+                        ring_wrapped,
                         current_dims,
                     );
                     let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
@@ -378,22 +390,29 @@ pub fn resume_pane_with_permit(
                 }
                 return ResumeOutcome::NoChange;
             }
-            // Phase C FR5 order: clear → scrollback → (alt-only) shadow.
-            // Routes through `build_resume_snapshot_bytes` so the strip +
-            // main/alt split logic stays in lockstep with the reattach /
-            // on-demand snapshot SSOT (`build_snapshot_bytes_with_layout`).
-            // Skip `contents_formatted()` entirely for main-buffer panes:
-            // the helper would drop the slice anyway, so we avoid both the
-            // computation and the longer shadow-parser lock hold.
+            // Phase C FR5 order: clear → scrollback → (alt-only, or
+            // wrapped-ring) shadow. Routes through
+            // `build_resume_snapshot_bytes_for_ring` so the strip +
+            // main/alt split + wrap-restore dump-block logic stays in
+            // lockstep with the reattach / on-demand snapshot SSOT
+            // (`build_snapshot_bytes_with_layout`). Skip
+            // `contents_formatted()` entirely for a non-wrapped main-buffer
+            // pane: the helper would drop the slice anyway, so we avoid both
+            // the computation and the longer shadow-parser lock hold.
             // D7'' (task0005 rework, review round-4 finding
             // `5ba2063e993baf6c`): the shadow parser's own size tracks
             // every `MuxPane::resize` call, so it is the pane's dims AT THE
             // MOMENT this snapshot is assembled — what `screen` was
             // actually produced at.
+            let (buffered, buffered_segments, ring_wrapped) = pane
+                .scrollback
+                .lock()
+                .unwrap()
+                .read_segments_with_wrap_state();
             let (screen, alt_screen, current_dims) = {
                 let parser = lock_shadow_parser(&pane.shadow_parser);
                 let alt = parser.screen().alternate_screen();
-                let screen_bytes = if alt {
+                let screen_bytes = if alt || ring_wrapped {
                     parser.screen().contents_formatted()
                 } else {
                     Vec::new()
@@ -401,7 +420,6 @@ pub fn resume_pane_with_permit(
                 let (rows, cols) = parser.screen().size();
                 (screen_bytes, alt, (cols, rows))
             };
-            let (buffered, buffered_segments) = pane.scrollback.lock().unwrap().read_segments();
             {
                 // raw_passthrough is drained + cleared (so it does not leak
                 // across detach cycles) but NOT concatenated — replaying the
@@ -411,11 +429,12 @@ pub fn resume_pane_with_permit(
                 let _ = buf.read_all();
                 buf.clear();
             }
-            let (snapshot, snapshot_segments) = build_resume_snapshot_bytes(
+            let (snapshot, snapshot_segments) = build_resume_snapshot_bytes_for_ring(
                 &buffered,
                 &buffered_segments,
                 &screen,
                 alt_screen,
+                ring_wrapped,
                 current_dims,
             );
             let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);

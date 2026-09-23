@@ -1,0 +1,152 @@
+schema_version: 1
+feature: mux-snapshot-ring-wrap-restore
+phase: create-spec
+status: completed
+generation: 1
+base_revision: bbd3055277df761a93855f7d7e460581ab7c924e
+last_input_digest: sha256:6fa5c3c1ca944ad7c7a2df968076afc0ebe338669b68d954e63ed68605a7c020
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-09-23T18:42:00+09:00'
+    questions:
+    - question_id: requirement.fix-approach
+      status: answered
+    - question_id: design-step.decision
+      status: answered
+answers:
+  requirement.fix-approach:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-23T18:50:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - plan_a
+    freeform: 'Codex (run_codex_exec.sh readonly, 1 turn) chose plan_a. Reasons: the evicted header cannot
+      be recovered from the remaining history, only from the daemon vt100 screen (scrollback_buffer.rs:223,
+      snapshot_bytes.rs:235); the trigger total_written > capacity keeps non-wrapped bytes identical (scrollback_buffer.rs:221);
+      the dump goes after the history replay with a current_dims DimSegment at its start (snapshot_bytes.rs:248,
+      :283), within the existing 64-segment budget (session/pane/mod.rs:171). Refinement: contents_formatted()
+      emits clear+CRLF and no scroll region (vt100 grid.rs:221, term.rs:374), so a DECSTBM left by the
+      replay could distort the dump; drawing the dump under a full-screen region / absolute origin and
+      then restoring the replayed region, origin mode and cursor reduces that (term_core csi_scroll.rs:20,
+      csi_cursor.rs:16). Residual: cells already trashed inside the daemon vt100 are not repaired, so
+      the 22cea6f leak path reopens for wrapped panes until clear(); DimSegment does not restore lost
+      rows or daemon cells; hot-upgrade handoff loses the wrap fact and the main-buffer screen, so plan
+      A alone does not cover it. Existing apt/wrap tests pass an empty dump and so do not prove safety;
+      add screen-comparison tests for header restore, apt+resize+wrap, and continued output after restore.
+      Rejected: plan_b removes the 22cea6f protection for every non-wrapped pane; plan_c only delays the
+      loss.'
+    normalized_answer: 'Adopt plan A: only when a main-buffer pane''s ring has evicted bytes (total_written
+      > capacity), append the daemon vt100 contents_formatted() dump after the stripped scrollback, positioned
+      by a trailing current_dims segment, at every snapshot assembly site. Non-wrapped panes stay byte-identical.
+      The dump is drawn so that a scroll region / origin mode left by the replay does not distort it,
+      and the replayed region, origin mode and cursor state are restored afterwards. The residual apt-debris
+      risk for wrapped panes and the hot-upgrade gap are recorded as known limits.'
+    resolution_note: 'gate: create-spec.requirement-clarification; policy action codex_consultation (batch-policies.yaml);
+      codex_consulted: true; harness: codex; turns: 1; Codex CHOICE plan_a mapped by the orchestrator
+      to option plan_a. Options not chosen: plan_b (always dump), plan_c (bigger ring). Recorded as an
+      assumption per record_as_assumption: true.'
+  design-step.decision:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-23T18:50:30+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: Accept the analyst's recommendation to skip the design step.
+    resolution_note: 'gate: create-spec.design-step; resolved by references/batch-policies.yaml (action:
+      select, option_id: decide_autonomously). No Codex consultation needed.'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:ebf4a318d747e5f89efc9501fed8e7e85560393aae8b44b1d5b5066d48f8e865
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:228a015978e69d770aea8c29d482c26f8ab28bce7e349a5cc47bb9ead7985602
+  output_digest: sha256:23ced9096f94e7e3177eed943ae7d1cb0640ea66ecacc2aaad6451da3bbb6da1
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:6fa5c3c1ca944ad7c7a2df968076afc0ebe338669b68d954e63ed68605a7c020
+  output_digest: null
+artifacts:
+- path: feature-docs/mux-snapshot-ring-wrap-restore/REQUIREMENTS.md
+  sha256: sha256:7673e364f63a0ddda68fe203adcd265c513fa5829602f410cf0ce8f9f797d7db
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-snapshot-ring-wrap-restore/SPEC.md
+  sha256: sha256:520f15a68b822533eb8829eb092aa7e9681fed7998365bae2b9302f7429c51c6
+  produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: sha256:6294588b9cc9df792036c4e3514aaf95203bdf9cf324beecb35d362e058147bc
+stale_redispatch_count: 0
+resolved_input_cache:
+  resolved_at: '2026-09-23T18:37:00+09:00'
+  e2e: []
+  design_system_candidates:
+  - doc/UI-DESIGN-GUIDELINES.yaml
+  - src-tauri/web-shared/styles.css
+  - src-tauri/src/ui/md3.rs
+  package_files:
+  - package.json
+  - Cargo.toml
+  - src-tauri/Cargo.toml
+  reference_scan_targets:
+  - src-tauri/src/mux/snapshot_bytes.rs
+  - src-tauri/src/mux/scrollback_buffer.rs
+  - src-tauri/src/mux/session/pane/output_target.rs
+  - src-tauri/src/mux/session/pane/mod.rs
+  - src-tauri/src/mux/ipc/reattach.rs
+  - src-tauri/src/mux/ipc/handlers/mod.rs
+  - src-tauri/src/mux/snapshot.rs
+  - src-tauri/src/mux/scrollback_filter.rs
+  - /home/sakura/src/my_projects/tauri/emterm/tmp/apt-progress-bar-regression-2026-07-09.md
+last_error: null
+assumptions:
+- assumption_id: A1
+  statement: Plan A is adopted (requirement.fix-approach answer, batch Codex consultation). The dump is
+    added only for main-buffer panes whose ring has evicted bytes; plan B (always dump) and plan C (larger
+    ring) are rejected.
+  reversible: true
+- assumption_id: A2
+  statement: The dump is drawn so that a scroll region / origin mode left by the scrollback replay does
+    not distort it, and the replay-established region, origin mode and cursor state are restored afterwards
+    (Codex refinement, FR8/FR9).
+  reversible: true
+- assumption_id: A3
+  statement: 'Verified fact: vt100 0.16.2 contents_formatted() emits cursor visibility, SGR reset, ESC[H
+    ESC[J, then rows joined by CRLF / CUP / cursor-forward, then a final cursor position and SGR. It emits
+    no DECSTBM, DECOM or autowrap state (vt100 grid.rs:217-252, term.rs:9-13, 372-383). In some end-of-row
+    cursor cases it also emits ESC 7 / ESC 8 (grid.rs:439-442).'
+  reversible: true
+- assumption_id: A4
+  statement: 'Verified fact: in term_core, a line feed at scroll_region_bottom scrolls the region instead
+    of moving down (terminal_core.rs:922-935), and CUP / ESC[H are region-relative under DECOM (csi_cursor.rs:16-30).
+    The FR8 distortion is therefore real whenever the replay ends with a narrowed region or DECOM on.
+    For top (no DECSTBM) it does not trigger.'
+  reversible: true
+- assumption_id: A5
+  statement: 'Verified fact: term_core DECSTBM homes the cursor (csi_scroll.rs:20-39), and restore_cursor
+    consumes the single saved-cursor slot (terminal_cursor.rs:108-127, take()). Restoring the region therefore
+    has to be followed by re-establishing the cursor, and ESC 7 / ESC 8 used by the snapshot itself would
+    clobber the application''s saved slot.'
+  reversible: true
+- assumption_id: A6
+  statement: 'Verified fact: vt100 0.16.2 Screen has no public accessor for the scroll region or origin
+    mode (public API: size, cursor_position, alternate_screen, hide_cursor, input modes, attrs). How the
+    replay-established region / origin mode is known when restoring it is a planning decision.'
+  reversible: true
+- assumption_id: A7
+  statement: 'Known limit (NFR6): cells already trashed inside the daemon vt100 are not repaired, so apt
+    debris can reappear for wrapped panes until clear().'
+  reversible: true
+- assumption_id: A8
+  statement: 'Known limit (NFR7): the hot-upgrade handoff loses the wrap fact and the main-buffer screen;
+    that path is out of scope.'
+  reversible: true
+- assumption_id: A9
+  statement: Existing apt / wrap tests pass an empty screen slice to build_snapshot_bytes, so they do
+    not by themselves demonstrate safety of the dump; TS3/TS4 supply that evidence.
+  reversible: true

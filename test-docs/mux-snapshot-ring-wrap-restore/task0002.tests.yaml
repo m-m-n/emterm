@@ -1,0 +1,134 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::apt_style_resize_and_wrap_restores_replay_state_region_active_and_after_stop
+    red_confirmed: false
+    red_reason: >-
+      Written alongside the D7/D8 fixes as an end-to-end (real mid-run
+      resize, region-active and after-stop) integration check, not run
+      against the pre-fix code in this session. It exercises the same
+      probe/composer mechanisms AC-3 (D7, pending wrap) and AC-5(c) (D8,
+      probe history depth) already prove red-then-green in isolation; this
+      test confirms both fixes hold together under a realistic apt-shaped
+      resize rather than re-deriving red confirmation for the combination.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::apt_region_stream_past_a_wrapped_ring_matches_a_reference_after_continued_output
+    red_confirmed: false
+    red_reason: >-
+      Written alongside the D7/D8 fixes, not run against the pre-fix code
+      in this session. The fixture never reaches a pending wrap (D7 does
+      not apply) and stays at a single dims throughout (no resize, so D8's
+      grow-resize divergence does not apply either); this test's purpose is
+      the region-active continuation coverage FR9 calls for, layered on
+      top of the already-proven D7/D8 fixes rather than re-exercising them.
+  AC-3:
+    tests:
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_restores_a_pending_wrap_and_matches_a_reference_after_one_more_char
+      - mux::snapshot_bytes::dump_block::tests::compose_wrapped_dump_block_reestablishes_a_pending_wrap_reported_by_the_probe
+    red_confirmed: true
+    red_reason: >-
+      Per the task plan's "Red first" instruction: with the D7
+      re-establishment branch temporarily disabled (composer's `if
+      probe.wrap_pending { ... }` gated to never fire, reproducing
+      task0001's behavior), both tests failed as expected —
+      compose_wrapped_dump_block_reestablishes_a_pending_wrap_reported_by_the_probe
+      panicked "the composed block must re-establish the pending wrap the
+      probe reported" (dump_block.rs:547), and the builder-level test
+      panicked "assertion `left == right` failed / left: false / right:
+      true" (wrap_restore_tests.rs:594, client.get_wrap_pending() vs
+      oracle's). Both pass unmodified once the branch is restored. A
+      separate, unrelated bug was also found and fixed during this: the
+      builder-level test's own ring capacity (256B) was too small to
+      retain a full screen's worth of "line N\r\n" history, so the probe's
+      cursor-row replay landed on row 20 instead of row 23 (confirmed by
+      instrumenting the test and observing "line 37" vs "line 38" row-0
+      content after appending one character) — a test-fixture defect, not
+      a production bug; fixed by raising the capacity to 512B (see the
+      test's capacity comment).
+  AC-4:
+    tests:
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_restores_a_pending_wrap_inside_a_narrowed_region_with_origin_mode
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_restores_a_pending_wrap_ending_in_a_double_width_character
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_leaves_no_pending_wrap_when_the_cursor_was_placed_absolutely
+      - mux::snapshot_bytes::dump_block::tests::compose_wrapped_dump_block_leaves_the_block_unchanged_when_no_wrap_is_pending
+    red_confirmed: true
+    red_reason: >-
+      (a) and (b) were run with the same D7 branch disabled as AC-3 above
+      and failed identically ("left: false / right: true" at
+      wrap_restore_tests.rs:654 and :714 respectively), confirming the
+      narrowed-region/origin-mode and double-width-character cases both
+      genuinely depend on the fix. (b)'s fixture had the same 256B->512B
+      ring-capacity defect as AC-3's and was fixed the same way. (c) is a
+      deliberate control case (no pending wrap): it passed BOTH with the
+      D7 branch enabled and disabled, as expected — it is not asserting
+      the fix itself but that the fix is a true no-op when there is
+      nothing to re-establish, so red_confirmed does not apply to it in
+      the same sense as (a)/(b); it is included here because it is the
+      regression guard that would catch the fix incorrectly firing on a
+      non-pending-wrap cursor. compose_wrapped_dump_block_leaves_the_block_unchanged_when_no_wrap_is_pending
+      is the composer-level counterpart of (c), same status.
+  AC-5:
+    tests:
+      - mux::snapshot_bytes::dump_block::tests::probe_replay_state_matches_the_oracle_across_a_rows_only_grow_resize
+      - mux::snapshot_bytes::dump_block::tests::probe_replay_state_matches_the_oracle_across_a_rows_and_columns_grow_resize
+      - mux::snapshot_bytes::dump_block::tests::probe_replay_state_matches_the_oracle_when_current_dims_exceeds_the_last_segment
+    red_confirmed: true
+    red_reason: >-
+      Per the task plan's "Red first" instruction: all three were run with
+      `PROBE_SCROLLBACK_LINES` temporarily reverted to task0001's `0`, then
+      restored to `10_000` afterward. (c) (current_dims exceeds the last
+      segment) failed exactly as anticipated: "assertion `left == right`
+      failed / left: 23 / right: 39" (dump_block.rs:722) — the zero-history
+      probe's cursor row versus the 10,000-line oracle's. (a) (rows-only
+      grow via an explicit mid-replay segment) and (b) (rows+columns grow)
+      did NOT diverge for their specific fixture shapes even at zero probe
+      history — an outcome the task plan's own Test Notes anticipated
+      ("If AC-5's rows-only case does not diverge at zero probe history...
+      If none reproduces, record that in the test record; the equality
+      assertion stays"). Extending (a) with a column grow (the plan's
+      suggested next step) would only reproduce (b)'s shape, which also
+      does not diverge, so no further fixture change was attempted; both
+      are kept as same-shape regression guards. The doc comments on all
+      three tests were corrected to attribute the actually-observed
+      divergence to (c) (an earlier draft of (a)'s doc comment had
+      mis-attributed (c)'s measured numbers to itself before this
+      red-first run was actually executed).
+  AC-6:
+    tests:
+      - mux::snapshot_bytes::dump_block::tests::compose_wrapped_dump_block_never_contains_decsc_or_decrc
+      - mux::snapshot_bytes::dump_block::tests::compose_wrapped_dump_block_reestablishes_a_pending_wrap_reported_by_the_probe
+    red_confirmed: false
+    red_reason: >-
+      Regression/verification criterion, not a new-behavior red. (a) the
+      pre-existing DECSC/DECRC-absence test is unmodified and passes; a new
+      assertion was added to the pending-wrap composer test above (same
+      two `windows(2)` checks) so the "including in the pending-wrap
+      cases" clause has explicit byte-level coverage, not just inspection
+      of reestablish_pending_wrap_bytes's fixed CHA/SGR/char output shape.
+      (b) every pre-existing dump_block / wrap_restore_tests / pty_spawn
+      test passes unmodified (verified: full lib suite 3579/3579 passed, 0
+      failed, 3 ignored pre-existing/unrelated — up from the 3568/3568
+      baseline by exactly the 11 tests this task adds). (c)
+      `cargo check --no-default-features` compiled cleanly with no
+      warnings. (d) `cargo build --lib --tests` produced no warnings in
+      the touched files; `cargo fmt --check` is clean.
+notes: >-
+  Baseline (Step 4a, before touching any file): full lib suite run,
+  3568 passed / 0 failed / 3 ignored — identical to task0001's own
+  recorded baseline, confirming nothing else regressed the tree between
+  tasks. Final: 3579 passed / 0 failed / 3 ignored (net +11 tests, all
+  from this task). AC-1 and AC-2's tests are genuinely new integration
+  coverage layered on the D7/D8 fixes proven red-then-green by AC-3/AC-4/
+  AC-5, so their own red_confirmed is honestly false rather than
+  re-deriving equivalent evidence; AC-3/AC-4(a,b)/AC-5(c) carry the actual
+  red-then-green evidence for this task's two behavior changes (D7, D8).
+  A process note: the implementer initially wrote all three files' edits
+  before running the mandatory 4a baseline, caught this mid-session,
+  stashed the in-progress edits (`git stash push -u`, captured by SHA,
+  restored via `git stash apply` rather than `pop` per the shared-worktree
+  stash protocol), ran the baseline clean, then re-applied the edits — the
+  baseline above is from that correctly-ordered run.

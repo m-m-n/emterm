@@ -172,8 +172,15 @@ pub(crate) fn clamp_dims_to_wire_domain(cols: u16, rows: u16) -> (u16, u16) {
 /// can ever contain: every surviving `dim_markers` entry
 /// ([`MAX_DIM_MARKERS`]), plus at most one synthesized head segment for a
 /// single cap eviction (`ScrollbackRingBuffer::read_segments`, D1'''''),
-/// plus at most one trailing screen-dump segment for an alt-screen pane
-/// (`build_snapshot_bytes_with_layout`'s D7'' segment).
+/// plus at most one trailing segment for either an alt-screen pane's
+/// screen dump (`build_snapshot_bytes_with_layout`'s D7'' segment) OR a
+/// wrapped main-buffer pane's wrap-restore dump block
+/// (`mux::snapshot_bytes::append_wrapped_dump_block_if_applicable`,
+/// mux-snapshot-ring-wrap-restore task0001 D2) — the two are mutually
+/// exclusive per snapshot (a wrapped ring only gets the dump-block segment
+/// when `alt_screen == false`), so they share this ONE trailing slot
+/// rather than adding a second: the value below is unchanged by this
+/// feature.
 ///
 /// D1'''''' (round-9 rework, review round-8 finding `6082de4e619d7f51`):
 /// with `MAX_DIM_MARKERS` raised to 62, this now evaluates to EXACTLY the

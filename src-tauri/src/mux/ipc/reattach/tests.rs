@@ -1,9 +1,151 @@
 use super::*;
+use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
 use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget, new_shadow_parser};
 use std::sync::Mutex as StdMutex;
 
 fn make_test_pane_with_target(id: u32, output_target: SharedOutputTarget) -> MuxPane {
     MuxPane::new_test(id, 80, 24, output_target)
+}
+
+fn to_replay_segments(
+    tuples: &[(usize, u16, u16)],
+) -> Vec<term_core::terminal_core::ReplaySegment> {
+    tuples
+        .iter()
+        .map(
+            |&(offset, cols, rows)| term_core::terminal_core::ReplaySegment {
+                offset: offset as u32,
+                cols,
+                rows,
+            },
+        )
+        .collect()
+}
+
+// ── AC-1 (FR1, FR10; TS-1): reproduction test, post-wrap main-buffer
+// snapshot restore ────────────────────────────────────────────────────
+//
+// Committed BEFORE any production-code change (task plan "Reproduction
+// first"). Pre-fix, this exact test body fails: `collect_reattach_data`'s
+// visible-reattach path replays only the RETAINED tail of the pane's
+// scrollback ring, which no longer contains the byte sequence that drew
+// the header row (evicted once the ring wrapped) — the daemon's shadow
+// parser still has it (it never evicts), but the pre-fix layout never
+// draws from it for a main-buffer pane. Post-fix, the wrap-aware builder
+// appends a dump block sourced from the shadow parser, restoring the
+// header row. The test's code does not change between the two runs.
+
+/// A `top`-like stream (task plan Design section): the header row is drawn
+/// ONCE via absolute cursor positioning; every subsequent frame updates
+/// only the process row (also via absolute positioning), never touching
+/// row 0 again. This lets a small-capacity ring evict the header-drawing
+/// bytes while the shadow parser (which never evicts) keeps the header in
+/// its visible screen state.
+fn synth_top_like_frames(frame_count: usize) -> Vec<Vec<u8>> {
+    let mut frames = Vec::with_capacity(frame_count + 1);
+    let mut header = Vec::new();
+    header.extend_from_slice(b"\x1b[H\x1b[2J");
+    header.extend_from_slice(b"\x1b[1;1H");
+    header.extend_from_slice(
+        b"PID USER      PR  NI    VIRT    RES    SHR S  %CPU %MEM     TIME+ COMMAND",
+    );
+    frames.push(header);
+    for i in 0..frame_count {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(b"\x1b[2;1H");
+        frame.extend_from_slice(
+            format!(
+                "{:>5} user      20   0  123456  12345   1234 R  {:>4}  0.3   0:00.{:02} proc-{}",
+                1000 + i,
+                i % 100,
+                i % 100,
+                i
+            )
+            .as_bytes(),
+        );
+        frame.extend_from_slice(b"\x1b[K");
+        frames.push(frame);
+    }
+    frames
+}
+
+/// AC-1: a visible reattach through `collect_reattach_data` restores the
+/// shadow parser's header row once the pane's scrollback ring has evicted
+/// the bytes that originally drew it.
+#[tokio::test]
+async fn wrapped_main_buffer_reattach_restores_the_shadow_parsers_header_row() {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    // Small enough that the top-like stream below overflows it well
+    // before all frames are fed, so the header-drawing bytes are evicted.
+    const SMALL_CAPACITY: usize = 2048;
+
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::NetworkDetach,
+        owner: None,
+    }));
+
+    let session_id;
+    {
+        let mut m = mgr.lock().await;
+        session_id = m.create_session("default".to_string());
+        let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+        let pane = make_test_pane_with_target(1, target);
+
+        // Fixture setup (Test Notes): replace the pane's ring with a
+        // small-capacity one, record a resize marker at the pane dims
+        // before writing (via `attribute_write`, which records one
+        // automatically the first time it is called on a fresh ring), and
+        // feed every byte to both the ring and the pane's shadow parser.
+        *pane.scrollback.lock().unwrap() = ScrollbackRingBuffer::new(SMALL_CAPACITY);
+
+        let frames = synth_top_like_frames(40);
+        let mut cumulative: usize = 0;
+        for frame in &frames {
+            pane.scrollback
+                .lock()
+                .unwrap()
+                .attribute_write(cols, rows, frame);
+            pane.shadow_parser.lock().unwrap().process(frame);
+            cumulative += frame.len();
+        }
+
+        // Precondition assertions (Design section).
+        assert!(
+            cumulative > SMALL_CAPACITY,
+            "test prerequisite: cumulative bytes ({cumulative}) must exceed \
+             the fixture ring's capacity ({SMALL_CAPACITY})"
+        );
+        {
+            let parser = pane.shadow_parser.lock().unwrap();
+            let header_text = parser.screen().rows(0, cols).next().unwrap_or_default();
+            assert!(
+                header_text.contains("PID"),
+                "test prerequisite: shadow parser's screen must still show \
+                 the header row, got {header_text:?}"
+            );
+        }
+
+        let session = m.get_session_mut(session_id).unwrap();
+        session.windows.get_mut(&wid).unwrap().add_pane(pane);
+    }
+
+    let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
+    assert_eq!(data.len(), 1);
+    let (_pane_id, snapshot, segments) = &data[0];
+
+    let mut core = term_core::terminal_core::TerminalCore::new(cols, rows, 10_000);
+    core.reset_and_replay_segments(snapshot, &to_replay_segments(segments));
+    let header_row = core.get_line_text(0);
+    assert!(
+        header_row.contains("PID"),
+        "post-wrap reattach snapshot must restore the shadow parser's \
+         header row; replayed row 0 was {header_row:?}"
+    );
 }
 
 // ── TS-4 / TS-6: on-demand snapshot builder (FR1) ────────────────────
