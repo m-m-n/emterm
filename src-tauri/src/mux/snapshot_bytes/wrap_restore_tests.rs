@@ -522,3 +522,256 @@ fn build_snapshot_bytes_for_ring_degrades_when_the_shadow_dump_is_empty() {
     );
     assert_eq!(ring_segments, delegated_segments);
 }
+
+// ── AC-3/AC-4 (task0002, D7): a pending wrap survives the wrapped-ring
+// restore, and one more printable character wraps identically to a
+// whole-stream reference ─────────────────────────────────────────────────
+
+/// Asserts every visible row, plus the cursor row/col, are equal between
+/// two cores at the same dims — the shared post-continuation check every
+/// AC-3/AC-4 case below runs after feeding one more printable character.
+fn assert_rows_and_cursor_match(client: &TerminalCore, reference: &TerminalCore, rows: u16) {
+    for r in 0..rows {
+        assert_eq!(
+            client.get_line_text(r).trim_end(),
+            reference.get_line_text(r).trim_end(),
+            "row {r} mismatch after continued output"
+        );
+    }
+    assert_eq!(client.get_cursor_row(), reference.get_cursor_row());
+    assert_eq!(client.get_cursor_col(), reference.get_cursor_col());
+}
+
+/// AC-3: a wrapped main-buffer stream whose last output exactly fills a
+/// row leaves the cursor with a pending wrap. After a snapshot replay, the
+/// client's pending-wrap flag and cursor position equal the probe's (an
+/// oracle replay of the delegated payload alone), and its visible rows
+/// equal the shadow parser's. Appending one printable character to both
+/// the client and a whole-stream reference gives equal visible rows and
+/// cursor positions: the character goes to the next row's first column,
+/// and the last column keeps its character.
+#[test]
+fn build_snapshot_bytes_for_ring_restores_a_pending_wrap_and_matches_a_reference_after_one_more_char()
+ {
+    let cols = 80u16;
+    let rows = 24u16;
+    let mut stream = Vec::new();
+    for i in 0..60u32 {
+        stream.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    // Fill the last row exactly (no trailing newline): a pending wrap.
+    stream.extend_from_slice(&vec![b'X'; cols as usize]);
+
+    // Capacity chosen to wrap (below the ~610B full stream) while still
+    // retaining more than a full screen's worth of "line N\r\n" tail (a ring
+    // any smaller loses enough scroll history that replaying the retained
+    // tail alone from blank no longer lands the cursor on the bottom row via
+    // genuine scrolling, which would make the probe's own cursor-row
+    // computation diverge from a whole-stream reference for reasons
+    // unrelated to what this test exercises).
+    let (raw, segments, wrapped, shadow_dump) =
+        wrapped_ring_and_shadow_dump(cols, rows, 512, &stream);
+    assert!(wrapped, "512B capacity must have wrapped for this stream");
+
+    let (payload, out_segments) =
+        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+
+    // Oracle: independently replay the DELEGATED (pre-dump) payload alone
+    // to compute the expected probe state (mirrors the AC-5(b)-style
+    // narrowed-region test above, at the builder level).
+    let (delegated_payload, delegated_segments) =
+        build_snapshot_bytes(&raw, &segments, &shadow_dump, false, (cols, rows));
+    let mut oracle = TerminalCore::new(cols, rows, 0);
+    oracle.reset_and_replay_segments(&delegated_payload, &to_replay_segments(&delegated_segments));
+    assert!(
+        oracle.get_wrap_pending(),
+        "test prerequisite: filling the last row exactly must leave a pending wrap"
+    );
+
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(&payload, &to_replay_segments(&out_segments));
+
+    assert_eq!(client.get_wrap_pending(), oracle.get_wrap_pending());
+    assert_eq!(client.get_cursor_row(), oracle.get_cursor_row());
+    assert_eq!(client.get_cursor_col(), oracle.get_cursor_col());
+
+    let mut parser = vt100::Parser::new(rows, cols, 0);
+    parser.process(&stream);
+    for r in 0..rows {
+        assert_eq!(
+            client.get_line_text(r).trim_end(),
+            row_text(&parser, cols, r).trim_end(),
+            "row {r} mismatch"
+        );
+    }
+
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(&stream);
+    reference.process_pty_data_fully(b"Y");
+
+    client.process_pty_data_fully(b"Y");
+
+    assert_rows_and_cursor_match(&client, &reference, rows);
+}
+
+/// AC-4(a): the pending-wrap row lies inside a narrowed scroll region with
+/// origin mode on.
+#[test]
+fn build_snapshot_bytes_for_ring_restores_a_pending_wrap_inside_a_narrowed_region_with_origin_mode()
+{
+    let cols = 80u16;
+    let rows = 24u16;
+    let mut stream = Vec::new();
+    for i in 0..60u32 {
+        stream.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    stream.extend_from_slice(b"\x1b[5;20r"); // narrow region, rows 5..20 (1-indexed)
+    stream.extend_from_slice(b"\x1b[?6h"); // origin mode on
+    stream.extend_from_slice(b"\x1b[3;1H"); // region-relative row 3, col 1
+    // Fill the row exactly (region-relative row 3, absolute row 6): a
+    // pending wrap, same as AC-3 but inside the narrowed/origin-mode case.
+    stream.extend_from_slice(&vec![b'Z'; cols as usize]);
+
+    let (raw, segments, wrapped, shadow_dump) =
+        wrapped_ring_and_shadow_dump(cols, rows, 512, &stream);
+    assert!(wrapped, "512B capacity must have wrapped for this stream");
+
+    let (payload, out_segments) =
+        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+
+    let (delegated_payload, delegated_segments) =
+        build_snapshot_bytes(&raw, &segments, &shadow_dump, false, (cols, rows));
+    let mut oracle = TerminalCore::new(cols, rows, 0);
+    oracle.reset_and_replay_segments(&delegated_payload, &to_replay_segments(&delegated_segments));
+    assert!(
+        oracle.get_wrap_pending(),
+        "test prerequisite: filling the region row exactly must leave a pending wrap"
+    );
+
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(&payload, &to_replay_segments(&out_segments));
+
+    assert_eq!(client.get_wrap_pending(), oracle.get_wrap_pending());
+    assert_eq!(client.get_cursor_row(), oracle.get_cursor_row());
+    assert_eq!(client.get_cursor_col(), oracle.get_cursor_col());
+    assert_eq!(
+        client.get_scroll_region_top(),
+        oracle.get_scroll_region_top()
+    );
+    assert_eq!(
+        client.get_scroll_region_bottom(),
+        oracle.get_scroll_region_bottom()
+    );
+    assert_eq!(client.get_mode(MODE_ORIGIN), oracle.get_mode(MODE_ORIGIN));
+
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(&stream);
+    reference.process_pty_data_fully(b"Y");
+
+    client.process_pty_data_fully(b"Y");
+
+    assert_rows_and_cursor_match(&client, &reference, rows);
+}
+
+/// AC-4(b): the pending-wrap row ends with a double-width character in its
+/// last two columns — the composer must re-establish the wrap by
+/// re-printing the wide-pair's BASE, not a lone spacer.
+#[test]
+fn build_snapshot_bytes_for_ring_restores_a_pending_wrap_ending_in_a_double_width_character() {
+    let cols = 80u16;
+    let rows = 24u16;
+    let mut stream = Vec::new();
+    for i in 0..60u32 {
+        stream.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    // Fill the row with (cols - 2) narrow chars, then one wide (2-column)
+    // character occupying the last two columns: a pending wrap.
+    stream.extend_from_slice(&vec![b'a'; (cols - 2) as usize]);
+    stream.extend_from_slice("世".as_bytes());
+
+    // See the capacity comment on the AC-3 test above: large enough to
+    // retain more than a full screen's worth of scroll history so the
+    // probe's cursor-row replay reaches the bottom row by genuine scrolling.
+    let (raw, segments, wrapped, shadow_dump) =
+        wrapped_ring_and_shadow_dump(cols, rows, 512, &stream);
+    assert!(wrapped, "512B capacity must have wrapped for this stream");
+
+    let (payload, out_segments) =
+        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+
+    let (delegated_payload, delegated_segments) =
+        build_snapshot_bytes(&raw, &segments, &shadow_dump, false, (cols, rows));
+    let mut oracle = TerminalCore::new(cols, rows, 0);
+    oracle.reset_and_replay_segments(&delegated_payload, &to_replay_segments(&delegated_segments));
+    assert!(
+        oracle.get_wrap_pending(),
+        "test prerequisite: filling the row with a trailing wide char must leave a pending wrap"
+    );
+
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(&payload, &to_replay_segments(&out_segments));
+
+    assert_eq!(client.get_wrap_pending(), oracle.get_wrap_pending());
+    assert_eq!(client.get_cursor_row(), oracle.get_cursor_row());
+    assert_eq!(client.get_cursor_col(), oracle.get_cursor_col());
+
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(&stream);
+    reference.process_pty_data_fully(b"Y");
+
+    client.process_pty_data_fully(b"Y");
+
+    assert_rows_and_cursor_match(&client, &reference, rows);
+}
+
+/// AC-4(c): a control case — the cursor sits at the last column with NO
+/// pending wrap (placed there by absolute positioning, not by filling the
+/// row via printing). The client's pending-wrap flag must stay clear, and
+/// the next character OVERWRITES the last column instead of wrapping, as
+/// on the reference.
+#[test]
+fn build_snapshot_bytes_for_ring_leaves_no_pending_wrap_when_the_cursor_was_placed_absolutely() {
+    let cols = 80u16;
+    let rows = 24u16;
+    let mut stream = Vec::new();
+    for i in 0..60u32 {
+        stream.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    // Absolute positioning to the last column — no pending wrap, unlike
+    // AC-3/AC-4(a)/(b) which reach the last column by printing into it.
+    stream.extend_from_slice(format!("\x1b[1;{}H", cols).as_bytes());
+
+    let (raw, segments, wrapped, shadow_dump) =
+        wrapped_ring_and_shadow_dump(cols, rows, 256, &stream);
+    assert!(wrapped, "256B capacity must have wrapped for this stream");
+
+    let (payload, out_segments) =
+        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+
+    let (delegated_payload, delegated_segments) =
+        build_snapshot_bytes(&raw, &segments, &shadow_dump, false, (cols, rows));
+    let mut oracle = TerminalCore::new(cols, rows, 0);
+    oracle.reset_and_replay_segments(&delegated_payload, &to_replay_segments(&delegated_segments));
+    assert!(
+        !oracle.get_wrap_pending(),
+        "test prerequisite: absolute positioning must not leave a pending wrap"
+    );
+
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(&payload, &to_replay_segments(&out_segments));
+
+    assert!(
+        !client.get_wrap_pending(),
+        "the client must not report a pending wrap the probe never reported"
+    );
+    assert_eq!(client.get_cursor_row(), oracle.get_cursor_row());
+    assert_eq!(client.get_cursor_col(), oracle.get_cursor_col());
+
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(&stream);
+    reference.process_pty_data_fully(b"Y");
+
+    client.process_pty_data_fully(b"Y");
+
+    assert_rows_and_cursor_match(&client, &reference, rows);
+}
