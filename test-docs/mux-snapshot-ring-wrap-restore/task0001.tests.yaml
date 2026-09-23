@@ -1,0 +1,152 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::reattach::tests::wrapped_main_buffer_reattach_restores_the_shadow_parsers_header_row
+    red_confirmed: true
+    red_reason: >-
+      Committed and run before any production-code change, per the task
+      plan's "Reproduction first". Pre-fix failure observed:
+      "post-wrap reattach snapshot must restore the shadow parser's header
+      row; replayed row 0 was \"    15  0.3   0:00.15 proc-15 ...\"" — the
+      header row was genuinely absent, replaced by garbled partial-frame
+      content, matching the documented symptom exactly. The identical test
+      body passes unmodified post-fix.
+  AC-2:
+    tests:
+      - mux::scrollback_buffer::tests::read_segments_with_wrap_state_reports_wrapped_when_cumulative_writes_exceed_capacity
+      - mux::scrollback_buffer::tests::read_segments_with_wrap_state_reports_wrapped_for_a_single_oversize_write
+      - mux::scrollback_buffer::tests::read_segments_with_wrap_state_exact_capacity_is_not_wrapped
+      - mux::scrollback_buffer::tests::read_segments_with_wrap_state_clear_after_wrap_resets_to_not_wrapped
+      - mux::scrollback_buffer::tests::read_segments_with_wrap_state_ring_rebuilt_from_a_wrapped_rings_capture_is_not_wrapped
+      - mux::scrollback_buffer::tests::read_segments_with_wrap_state_bytes_and_segments_match_read_segments
+      - mux::scrollback_buffer::tests::read_segments_with_wrap_state_wrapped_bytes_length_equals_capacity
+    red_confirmed: false
+    red_reason: >-
+      Written alongside read_segments_with_wrap_state itself (a brand-new
+      method with no pre-fix behavior to diverge from) rather than in a
+      separately observed red run before the method existed — a missing
+      method would have failed to compile, but that specific compile
+      failure was not captured as a discrete red observation in this
+      session. All seven pass against the implemented method and were
+      derived analytically from the ring's invariants (see notes).
+  AC-3:
+    tests:
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_wrapped_main_buffer_restores_the_shadow_parsers_visible_screen
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_uses_current_dims_even_when_it_differs_from_the_last_ring_segment
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_restores_the_shadow_parsers_header_row_for_a_wrapped_ring
+      - mux::session::pane::tests::test_resume_pane_with_permit_restores_the_shadow_parsers_header_row_for_a_wrapped_ring
+      - mux::session::pane::tests::test_evaluate_output_target_restores_the_shadow_parsers_header_row_for_a_wrapped_ring
+    red_confirmed: false
+    red_reason: >-
+      The on-demand and both resume-site reproduction tests were written
+      after wiring their respective assembly sites (handlers.rs,
+      output_target.rs) to the wrap-aware builders, so they were never run
+      against the pre-fix call sites within this session — unlike AC-1's
+      reattach-path reproduction, which was committed and observed red
+      first. The underlying restore mechanism these four tests exercise is
+      the SAME wrap-aware builder AC-1 already proves red-then-green
+      end-to-end; these confirm the other three assembly sites route
+      through it correctly, not a second instance of the same behavior.
+  AC-4:
+    tests:
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_non_wrapped_matches_the_plain_builder_exactly
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_alt_screen_matches_the_plain_builder_even_when_wrapped
+      - mux::snapshot_bytes::wrap_restore_tests::build_resume_snapshot_bytes_for_ring_non_wrapped_matches_the_plain_builder_exactly
+      - mux::snapshot_bytes::wrap_restore_tests::build_resume_snapshot_bytes_for_ring_alt_screen_matches_the_plain_builder_even_when_wrapped
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_a_ring_at_capacity_reports_not_wrapped_and_matches_plain_output
+    red_confirmed: false
+    red_reason: >-
+      Byte-identity assertions against the pre-existing (unmodified)
+      builders; written alongside the wrap-aware wrapper functions rather
+      than observed failing first. All pre-existing snapshot_bytes::tests
+      (layout / omission / segment tests) pass UNMODIFIED, which is the
+      literal AC-4 requirement — see notes for the full unmodified-pass
+      confirmation.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::apt_style_recording_past_a_wrapped_ring_restores_the_shadow_parsers_screen_faithfully
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_restores_probe_state_after_narrowed_region_and_origin_mode
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_preserves_a_pending_application_saved_cursor
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_never_emits_decsc_or_decrc_even_when_the_shadow_parser_parks_the_cursor_past_a_row
+      - mux::snapshot_bytes::dump_block::tests::compose_wrapped_dump_block_never_contains_decsc_or_decrc
+    red_confirmed: false
+    red_reason: >-
+      Written alongside the composer (dump_block.rs) and its builder
+      wiring, not observed failing first. (a)'s apt scenario was narrowed
+      during implementation: a live vt100::Parser fed the exact apt
+      fixture already shows residual "mixed" rows of its own (a
+      pre-existing vt100-crate characteristic, NFR6 territory, confirmed
+      by direct inspection against the bare vt100 crate outside this
+      code), so the test pins "no ADDITIONAL mixing beyond what the shadow
+      already has" rather than "zero mixing" — see the test's own doc
+      comment for the full rationale and the standalone reproduction that
+      confirmed it. A live mid-run resize was also dropped from that
+      fixture for the same reason (vt100's row-count-change reflow
+      interacting with apt's fixed bar row is an independent quirk); the
+      resize-differs-from-current-dims case is covered instead, with
+      controlled non-apt content, by
+      build_snapshot_bytes_for_ring_uses_current_dims_even_when_it_differs_from_the_last_ring_segment
+      (AC-3).
+  AC-6:
+    tests:
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_continued_output_matches_a_reference_fed_the_whole_stream
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_scrollback_history_matches_a_replay_truncated_at_the_dump_block_start
+    red_confirmed: false
+    red_reason: >-
+      Written alongside the composer and builder wiring, not observed
+      failing first. The apt-specific half of AC-6's continued-output
+      claim was deliberately NOT exercised with the apt fixture (see
+      AC-5's red_reason: term_core and the real vt100 crate diverge on
+      this exact content pattern independent of this feature, which would
+      make an apt-fixture "reference terminal" comparison a cross-engine
+      confound rather than a meaningful regression check) — it is instead
+      proven with a clean, single-engine (term_core throughout) synthetic
+      top-like fixture, which is what the two listed tests do.
+  AC-7:
+    tests:
+      - mux::session::pane::tests::largest_real_wrap_restore_producer_segment_list_round_trips_cleanly
+      - mux::scrollback_buffer::tests::default_scrollback_capacity_is_pinned_at_2_mib
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_degrades_to_the_delegated_output_when_the_probe_fails
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_degrades_when_the_shadow_dump_is_empty
+      - mux::snapshot_bytes::dump_block::tests::compose_wrapped_dump_block_returns_none_when_the_probe_fails
+    red_confirmed: false
+    red_reason: >-
+      (a): wire-budget saturation test, written alongside the wrap-aware
+      builder. (b): the capacity-constant pin is a straightforward
+      assert_eq! against an existing constant with no prior behavior to
+      diverge from. (c) and (d) are inspection-only (no dedicated test):
+      (c) verified by reading output_target.rs's `if alt || ring_wrapped`
+      dump-computation gate and handlers/mod.rs's scoped
+      read_segments_with_wrap_state-only copy block; (d) verified by
+      reading the updated doc comments in snapshot_bytes.rs,
+      scrollback_buffer.rs (MAX_DIM_MARKERS), pane/mod.rs
+      (MAX_DAEMON_SNAPSHOT_SEGMENTS), and reattach.rs. (e) exercises the
+      internal probe-failure seam directly, written alongside
+      compose_wrapped_dump_block. (f): the full lib test command
+      (`bash scripts/fetch-fonts.sh && bun install && bun run
+      build:viewer && bun run build:settings && cargo test --lib --
+      --test-threads=1`) passed 3568/3568 (0 failed, 3 ignored,
+      pre-existing and unrelated to this task), and
+      `cargo check --no-default-features` compiled cleanly with no
+      warnings. No platform-specific (#[cfg(unix)] / #[cfg(windows)])
+      code was added.
+notes: >-
+  Only AC-1's reproduction test was genuinely red-then-green observed
+  within this session, per the task plan's explicit "Reproduction first"
+  mandate — it is the one Acceptance Criterion the plan requires be
+  committed and run BEFORE any production-code change, and that discipline
+  was followed exactly (failing run captured with the real pre-fix
+  message, then the identical test body turned green post-fix with no
+  test-code changes). Every other Acceptance Criterion's tests were
+  written test-and-implementation-together for a large, deeply
+  interconnected 15-file feature under a large but finite effort budget;
+  all pass against the final implementation, and the AC-4 byte-identity
+  tests plus the full pre-existing test suite (3568/3568, 0 regressions)
+  provide strong evidence the wrap-aware builders are correct delegating
+  wrappers for every non-wrapped/alt-screen case. This is a deliberate
+  pragmatic scoping decision, not an oversight — flagged honestly here per
+  the tdd-testing skill's guidance rather than fabricating red-confirmation
+  for cases not literally observed.
