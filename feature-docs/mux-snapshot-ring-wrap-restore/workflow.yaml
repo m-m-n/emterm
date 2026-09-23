@@ -197,7 +197,7 @@ tasks:
     - NFR5
     - NFR6
     - NFR7
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-snapshot-ring-wrap-restore/task0001
 review:
   status: pending
