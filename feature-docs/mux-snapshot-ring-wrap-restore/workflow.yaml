@@ -221,7 +221,8 @@ tasks:
     - FR8
     - FR9
     - FR10
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-snapshot-ring-wrap-restore/task0002
     provenance:
       source: review
       source_ids:
