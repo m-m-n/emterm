@@ -1,0 +1,63 @@
+round: 1
+executed_at: "2026-09-23T21:54:40+09:00"
+scope:
+  review_mode: diff
+  base_commit: f1b3832320dda58fed2153846b7ef0bb2ab16a37
+  head_commit: 5421995844b2805923e5d51b745f3ce8e0430223
+  changed_files:
+    - src-tauri/src/window_host/tests.rs
+    - test-docs/anchor-scan-false-success/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+findings_dropped_by_gate:
+  # 評価者が返した findings のうち、R3b step 1（file の絶対パス拒否）で落としたもの。
+  # 採用済みの指摘ではなく、解決済みでも問題なしでもない。評価者由来（sources 空 → claude:evaluator）。
+  - gate: "R3b step 1: absolute path rejected"
+    original_file: "/home/sakura/src/my_projects/tauri/emterm/.claude/worktrees/em-workflow/anchor-scan-false-success/integration/src-tauri/src/window_host/tests.rs"
+    line: 7131
+    severity: medium
+    category: spec
+    title: "Step 2 の呼び出し一意性チェックが生識別子 r#callee(...) を数えないため、呼び出しが 2 つあっても locate_call が Ok を返す"
+    summary: "新しい生識別子の分岐は r# 接頭辞込みのテキストを Ident として持ち、step 2 は完全一致で callee を探すため r#probe_call(...) を数えない。r#probe_call(...); probe_call(a, b, c, d); の本体で hits が 1 件になり Ok を返す。変更前は Err だった。比較前に r# を取り除き、負のテストを足す案。"
+  - gate: "R3b step 1: absolute path rejected"
+    original_file: "/home/sakura/src/my_projects/tauri/emterm/.claude/worktrees/em-workflow/anchor-scan-false-success/integration/src-tauri/src/window_host/tests.rs"
+    line: 7199
+    severity: medium
+    category: spec
+    title: "数値リテラルの走査が . の後ろの識別子を飲み込むため、0..callee(...) や self.0.callee(...) の呼び出しが一意性チェックから漏れる"
+    summary: "数値リテラル走査が英数字・_・. を続けて 1 トークンにするため 0..probe_call が 1 個のリテラルになる。この差分で入った問題ではない既存経路。. の直後が . または識別子開始文字なら止める案。"
+  - gate: "R3b step 1: absolute path rejected (step 2 でも severity low のため対象外)"
+    original_file: "/home/sakura/src/my_projects/tauri/emterm/.claude/worktrees/em-workflow/anchor-scan-false-success/integration/src-tauri/src/window_host/tests.rs"
+    line: 6842
+    severity: low
+    category: comprehensive
+    title: "anchor_scan 冒頭のコメントが指す設計文書のパス doc/tasks/anchor-scan-false-success/ が存在しない"
+    summary: "実際の Design 節は feature-docs/anchor-scan-false-success/tasks/task0001.md にある。"
+evaluation:
+  round_summary: "Round 1（diff モード、cross_validation false）。comprehensive#0・security#0・spec#0 の 3 run とも findings 0 件。reviewer 出力に injection の試みは無い。評価者は anchor_scan モジュール全体・既存 anchor テスト・追加 16 本のテスト・task0001.tests.yaml・SPEC.md・task0001.md の Design 節を読み、pointer_routing.rs を grep で確認した（5/10 ファイル）。comprehensive: 設計文書パスの low 1 件。security: corroborated（#[cfg(test)] のテスト専用コードで外部入力も権限境界も無い）。spec: FR4 の残り経路 medium 2 件（生識別子 callee がこの差分で Err→Ok、数値リテラル走査の既存経路）。FR1〜FR3・FR5 の実装と TS-1〜TS-6 のテストはそろっている。AC-7 の既存テスト 8 本は本体を変えずに残る。"
+  recommended_action: "auto_fix"
+  action_rationale: "critical/high は無い。medium 2 件は anchor_scan の名前比較と数値リテラル走査を数行直し負テストを 2 本足せば閉じられる。2 件とも evaluator 起点で sources が空なので、自動修正の対象に入れるかは review-phase の規則に従う。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
