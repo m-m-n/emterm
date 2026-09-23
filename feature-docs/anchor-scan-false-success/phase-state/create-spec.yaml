@@ -5,10 +5,13 @@ status: in_progress
 generation: 1
 mode: batch
 last_input_digest: null
-active_request_id: cs-analyst-001
+active_request_id: cs-specwriter-001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+- request_id: cs-analyst-001
+  status: completed
+  input_digest: sha256:efd10d3d444345b4bb2746c443fcb525cb866e1aabce5a93aee033029a9ad1dd
 artifacts: []
 patches: []
 stale_redispatch_count: 0
