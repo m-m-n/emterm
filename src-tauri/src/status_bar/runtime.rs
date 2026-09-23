@@ -87,8 +87,6 @@ impl StatusBarRuntime {
     /// `cwd_source` returns the active tab's cwd (used by Cwd /
     /// GitBranch providers).
     pub fn new(settings: &StatusBarSettings, cwd_source: CwdSource, wake: WakeFn) -> Self {
-        let mut engine = TemplateEngine::new();
-
         // TimeProvider owns a timer thread that fires at
         // `refresh_rates["time"]` (default 1000 ms).
         let time_interval_ms = settings.refresh_rates.get("time").copied().unwrap_or(1000);
@@ -99,6 +97,41 @@ impl StatusBarRuntime {
                 interval: Duration::from_millis(time_interval_ms),
             },
         ));
+        Self::new_internal(settings, cwd_source, wake, time)
+    }
+
+    /// Test-only builder (task0001, FR7): swaps only the time
+    /// provider's tick source for the test-only manual one, so timer
+    /// tests can drive ticks deterministically instead of waiting on
+    /// real time. Everything else -- the `WakeFn` clone handed to
+    /// every provider, the cwd/git/command providers, the dispatcher
+    /// -- runs through the same [`Self::new_internal`] as [`Self::new`].
+    #[cfg(test)]
+    fn new_with_manual_time_source(
+        settings: &StatusBarSettings,
+        cwd_source: CwdSource,
+        wake: WakeFn,
+    ) -> (
+        Self,
+        crate::status_bar::providers::time::ManualTickController,
+    ) {
+        let (time, controller) =
+            TimeProvider::with_manual_source(settings.time_format.clone(), wake.clone());
+        let rt = Self::new_internal(settings, cwd_source, wake, Arc::new(time));
+        (rt, controller)
+    }
+
+    /// Shared construction body behind [`Self::new`] and the
+    /// test-only manual-source builder. Takes the already-constructed
+    /// `TimeProvider` so the only thing that differs between the two
+    /// callers is which tick source backs its timer thread.
+    fn new_internal(
+        settings: &StatusBarSettings,
+        cwd_source: CwdSource,
+        wake: WakeFn,
+        time: Arc<TimeProvider>,
+    ) -> Self {
+        let mut engine = TemplateEngine::new();
         engine.register(time.clone() as Arc<_>);
 
         // CwdProvider has no thread; OSC 7 callers invoke
@@ -497,12 +530,22 @@ mod tests {
         );
     }
 
-    /// TS-29 (at the runtime level): TimeProvider's timer thread,
-    /// constructed by the runtime, fires the runtime-provided wake on
-    /// the `refresh_rates["time"]` interval. We use a short interval
-    /// to keep the test fast.
+    /// TS-29 (at the runtime level, task0001 rewrite, FR7): TimeProvider's
+    /// timer thread, constructed by the runtime, fires the runtime-provided
+    /// wake for each delivered tick. Built through the test-only manual
+    /// tick-source builder so ticks are driven deterministically (NFR2) --
+    /// no sleep, no fixed window -- and the wake count is asserted exactly.
+    ///
+    /// The cwd source returns none and the git-branch interval is long, so
+    /// the only other provider that could fire `wake` in this setup is the
+    /// git-branch worker's initial cache-clear tick. Per SPEC.md the cache
+    /// clear only wakes when a branch or status was cached before; the
+    /// cache starts empty, so it adds no wake here and the exact count
+    /// below reflects the timer alone.
     #[test]
     fn runtime_time_provider_timer_fires_wake() {
+        use crate::status_bar::providers::time::release_and_assert_ticks;
+        use crate::status_bar::template_engine::VariableProvider;
         use std::sync::atomic::{AtomicUsize, Ordering};
         let count = Arc::new(AtomicUsize::new(0));
         let c2 = count.clone();
@@ -510,20 +553,18 @@ mod tests {
             c2.fetch_add(1, Ordering::Relaxed);
         });
         let mut s = StatusBarSettings::default();
-        s.refresh_rates.insert("time".to_string(), 25);
         // Keep the git worker idle.
         s.refresh_rates.insert("git_branch".to_string(), 60_000);
-        let rt = StatusBarRuntime::new(&s, Arc::new(|| None), wake);
-        std::thread::sleep(Duration::from_millis(120));
-        let observed = count.load(Ordering::Relaxed);
-        // The git-branch worker also fires `wake` once on the initial
-        // clear-cache call (cwd_source returns None). We expect ≥ 2
-        // wakes from the time timer alone, so ≥ 3 total is the lower
-        // bound. A looser ≥ 2 keeps the test robust under heavily
-        // loaded CI.
-        assert!(
-            observed >= 2,
-            "expected ≥ 2 wakes from TimeProvider timer, observed {observed}"
+        let (rt, ctrl) = StatusBarRuntime::new_with_manual_time_source(&s, Arc::new(|| None), wake);
+        const N: u64 = 3;
+        ctrl.hold(N);
+        release_and_assert_ticks(
+            &ctrl,
+            || count.load(Ordering::Relaxed) as u64,
+            || rt.time_provider.version(None),
+            0,
+            0,
+            N,
         );
         drop(rt);
     }
