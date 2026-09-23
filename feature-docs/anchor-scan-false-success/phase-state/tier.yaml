@@ -1,0 +1,33 @@
+schema_version: 1
+feature: anchor-scan-false-success
+tier: reduced
+bases:
+- basis: description_only
+  probabilities:
+    '0': 0.52
+    '1': 0.48
+    '2': 0.0
+  expectation_clear: 0.94
+  confidence: 0.28
+  observed_at: '2026-09-23T21:01:14+09:00'
+- basis: description_plus_code
+  probabilities:
+    '0': 0.56
+    '1': 0.44
+    '2': 0.0
+  expectation_clear: 0.94
+  confidence: 0.34
+  observed_at: '2026-09-23T21:01:15+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/window_host/tests.rs
+  changed_lines_approx: 150
+  new_functions_needed: 5
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+rationale: score.probabilities['0']=0.52 >= 0.4 (p0_floor) and score.probabilities['0']
+  + score.probabilities['1']=1.0 >= 0.85 (bucket_sum_floor)
+decided_at: '2026-09-23T21:02:00+09:00'
