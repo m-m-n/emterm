@@ -1,0 +1,31 @@
+schema_version: 1
+feature: anchor-scan-callee-miscount
+records:
+- question_id: requirement.turbofish-callee-scope
+  packet_id: create-spec-q0001
+  answered_at: '2026-09-23T23:12:52+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - include
+  freeform: null
+  normalized_answer: 'include: turbofish の callee 呼び出し (callee::<...>() も step 2 で数え、別の呼び出しと並ぶ本体で
+    Err を返す。負のテストを追加する'
+  resolution_note: 'gate: create-spec.requirement-clarification; options: out_of_scope
+    / include; choice: include; codex_consulted: true (harness codex, 1 turn); 要点:
+    turbofish 経路も「誤った範囲を成功として返さない」不変条件の同じ違反で、閉じる変更は step 2 の比較に限られ小さい。worker 推奨は out_of_scope
+    だったが、Codex の include を比較して優位と判断した; opus_escalation: false'
+- question_id: requirement.step1-raw-fn-name
+  packet_id: create-spec-q0001
+  answered_at: '2026-09-23T23:12:52+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - include_with_test
+  freeform: null
+  normalized_answer: 'include_with_test: step 1 の fn_name 比較でも r# を除いて比較し、fn r#probe_fn
+    と fn probe_fn が両方ある本体で Err を期待する負のテストを追加する'
+  resolution_note: 'gate: create-spec.requirement-clarification; options: include_with_test
+    / include_no_test / callee_only; choice: include_with_test; codex_consulted: true
+    (harness codex, 1 turn); 要点: 深さ 0 の r#probe_fn と probe_fn を別名扱いすると曖昧な入力で Ok を返せてしまう。worker
+    推奨と Codex の結論が一致; opus_escalation: false'

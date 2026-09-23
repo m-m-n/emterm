@@ -1,15 +1,54 @@
 schema_version: 1
 feature: anchor-scan-callee-miscount
 phase: create-spec
-status: initialized
+status: awaiting_answers
 generation: 1
 mode: batch
 base_revision: 66d69a8a49480fa5170be9c3a583ac3d150b5a25
-last_input_digest: null
+last_input_digest: sha256:3ae39b78d9f2f605a2df08f39ece6607227a951b5db27d983292cdd19b5e35bf
 active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-09-23T23:12:52+09:00'
+    questions:
+    - question_id: requirement.turbofish-callee-scope
+      status: answered
+    - question_id: requirement.step1-raw-fn-name
+      status: answered
+answers:
+  requirement.turbofish-callee-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-23T23:12:52+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - include
+    freeform: null
+    normalized_answer: 'include: turbofish の callee 呼び出し (callee::<...>() も step 2
+      で数え、別の呼び出しと並ぶ本体で Err を返す。負のテストを追加する'
+    resolution_note: 'gate: create-spec.requirement-clarification; options: out_of_scope
+      / include; choice: include; codex_consulted: true (harness codex, 1 turn); 要点:
+      turbofish 経路も「誤った範囲を成功として返さない」不変条件の同じ違反で、閉じる変更は step 2 の比較に限られ小さい。worker 推奨は
+      out_of_scope だったが、Codex の include を比較して優位と判断した; opus_escalation: false'
+  requirement.step1-raw-fn-name:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-23T23:12:52+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - include_with_test
+    freeform: null
+    normalized_answer: 'include_with_test: step 1 の fn_name 比較でも r# を除いて比較し、fn r#probe_fn
+      と fn probe_fn が両方ある本体で Err を期待する負のテストを追加する'
+    resolution_note: 'gate: create-spec.requirement-clarification; options: include_with_test
+      / include_no_test / callee_only; choice: include_with_test; codex_consulted:
+      true (harness codex, 1 turn); 要点: 深さ 0 の r#probe_fn と probe_fn を別名扱いすると曖昧な入力で
+      Ok を返せてしまう。worker 推奨と Codex の結論が一致; opus_escalation: false'
+worker_runs:
+- request_id: cs-analyst-001
+  status: needs_user_input
+  input_digest: sha256:3ae39b78d9f2f605a2df08f39ece6607227a951b5db27d983292cdd19b5e35bf
 artifacts: []
 patches: []
 stale_redispatch_count: 0
