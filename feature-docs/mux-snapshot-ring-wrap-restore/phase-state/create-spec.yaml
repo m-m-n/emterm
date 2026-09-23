@@ -4,8 +4,8 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: bbd3055277df761a93855f7d7e460581ab7c924e
-last_input_digest: sha256:228a015978e69d770aea8c29d482c26f8ab28bce7e349a5cc47bb9ead7985602
-active_request_id: create-spec-run-0002
+last_input_digest: sha256:6fa5c3c1ca944ad7c7a2df968076afc0ebe338669b68d954e63ed68605a7c020
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -65,12 +65,16 @@ worker_runs:
   input_digest: sha256:ebf4a318d747e5f89efc9501fed8e7e85560393aae8b44b1d5b5066d48f8e865
   output_digest: null
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:228a015978e69d770aea8c29d482c26f8ab28bce7e349a5cc47bb9ead7985602
+  output_digest: sha256:23ced9096f94e7e3177eed943ae7d1cb0640ea66ecacc2aaad6451da3bbb6da1
+- request_id: create-spec-run-0003
+  status: dispatched
+  input_digest: sha256:6fa5c3c1ca944ad7c7a2df968076afc0ebe338669b68d954e63ed68605a7c020
   output_digest: null
 artifacts: []
 patches: []
-progress_fingerprint: null
+progress_fingerprint: sha256:6294588b9cc9df792036c4e3514aaf95203bdf9cf324beecb35d362e058147bc
 stale_redispatch_count: 0
 resolved_input_cache:
   resolved_at: '2026-09-23T18:37:00+09:00'
@@ -95,11 +99,48 @@ resolved_input_cache:
   - /home/sakura/src/my_projects/tauri/emterm/tmp/apt-progress-bar-regression-2026-07-09.md
 last_error: null
 assumptions:
-- assumption_id: a-fix-1
-  statement: Plan A is adopted (see requirement.fix-approach). The dump is added only for main-buffer
-    panes whose ring has evicted bytes.
+- assumption_id: A1
+  statement: Plan A is adopted (requirement.fix-approach answer, batch Codex consultation). The dump is
+    added only for main-buffer panes whose ring has evicted bytes; plan B (always dump) and plan C (larger
+    ring) are rejected.
   reversible: true
-- assumption_id: a-fix-2
-  statement: The dump is drawn under a full-screen scroll region / absolute origin, and the scroll region,
-    origin mode and cursor that the scrollback replay established are restored afterwards.
+- assumption_id: A2
+  statement: The dump is drawn so that a scroll region / origin mode left by the scrollback replay does
+    not distort it, and the replay-established region, origin mode and cursor state are restored afterwards
+    (Codex refinement, FR8/FR9).
+  reversible: true
+- assumption_id: A3
+  statement: 'Verified fact: vt100 0.16.2 contents_formatted() emits cursor visibility, SGR reset, ESC[H
+    ESC[J, then rows joined by CRLF / CUP / cursor-forward, then a final cursor position and SGR. It emits
+    no DECSTBM, DECOM or autowrap state (vt100 grid.rs:217-252, term.rs:9-13, 372-383). In some end-of-row
+    cursor cases it also emits ESC 7 / ESC 8 (grid.rs:439-442).'
+  reversible: true
+- assumption_id: A4
+  statement: 'Verified fact: in term_core, a line feed at scroll_region_bottom scrolls the region instead
+    of moving down (terminal_core.rs:922-935), and CUP / ESC[H are region-relative under DECOM (csi_cursor.rs:16-30).
+    The FR8 distortion is therefore real whenever the replay ends with a narrowed region or DECOM on.
+    For top (no DECSTBM) it does not trigger.'
+  reversible: true
+- assumption_id: A5
+  statement: 'Verified fact: term_core DECSTBM homes the cursor (csi_scroll.rs:20-39), and restore_cursor
+    consumes the single saved-cursor slot (terminal_cursor.rs:108-127, take()). Restoring the region therefore
+    has to be followed by re-establishing the cursor, and ESC 7 / ESC 8 used by the snapshot itself would
+    clobber the application''s saved slot.'
+  reversible: true
+- assumption_id: A6
+  statement: 'Verified fact: vt100 0.16.2 Screen has no public accessor for the scroll region or origin
+    mode (public API: size, cursor_position, alternate_screen, hide_cursor, input modes, attrs). How the
+    replay-established region / origin mode is known when restoring it is a planning decision.'
+  reversible: true
+- assumption_id: A7
+  statement: 'Known limit (NFR6): cells already trashed inside the daemon vt100 are not repaired, so apt
+    debris can reappear for wrapped panes until clear().'
+  reversible: true
+- assumption_id: A8
+  statement: 'Known limit (NFR7): the hot-upgrade handoff loses the wrap fact and the main-buffer screen;
+    that path is out of scope.'
+  reversible: true
+- assumption_id: A9
+  statement: Existing apt / wrap tests pass an empty screen slice to build_snapshot_bytes, so they do
+    not by themselves demonstrate safety of the dump; TS3/TS4 supply that evidence.
   reversible: true
