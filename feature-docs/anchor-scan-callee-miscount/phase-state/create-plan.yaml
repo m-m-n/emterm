@@ -1,0 +1,20 @@
+schema_version: 1
+feature: anchor-scan-callee-miscount
+phase: create-plan
+status: dispatching
+generation: 1
+mode: batch
+base_revision: 42d6247882fab7bfe31aaf3a13960c28d86b76ed
+last_input_digest: sha256:6415c9335758437af08bf914b44cb1e8d094000e261039430027016d37bf127f
+active_request_id: cp-planner-001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: cp-planner-001
+  status: dispatched
+  input_digest: sha256:6415c9335758437af08bf914b44cb1e8d094000e261039430027016d37bf127f
+artifacts: []
+patches: []
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
