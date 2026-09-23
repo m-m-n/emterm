@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 
 use super::outbound::ReplySink;
 use super::pty_spawn::{register_pane_and_start_reader, spawn_pty};
-use super::reattach::build_shadow_parser_snapshot;
+use super::reattach::build_shadow_parser_snapshot_for_ring;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatusReportSender, DeferredOutputQueue, NotificationSender, PaneId, PtyOutputChunk,
@@ -517,13 +517,21 @@ pub(super) async fn handle_request_pane_snapshot(
     // copy-only critical section: the O(n) copy is unavoidable, but the
     // lock must never span assembly/log/send. Keep the copy inside this
     // block when refactoring.
-    let (scrollback_data, scrollback_segments): (Vec<u8>, Vec<(usize, u16, u16)>) = {
+    let (scrollback_data, scrollback_segments, ring_wrapped): (
+        Vec<u8>,
+        Vec<(usize, u16, u16)>,
+        bool,
+    ) = {
         let guard = scrollback.lock().unwrap();
-        guard.read_segments()
+        guard.read_segments_with_wrap_state()
         // guard dropped here, at scope end, before any assembly/log/send.
     };
-    let (snapshot, snapshot_segments) =
-        build_shadow_parser_snapshot(&shadow_parser, &scrollback_data, &scrollback_segments);
+    let (snapshot, snapshot_segments) = build_shadow_parser_snapshot_for_ring(
+        &shadow_parser,
+        &scrollback_data,
+        &scrollback_segments,
+        ring_wrapped,
+    );
     let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
     // Promoted from debug -> warn so release builds (which drop debug/info)
     // capture the snapshot-reply path during recovery investigations. The

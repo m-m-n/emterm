@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent_status::AgentState as CoreAgentState;
+use crate::mux::ipc::reattach::build_shadow_parser_snapshot;
 use crate::mux::session::pane::{
     AgentWaiter, DeferredOutputItem, MuxPane, PaneOutputTarget, SharedOutputTarget,
 };
@@ -488,6 +489,116 @@ async fn handle_request_pane_snapshot_emits_snapshot_kind() {
     assert!(
         rx.try_recv().is_err(),
         "exactly one snapshot chunk expected"
+    );
+}
+
+/// AC-3 (FR2, FR5, FR6, FR7; TS-2; mux-snapshot-ring-wrap-restore
+/// task0001): the on-demand `RequestPaneSnapshot` path also restores the
+/// shadow parser's header row for a wrapped main-buffer pane — the
+/// on-demand counterpart of
+/// `mux::ipc::reattach::tests::wrapped_main_buffer_reattach_restores_the_shadow_parsers_header_row`,
+/// driven through `handle_request_pane_snapshot` instead of
+/// `collect_reattach_data`. Fixture per the task plan's Test Notes:
+/// replace the pane's ring with a small-capacity one, feed the same bytes
+/// to both the ring (via `attribute_write`, which records a resize marker
+/// on first use) and the shadow parser until the cumulative bytes exceed
+/// capacity.
+#[tokio::test]
+async fn handle_request_pane_snapshot_restores_the_shadow_parsers_header_row_for_a_wrapped_ring() {
+    use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
+
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    const SMALL_CAPACITY: usize = 2048;
+
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let target: SharedOutputTarget =
+        Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+
+    let session_id = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        add_pane(&mut m, sid, wid, 1, target.clone());
+        let pane_ref = m
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&1)
+            .unwrap();
+
+        *pane_ref.scrollback.lock().unwrap() = ScrollbackRingBuffer::new(SMALL_CAPACITY);
+
+        let mut cumulative: usize = 0;
+        let mut header = Vec::new();
+        header.extend_from_slice(b"\x1b[H\x1b[2J\x1b[1;1H");
+        header.extend_from_slice(b"PID USER HEADER-ROW-TEXT");
+        pane_ref
+            .scrollback
+            .lock()
+            .unwrap()
+            .attribute_write(cols, rows, &header);
+        pane_ref.shadow_parser.lock().unwrap().process(&header);
+        cumulative += header.len();
+        for i in 0..200u32 {
+            let frame = format!("\x1b[2;1Hframe {i:>4}\x1b[K").into_bytes();
+            pane_ref
+                .scrollback
+                .lock()
+                .unwrap()
+                .attribute_write(cols, rows, &frame);
+            pane_ref.shadow_parser.lock().unwrap().process(&frame);
+            cumulative += frame.len();
+        }
+
+        assert!(
+            cumulative > SMALL_CAPACITY,
+            "test prerequisite: cumulative bytes ({cumulative}) must exceed \
+             the fixture ring's capacity ({SMALL_CAPACITY})"
+        );
+        {
+            let parser = pane_ref.shadow_parser.lock().unwrap();
+            let header_text = parser.screen().rows(0, cols).next().unwrap_or_default();
+            assert!(
+                header_text.contains("HEADER-ROW-TEXT"),
+                "test prerequisite: shadow parser's screen must still show \
+                 the header row, got {header_text:?}"
+            );
+        }
+        sid
+    };
+
+    let req = MuxMessage {
+        msg_type: MessageType::RequestPaneSnapshot,
+        pane_id: 1,
+        payload: Vec::new(),
+    };
+    let mut deferred = DeferredOutputQueue::new();
+    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred)
+        .await
+        .expect("handle_request_pane_snapshot");
+
+    let chunk = rx.try_recv().expect("snapshot chunk expected");
+    let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&chunk.data);
+    let replay_segments: Vec<term_core::terminal_core::ReplaySegment> = segments
+        .iter()
+        .map(|s| term_core::terminal_core::ReplaySegment {
+            offset: s.offset,
+            cols: s.cols,
+            rows: s.rows,
+        })
+        .collect();
+    let mut core = term_core::terminal_core::TerminalCore::new(cols, rows, 10_000);
+    core.reset_and_replay_segments(content, &replay_segments);
+    let header_row = core.get_line_text(0);
+    assert!(
+        header_row.contains("HEADER-ROW-TEXT"),
+        "post-wrap on-demand snapshot must restore the shadow parser's \
+         header row; replayed row 0 was {header_row:?}"
     );
 }
 

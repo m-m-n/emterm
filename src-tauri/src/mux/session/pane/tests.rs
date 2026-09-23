@@ -562,6 +562,102 @@ fn largest_real_producer_segment_list_round_trips_cleanly() {
     }
 }
 
+/// TS-10 (AC-7(a), mux-snapshot-ring-wrap-restore task0001): the same
+/// shape as [`largest_real_producer_segment_list_round_trips_cleanly`],
+/// but through the WRAP-AWARE builder for a wrapped MAIN-BUFFER pane
+/// (`alt_screen = false`, `ring_wrapped = true`) instead of the alt-screen
+/// branch. The wrap-restore trailing dump segment shares the same wire-
+/// budget slot as the alt-screen trailing segment (`scrollback_buffer.rs`'s
+/// `MAX_DIM_MARKERS` doc) — this pins that the daemon's largest
+/// wrap-restore producible shape (the cap saturated with exactly one
+/// eviction, plus the trailing dump segment) also saturates at exactly
+/// `MAX_DAEMON_SNAPSHOT_SEGMENTS` without exceeding the wire decoder's
+/// `MAX_SEGMENTS`.
+#[test]
+fn largest_real_wrap_restore_producer_segment_list_round_trips_cleanly() {
+    let (cols, rows) = clamp_dims_to_wire_domain(700, 700);
+    assert_eq!(
+        (cols, rows),
+        (700, 700),
+        "test prerequisite: this shape must fit PRODUCER_SEGMENT_CELL_BUDGET \
+         unclamped, or this test no longer drives the LARGEST real shape \
+         the producer can emit"
+    );
+
+    let content_per_step: &[u8] = b"real-producer-step;";
+    let step_count = MAX_DIM_MARKERS + 1;
+    // Same generous headroom as the sibling test — deliberately NOT
+    // pushing the ring's own byte window into a real wrap, so the
+    // dim_markers count-cap eviction stays the sole, isolated eviction
+    // mechanism in play (D1''''': combining it with a real byte-level wrap
+    // shifts `oldest_offset` and folds additional surviving markers into
+    // the single synthesized head segment instead of leaving them as
+    // distinct `mid` entries, which would change the segment COUNT this
+    // test pins for reasons unrelated to what it is testing). `ring_wrapped`
+    // is instead passed directly to the wrap-aware builder below,
+    // independent of this ring's own (accurately reported) non-wrapped
+    // state — this test is about the wrap-aware builder's wire-budget
+    // saturation, not a second exercise of `read_segments_with_wrap_state`
+    // (already covered exhaustively by the AC-2 `scrollback_buffer` tests).
+    let capacity = step_count * content_per_step.len() + 4096;
+    let mut rb = ScrollbackRingBuffer::new(capacity);
+    for _ in 0..step_count {
+        rb.write_resize_marker(cols, rows);
+        rb.write(content_per_step);
+    }
+    let (raw, segments) = rb.read_segments();
+    assert_eq!(
+        segments.len(),
+        MAX_DIM_MARKERS + 1,
+        "test prerequisite: exactly one cap eviction must synthesize the \
+         head segment (D1''''')"
+    );
+    let ring_wrapped = true;
+
+    // Trailing wrap-restore dump segment (D2): non-empty `screen` (the
+    // shadow parser's dump, standing in here as an opaque byte string
+    // since only the segment COUNT is under test) plus a non-empty
+    // `scrollback_segments` appends one more segment at `current_dims`,
+    // reaching the daemon's true maximum — same slot the alt-screen
+    // trailing segment would otherwise occupy.
+    let screen = vec![b'S'; 100];
+    let (payload_bytes, snapshot_segments) =
+        crate::mux::snapshot_bytes::build_snapshot_bytes_for_ring(
+            &raw,
+            &segments,
+            &screen,
+            false,
+            ring_wrapped,
+            (cols, rows),
+        );
+    assert_eq!(
+        snapshot_segments.len(),
+        MAX_DAEMON_SNAPSHOT_SEGMENTS as usize,
+        "test prerequisite: the trailing wrap-restore dump segment must be \
+         present, reaching MAX_DAEMON_SNAPSHOT_SEGMENTS"
+    );
+
+    let wire_payload = encode_snapshot_segments(&payload_bytes, &snapshot_segments);
+    let decoded = mux_ipc::protocol::decode_snapshot_payload_typed(&wire_payload);
+    match decoded {
+        mux_ipc::protocol::DecodedSnapshotPayload::Structured {
+            segments: decoded_segments,
+            ..
+        } => {
+            assert_eq!(
+                decoded_segments.len(),
+                MAX_DAEMON_SNAPSHOT_SEGMENTS as usize
+            );
+        }
+        other => panic!(
+            "the largest segment list the REAL wrap-restore producer path \
+             emits ({} segments at {cols}x{rows}) must decode as \
+             Structured, not {other:?}",
+            MAX_DAEMON_SNAPSHOT_SEGMENTS
+        ),
+    }
+}
+
 /// AC-2 (round-9 rework, review round-8 finding `6082de4e619d7f51`):
 /// raising `MAX_DIM_MARKERS` (and so `MAX_DAEMON_SNAPSHOT_SEGMENTS`)
 /// must not shrink `PRODUCER_SEGMENT_CELL_BUDGET` underneath a REAL
@@ -1347,6 +1443,76 @@ fn test_evaluate_output_target_detached_to_connected_returns_snapshot() {
     assert_eq!(pane.raw_passthrough.lock().unwrap().len(), 0);
 }
 
+/// AC-3 (FR2, FR5, FR6, FR7; mux-snapshot-ring-wrap-restore task0001):
+/// `evaluate_output_target`'s resume branch also restores the shadow
+/// parser's header row for a wrapped MAIN-BUFFER pane — mirrors
+/// `test_resume_pane_with_permit_restores_the_shadow_parsers_header_row_for_a_wrapped_ring`
+/// for this sibling resume site.
+#[test]
+fn test_evaluate_output_target_restores_the_shadow_parsers_header_row_for_a_wrapped_ring() {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    const SMALL_CAPACITY: usize = 2048;
+
+    let (owned_tx, _rx) = mpsc::channel(16);
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::HiddenByVisibility,
+        owner: Some(owned_tx.clone()),
+    }));
+    let pane = MuxPane::new_test(14, cols, rows, target.clone());
+    *pane.scrollback.lock().unwrap() =
+        crate::mux::scrollback_buffer::ScrollbackRingBuffer::new(SMALL_CAPACITY);
+
+    let mut cumulative: usize = 0;
+    let mut header = Vec::new();
+    header.extend_from_slice(b"\x1b[H\x1b[2J\x1b[1;1H");
+    header.extend_from_slice(b"PID USER HEADER-ROW-TEXT");
+    pane.scrollback
+        .lock()
+        .unwrap()
+        .attribute_write(cols, rows, &header);
+    pane.shadow_parser.lock().unwrap().process(&header);
+    cumulative += header.len();
+    for i in 0..200u32 {
+        let frame = format!("\x1b[2;1Hframe {i:>4}\x1b[K").into_bytes();
+        pane.scrollback
+            .lock()
+            .unwrap()
+            .attribute_write(cols, rows, &frame);
+        pane.shadow_parser.lock().unwrap().process(&frame);
+        cumulative += frame.len();
+    }
+    assert!(
+        cumulative > SMALL_CAPACITY,
+        "test prerequisite: ring must have wrapped"
+    );
+
+    let result = evaluate_output_target(&pane, false, true, &owned_tx);
+    match result {
+        EvalResult::ResumeWithSnapshot { chunk } => {
+            let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&chunk.data);
+            let replay_segments: Vec<term_core::terminal_core::ReplaySegment> = segments
+                .iter()
+                .map(|s| term_core::terminal_core::ReplaySegment {
+                    offset: s.offset,
+                    cols: s.cols,
+                    rows: s.rows,
+                })
+                .collect();
+            let mut core = term_core::terminal_core::TerminalCore::new(cols, rows, 10_000);
+            core.reset_and_replay_segments(content, &replay_segments);
+            let header_row = core.get_line_text(0);
+            assert!(
+                header_row.contains("HEADER-ROW-TEXT"),
+                "post-wrap evaluate_output_target resume snapshot must \
+                 restore the shadow parser's header row; replayed row 0 \
+                 was {header_row:?}"
+            );
+        }
+        _ => panic!("expected ResumeWithSnapshot"),
+    }
+}
+
 /// D6''' (round-6 rework, review round-5 finding `89b58cd82d7aa713`):
 /// mirrors `test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit`
 /// for `evaluate_output_target`'s parallel `ResumeWithSnapshot` branch
@@ -1594,6 +1760,77 @@ async fn test_resume_pane_with_permit_includes_screen_for_alt_screen() {
             .windows(b"ALT-RESUME-SHADOW".len())
             .any(|w| w == b"ALT-RESUME-SHADOW"),
         "alt-screen resume snapshot must include the shadow screen dump"
+    );
+}
+
+/// AC-3 (FR2, FR5, FR6, FR7; mux-snapshot-ring-wrap-restore task0001):
+/// `resume_pane_with_permit` also restores the shadow parser's header row
+/// for a wrapped MAIN-BUFFER pane (not just alt-screen) — the
+/// visibility-resume counterpart of the reattach / on-demand reproduction
+/// fixtures. Fixture per the task plan's Test Notes: replace the pane's
+/// ring with a small-capacity one, feed the same bytes to both the ring
+/// (via `attribute_write`) and the shadow parser until cumulative bytes
+/// exceed capacity.
+#[tokio::test]
+async fn test_resume_pane_with_permit_restores_the_shadow_parsers_header_row_for_a_wrapped_ring() {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    const SMALL_CAPACITY: usize = 2048;
+
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::HiddenByVisibility,
+        owner: Some(owned_tx.clone()),
+    }));
+    let pane = MuxPane::new_test(13, cols, rows, target.clone());
+    *pane.scrollback.lock().unwrap() =
+        crate::mux::scrollback_buffer::ScrollbackRingBuffer::new(SMALL_CAPACITY);
+
+    let mut cumulative: usize = 0;
+    let mut header = Vec::new();
+    header.extend_from_slice(b"\x1b[H\x1b[2J\x1b[1;1H");
+    header.extend_from_slice(b"PID USER HEADER-ROW-TEXT");
+    pane.scrollback
+        .lock()
+        .unwrap()
+        .attribute_write(cols, rows, &header);
+    pane.shadow_parser.lock().unwrap().process(&header);
+    cumulative += header.len();
+    for i in 0..200u32 {
+        let frame = format!("\x1b[2;1Hframe {i:>4}\x1b[K").into_bytes();
+        pane.scrollback
+            .lock()
+            .unwrap()
+            .attribute_write(cols, rows, &frame);
+        pane.shadow_parser.lock().unwrap().process(&frame);
+        cumulative += frame.len();
+    }
+    assert!(
+        cumulative > SMALL_CAPACITY,
+        "test prerequisite: ring must have wrapped"
+    );
+
+    let permit = owned_tx.reserve().await.expect("reserve permit");
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+    let chunk = rx.try_recv().expect("snapshot enqueued");
+    let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&chunk.data);
+    let replay_segments: Vec<term_core::terminal_core::ReplaySegment> = segments
+        .iter()
+        .map(|s| term_core::terminal_core::ReplaySegment {
+            offset: s.offset,
+            cols: s.cols,
+            rows: s.rows,
+        })
+        .collect();
+    let mut core = term_core::terminal_core::TerminalCore::new(cols, rows, 10_000);
+    core.reset_and_replay_segments(content, &replay_segments);
+    let header_row = core.get_line_text(0);
+    assert!(
+        header_row.contains("HEADER-ROW-TEXT"),
+        "post-wrap visibility-resume snapshot must restore the shadow \
+         parser's header row; replayed row 0 was {header_row:?}"
     );
 }
 

@@ -952,6 +952,128 @@ fn apt_style_recording_replays_without_cross_line_mixing() {
     }
 }
 
+/// AC-5(a) (mux-snapshot-ring-wrap-restore task0001): the apt synthesizer,
+/// pushed past a genuinely wrapped ring's capacity (filler bytes in
+/// front, per the task plan's Test Notes), snapshotted via the wrap-aware
+/// builder. The replayed visible region must equal the shadow parser's
+/// screen row by row — FIDELITY, not a zero-mixing guarantee: a real
+/// `vt100::Parser` fed this exact apt fixture (mirroring
+/// `apt_style_recording_replays_without_cross_line_mixing`'s detector)
+/// already shows residual mixed rows of its OWN before any dump-block
+/// code runs at all (confirmed by direct inspection against the bare
+/// `vt100` crate, independent of filler, resize, or this feature — a
+/// short log line printed via `\x1b[1A` cursor-up right after a longer
+/// bar draw leaves a trailing fragment vt100 does not erase). That is
+/// exactly NFR6 "the shadow parser can itself carry residual trashed
+/// cells from unrelated bugs (not repaired by this feature)" territory:
+/// the dump block's job is to faithfully MIRROR whatever the shadow
+/// parser currently shows, mixed or not, never to repair it — so the
+/// invariant this test pins is `client_mixed == shadow_mixed` (never
+/// MORE), not `== 0`.
+///
+/// AC-6's continued-output claim is deliberately NOT exercised with this
+/// apt fixture: the natural "reference" oracle would be a `TerminalCore`
+/// fed the raw apt bytes directly, but `term_core` and the real `vt100`
+/// crate handle this exact short-line-after-cursor-up pattern DIFFERENTLY
+/// (confirmed by direct inspection — `term_core` does not reproduce the
+/// vt100 crate's residual fragment), so such a reference would not agree
+/// with the (deliberately vt100-shadow-faithful) client even absent this
+/// feature — a cross-engine confound, not a regression to catch. AC-6 is
+/// instead proven with a clean, single-engine (`term_core` on both sides)
+/// fixture: `build_snapshot_bytes_for_ring_continued_output_matches_a_reference_fed_the_whole_stream`
+/// in `snapshot_bytes/wrap_restore_tests.rs`.
+///
+/// Held at a SINGLE dims throughout (`synth_apt_bytes_with_midrun_resize`
+/// called with `rows_a == rows_b`, so its own internal "resize" section is
+/// a same-dims no-op) so the fixture isolates this apt-specific mixing
+/// characteristic from resize-driven effects. The resize-differs-from-
+/// current-dims case itself is covered separately, with controlled
+/// (non-apt) content, by
+/// `build_snapshot_bytes_for_ring_uses_current_dims_even_when_it_differs_from_the_last_ring_segment`
+/// in `snapshot_bytes/wrap_restore_tests.rs`.
+#[test]
+fn apt_style_recording_past_a_wrapped_ring_restores_the_shadow_parsers_screen_faithfully() {
+    use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
+    use term_core::terminal_core::TerminalCore;
+
+    let cols: u16 = 120;
+    let rows: u16 = 48;
+
+    let (apt_bytes, apt_segments) = synth_apt_bytes_with_midrun_resize(cols, rows, rows);
+    assert_eq!(apt_segments.len(), 2, "test prerequisite");
+
+    // Filler bytes in front so the ring wraps well before apt starts —
+    // plain unrelated history, evicted first, never touched by the mixing
+    // detector.
+    let mut filler = Vec::new();
+    for i in 0..400u32 {
+        filler.extend_from_slice(format!("filler line {i} of unrelated history\r\n").as_bytes());
+    }
+
+    let capacity = apt_bytes.len() + filler.len() / 4; // wraps: evicts most filler, keeps all of apt
+    let mut rb = ScrollbackRingBuffer::new(capacity);
+    let mut shadow = vt100::Parser::new(rows, cols, 0);
+
+    rb.attribute_write(cols, rows, &filler);
+    shadow.process(&filler);
+    rb.attribute_write(cols, rows, &apt_bytes);
+    shadow.process(&apt_bytes);
+
+    let (raw, segments, ring_wrapped) = rb.read_segments_with_wrap_state();
+    assert!(
+        ring_wrapped,
+        "test prerequisite: the ring must have wrapped"
+    );
+
+    let shadow_mixed = {
+        let mut count = 0;
+        for r in 0..rows {
+            let line = shadow
+                .screen()
+                .rows(0, cols)
+                .nth(r as usize)
+                .unwrap_or_default();
+            let has_bar = line.contains('\u{2588}') || line.trim_end().ends_with(']');
+            let has_log = line.contains("percent");
+            if has_bar && has_log {
+                count += 1;
+            }
+        }
+        count
+    };
+
+    let screen_dump = shadow.screen().contents_formatted();
+    let (payload, out_segments) = crate::mux::snapshot_bytes::build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &screen_dump,
+        false,
+        ring_wrapped,
+        (cols, rows),
+    );
+
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(&payload, &to_replay_segments(&out_segments));
+
+    let client_mixed = count_mixed_rows(&client, rows);
+    assert_eq!(
+        client_mixed, shadow_mixed,
+        "post-wrap snapshot replay must introduce zero ADDITIONAL cross-\
+         line-mixed rows beyond whatever the shadow parser's own screen \
+         already has (NFR6: mirror it faithfully, never repair or worsen \
+         it)"
+    );
+    for r in 0..rows {
+        let got = client.get_line_text(r);
+        let want = shadow
+            .screen()
+            .rows(0, cols)
+            .nth(r as usize)
+            .unwrap_or_default();
+        assert_eq!(got.trim_end(), want.trim_end(), "row {r} mismatch");
+    }
+}
+
 /// Test-only oracle mirroring `ScrollbackRingBuffer::read_segments`'s
 /// head/mid split, but over a marker history that was NEVER capped to
 /// `MAX_DIM_MARKERS` — the theoretical FULL attribution the real cap
