@@ -18,3 +18,12 @@ records:
     equality B verifies at the last column, so both are directly tied to restore correctness; rework cap
     is 1 so there is no second chance this run; E is unmeasured and not needed for A-D, so measure first
     in a separate task. codex_consulted: true; opus_escalation: false'
+- question_id: verify.ac1-commit-order
+  packet_id: null
+  answered_at: '2026-09-23T22:05:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: option
+  selected_option_ids: [B]
+  freeform: null
+  normalized_answer: judge AC1 pass on its substantive requirement; record the commit-order deviation as a process note, not a failed item
+  resolution_note: 'gate: verify AC1 commit-order judgment (unlisted, no gate_id); options: (A) record AC1 as a failed item, which triggers a rework that cannot rewrite merged history and would hit the lineage cap; (B) pass AC1 on substance (reproduction test exists, red run recorded in task0001.tests.yaml with the pre-fix message) and report the deviation. chosen: (B). not chosen: (A). key points: task0001 landed as one commit a425ae5b containing both the test and the fix, so the commit-order clause is unmet; merged history cannot be changed by rework, so (A) only produces futile retries; the deviation is stated in the verify result and the final report. codex_consulted: true; opus_escalation: false'

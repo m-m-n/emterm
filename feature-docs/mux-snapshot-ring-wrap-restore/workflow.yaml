@@ -152,7 +152,18 @@ workflow:
   status: completed
   completed_at_commit: cd700108b4f5c00b8e495915c6959a1ca1085fbb
 - id: verify
-  status: in_progress
+  status: completed
+  completed_at_commit: a71ea067472e6bc7eccbf628c8a223e3fc3e9eeb
+  result: pass
+  failed_items: []
+  excluded_scenarios: []
+  manual_pending:
+  - TS-11
+  notes:
+  - 'AC1 commit order: task0001 landed as one commit a425ae5b holding both the reproduction test and the fix; the red run is recorded in task0001.tests.yaml (red_confirmed: true). Judged pass on substance per batch-audit verify.ac1-commit-order.'
+  - 'TS-16: the absence of ED 3, alt-screen toggle and autowrap change in the dump block is not asserted by a test; only DECSC/DECRC absence is asserted.'
+  - 'TS-2: the four assembly-path tests check the header row; full row equality and the trailing dump segment are checked at builder level.'
+  evidence: rust build check ok, CLI-only check ok, lib tests 3579 passed 0 failed 3 ignored, cargo fmt --check ok, bun test 402 pass, biome check clean
 - id: retrospect
   status: pending
 tasks:
