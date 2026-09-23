@@ -90,7 +90,7 @@ workflow:
   completed_at_commit: 26f232a1685bf0571f1a2fde396984ca76b6fd81
   base_commit: 4a4293f0ec77d023498fc963988e6693acfcc427
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -110,9 +110,18 @@ tasks:
     branch: em-workflow/anchor-scan-turbofish-arrow/task0001
     notes: null
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
   perspectives: []
+  plan:
+    floor:
+    - comprehensive
+    - security
+    discretionary: []
+    cross_validation: false
+    skipped:
+    - perspective: spec
+      reason: SPEC.md absent (minimal tier, TASK.md only) -> spec_available false
   residual_critical_high: 0
   needs_rework: false
 requirements: {}
