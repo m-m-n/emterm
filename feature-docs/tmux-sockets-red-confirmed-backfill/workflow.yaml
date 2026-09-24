@@ -78,7 +78,8 @@ workflow:
     completed_at_commit: 6728004eb7892bf09e2e0f294b99755c644b0dc6
     base_commit: b49bc0ac8ef8d73abc13e43f74081134d87a03d2
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: ed693d574f96a02c77778f4f909b196dfaf99be2
   - id: verify
     status: pending
     result: null
@@ -102,8 +103,11 @@ tasks:
     branch: em-workflow/tmux-sockets-red-confirmed-backfill/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security]
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor: [comprehensive, security]
     discretionary: []
