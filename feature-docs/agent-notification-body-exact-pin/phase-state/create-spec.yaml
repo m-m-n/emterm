@@ -1,0 +1,20 @@
+schema_version: 1
+feature: agent-notification-body-exact-pin
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 16a58a1ed8a50ea567e21c3b7117fa88987f7536
+last_input_digest: sha256:4e64399efbffedb8348b05f20ab5f0317b254f1f86aa81b9c4ad31a1cf0bd7c1
+active_request_id: cs-analyst-001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: cs-analyst-001
+    status: dispatched
+    input_digest: sha256:4e64399efbffedb8348b05f20ab5f0317b254f1f86aa81b9c4ad31a1cf0bd7c1
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
