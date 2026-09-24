@@ -84,7 +84,19 @@ workflow:
     artifacts: [retrospect.yaml]
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Backfill red_confirmed on AC-3..AC-6
+    plan: TASK.md
+    files:
+      - test-docs/tmux-sockets-discover-flake/task0001.tests.yaml
+    skills: []
+    domains: []
+    complexity: low
+    requirements: []
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
