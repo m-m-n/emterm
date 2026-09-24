@@ -126,7 +126,8 @@ workflow:
   completed_at_commit: 7eb0bed7b58d7f5ccbf57bcc4f1f4d56c5690166
   base_commit: 258a0843000965e939490fd95ba8b90227a7e231
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 980772ccee26c6977fd7e0fea954bdaed07b6d0b
 - id: verify
   status: pending
 - id: retrospect
@@ -148,8 +149,13 @@ tasks:
     branch: em-workflow/agent-notification-body-exact-pin/task0001
     notes: null
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive
