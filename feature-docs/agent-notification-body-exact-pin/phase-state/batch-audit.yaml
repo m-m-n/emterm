@@ -1,0 +1,45 @@
+schema_version: 1
+feature: agent-notification-body-exact-pin
+records:
+  - question_id: create-spec.design-system
+    packet_id: null
+    answered_at: "2026-09-24T23:35:00+09:00"
+    source: batch-decision-table
+    answer_mode: option
+    selected_option_ids: [project_native]
+    freeform: null
+    normalized_answer: "project_native: doc/UI-DESIGN-GUIDELINES.yaml"
+    resolution_note: >-
+      gate: create-spec.design-system; resolved by batch-policies.yaml (top
+      candidate -> project_native). Options: project_native / em_workflow /
+      none. Chosen: project_native (doc/UI-DESIGN-GUIDELINES.yaml, the only
+      candidate). codex_consulted: false. Design step is skipped (minimal tier).
+  - question_id: create-spec.codex-consultation
+    packet_id: null
+    answered_at: "2026-09-24T23:35:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "Q1: A (exact assert_eq!). Q2: rewrite CSI comment, drop 'pins the property' wording. Q3: keep the two En/Blocked tests only. Q4: 'abcd' is correct; do not mention DEL."
+    normalized_answer: "Q1=A, Q2=rewrite-comment, Q3=no-extra-locales, Q4=abcd-confirmed"
+    resolution_note: >-
+      gate: none (user-instructed Codex consultation, per the run's argument
+      "Consult Codex on any unclear points and adopt the option judged to be
+      comparatively better"); codex_consulted: true (run_codex_exec.sh readonly).
+      Q1 assertion form. Options: A exact assert_eq!(body, "claude: red title
+      (blocked)") / assert_eq!(body, "claude: abcd (blocked)"); B negative checks
+      plus body.contains("red title"); C A plus the existing negative checks.
+      Chosen A. Not chosen: B — substring checks allow wrong surrounding content;
+      C — the negative checks are redundant once the whole body is pinned. A
+      later markup-escaping task updates the expected strings if needed.
+      Q2 the CSI test comment says it "pins the property, not one exact fixture
+      string (task plan Test Notes)". Chosen: rewrite it to state that the
+      complete body is asserted to verify CSI removal and preservation of visible
+      text; not chosen: keep it (contradicts exact equality).
+      Q3 coverage scope. Chosen: keep the two En/Blocked tests only; not chosen:
+      add Ja locale / other states (sanitization runs unconditionally, locale
+      formatting is covered by existing tests, extra cases widen scope).
+      Q4 "abcd" confirmed as sanitize_title's output for "a\x07b\x00c\u{9f}d"
+      (an existing sanitize_title test expects it); the control-test comment
+      must not claim DEL coverage (no DEL in the fixture).
+      No Opus escalation ran. Recorded as a comment on the Notion task page.
