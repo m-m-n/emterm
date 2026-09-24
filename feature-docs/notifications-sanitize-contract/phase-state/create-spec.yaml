@@ -1,11 +1,11 @@
 schema_version: 1
 feature: notifications-sanitize-contract
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: 72b7e5fcf9c832f0ee3078cfcc1db853818769c2
-last_input_digest: sha256:9cd22663d78083a7067082a904ffe09032002b63403ab18d9c113fa7a60d925c
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:98633833ab19a3aeba68fd0c62595e06a10f4f64ddf5d177ef4cc8567a3b2701
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: answered
@@ -67,6 +67,10 @@ worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:9cd22663d78083a7067082a904ffe09032002b63403ab18d9c113fa7a60d925c
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:98633833ab19a3aeba68fd0c62595e06a10f4f64ddf5d177ef4cc8567a3b2701
   output_digest: null
 artifacts: []
 patches: []
