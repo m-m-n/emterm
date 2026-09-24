@@ -1,0 +1,28 @@
+schema_version: 1
+feature: anchor-scan-turbofish-arrow
+records:
+  - question_id: create-spec.codex-consultation
+    packet_id: null
+    answered_at: "2026-09-24T08:05:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "Option A — a `>` whose preceding token is a byte-adjacent `-` is part of `->` and does not change the angle depth"
+    normalized_answer: "Option A"
+    resolution_note: >-
+      gate: none (user-instructed Codex consultation, per the run's argument
+      "Consult Codex on any unclear points and adopt the option judged to be
+      comparatively better"); codex_consulted: true (run_codex_exec.sh readonly,
+      reasoning xhigh). Question: how find_balancing_angle_close in
+      src-tauri/src/window_host/tests.rs should recognize `->` inside a
+      turbofish generic-argument list. Options: A (preceding `-` token, byte
+      adjacent: prev.end == this.start), B (preceding `-` token regardless of
+      adjacency), C (other). Chosen: A. Options NOT chosen: B — rejected because
+      scan discards whitespace and comments, so token adjacency does not imply
+      source adjacency; B would misread `- >` and `-/*c*/>` as `->`. C — no
+      better alternative proposed. Key points: byte offsets already on PosTok
+      are sufficient; `>>` still closes two levels; `::<-1>` still closes
+      normally (preceding token is a numeric literal); the sole-turbofish Err
+      contract is unchanged. Codex also proposed the regression test list now
+      recorded in TASK.md Expected Result. No Opus escalation ran. The
+      discussion was recorded as a comment on the Notion task page.

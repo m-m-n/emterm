@@ -7383,9 +7383,19 @@ mod anchor_scan {
     /// means the generic-argument list was never closed inside this
     /// range — the walk stops immediately and returns `None`, rather
     /// than reading past the unmatched close to some unrelated `>`
-    /// further along. Returns the index of the balancing `>`, or `None`
-    /// when the walk reaches `end` without finding one at nesting depth
-    /// 0 — the walk never goes past the body end.
+    /// further along. anchor-scan-turbofish-arrow/task0001: a `>`
+    /// immediately preceded by a byte-adjacent `Punct('-')` token
+    /// (`toks[m - 1].end == toks[m].start`, with `m - 1 >= after_open`)
+    /// is the `>` of a `->` return-type arrow inside a generic argument
+    /// (e.g. `fn(u8) -> u8`) — it is skipped without changing depth,
+    /// never counted as a close. Any other `-` before a `>` (separated
+    /// by whitespace or a comment, since the scanner already discarded
+    /// those tokens and byte-adjacency no longer holds; or with
+    /// something other than `-` — such as a numeric literal for a
+    /// negative const generic — immediately before it) closes the list
+    /// as usual. Returns the index of the balancing `>`, or `None` when
+    /// the walk reaches `end` without finding one at nesting depth 0 —
+    /// the walk never goes past the body end.
     fn find_balancing_angle_close(toks: &[PosTok], after_open: usize, end: usize) -> Option<usize> {
         let mut angle_depth = 1i32;
         let mut nest_depth = 0i32;
@@ -7402,9 +7412,14 @@ mod anchor_scan {
             } else if nest_depth == 0 && is_punct(&toks[m], '<') {
                 angle_depth += 1;
             } else if nest_depth == 0 && is_punct(&toks[m], '>') {
-                angle_depth -= 1;
-                if angle_depth == 0 {
-                    return Some(m);
+                let is_arrow_close = m > after_open
+                    && is_punct(&toks[m - 1], '-')
+                    && toks[m - 1].end == toks[m].start;
+                if !is_arrow_close {
+                    angle_depth -= 1;
+                    if angle_depth == 0 {
+                        return Some(m);
+                    }
                 }
             }
             m += 1;
@@ -7514,9 +7529,12 @@ mod anchor_scan {
         //     find_balancing_angle_close's own doc comment has the
         //     nesting-depth details, including why a const-generic
         //     comparison/shift or an array length inside the list never
-        //     desyncs the balance), then `(`. A turbofish-shaped
-        //     reference not followed by `(` after the balancing `>` is
-        //     not a call and is not counted (EC-4).
+        //     desyncs the balance), then `(`. A `->` return-type arrow
+        //     inside the generic argument (e.g. `fn(u8) -> u8`) does not
+        //     prematurely close the list — `find_balancing_angle_close`
+        //     skips the arrow's own `>` (anchor-scan-turbofish-arrow/task0001).
+        //     A turbofish-shaped reference not followed by `(` after the
+        //     balancing `>` is not a call and is not counted (EC-4).
         // `hits` pairs each counted occurrence's callee-token index with
         // whether it was the turbofish shape.
         let mut hits: Vec<(usize, bool)> = Vec::new();
@@ -8202,6 +8220,190 @@ fn anchor_locate_call_sole_turbofish_call_returns_err() {
         result.is_err(),
         "AC-5(b)/anchor-scan-callee-miscount: a body whose only call is turbofish-form must \
          return Err, never anchoring from `::`"
+    );
+}
+
+// ── anchor-scan-turbofish-arrow/task0001: `->` inside a turbofish's
+// generic-argument list must not be mistaken for the list's own closing
+// `>` ─────────────────────────────────────────────────────────────────
+
+/// AC-1 (anchor-scan-turbofish-arrow/task0001): the reproduction case —
+/// a turbofish generic argument containing a `->` return-type arrow
+/// (`fn(u8) -> u8`) must not have the arrow's own `>` mistaken for the
+/// list's balancing close. The turbofish call must be counted alongside
+/// the plain call, rejecting the body as ambiguous.
+#[test]
+fn anchor_locate_call_turbofish_arrow_return_type_counted_as_ambiguous() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { \
+               probe_call::<fn(u8) -> u8>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-1/anchor-scan-turbofish-arrow: a turbofish call whose generic argument contains \
+         `->` must be counted, rejecting the body as ambiguous"
+    );
+}
+
+/// AC-2 (anchor-scan-turbofish-arrow/task0001): the same reproduction
+/// with the call order reversed — the plain call first, the turbofish
+/// call with the `->` arrow second. Still ambiguous.
+#[test]
+fn anchor_locate_call_turbofish_arrow_return_type_reversed_order_counted_as_ambiguous() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { probe_call(a, b, c, d); \
+               probe_call::<fn(u8) -> u8>(w, x, y, z); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-2/anchor-scan-turbofish-arrow: reversing the call order must not change the \
+         ambiguous verdict"
+    );
+}
+
+/// AC-3(a) (anchor-scan-turbofish-arrow/task0001): the `->` arrow
+/// nested two generic levels deep (`Box<dyn Fn(u8) -> u8>`) must still
+/// be skipped without changing depth, so the outer turbofish list's own
+/// doubled `>>` closes it correctly and the call is counted.
+#[test]
+fn anchor_locate_call_turbofish_arrow_nested_in_dyn_fn_counted_as_ambiguous() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { \
+               probe_call::<Box<dyn Fn(u8) -> u8>>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-3(a)/anchor-scan-turbofish-arrow: a `->` nested inside `Box<dyn Fn(u8) -> u8>` \
+         must be skipped, letting the outer `>>` close the list and the call be counted"
+    );
+}
+
+/// AC-3(b) (anchor-scan-turbofish-arrow/task0001): two `->` arrows in
+/// sequence (`fn() -> fn(u8) -> u8`) must both be skipped, so the call
+/// is still counted.
+#[test]
+fn anchor_locate_call_turbofish_double_arrow_counted_as_ambiguous() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { \
+               probe_call::<fn() -> fn(u8) -> u8>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-3(b)/anchor-scan-turbofish-arrow: two `->` arrows in sequence must both be \
+         skipped, letting the call be counted"
+    );
+}
+
+/// AC-3(c) (anchor-scan-turbofish-arrow/task0001): a `->` arrow
+/// followed by its own nested generic (`fn() -> Vec<u8>`) must be
+/// skipped without disturbing the nested `<...>` depth tracking that
+/// follows it.
+#[test]
+fn anchor_locate_call_turbofish_arrow_then_nested_generic_counted_as_ambiguous() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { \
+               probe_call::<fn() -> Vec<u8>>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-3(c)/anchor-scan-turbofish-arrow: a `->` arrow followed by a nested generic must \
+         be skipped without disturbing the nested depth tracking"
+    );
+}
+
+/// AC-4 (anchor-scan-turbofish-arrow/task0001): block comments around
+/// (but not inside) the `->` arrow, and right after the list's real
+/// closing `>`, must not stop the arrow from being recognized or the
+/// call from being counted — the scanner already discards comment
+/// tokens, and the arrow's own two characters stay byte-adjacent.
+#[test]
+fn anchor_locate_call_turbofish_arrow_with_comments_counted_as_ambiguous() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { \
+               probe_call::<fn(u8) /*a*/ -> /*b*/ u8>/*c*/(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4/anchor-scan-turbofish-arrow: comments around the arrow and after the list's \
+         close must not stop the call from being counted"
+    );
+}
+
+/// AC-5 (anchor-scan-turbofish-arrow/task0001): a body whose only call
+/// is turbofish-form with a `->` in its generic argument must still
+/// return `Err`, unchanged from the existing turbofish-sole-call
+/// contract (AC-5(b) above).
+#[test]
+fn anchor_locate_call_sole_turbofish_arrow_call_returns_err() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { \
+               probe_call::<fn(u8) -> u8>(w, x, y, z); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-5/anchor-scan-turbofish-arrow: a sole turbofish-form call with a `->` in its \
+         generic argument must still return Err, never anchoring from `::`"
+    );
+}
+
+/// AC-6 (anchor-scan-turbofish-arrow/task0001): a bare turbofish-form
+/// reference (not itself shaped as a call) whose generic argument
+/// contains a `->` must still not be counted — the balancing `>` is
+/// found correctly, and the token right after it is `;`, not `(`. The
+/// single real plain call still anchors cleanly.
+#[test]
+fn anchor_locate_call_bare_turbofish_arrow_reference_not_counted() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { let f = probe_call::<fn(u8) -> u8>; \
+               probe_call(a, b, c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-6/anchor-scan-turbofish-arrow: a bare turbofish reference with a `->` in its \
+         generic argument must not be counted, leaving the plain call to anchor",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, c, d",
+        "AC-6/anchor-scan-turbofish-arrow: the argument text must be exactly the plain call's \
+         four arguments"
+    );
+}
+
+/// AC-7(a) (anchor-scan-turbofish-arrow/task0001): a `-` separated from
+/// the following `>` by whitespace (`<- >`) is not a `->` arrow — the
+/// byte-adjacency check fails, so the `>` closes the list normally and
+/// the call is counted.
+#[test]
+fn anchor_locate_call_hyphen_space_before_angle_close_not_treated_as_arrow() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { probe_call::<- >(w, x, y, z); \
+               probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-7(a)/anchor-scan-turbofish-arrow: a `-` separated from `>` by whitespace must not \
+         be treated as `->`, so the `>` closes the list and the call is counted"
+    );
+}
+
+/// AC-7(b) (anchor-scan-turbofish-arrow/task0001): a `-` separated from
+/// the following `>` by a block comment (`<-/*c*/>`) is likewise not a
+/// `->` arrow.
+#[test]
+fn anchor_locate_call_hyphen_comment_before_angle_close_not_treated_as_arrow() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { probe_call::<-/*c*/>(w, x, y, z); \
+               probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-7(b)/anchor-scan-turbofish-arrow: a `-` separated from `>` by a comment must not \
+         be treated as `->`, so the `>` closes the list and the call is counted"
+    );
+}
+
+/// AC-8 (anchor-scan-turbofish-arrow/task0001): a negative const generic
+/// argument (`::<-1>`) has a numeric literal — not `-` — immediately
+/// before the closing `>`, so the list closes normally regardless of
+/// the arrow check.
+#[test]
+fn anchor_locate_call_negative_const_generic_closes_normally() {
+    let src = "fn probe_fn(w: i32, x: i32, y: i32, z: i32) { probe_call::<-1>(w, x, y, z); \
+               probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-8/anchor-scan-turbofish-arrow: a negative const generic's `>` must close the list \
+         normally, since the token right before it is a numeric literal, not `-`"
     );
 }
 
