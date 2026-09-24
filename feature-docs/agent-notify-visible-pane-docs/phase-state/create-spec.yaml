@@ -5,10 +5,33 @@ status: in_progress
 generation: 1
 mode: batch
 last_input_digest: sha256:d3b9ea2885c18702a8f3bd286ce0d2af6bab117b566f1beac3e7cff955520a8d
-active_request_id: cs-analyst-001
+active_request_id: cs-specwriter-001
 packets: {}
-answers: {}
-worker_runs: []
+answers:
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-24T23:35:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: doc/UI-DESIGN-GUIDELINES.yaml (top candidate
+      of 3 detected)'
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-09-24T23:35:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: 'skipped: documentation-only change, no UI; also removed by
+      tier reduced'
+worker_runs:
+- request_id: cs-analyst-001
+  status: completed
+  input_digest: sha256:d3b9ea2885c18702a8f3bd286ce0d2af6bab117b566f1beac3e7cff955520a8d
 artifacts: []
 patches: []
 stale_redispatch_count: 0
