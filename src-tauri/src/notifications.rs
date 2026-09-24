@@ -1066,8 +1066,9 @@ mod tests {
 
     // AC-2 (agent-notification-sanitize-title task0001): a tab title
     // carrying a CSI sequence must not leak escape/CSI bytes into the
-    // returned body — pins the property, not one exact fixture string
-    // (task plan Test Notes).
+    // returned body. Pins the whole body so the assertion catches both the
+    // CSI remnants (`[31m` / `[0m`) being left behind and the visible text
+    // (`red title`) being lost.
     #[test]
     fn agent_notification_body_strips_csi_sequences_from_tab_title() {
         let body = agent_notification_body(
@@ -1075,15 +1076,14 @@ mod tests {
             "\x1b[31mred\x1b[0m title",
             Locale::En,
         );
-        assert!(
-            !body.contains('\x1b'),
-            "body must not contain the ESC byte: {body:?}"
-        );
+        assert_eq!(body, "claude: red title (blocked)");
     }
 
     // AC-3 (agent-notification-sanitize-title task0001): a tab title
-    // carrying C0/DEL/C1 control characters must not leak any of them
-    // into the returned body.
+    // carrying C0/C1 control characters must not leak any of them into
+    // the returned body. Pins the whole body so the assertion catches both
+    // stray control characters being left behind and the visible text
+    // (`abcd`) being lost.
     #[test]
     fn agent_notification_body_strips_control_chars_from_tab_title() {
         let body = agent_notification_body(
@@ -1091,12 +1091,6 @@ mod tests {
             "a\x07b\x00c\u{9f}d",
             Locale::En,
         );
-        assert!(
-            body.chars().all(|c| {
-                let cp = c as u32;
-                !(cp <= 0x1f || (0x7f..=0x9f).contains(&cp))
-            }),
-            "body must not contain C0/DEL/C1 control characters: {body:?}"
-        );
+        assert_eq!(body, "claude: abcd (blocked)");
     }
 }
