@@ -1,7 +1,7 @@
 schema_version: 1
 feature: agent-notification-body-exact-pin
 phase: create-plan
-status: in_progress
+status: completed
 generation: 1
 base_revision: 0088ad2fee4f703641aaaa8ddad66816eb27465c
 last_input_digest: sha256:59c582666934c0b463e7b55312a0223f8c7febb779854f1a007da66a34d3eab5
