@@ -187,17 +187,23 @@ before they are shown in the UI or in a notification.
 
 ## Notifications
 
-An OS notification fires when a pane not visible in the foreground window
-has a real transition to `blocked` or `done`. The following never produce a
-notification:
+An OS notification fires for any pane on a real transition to `blocked` or
+`done`. For a visible pane (the focused window's active tab), this is
+controlled by `agent_notify_visible_pane` (default on) and is suppressed
+only when that setting is off. Panes that are not visible are unaffected by
+that setting. The following never produce a notification:
 
 - A same-state re-report.
 - A name-only change (no state change).
 - A state update derived from snapshot/replay (e.g. after reattaching to a
   mux session).
 
-Notifications are further limited by a per-pane rate limit, and only fire
-when both the `agent_status_notifications` setting (default on) and the
-existing global notification setting are enabled. The name shown in a
+Notifications are further limited by a per-pane rate limit. Every
+notification also requires: the `agent_status_notifications` setting
+(default on), the global notification setting (default on), and the
+per-event toggle for the transition's target state (default on) —
+`agent_notify_on_done` for transitions to `done`, `agent_notify_on_blocked`
+for transitions to `blocked`. For a visible pane, `agent_notify_visible_pane`
+(default on) applies in addition to the above. The name shown in a
 notification body is the sanitized (control-character-stripped) display
 name.
