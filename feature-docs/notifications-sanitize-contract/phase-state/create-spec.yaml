@@ -1,0 +1,21 @@
+schema_version: 1
+feature: notifications-sanitize-contract
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 72b7e5fcf9c832f0ee3078cfcc1db853818769c2
+last_input_digest: sha256:9cd22663d78083a7067082a904ffe09032002b63403ab18d9c113fa7a60d925c
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:9cd22663d78083a7067082a904ffe09032002b63403ab18d9c113fa7a60d925c
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
