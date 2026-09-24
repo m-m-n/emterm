@@ -130,7 +130,20 @@ workflow:
   artifacts:
   - retrospect.yaml
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: agent_notification_body のサニタイズ固定テストを本文全体の一致に強化する
+    plan: TASK.md
+    files:
+    - src-tauri/src/notifications.rs
+    skills: []
+    domains:
+    - input-handling
+    complexity: low
+    requirements: []
+    status: pending
+    branch: null
+    notes: null
 review:
   status: pending
   rounds_completed: 0
