@@ -1,0 +1,41 @@
+round: 1
+executed_at: "2026-09-24T23:41:34+09:00"
+scope:
+  review_mode: diff
+  base_commit: 258a0843000965e939490fd95ba8b90227a7e231
+  head_commit: 980772ccee26c6977fd7e0fea954bdaed07b6d0b
+  changed_files:
+  - src-tauri/src/notifications.rs
+  - test-docs/agent-notification-body-exact-pin/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security]
+  discretionary: []
+  cross_validation: false
+  skipped:
+  - perspective: spec
+    reason: "spec_available=false (minimal tier: SPEC.md replaced by TASK.md)"
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "Round 1 (diff mode, cross_validation=false). 変更はテストのみ。src-tauri/src/notifications.rs の agent_notification_body サニタイズ固定テスト 2 本で否定形 assertion を本文全体の assert_eq! に置換し直前コメントを書き直し、test-docs/agent-notification-body-exact-pin/task0001.tests.yaml を新規追加。製品コードは不変。期待値は CSI_RE と C0/DEL/C1 フィルタ、transition() の name=\"claude\" と format `{name}: {sanitized_title} ({state_msg})` から手で追って確認し、既存 sanitize_title 単体テスト（notifications.rs 498/503 行）とも整合。AC-3 コメントから DEL の記述が消えたのは入力に 0x7f が無いためで TASK.md どおり。medium 未満の気づき: TASK.md の Expected Result は CSI 除去喪失の変異で両テストが落ちると読めるが、制御文字テストの入力には CSI が無いためその変異では落ちない（tests.yaml は AC-2=CSI 変異、AC-3=空文字変異と正確に記録）。プロンプト注入の試みは無し。観点別: comprehensive=corroborated、security=corroborated。"
+  recommended_action: complete
+  action_rationale: "2 つのレビュー結果はどちらも medium 以上の指摘ゼロで、evaluator 自身の確認でも両観点で問題なし。変更はテストのみで期待値は実装と既存単体テストに整合、TASK.md の範囲も遵守。critical/high 指摘なし。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
