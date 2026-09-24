@@ -96,7 +96,7 @@ tasks:
     domains: []
     complexity: low
     requirements: []
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/tmux-sockets-red-confirmed-backfill/task0001
 
