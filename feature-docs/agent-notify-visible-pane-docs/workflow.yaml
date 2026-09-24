@@ -56,7 +56,7 @@ workflow:
     completed_at_commit: 45b6978b625befc7f2f9db137ef11826c55f6a5b
     base_commit: a4933a5c52c92af931472be4d4a8a7f2d16c7c04
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
   - id: retrospect
@@ -77,7 +77,11 @@ tasks:
     notes: null
 
 review:
-  status: pending
+  status: in_progress
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary: []
+    cross_validation: false
 
 requirements:
   FR1: {title: "SPECIFICATION.md visible-pane behavior statement", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-1, TS-4]}
