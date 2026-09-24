@@ -49,7 +49,8 @@ workflow:
       ドキュメントのみの変更で、UI・画面・ビジュアルの変更が無い。
   - id: create-plan
     artifacts: [VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 8d2ed1738d3164c90c38cd1ca48f03aba2680068
   - id: implement
     status: pending
   - id: review
@@ -60,19 +61,29 @@ workflow:
     artifacts: [retrospect.yaml]
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Align agent-notification docs with visible-pane behavior
+    plan: tasks/task0001.md
+    files: [doc/AGENT-STATUS.md, doc/SPECIFICATION.md]
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
 
 review:
   status: pending
 
 requirements:
-  FR1: {title: "SPECIFICATION.md visible-pane behavior statement", status: ok, tbd_reason: null, excluded_reason: null, tasks: [], tests: []}
-  FR2: {title: "SPECIFICATION.md setting-key list includes agent_notify_visible_pane", status: ok, tbd_reason: null, excluded_reason: null, tasks: [], tests: []}
-  FR3: {title: "AGENT-STATUS.md Notifications section visible-pane behavior", status: ok, tbd_reason: null, excluded_reason: null, tasks: [], tests: []}
-  FR4: {title: "AGENT-STATUS.md Notifications section setting-key list", status: ok, tbd_reason: null, excluded_reason: null, tasks: [], tests: []}
-  NFR1: {title: "変更範囲", status: ok, tbd_reason: null, excluded_reason: null, tasks: [], tests: []}
-  NFR2: {title: "コードとの一致", status: ok, tbd_reason: null, excluded_reason: null, tasks: [], tests: []}
-  NFR3: {title: "記述内容", status: ok, tbd_reason: null, excluded_reason: null, tasks: [], tests: []}
+  FR1: {title: "SPECIFICATION.md visible-pane behavior statement", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-1, TS-4]}
+  FR2: {title: "SPECIFICATION.md setting-key list includes agent_notify_visible_pane", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-1]}
+  FR3: {title: "AGENT-STATUS.md Notifications section visible-pane behavior", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-2, TS-4]}
+  FR4: {title: "AGENT-STATUS.md Notifications section setting-key list", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-3, TS-4]}
+  NFR1: {title: "変更範囲", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-5]}
+  NFR2: {title: "コードとの一致", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-4]}
+  NFR3: {title: "記述内容", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-6]}
 
 batch:
   review_rework_count: 0
