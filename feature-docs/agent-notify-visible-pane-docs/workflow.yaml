@@ -59,7 +59,7 @@ workflow:
     status: completed
     completed_at_commit: 95767737146e142233f9f33890df5d46094167af
   - id: verify
-    status: pending
+    status: in_progress
   - id: retrospect
     artifacts: [retrospect.yaml]
     status: pending
