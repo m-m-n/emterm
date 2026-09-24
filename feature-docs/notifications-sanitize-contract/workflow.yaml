@@ -102,7 +102,8 @@ workflow:
   completed_at_commit: d41d33e9a7c5a0556e5d53cd37c6781efd4eec70
   summary: 'build (default + --no-default-features) ok, no warnings; lib tests 3640 passed / 0 failed / 3 ignored; TS1-TS7 and public-surface inspection pass'
 - id: retrospect
-  status: pending
+  status: completed
+  completed_at_commit: ab96d65741f89d1d00864a6bfc1bed44162acc3b
 tasks:
   task0001:
     title: SanitizedTitle newtype, builder signatures, call-site migration and doc rewrite
