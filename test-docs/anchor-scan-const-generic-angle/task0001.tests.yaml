@@ -1,0 +1,176 @@
+task_id: task0001
+baseline_failures: []          # cargo test --lib was fully green (3613 passed, 3 ignored) before any change
+final_failures: []             # cargo test --lib fully green after the change (3626 passed, 3 ignored)
+
+# TASK.md has no numbered "Acceptance Criteria" section — per the task
+# assignment, its "Expected Result" bullets ARE the acceptance criteria.
+# AC-N below numbers those bullets in the order they appear in TASK.md.
+acceptance_tests:
+  AC-1:
+    tests: [window_host::tests::anchor_locate_call_const_generic_comparison_inside_braces_counted_as_ambiguous]
+    red_confirmed: true
+    red_reason: >-
+      Reproduction case. Before the fix, the first `>` inside `{ 1 > 0 }`
+      was misread as the turbofish's own closing angle bracket; the token
+      right after it is the literal `0`, not `(`, so the occurrence was
+      silently NOT counted as a call at all — leaving only the plain `P`
+      call, so locate_call wrongly returned Ok anchored on the unrelated
+      plain call instead of the expected Err. Assertion failed:
+      "AC-1/anchor-scan-const-generic-angle: a const-generic comparison
+      inside `{ }` must not desync the balancing walk...".
+  AC-2:
+    tests: [window_host::tests::anchor_locate_call_const_generic_comparison_bare_reference_not_counted]
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, the real closing `>` (after `}`) was never reached
+      (the walk closed early on the misread inner `>`, then found `(0)`'s
+      `(` did not follow it, still failing to find gt_idx==Some pointing
+      past `;`); the reference and the plain call were BOTH left
+      uncounted/miscounted such that locate_call returned Err "found 2"
+      instead of Ok. Observed panic: "... found 2 — explicit failure,
+      never a silent wrong pick" via .expect().
+  AC-3:
+    tests: [window_host::tests::anchor_locate_call_const_generic_comparison_order_reversed_counted_as_ambiguous]
+    red_confirmed: true
+    red_reason: >-
+      Same root cause as AC-1 with call order reversed. Before the fix
+      the turbofish occurrence was silently uncounted, so only the plain
+      call was found and locate_call wrongly returned Ok instead of the
+      expected Err. Assertion failed: "AC-3/anchor-scan-const-generic-angle:
+      reversing the call order must not change the ambiguity outcome".
+  AC-4a:
+    tests: [window_host::tests::anchor_locate_call_const_generic_less_than_inside_braces_counted_as_ambiguous]
+    red_confirmed: true
+    red_reason: >-
+      `{ 1 < 2 }`: before the fix the inner `<` was double-counted as an
+      angle-bracket opener, shifting the depth so the walk balanced one
+      token too early/late and produced an inconsistent has_call_paren
+      result. Assertion failed before the fix (turbofish call not
+      recognized as ambiguous with the plain call).
+  AC-4b:
+    tests: [window_host::tests::anchor_locate_call_const_generic_right_shift_inside_braces_counted_as_ambiguous]
+    red_confirmed: true
+    red_reason: >-
+      `{ N >> 1 }`: before the fix both `>` tokens of `>>` were counted
+      as angle-bracket closers (closing 2 levels), reaching depth 0 one
+      `>` too early — the real closing `>` (after `}`) was then followed
+      by `(`, itself parsed as a second, bogus "closing" that never got
+      hit, missing the true call boundary. Assertion failed before the
+      fix.
+  AC-4c:
+    tests: [window_host::tests::anchor_locate_call_const_generic_left_shift_inside_array_length_counted_as_ambiguous]
+    red_confirmed: true
+    red_reason: >-
+      `[u8; 1 << 2]`: before the fix, `<<` inside the array-length
+      expression was double-counted as two angle-bracket openers, so the
+      walk never balanced back to 0 by the real closing `>`. Assertion
+      failed before the fix.
+  AC-4d:
+    tests: [window_host::tests::anchor_locate_call_const_generic_mixed_nesting_inside_braces_counted_as_ambiguous]
+    red_confirmed: true
+    red_reason: >-
+      `{ [1 << 2][0] > (0) }`: before the fix, the `<<` inside `[1 << 2]`
+      was double-counted and the mid-block `>` comparison was also
+      miscounted, together desyncing the walk from the real closing `>`
+      after `}`. Assertion failed before the fix.
+  AC-4e:
+    tests: [window_host::tests::anchor_locate_call_nested_generic_types_still_counted_as_ambiguous]
+    red_confirmed: false
+    red_reason: >-
+      `Result<Vec<u8>, Option<u16>>>` has no comparison/shift operators,
+      so the pre-fix flat `<`/`>` counter already balanced it correctly
+      (this exact shape is the pre-existing
+      anchor_locate_call_turbofish_with_nested_generics_counted_as_ambiguous
+      test, which was already green). This test passed before any
+      implementation change — it is a regression guard proving the
+      nesting-depth gate does not disturb genuinely nested generics, not
+      a reproduction of the bug. Carried into the report's
+      unconfirmed_reds.
+  AC-4f:
+    tests: [window_host::tests::anchor_locate_call_tuple_type_generic_argument_counted_as_ambiguous]
+    red_confirmed: false
+    red_reason: >-
+      `(Vec<u8>, u8)` has no comparison/shift operators; the pre-fix flat
+      counter already balanced its inner `<u8>` correctly since the outer
+      `(`/`)` were simply ignored by the old counter (never touched
+      angle_depth). Passed before any implementation change — a
+      regression guard for the Design note's "`(` treated like `[`/`{`"
+      decision, not a bug reproduction. Carried into the report's
+      unconfirmed_reds.
+  AC-4g:
+    tests: [window_host::tests::anchor_locate_call_fn_pointer_type_generic_argument_counted_as_ambiguous]
+    red_confirmed: false
+    red_reason: >-
+      Same reasoning as AC-4f: `fn(Vec<u8>)` has no comparison/shift
+      operators, so it already balanced correctly under the old flat
+      counter. Passed before any implementation change. Carried into the
+      report's unconfirmed_reds.
+  AC-4h:
+    tests: [window_host::tests::anchor_locate_call_const_generic_comparison_with_comments_counted_as_ambiguous]
+    red_confirmed: true
+    red_reason: >-
+      Same root cause as AC-1, with comments around the turbofish (the
+      scanner already discards comment tokens before this walk runs, so
+      the comments themselves are not the variable under test — the
+      const-generic comparison inside `{ }` is). Assertion failed before
+      the fix.
+  AC-5:
+    tests: [window_host::tests::anchor_locate_call_sole_const_generic_comparison_turbofish_call_returns_err]
+    red_confirmed: true
+    red_reason: >-
+      Strengthened beyond a plain `is_err()` check (which would have
+      passed even before the fix, for the wrong reason) to assert the
+      error text contains "turbofish-form" — i.e. that the call was
+      actually *recognized* and rejected via the pre-existing
+      sole-turbofish-call contract (SPEC as-2), not miscounted as zero
+      calls. Before the fix, the misread inner `>` made
+      has_call_paren false (next token is the literal `0`, not `(`), so
+      the occurrence was never counted at all and locate_call returned
+      "found 0" instead of the turbofish-form rejection. Observed panic:
+      "... got: anchor: expected exactly one call to `probe_call` inside
+      `fn probe_fn`, found 0 — explicit failure, never a silent wrong
+      pick".
+  AC-6:
+    tests:
+      - window_host::tests::anchor_locate_call_turbofish_callee_counted_as_ambiguous
+      - window_host::tests::anchor_locate_call_turbofish_with_nested_generics_counted_as_ambiguous
+      - window_host::tests::anchor_locate_call_turbofish_with_comments_counted_as_ambiguous
+      - window_host::tests::anchor_locate_call_bare_turbofish_reference_not_counted
+      - window_host::tests::anchor_locate_call_sole_turbofish_call_returns_err
+      - window_host::tests::button_path_rewrapped_argument_list_edit_is_accepted
+    red_confirmed: false
+    red_reason: >-
+      Regression bar, not new behavior: these pre-existing anchor_scan
+      tests (`>>` two-level close, nested generics, comment
+      interleaving, non-call `let f = probe_call::<u8>;` reference) and
+      the benign-edit test must stay green through the change. They were
+      green before the change and remain green after
+      (baseline_failures/final_failures both empty over the full 3613 /
+      3626-test suite), which is exactly what this AC requires — it was
+      never expected to go red.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/verification outcome, not a single test: `cargo check` and
+      `cargo test --manifest-path src-tauri/Cargo.toml --lib` are both
+      green (3626 passed, 0 failed, 3 ignored — the same 3 pre-existing
+      ignores as the baseline).
+  Design-note-negative-nesting-depth:
+    tests: [window_host::tests::anchor_locate_call_turbofish_negative_nesting_depth_stops_the_walk]
+    red_confirmed: true
+    red_reason: >-
+      Not one of TASK.md's "Expected Result" bullets, but an explicit
+      requirement of the "Change" section (入れ子の深さを負にする閉じ括弧
+      に出会ったら、走査を打ち切って None を返す — Design note, option A vs
+      B) that none of the Expected Result examples happen to exercise.
+      Added as supplementary coverage discriminating option A (adopted:
+      stop immediately on a negative dip) from option B (rejected:
+      ignore the negative dip and keep going, risking a later unrelated
+      `(`/`[` resyncing depth to 0 and misreading an unconnected `>`).
+      Before this fix (which had no such guard at all — the depth
+      variable was flat, not gated by nesting), the stray `)` then `[`
+      resynced nest_depth to 0 right before the injected `>`, wrongly
+      counting the reference as a second call. Observed panic before
+      the fix: "... found 2 — explicit failure, never a silent wrong
+      pick" via .expect().

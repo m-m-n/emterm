@@ -7364,23 +7364,46 @@ mod anchor_scan {
         ArgCount::Count(count)
     }
 
-    /// anchor-scan-callee-miscount/task0001 (FR3): from the index right
-    /// after a turbofish's opening `<`, walks to the `>` that balances
-    /// it — each `<` opens one level and each `>` closes one, and since
-    /// the scanner emits each `>` as its own punctuation token, `>>`
-    /// closes two levels (EC-3). Tokens other than `<` / `>` are
-    /// skipped. Returns the index of the balancing `>`, or `None` when
-    /// the walk reaches `end` without finding it — the walk never goes
-    /// past the body end.
+    /// anchor-scan-const-generic-angle/task0001 (FR3, EC-3): from the
+    /// index right after a turbofish's opening `<`, walks to the `>`
+    /// that balances it. A separate nesting depth — one counter shared
+    /// by `(` / `[` / `{` against their own `)` / `]` / `}` (Design
+    /// note, 入れ子の追い方: A) — gates which `<` / `>` tokens change the
+    /// angle-bracket depth: only while nesting depth is 0 does a `<`
+    /// open a level and a `>` close one (`>>` still closes two levels
+    /// there, EC-3, unchanged from before). While nesting depth is
+    /// positive, a `<` / `>` is a comparison or shift operator inside a
+    /// const-generic block (`{ 1 > 0 }`, `{ N >> 1 }`) or an array
+    /// length (`[u8; 1 << 2]`) and is skipped — the paren/bracket/brace
+    /// depth itself still keeps updating. `(` is treated the same as
+    /// `[` / `{` (Design note, `(` の扱い): a well-formed `(Vec<u8>,
+    /// u8)` or `fn(Vec<u8>)` still balances because its own inner
+    /// `<...>` closes at the deeper nesting level, before nesting depth
+    /// returns to 0. A closer that would take nesting depth negative
+    /// means the generic-argument list was never closed inside this
+    /// range — the walk stops immediately and returns `None`, rather
+    /// than reading past the unmatched close to some unrelated `>`
+    /// further along. Returns the index of the balancing `>`, or `None`
+    /// when the walk reaches `end` without finding one at nesting depth
+    /// 0 — the walk never goes past the body end.
     fn find_balancing_angle_close(toks: &[PosTok], after_open: usize, end: usize) -> Option<usize> {
-        let mut depth = 1i32;
+        let mut angle_depth = 1i32;
+        let mut nest_depth = 0i32;
         let mut m = after_open;
         while m < end {
-            if is_punct(&toks[m], '<') {
-                depth += 1;
-            } else if is_punct(&toks[m], '>') {
-                depth -= 1;
-                if depth == 0 {
+            if is_punct(&toks[m], '(') || is_punct(&toks[m], '[') || is_punct(&toks[m], '{') {
+                nest_depth += 1;
+            } else if is_punct(&toks[m], ')') || is_punct(&toks[m], ']') || is_punct(&toks[m], '}')
+            {
+                nest_depth -= 1;
+                if nest_depth < 0 {
+                    return None;
+                }
+            } else if nest_depth == 0 && is_punct(&toks[m], '<') {
+                angle_depth += 1;
+            } else if nest_depth == 0 && is_punct(&toks[m], '>') {
+                angle_depth -= 1;
+                if angle_depth == 0 {
                     return Some(m);
                 }
             }
@@ -7485,10 +7508,15 @@ mod anchor_scan {
         // every occurrence of the callee's bare name inside that body,
         // in either call shape, is counted — exactly one is required:
         //   - Plain: bare name immediately followed by `(`.
-        //   - Turbofish: bare name, `::`, a balanced `<`…`>`
-        //     generic-argument list, then `(` (Design, 3). A
-        //     turbofish-shaped reference not followed by `(` after the
-        //     balancing `>` is not a call and is not counted (EC-4).
+        //   - Turbofish: bare name, `::`, a `<`…`>` generic-argument
+        //     list balanced at nesting depth 0 (Design, 3;
+        //     anchor-scan-const-generic-angle/task0001 —
+        //     find_balancing_angle_close's own doc comment has the
+        //     nesting-depth details, including why a const-generic
+        //     comparison/shift or an array length inside the list never
+        //     desyncs the balance), then `(`. A turbofish-shaped
+        //     reference not followed by `(` after the balancing `>` is
+        //     not a call and is not counted (EC-4).
         // `hits` pairs each counted occurrence's callee-token index with
         // whether it was the turbofish shape.
         let mut hits: Vec<(usize, bool)> = Vec::new();
@@ -8229,6 +8257,251 @@ fn anchor_locate_call_r_hash_fn_is_not_treated_as_keyword() {
         "a, b, c, d",
         "AC-6(c)/as-1/anchor-scan-callee-miscount: the argument text must be exactly the \
          real definition's four arguments"
+    );
+}
+
+// ── anchor-scan-const-generic-angle/task0001: const-generic / array-length
+// `<` / `>` inside a turbofish's generic-argument list must never be
+// mistaken for the list's own angle brackets ───────────────────────────
+
+/// AC-1 (anchor-scan-const-generic-angle/task0001, reproduction): a
+/// const-generic comparison `{ 1 > 0 }` inside the turbofish must not be
+/// read as the list's own closing `>` — the real closing `>` (after the
+/// `}`) is found, the call is recognized, and the body becomes ambiguous
+/// against the separate plain call.
+#[test]
+fn anchor_locate_call_const_generic_comparison_inside_braces_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call::<{ 1 > 0 }>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-1/anchor-scan-const-generic-angle: a const-generic comparison inside `{{ }}` must \
+         not desync the balancing walk — the turbofish call must be recognized and counted, \
+         rejecting the body as ambiguous"
+    );
+}
+
+/// AC-2 (anchor-scan-const-generic-angle/task0001): a bare turbofish
+/// reference whose const-generic block contains a comparison
+/// (`{ 1 > (0) }`) must still be recognized as *not* shaped as a call —
+/// the real closing `>` is found even though it is followed by `;`, not
+/// `(` — leaving the separate plain call to anchor cleanly.
+#[test]
+fn anchor_locate_call_const_generic_comparison_bare_reference_not_counted() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               let f = probe_call::<{ 1 > (0) }>; probe_call(a, b, c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "AC-2/anchor-scan-const-generic-angle: the bare turbofish reference must not be \
+         counted, leaving the plain call to anchor",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, c, d",
+        "AC-2/anchor-scan-const-generic-angle: the argument text must be exactly the plain \
+         call's four arguments"
+    );
+}
+
+/// AC-3 (anchor-scan-const-generic-angle/task0001): the same ambiguity
+/// as AC-1 still arises when the plain call comes first and the
+/// const-generic turbofish call comes second — call order must not
+/// change the result.
+#[test]
+fn anchor_locate_call_const_generic_comparison_order_reversed_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call(a, b, c, d); probe_call::<{ 1 > 0 }>(w, x, y, z); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-3/anchor-scan-const-generic-angle: reversing the call order must not change the \
+         ambiguity outcome"
+    );
+}
+
+/// AC-4a (anchor-scan-const-generic-angle/task0001): a const-generic
+/// `<` comparison inside `{ }` must not be read as an opening
+/// angle-bracket either.
+#[test]
+fn anchor_locate_call_const_generic_less_than_inside_braces_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call::<{ 1 < 2 }>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4a/anchor-scan-const-generic-angle: a const-generic `<` comparison inside `{{ }}` \
+         must not desync the balancing walk"
+    );
+}
+
+/// AC-4b (anchor-scan-const-generic-angle/task0001, EC-3): a
+/// const-generic right-shift `{ N >> 1 }` must not be misread as two
+/// angle-bracket closes — nesting depth stays positive for both `>`
+/// tokens of `>>` here, so neither changes the angle-bracket depth.
+#[test]
+fn anchor_locate_call_const_generic_right_shift_inside_braces_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call::<{ N >> 1 }>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4b/anchor-scan-const-generic-angle: a const-generic right-shift inside `{{ }}` \
+         must not desync the balancing walk"
+    );
+}
+
+/// AC-4c (anchor-scan-const-generic-angle/task0001): a left-shift
+/// inside an array-length expression (`[u8; 1 << 2]`) must not be
+/// misread as angle brackets either — `[` / `]` gate the nesting depth
+/// exactly like `{` / `}`.
+#[test]
+fn anchor_locate_call_const_generic_left_shift_inside_array_length_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call::<[u8; 1 << 2]>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4c/anchor-scan-const-generic-angle: a left-shift inside an array-length \
+         expression must not desync the balancing walk"
+    );
+}
+
+/// AC-4d (anchor-scan-const-generic-angle/task0001): a const-generic
+/// block containing both a nested array-length left-shift and a
+/// comparison (`{ [1 << 2][0] > (0) }`) must still resolve to the
+/// correct outer closing `>` — nesting depth must survive `[`/`]` and
+/// `(`/`)` transitions inside the same `{ }` block.
+#[test]
+fn anchor_locate_call_const_generic_mixed_nesting_inside_braces_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call::<{ [1 << 2][0] > (0) }>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4d/anchor-scan-const-generic-angle: mixed bracket/paren/brace nesting inside a \
+         const-generic block must not desync the balancing walk"
+    );
+}
+
+/// AC-4e (anchor-scan-const-generic-angle/task0001): genuinely nested
+/// generic types (`Result<Vec<u8>, Option<u16>>`) with no operators
+/// inside must still balance correctly — this is not a const-generic
+/// case, it must keep working exactly as before the nesting-depth gate
+/// was added.
+#[test]
+fn anchor_locate_call_nested_generic_types_still_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call::<Result<Vec<u8>, Option<u16>>>(w, x, y, z); \
+               probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4e/anchor-scan-const-generic-angle: genuinely nested generic types with no \
+         operators must still balance and be counted, rejecting the body as ambiguous"
+    );
+}
+
+/// AC-4f (anchor-scan-const-generic-angle/task0001): a tuple type
+/// argument (`(Vec<u8>, u8)`) must balance via its own inner `<u8>`
+/// closing at the deeper nesting level — the outer `(` / `)` gate the
+/// nesting depth exactly like `[` / `{` / `]` / `}`.
+#[test]
+fn anchor_locate_call_tuple_type_generic_argument_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call::<(Vec<u8>, u8)>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4f/anchor-scan-const-generic-angle: a tuple-type generic argument must still \
+         balance via its own inner closing `>`, and the call must be counted"
+    );
+}
+
+/// AC-4g (anchor-scan-const-generic-angle/task0001): a fn-pointer type
+/// argument (`fn(Vec<u8>)`) must balance the same way as a tuple type.
+#[test]
+fn anchor_locate_call_fn_pointer_type_generic_argument_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call::<fn(Vec<u8>)>(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4g/anchor-scan-const-generic-angle: a fn-pointer-type generic argument must still \
+         balance via its own inner closing `>`, and the call must be counted"
+    );
+}
+
+/// AC-4h (anchor-scan-const-generic-angle/task0001): comments around
+/// the const-generic turbofish (before `::` and after the closing `>`)
+/// must not stop the call from being recognized — the scanner already
+/// discards comment tokens before this walk ever sees them.
+#[test]
+fn anchor_locate_call_const_generic_comparison_with_comments_counted_as_ambiguous() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call/*a*/::<{ 1 > 0 }>/*b*/(w, x, y, z); probe_call(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    assert!(
+        result.is_err(),
+        "AC-4h/anchor-scan-const-generic-angle: comments around the const-generic turbofish \
+         must not stop the call from being recognized and counted"
+    );
+}
+
+/// AC-5 (anchor-scan-const-generic-angle/task0001, SPEC as-2): a body
+/// whose only call is a const-generic turbofish call must still return
+/// `Err` via the pre-existing sole-turbofish-call contract — recognizing
+/// the call correctly does not change that steps 3/4 never anchor a
+/// turbofish call. Asserted via the error text (`turbofish-form`) so the
+/// test actually confirms the *call was recognized* and rejected by that
+/// specific contract, not the unrelated "found 0 calls" ambiguous-count
+/// message the const-generic bug's mis-parse would otherwise produce
+/// (the same misread `>` that made AC-1 falsely non-ambiguous makes the
+/// call invisible here too, before this task's fix).
+#[test]
+fn anchor_locate_call_sole_const_generic_comparison_turbofish_call_returns_err() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               probe_call::<{ 1 > 0 }>(a, b, c, d); }";
+    let result = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4);
+    match result {
+        Ok(_) => panic!(
+            "AC-5/anchor-scan-const-generic-angle: a body whose only call is a const-generic \
+             turbofish call must return Err, never anchoring from `::`"
+        ),
+        Err(err) => assert!(
+            err.contains("turbofish-form"),
+            "AC-5/anchor-scan-const-generic-angle: the call must be recognized as a \
+             (turbofish) call and rejected by the sole-turbofish-call contract, not miscounted \
+             as zero calls — got: {err}"
+        ),
+    }
+}
+
+/// Change-spec regression (anchor-scan-const-generic-angle/task0001,
+/// Design note 入れ子の追い方: A vs B): a closer that takes the nesting
+/// depth negative (a stray `)` with no `(` opened inside this range)
+/// must stop the walk immediately rather than let a *later* unrelated
+/// `[` bring the nesting depth back to exactly 0 and make some
+/// unconnected `>` further along look like the list's own close. If the
+/// walk kept going after the negative dip (option B, rejected in the
+/// design note), the stray `)` followed by `[` would resync depth to 0
+/// right before the `>`, making this reference falsely look like a
+/// counted call and the body falsely ambiguous. `)` / `[` (not `{` /
+/// `}`) are used here so the stray closer never interferes with the
+/// unrelated, brace-only body-extraction walk that runs before this one.
+#[test]
+fn anchor_locate_call_turbofish_negative_nesting_depth_stops_the_walk() {
+    let src = "fn probe_fn(a: i32, b: i32, c: i32, d: i32) { \
+               let f = probe_call::<)[>(w, x, y, z); probe_call(a, b, c, d); }";
+    let anchored = anchor_scan::locate_call(src, "probe_fn", "probe_call", 4).expect(
+        "Change-spec regression/anchor-scan-const-generic-angle: a closer that takes nesting \
+         depth negative must stop the walk, so this reference is never counted as a call, \
+         leaving the plain call to anchor",
+    );
+    assert_eq!(
+        &src[anchored.args_start..anchored.args_end],
+        "a, b, c, d",
+        "Change-spec regression/anchor-scan-const-generic-angle: the argument text must be \
+         exactly the plain call's four arguments"
     );
 }
 
