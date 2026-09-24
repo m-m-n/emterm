@@ -1,0 +1,44 @@
+schema_version: 1
+feature: anchor-scan-const-generic-angle
+records:
+  - question_id: create-spec.design-system
+    packet_id: null
+    answered_at: "2026-09-24T09:40:00+09:00"
+    source: batch-policy
+    answer_mode: option
+    selected_option_ids: [project_native]
+    freeform: null
+    normalized_answer: "project_native: doc/UI-DESIGN-GUIDELINES.yaml"
+    resolution_note: >-
+      gate: create-spec.design-system; resolved by batch-policies.yaml (top
+      candidate -> project_native). Options: project_native / em_workflow /
+      none. Chosen: project_native (doc/UI-DESIGN-GUIDELINES.yaml, the only
+      candidate). codex_consulted: false. Design step is skipped (minimal tier).
+  - question_id: create-spec.codex-consultation
+    packet_id: null
+    answered_at: "2026-09-24T09:40:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "Q1: A (one combined ( [ { nest depth; underflow -> None). Q2: treat ( like [ and { (ignore < > inside). Q3: base on main."
+    normalized_answer: "Q1=A, Q2=ignore-inside-parens, Q3=main"
+    resolution_note: >-
+      gate: none (user-instructed Codex consultation, per the run's argument
+      "Consult Codex on any unclear points and adopt the option judged to be
+      comparatively better"); codex_consulted: true (run_codex_exec.sh readonly).
+      Q1 how find_balancing_angle_close tracks brackets. Options: A (one combined
+      nest depth for ( [ {, count < > only at nest 0, a closer that would make
+      nest negative ends the walk with None), B (same, but ignore the underflowing
+      closer and keep scanning), C (stack of opener kinds, mismatch -> None).
+      Chosen A. Not chosen: B — can walk past an unmatched closer and pick up an
+      unrelated `>`; C — kind-mismatch detection unnecessary for this fix.
+      Q2 whether `(` also suppresses angle counting. Chosen: yes — in valid
+      syntax `(Vec<u8>, u8)` / `fn(Vec<u8>)` balance their inner angles
+      internally, so ignoring them keeps the outer pairing. Not chosen: only [ {.
+      Q3 base branch. Options: A main, B the unmerged sibling branch
+      em-workflow/anchor-scan-turbofish-arrow/integration (same function, `->`
+      fix). Chosen A (matches base_branch: main; B would pull in unmerged work).
+      Consequence: a textual conflict in find_balancing_angle_close is expected
+      when both land; keep both the nest handling and the sibling's `->` check.
+      Codex also proposed the regression list recorded in TASK.md Expected
+      Result. No Opus escalation ran. Recorded as a comment on the Notion task page.
