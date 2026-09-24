@@ -96,9 +96,11 @@ workflow:
   status: completed
   completed_at_commit: a1434eacc27b44cd86292dc031f877a9375388e0
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  result: pass
   failed_items: []
+  completed_at_commit: d41d33e9a7c5a0556e5d53cd37c6781efd4eec70
+  summary: 'build (default + --no-default-features) ok, no warnings; lib tests 3640 passed / 0 failed / 3 ignored; TS1-TS7 and public-surface inspection pass'
 - id: retrospect
   status: pending
 tasks:
