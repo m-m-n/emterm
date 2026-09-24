@@ -1,0 +1,42 @@
+schema_version: 1
+feature: agent-notification-body-exact-pin
+tier: minimal
+bases:
+- basis: description_only
+  probabilities:
+    '0': 0.96
+    '1': 0.04
+    '2': 0.0
+    '3': 0.0
+  expectation_clear: 0.9
+  confidence: 0.96
+  observed_at: '2026-09-24T23:21:40+09:00'
+- basis: description_plus_code
+  probabilities:
+    '0': 0.97
+    '1': 0.03
+    '2': 0.0
+    '3': 0.0
+  expectation_clear: 0.91
+  confidence: 0.97
+  observed_at: '2026-09-24T23:22:10+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/notifications.rs
+  changed_lines_approx: 20
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  evidence: 'The two tests at lines 1072–1100 still use negative assertions. Replace them with assert_eq!(body,
+    "claude: red title (blocked)") and assert_eq!(body, "claude: abcd (blocked)"); update the CSI comment
+    that explicitly rejects an exact fixture. Source inspection and an in-memory equivalent evaluation
+    confirm sanitize_title("\x1b[31mred\x1b[0m title") produces "red title", and sanitize_title("a\x07b\x00c\u{9f}d")
+    produces "abcd". Existing sanitizer tests at lines 497–503 assert these exact outputs. The transition
+    helper supplies "claude", and the formatter supplies the English blocked suffix. No production changes
+    are needed. No files were changed. The required cargo test --manifest-path src-tauri/Cargo.toml --lib
+    remains unrun because this survey prohibits filesystem writes.'
+rationale: score.probabilities['0']=0.96 >= 0.8 (p0_floor) and score.expectation_clear=0.9 >= 0.5 (expectation_clear_floor)
+decided_at: '2026-09-24T23:22:27+09:00'
