@@ -96,9 +96,9 @@ tasks:
     domains: []
     complexity: low
     requirements: []
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/tmux-sockets-red-confirmed-backfill/task0001
 
 review:
   status: pending
