@@ -114,7 +114,7 @@ tasks:
     - input-handling
     complexity: low
     requirements: []
-    status: in_progress
+    status: merged
     branch: em-workflow/anchor-scan-const-generic-angle/task0001
     notes: null
 review:
