@@ -139,15 +139,45 @@ thread_local! {
 /// around them while bounding the scan/allocation cost.
 const SANITIZE_INPUT_CAP: usize = 4096;
 
+/// A tab title that has already passed through [`sanitize_title`]: no CSI
+/// sequence of the form the CSI pattern in [`sanitize_title`] matches, no
+/// C0 / DEL / C1 control character, and at most 100 characters long.
+///
+/// [`sanitize_title`] is the only producer of this type. There is no
+/// public constructor that takes raw text, and no conversion in either
+/// direction with `String` / `&str` (no `From`, `Into`, `FromStr`,
+/// `Deref`, `AsRef`, or `Borrow`) — on purpose, so that a raw tab title
+/// reaching [`notification_body`] or [`agent_notification_body`] from
+/// outside this module is a compile-time type error rather than a runtime
+/// concern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SanitizedTitle {
+    text: String,
+}
+
+impl SanitizedTitle {
+    /// Borrow the sanitized text.
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
+
+impl std::fmt::Display for SanitizedTitle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
 /// Sanitize a tab title for notification display: strip ANSI CSI
 /// sequences, drop remaining C0/C1 control characters, truncate to 100
-/// characters. Mirrors `NotificationManager.sendDesktopNotification`.
-pub fn sanitize_title(title: &str) -> String {
+/// characters. Mirrors `NotificationManager.sendDesktopNotification`. The
+/// only producer of [`SanitizedTitle`] outside this module.
+pub fn sanitize_title(title: &str) -> SanitizedTitle {
     // Bound the work before the regex pass so a pathological multi-MiB
     // title cannot force a full-length scan + allocation.
     let bounded: String = title.chars().take(SANITIZE_INPUT_CAP).collect();
     let stripped = CSI_RE.with(|re| re.replace_all(&bounded, "").into_owned());
-    stripped
+    let text = stripped
         .chars()
         .filter(|c| {
             let cp = *c as u32;
@@ -155,13 +185,17 @@ pub fn sanitize_title(title: &str) -> String {
             !(cp <= 0x1f || (0x7f..=0x9f).contains(&cp))
         })
         .take(100)
-        .collect()
+        .collect();
+    SanitizedTitle { text }
 }
 
 /// Notification body — WebView `formatNotificationBody`. The per-kind
 /// suffix comes from the resolved locale; the strings are the WebView
 /// locales' `settings.notification.body.*` values verbatim.
-pub fn notification_body(sanitized_title: &str, kind: ActivityKind, locale: Locale) -> String {
+///
+/// Requires a [`SanitizedTitle`]; [`sanitize_title`] is its only producer,
+/// so the type enforces the tab-title invariant at every call site.
+pub fn notification_body(title: &SanitizedTitle, kind: ActivityKind, locale: Locale) -> String {
     let msg = match (locale, kind) {
         (Locale::En, ActivityKind::ProcessExit) => "Process exited",
         (Locale::En, ActivityKind::Output) => "New output",
@@ -170,7 +204,7 @@ pub fn notification_body(sanitized_title: &str, kind: ActivityKind, locale: Loca
         (Locale::Ja, ActivityKind::Output) => "新しい出力",
         (Locale::Ja, ActivityKind::Bell) => "ベル",
     };
-    format!("{sanitized_title}: {msg}")
+    format!("{title}: {msg}")
 }
 
 // ── Agent-status notifications (task0007 / FR9; task0001 event-type
@@ -210,9 +244,10 @@ pub fn notification_body(sanitized_title: &str, kind: ActivityKind, locale: Loca
 pub struct AgentTransition {
     pub old_state: Option<AgentState>,
     pub new_state: AgentState,
-    /// Sanitized agent name (sanitization is guaranteed upstream by the
-    /// core `agent_status` module); `None` when the pane never reported
-    /// one.
+    /// Sanitized agent name, sanitized upstream at parse time by the core
+    /// `agent_status` module's `sanitize_name`; `None` when the pane never
+    /// reported one. [`agent_notification_body`] uses this value as-is and
+    /// does not re-sanitize it.
     pub name: Option<String>,
 }
 
@@ -362,14 +397,14 @@ fn agent_name_fallback(locale: Locale) -> &'static str {
 /// the task plan's body format ("uses the model's name ... or a neutral
 /// fallback, plus the tab title").
 ///
-/// `tab_title` is untrusted (OSC 0/2 payload) and is routed through the
-/// same [`sanitize_title`] used by the tab-activity notification path
-/// (agent-notification-sanitize-title task0001, review finding
-/// 7dd413bdd9289905) — sanitizing here makes this function the single
-/// choke point for both existing call sites and any future one.
+/// Requires a [`SanitizedTitle`]; [`sanitize_title`] is its only producer,
+/// so the type enforces the tab-title invariant at every call site. The
+/// agent name comes from `AgentTransition::name`, trusted as already
+/// sanitized at parse time by `crate::agent_status`'s `sanitize_name`, and
+/// is not re-sanitized here.
 pub fn agent_notification_body(
     transition: &AgentTransition,
-    tab_title: &str,
+    title: &SanitizedTitle,
     locale: Locale,
 ) -> String {
     let name = transition
@@ -388,8 +423,7 @@ pub fn agent_notification_body(
         (Locale::En, AgentState::Working | AgentState::Idle) => "active",
         (Locale::Ja, AgentState::Working | AgentState::Idle) => "実行中",
     };
-    let sanitized_title = sanitize_title(tab_title);
-    format!("{name}: {sanitized_title} ({state_msg})")
+    format!("{name}: {title} ({state_msg})")
 }
 
 #[cfg(test)]
@@ -495,24 +529,27 @@ mod tests {
 
     #[test]
     fn sanitize_strips_csi_sequences() {
-        assert_eq!(sanitize_title("\x1b[31mred\x1b[0m title"), "red title");
+        assert_eq!(
+            sanitize_title("\x1b[31mred\x1b[0m title").as_str(),
+            "red title"
+        );
     }
 
     #[test]
     fn sanitize_strips_control_chars() {
-        assert_eq!(sanitize_title("a\x07b\x00c\u{9f}d"), "abcd");
+        assert_eq!(sanitize_title("a\x07b\x00c\u{9f}d").as_str(), "abcd");
     }
 
     #[test]
     fn sanitize_truncates_at_100_chars() {
         let long = "あ".repeat(150);
         let out = sanitize_title(&long);
-        assert_eq!(out.chars().count(), 100);
+        assert_eq!(out.as_str().chars().count(), 100);
     }
 
     #[test]
     fn sanitize_passes_plain_titles_through() {
-        assert_eq!(sanitize_title("zsh — ~/src"), "zsh — ~/src");
+        assert_eq!(sanitize_title("zsh — ~/src").as_str(), "zsh — ~/src");
     }
 
     #[test]
@@ -522,21 +559,29 @@ mod tests {
         // output still lands at the 100-char display cap.
         let huge = "x".repeat(100_000);
         let out = sanitize_title(&huge);
-        assert_eq!(out.chars().count(), 100);
+        assert_eq!(out.as_str().chars().count(), 100);
+    }
+
+    // AC-1: the read-only accessor and the `Display` output agree.
+    #[test]
+    fn sanitized_title_accessor_and_display_agree() {
+        let sanitized = sanitize_title("\x1b[31mred\x1b[0m title");
+        assert_eq!(sanitized.as_str(), sanitized.to_string());
     }
 
     #[test]
     fn body_formats_match_webview_strings() {
+        let title = sanitize_title("tab");
         assert_eq!(
-            notification_body("tab", ActivityKind::ProcessExit, Locale::En),
+            notification_body(&title, ActivityKind::ProcessExit, Locale::En),
             "tab: Process exited"
         );
         assert_eq!(
-            notification_body("tab", ActivityKind::Output, Locale::En),
+            notification_body(&title, ActivityKind::Output, Locale::En),
             "tab: New output"
         );
         assert_eq!(
-            notification_body("tab", ActivityKind::Bell, Locale::En),
+            notification_body(&title, ActivityKind::Bell, Locale::En),
             "tab: Bell"
         );
     }
@@ -544,18 +589,37 @@ mod tests {
     #[test]
     fn body_formats_match_webview_ja_strings() {
         // Values from src/i18n/locales/ja.json `settings.notification.body.*`.
+        let title = sanitize_title("tab");
         assert_eq!(
-            notification_body("tab", ActivityKind::ProcessExit, Locale::Ja),
+            notification_body(&title, ActivityKind::ProcessExit, Locale::Ja),
             "tab: プロセスが終了しました"
         );
         assert_eq!(
-            notification_body("tab", ActivityKind::Output, Locale::Ja),
+            notification_body(&title, ActivityKind::Output, Locale::Ja),
             "tab: 新しい出力"
         );
         assert_eq!(
-            notification_body("tab", ActivityKind::Bell, Locale::Ja),
+            notification_body(&title, ActivityKind::Bell, Locale::Ja),
             "tab: ベル"
         );
+    }
+
+    // TS1 (AC-3): a CSI-bearing tab title passed through `sanitize_title`
+    // produces a clean body — no ESC byte, no CSI remnant — for every
+    // `ActivityKind`.
+    #[test]
+    fn body_strips_csi_from_sanitized_title_for_every_activity_kind() {
+        let title = sanitize_title("\x1b[31mred\x1b[0m title");
+        for (kind, expected) in [
+            (ActivityKind::ProcessExit, "red title: Process exited"),
+            (ActivityKind::Output, "red title: New output"),
+            (ActivityKind::Bell, "red title: Bell"),
+        ] {
+            let body = notification_body(&title, kind, Locale::En);
+            assert_eq!(body, expected);
+            assert!(!body.contains('\x1b'));
+            assert!(!body.contains('['));
+        }
     }
 
     // ── Agent-status notifications (task0007) ───────────────────────
@@ -1043,10 +1107,11 @@ mod tests {
 
     #[test]
     fn agent_notification_body_uses_sanitized_name_and_tab_title() {
-        let body = agent_notification_body(&transition(AgentState::Blocked), "my-tab", Locale::En);
+        let title = sanitize_title("my-tab");
+        let body = agent_notification_body(&transition(AgentState::Blocked), &title, Locale::En);
         assert_eq!(body, "claude: my-tab (blocked)");
 
-        let body = agent_notification_body(&transition(AgentState::Done), "my-tab", Locale::Ja);
+        let body = agent_notification_body(&transition(AgentState::Done), &title, Locale::Ja);
         assert_eq!(body, "claude: my-tab (完了)");
     }
 
@@ -1054,12 +1119,13 @@ mod tests {
     fn agent_notification_body_falls_back_to_neutral_name_when_absent() {
         let mut t = transition(AgentState::Blocked);
         t.name = None;
+        let title = sanitize_title("my-tab");
         assert_eq!(
-            agent_notification_body(&t, "my-tab", Locale::En),
+            agent_notification_body(&t, &title, Locale::En),
             "Agent: my-tab (blocked)"
         );
         assert_eq!(
-            agent_notification_body(&t, "my-tab", Locale::Ja),
+            agent_notification_body(&t, &title, Locale::Ja),
             "エージェント: my-tab (ブロック中)"
         );
     }
@@ -1071,11 +1137,8 @@ mod tests {
     // (`red title`) being lost.
     #[test]
     fn agent_notification_body_strips_csi_sequences_from_tab_title() {
-        let body = agent_notification_body(
-            &transition(AgentState::Blocked),
-            "\x1b[31mred\x1b[0m title",
-            Locale::En,
-        );
+        let title = sanitize_title("\x1b[31mred\x1b[0m title");
+        let body = agent_notification_body(&transition(AgentState::Blocked), &title, Locale::En);
         assert_eq!(body, "claude: red title (blocked)");
     }
 
@@ -1086,11 +1149,8 @@ mod tests {
     // (`abcd`) being lost.
     #[test]
     fn agent_notification_body_strips_control_chars_from_tab_title() {
-        let body = agent_notification_body(
-            &transition(AgentState::Blocked),
-            "a\x07b\x00c\u{9f}d",
-            Locale::En,
-        );
+        let title = sanitize_title("a\x07b\x00c\u{9f}d");
+        let body = agent_notification_body(&transition(AgentState::Blocked), &title, Locale::En);
         assert_eq!(body, "claude: abcd (blocked)");
     }
 }
