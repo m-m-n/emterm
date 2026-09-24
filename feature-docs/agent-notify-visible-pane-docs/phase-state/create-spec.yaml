@@ -5,7 +5,7 @@ status: in_progress
 generation: 1
 mode: batch
 last_input_digest: sha256:d3b9ea2885c18702a8f3bd286ce0d2af6bab117b566f1beac3e7cff955520a8d
-active_request_id: cs-specwriter-001
+active_request_id: null
 packets: {}
 answers:
   create-spec.design-system:
@@ -32,6 +32,12 @@ worker_runs:
 - request_id: cs-analyst-001
   status: completed
   input_digest: sha256:d3b9ea2885c18702a8f3bd286ce0d2af6bab117b566f1beac3e7cff955520a8d
-artifacts: []
+- request_id: cs-specwriter-001
+  status: completed
+  input_digest: sha256:d3b9ea2885c18702a8f3bd286ce0d2af6bab117b566f1beac3e7cff955520a8d
+artifacts:
+- path: feature-docs/agent-notify-visible-pane-docs/SPEC.md
+  sha256: sha256:58b26c0175c4821f606d9b2916eff14dc20c7cac762bbaa48d93d81329e637eb
+  produced_by: cs-specwriter-001
 patches: []
 stale_redispatch_count: 0
