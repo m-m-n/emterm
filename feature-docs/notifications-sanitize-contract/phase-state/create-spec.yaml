@@ -1,7 +1,7 @@
 schema_version: 1
 feature: notifications-sanitize-contract
 phase: create-spec
-status: dispatching
+status: applying_patch
 generation: 1
 base_revision: 72b7e5fcf9c832f0ee3078cfcc1db853818769c2
 last_input_digest: sha256:98633833ab19a3aeba68fd0c62595e06a10f4f64ddf5d177ef4cc8567a3b2701
@@ -73,10 +73,16 @@ worker_runs:
   input_digest: sha256:98633833ab19a3aeba68fd0c62595e06a10f4f64ddf5d177ef4cc8567a3b2701
   output_digest: null
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: null
   output_digest: null
-artifacts: []
+artifacts:
+- path: feature-docs/notifications-sanitize-contract/REQUIREMENTS.md
+  sha256: sha256:1ae435e8448f392f4118462f87a9d0d94904383233b6fd255e409b6bed4d4cab
+  produced_by: create-spec-run-0003
+- path: feature-docs/notifications-sanitize-contract/SPEC.md
+  sha256: sha256:7694d9dcb5563f41dff2bf1fa6b3ae3bc506e5fc6f612c735796067db5cfa2ca
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
