@@ -1,7 +1,7 @@
 schema_version: 1
 feature: agent-notify-visible-pane-docs
 phase: create-spec
-status: in_progress
+status: completed
 generation: 1
 mode: batch
 last_input_digest: sha256:d3b9ea2885c18702a8f3bd286ce0d2af6bab117b566f1beac3e7cff955520a8d
