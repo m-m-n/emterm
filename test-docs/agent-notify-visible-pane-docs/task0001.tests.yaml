@@ -1,0 +1,79 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      grep -n "not visible in the foreground window" doc/AGENT-STATUS.md
+      matched line 190 before the edit (confirmed by reading the file's
+      Notifications section prior to editing); after Edit A the same grep
+      returns no match (exit 1).
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit the opening statement (old lines 190-191) read "An OS
+      notification fires when a pane not visible in the foreground window has
+      a real transition to `blocked` or `done`" — it named no setting, did
+      not say "any pane", and did not state that non-visible panes are
+      unaffected. After Edit A the statement states all three required
+      elements, confirmed by re-reading the section.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      This criterion requires the three-item "never produce a notification"
+      list to be unchanged; there is no observable behavior that could fail
+      first. Verified by diff: the list's three bullets (same-state
+      re-report, name-only change, snapshot/replay-derived update) are
+      byte-identical before and after the edit (git diff doc/AGENT-STATUS.md
+      shows no change to those three lines).
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Reading the pre-edit "## Notifications" section (old lines 188-203)
+      showed only `agent_status_notifications` and prose "the existing
+      global notification setting" — `agent_notify_on_done`,
+      `agent_notify_on_blocked`, and `agent_notify_visible_pane` were absent
+      from the section. After Edit B, a grep scoped to the section
+      (awk '/^## Notifications/,0' doc/AGENT-STATUS.md | grep -E
+      "agent_notify_visible_pane|agent_status_notifications|agent_notify_on_done|agent_notify_on_blocked")
+      matches all four keys, the per-pane rate limit sentence is retained,
+      and the sanitized-display-name sentence is retained.
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, doc/AGENT-STATUS.md's opening statement contradicted
+      should_fire_agent_notification (src-tauri/src/notifications.rs:271-287)
+      and agent_status_pane_visible (src-tauri/src/app/agent_status.rs:45-57)
+      — it implied a visible pane never notifies, when the code gates
+      visible-pane notifications on `agent_notify_visible_pane` (default on,
+      src-tauri/src/settings/mod.rs:321) instead of suppressing them
+      unconditionally. After the edit the text matches the code. Cross-check
+      of doc/SPECIFICATION.md's "#### Mux Agent Status and Agent API"
+      (lines 1230-1232): both the visible-pane bullet (1231) and the
+      settings-key bullet (1232) already named `agent_notify_visible_pane`
+      before this task started, so no mismatch was found and
+      doc/SPECIFICATION.md was left unchanged, per Design section 3.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Lint-style check over the diff's added lines, not a behavior with a
+      prior red state (no lines existed to check before any edit). Verified
+      post-edit: git diff doc/AGENT-STATUS.md | grep '^+' | grep -v '^+++' |
+      grep -nE '\bPR\b|#29|\bfinding\b|active-window|\bprevious(ly)?\b|no
+      longer|\bnow\b|\bnew\b|\bexisting\b|\brestores\b' returns no matches.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      File-scope check over the final diff, not a behavior with a prior red
+      state. Verified post-edit: git status --short shows only
+      doc/AGENT-STATUS.md modified (plus this test-docs record); the AC-5
+      cross-check found no mismatch, so doc/SPECIFICATION.md was not
+      touched; no Rust, TypeScript, or settings-schema file changed.
