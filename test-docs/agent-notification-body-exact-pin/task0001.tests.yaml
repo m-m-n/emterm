@@ -1,0 +1,28 @@
+task_id: task0001
+baseline_failures: []          # full `--lib` run before any edits: 3637 passed, 0 failed, 3 ignored
+final_failures: []             # full `--lib` re-run after implementation: 3637 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-2:
+    tests: [notifications::tests::agent_notification_body_strips_csi_sequences_from_tab_title]
+    red_confirmed: true
+    red_reason: >
+      This task only strengthens an existing assertion (no production code
+      changes to sanitize_title/agent_notification_body), so writing the new
+      assert_eq! against the untouched implementation is immediately green
+      and proves nothing on its own. Confirmed red by temporarily mutating
+      sanitize_title to skip the CSI_RE.replace_all step (the exact
+      "CSI removal lost, C0 filter only" regression named in the task plan's
+      Expected Result): the test failed with
+      `left: "claude: [31mred[0m title (blocked)"` vs
+      `right: "claude: red title (blocked)"`. Mutation was then reverted
+      (git diff confirmed clean revert of notifications.rs production code).
+  AC-3:
+    tests: [notifications::tests::agent_notification_body_strips_control_chars_from_tab_title]
+    red_confirmed: true
+    red_reason: >
+      Same rationale as AC-2 (no production code change in this task).
+      Confirmed red by temporarily mutating sanitize_title to return an
+      empty string (the "title emptied" regression named in the task plan's
+      Expected Result): both this test and the CSI test failed with
+      `left: "claude:  (blocked)"` vs the expected exact body. Mutation was
+      then reverted.
