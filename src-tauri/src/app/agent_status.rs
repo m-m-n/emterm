@@ -168,7 +168,10 @@ impl App {
     /// inputs (task0001 AC-6). `pane_visible` is `true` when the pane is
     /// the one currently shown in the foreground OS window — the caller
     /// computes this (it owns the tab/pane visibility model; this method
-    /// only applies the gating rule). `tab_title` feeds the notification
+    /// only applies the gating rule). `tab_title` is raw and untrusted
+    /// (an OSC 0/2 payload); it is sanitized here, via
+    /// [`crate::notifications::sanitize_title`], only on the branch where
+    /// the notification actually fires, before it feeds the notification
     /// body.
     ///
     /// This is the integration point IMPLEMENTATION.md assigns to
@@ -208,8 +211,12 @@ impl App {
         );
         if fire {
             self.agent_notification_rate_limiter.record(pane_key, now);
-            let body =
-                crate::notifications::agent_notification_body(transition, tab_title, self.locale);
+            let sanitized_title = crate::notifications::sanitize_title(tab_title);
+            let body = crate::notifications::agent_notification_body(
+                transition,
+                &sanitized_title,
+                self.locale,
+            );
             self.notify(crate::notifications::NOTIFICATION_TITLE, &body);
         }
         fire
