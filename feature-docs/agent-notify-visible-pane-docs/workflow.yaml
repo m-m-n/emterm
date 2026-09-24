@@ -56,7 +56,8 @@ workflow:
     completed_at_commit: 45b6978b625befc7f2f9db137ef11826c55f6a5b
     base_commit: a4933a5c52c92af931472be4d4a8a7f2d16c7c04
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 95767737146e142233f9f33890df5d46094167af
   - id: verify
     status: pending
   - id: retrospect
@@ -77,7 +78,11 @@ tasks:
     notes: null
 
 review:
-  status: in_progress
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, spec]
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor: [comprehensive, security, spec]
     discretionary: []
