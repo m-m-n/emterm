@@ -143,7 +143,7 @@ tasks:
     - input-handling
     complexity: low
     requirements: []
-    status: in_progress
+    status: merged
     branch: em-workflow/agent-notification-body-exact-pin/task0001
     notes: null
 review:
