@@ -143,8 +143,8 @@ tasks:
     - input-handling
     complexity: low
     requirements: []
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/agent-notification-body-exact-pin/task0001
     notes: null
 review:
   status: pending
