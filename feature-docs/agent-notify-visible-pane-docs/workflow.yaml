@@ -1,0 +1,135 @@
+schema_version: 1
+feature: agent-notify-visible-pane-docs
+created: 2026-09-24
+base_branch: main
+parent_branch: em-workflow/agent-notify-visible-pane-docs/integration
+tier: reduced
+tier_decision:
+  by: orchestrator
+  confidence:
+    - basis: description_only
+      probabilities: {"0": 0.4, "1": 0.6, "2": 0.0, "3": 0.0}
+      expectation_clear: 0.9
+    - basis: description_plus_code
+      probabilities: {"0": 0.48, "1": 0.52, "2": 0.0, "3": 0.0}
+      expectation_clear: 0.91
+  at: "2026-09-24T23:45:00+09:00"
+  reductions: [REQUIREMENTS.md, design, IMPLEMENTATION.md]
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths: [doc/UI-DESIGN-GUIDELINES.yaml]
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: "bunx biome check ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: dd1c964c6211ba69d60d13118fc794120775de4a
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      tier reduced により design ステップを削減した。requirements-analyst の推奨も skip で、
+      gate create-spec.design-step をバッチポリシー（decide_autonomously）で解決した。
+      ドキュメントのみの変更で、UI・画面・ビジュアルの変更が無い。
+  - id: create-plan
+    artifacts: [VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 8d2ed1738d3164c90c38cd1ca48f03aba2680068
+  - id: implement
+    status: completed
+    completed_at_commit: 45b6978b625befc7f2f9db137ef11826c55f6a5b
+    base_commit: a4933a5c52c92af931472be4d4a8a7f2d16c7c04
+  - id: review
+    status: completed
+    completed_at_commit: 95767737146e142233f9f33890df5d46094167af
+  - id: verify
+    status: completed
+    completed_at_commit: 1c2031c478928867dc372dfff852a45bc72f8297
+    result: pass
+    failed_items: []
+    summary: >-
+      cargo check / cargo test --lib (3637 pass) / bun build:viewer+settings /
+      bun test (402 pass) / cargo fmt --check / biome check all exit 0.
+      TS-1〜TS-6 pass (TS-6 の大文字小文字無視の "PR" 一致は suppressed/produce の部分一致のみ).
+  - id: retrospect
+    artifacts: [retrospect.yaml]
+    status: completed
+    completed_at_commit: ead4bbe4cc2599ddae88a88d4dac929377f10845
+
+tasks:
+  task0001:
+    title: Align agent-notification docs with visible-pane behavior
+    plan: tasks/task0001.md
+    files: [doc/AGENT-STATUS.md, doc/SPECIFICATION.md]
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2, NFR3]
+    status: merged
+    branch: em-workflow/agent-notify-visible-pane-docs/task0001
+    notes: null
+
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, spec]
+  residual_critical_high: 0
+  needs_rework: false
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary: []
+    cross_validation: false
+
+requirements:
+  FR1: {title: "SPECIFICATION.md visible-pane behavior statement", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-1, TS-4]}
+  FR2: {title: "SPECIFICATION.md setting-key list includes agent_notify_visible_pane", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-1]}
+  FR3: {title: "AGENT-STATUS.md Notifications section visible-pane behavior", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-2, TS-4]}
+  FR4: {title: "AGENT-STATUS.md Notifications section setting-key list", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-3, TS-4]}
+  NFR1: {title: "変更範囲", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-5]}
+  NFR2: {title: "コードとの一致", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-4]}
+  NFR3: {title: "記述内容", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-6]}
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+
+goal: |
+  # 可視ペイン通知の新挙動と agent_notify_visible_pane をドキュメントに反映する
+  
+  ## やりたいこと（必須）
+  `doc/SPECIFICATION.md` と `doc/AGENT-STATUS.md` を可視ペイン通知の現行挙動に合わせて更新し、新設定キー `agent_notify_visible_pane` を記載する。
+  ## 背景・なぜ（必須）
+  `doc/SPECIFICATION.md:1195-1196` と `doc/AGENT-STATUS.md:190,199-201` が「non-visible pane のみ通知」という旧挙動を記述したままで、active-window-agent-notification（PR: [https://github.com/m-m-n/emterm/pull/29](https://github.com/m-m-n/emterm/pull/29)）で追加された新キー `agent_notify_visible_pane`（既定 ON）も列挙されていない。姉妹機能 agent-desktop-notification は設定追加時に SPECIFICATION.md を更新しており、リポジトリの慣行としてもドキュメント更新が期待される。
+  - レビュー finding: `3a1451892c226760`（severity medium / category comprehensive / confidence 50）
+  - 記録: `feature-docs/active-window-agent-notification/reviews/round1.yaml`
+  ## 受け入れ条件 / 完了の定義（必須）
+  - [ ] `doc/SPECIFICATION.md:1195` を「可視ペインは `agent_notify_visible_pane`（既定 on）で制御し、OFF のときのみ抑止」に書き換える
+  - [ ] `doc/SPECIFICATION.md:1196` の設定キー列挙に `agent_notify_visible_pane` を追加する
+  - [ ] `doc/AGENT-STATUS.md` の Notifications 節を同じ内容に合わせる
+  ## スコープ外（任意）
+  - コードの挙動変更（ドキュメントのみ）
+  - 通知本文のサニタイズ・D-Bus 非同期化（それぞれ別タスク）
+  ## 制約・前提（任意）
+  - 本 finding は `em-workflow/active-window-agent-notification/integration` ブランチ（PR #29、main 未マージ）に対するレビューで検出された。PR #29 がマージ済みかを先に確認し、実際にコードに入っている挙動を記述すること。
+  - confidence 50 は対象ファイルが changed_files 外だったための丸め。指摘内容自体は行番号込みで具体。

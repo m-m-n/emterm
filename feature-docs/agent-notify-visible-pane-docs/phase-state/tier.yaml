@@ -1,0 +1,39 @@
+schema_version: 1
+feature: agent-notify-visible-pane-docs
+tier: reduced
+bases:
+- basis: description_only
+  probabilities:
+    '0': 0.4
+    '1': 0.6
+    '2': 0.0
+    '3': 0.0
+  expectation_clear: 0.9
+  confidence: 0.6
+  observed_at: '2026-09-24T23:44:00+09:00'
+- basis: description_plus_code
+  probabilities:
+    '0': 0.48
+    '1': 0.52
+    '2': 0.0
+    '3': 0.0
+  expectation_clear: 0.91
+  confidence: 0.52
+  observed_at: '2026-09-24T23:44:00+09:00'
+pre_survey_estimate:
+  files_expected:
+  - doc/SPECIFICATION.md
+  - doc/AGENT-STATUS.md
+  changed_lines_approx: 8
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  evidence: src-tauri/src/notifications.rs:282 は表示中であることによる抑制を設定OFF時だけ適用し、他の通知条件も維持している。src-tauri/src/app/agent_status.rs:202
+    で設定を渡し、src-tauri/src/settings/mod.rs:321 で既定値をtrueにしている。doc/SPECIFICATION.md:1231 は挙動を反映済みだが、同:1617
+    の設定キー一覧にはagent_notify_visible_paneの追加が必要だよ。doc/AGENT-STATUS.md:190 は非表示の場合だけ通知する旧記述なので修正が必要だよ
+rationale: score.probabilities['0']=0.4 >= 0.4 (p0_floor) and score.probabilities['0'] + score.probabilities['1']=1.0
+  >= 0.85 (bucket_sum_floor)。注記：最初に独自文言の質問セットで Jev を呼んだ結果（P(0)=0.03/0.04）は、過去 run と質問セットが揃っていなかったため採用せず、既存 run と同一の質問文で再判定した
+decided_at: '2026-09-24T23:45:00+09:00'
