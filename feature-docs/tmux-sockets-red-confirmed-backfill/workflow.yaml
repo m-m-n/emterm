@@ -81,8 +81,9 @@ workflow:
     status: completed
     completed_at_commit: ed693d574f96a02c77778f4f909b196dfaf99be2
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 96a646ebc9ad83efa6e1dc30f6f4c49f1bad95fd
+    result: pass
     failed_items: []
   - id: retrospect
     artifacts: [retrospect.yaml]
