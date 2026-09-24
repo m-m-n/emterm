@@ -1,0 +1,145 @@
+schema_version: 1
+feature: agent-notification-body-exact-pin
+created: '2026-09-24'
+base_branch: main
+parent_branch: em-workflow/agent-notification-body-exact-pin/integration
+goal: '# agent_notification_body のサニタイズ固定テストを強化する
+
+
+  Notion: https://www.notion.so/3b93509ec8ee81aab815edf0b5d95527 (種別: 改善)
+
+
+  ## やりたいこと（必須）
+
+  `agent_notification_body` のサニタイズ固定テスト 2 件を、否定形の assertion から本文全体を固定する `assert_eq!` に強化する。
+
+  ## 背景・なぜ（必須）
+
+  PR https://github.com/m-m-n/emterm/pull/31 で追加したテストは主張が弱く、防ごうとしている回帰を検知できない。
+
+  `agent_notification_body_strips_csi_sequences_from_tab_title` は `!body.contains(''\x1b'')` しか主張していない。入力
+  `"\x1b[31mred\x1b[0m title"` に対して、仮に `sanitize_title` の CSI 正規表現が失われて C0 フィルタだけが残った場合、結果は `"[31mred[0m
+  title"` となり ESC バイトは存在しないのでテストは緑のまま通る。`agent_notification_body_strips_control_chars_from_tab_title`
+  も制御文字の不在しか見ないため同様。
+
+  つまり将来 `agent_notification_body` の `sanitize_title` 呼び出しが素朴な `is_control` フィルタ等に置き換わっても、両テストは検知できない。これは
+  PR #31 が防ごうとしている「choke point が壊れる」回帰そのもの。
+
+  加えて両テストの assertion は否定形のみなので、サニタイズが本文を丸ごと空にする実装（body が `"claude:  (blocked)"`）でも通ってしまい、可視テキストの保存も固定されていない。
+
+  `sanitize_title` 自体の CSI テスト（`src-tauri/src/notifications.rs:478`）は存在するが、それは choke point の経路を固定しない。
+
+  実装の挙動自体は正しく、固定の強度だけの問題。
+
+  - 該当箇所: `src-tauri/src/notifications.rs:1008`
+
+  - 検出元: PR https://github.com/m-m-n/emterm/pull/31 のレビュー round1、finding `c215e7ec73f7a019`（severity medium
+  / category comprehensive / confidence 65）
+
+  - 記録: `feature-docs/agent-notification-sanitize-title/reviews/round1.yaml`
+
+  ## 受け入れ条件 / 完了の定義（必須）
+
+  - [ ] CSI テストが CSI 残骸（`[31m`）の除去と可視テキスト（`red title`）の保存の両方を固定する
+
+  - [ ] 制御文字テストも同様に本文全体を固定する
+
+  - [ ] `cargo test --manifest-path src-tauri/Cargo.toml --lib` が通る
+
+  ## スコープ外（任意）
+
+  - `sanitize_title` 自体の挙動変更
+
+  - 通知本文のフォーマット変更
+
+  ## 制約・前提（任意）
+
+  - `assert_eq!(body, "claude: red title (blocked)")` / `assert_eq!(body, "claude: abcd (blocked)")` の形が最も強い。最小修正としては
+  `!body.contains(''\x1b'') && !body.contains("[31m") && body.contains("red title")` でも可。
+
+  - 本文フォーマットを固定すると、後続タスク（通知 body の markup エスケープ）で期待値の更新が必要になる可能性がある。
+
+  - PR #31 が main にマージされた後の状態を前提に着手すること。
+
+  '
+tier: minimal
+tier_decision:
+  by: orchestrator
+  confidence:
+  - basis: description_only
+    probabilities:
+      '0': 0.96
+      '1': 0.04
+      '2': 0.0
+      '3': 0.0
+    expectation_clear: 0.9
+  - basis: description_plus_code
+    probabilities:
+      '0': 0.97
+      '1': 0.03
+      '2': 0.0
+      '3': 0.0
+    expectation_clear: 0.91
+  at: '2026-09-24T23:22:27+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - IMPLEMENTATION.md
+  - design
+  - SPEC.md (replaced by TASK.md)
+  - task splitting
+  - VERIFICATION.md
+  - task-level parallelism
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - TASK.md
+  status: completed
+  completed_at_commit: 974cf37e82a15f658d3f9ba195526c3eacf70bdd
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'minimal tier subtracts the design step; requirements-analyst also recommended skip:
+    test-assertion-only change with no UI, visual, or interaction surface.'
+- id: create-plan
+  artifacts:
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  artifacts:
+  - retrospect.yaml
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements: {}
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2

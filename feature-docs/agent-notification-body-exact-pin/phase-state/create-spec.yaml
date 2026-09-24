@@ -1,20 +1,34 @@
 schema_version: 1
 feature: agent-notification-body-exact-pin
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: 16a58a1ed8a50ea567e21c3b7117fa88987f7536
+base_revision: 4f366c165d97b9a168a55d710e8c22aaa83fe2ec
 last_input_digest: sha256:4e64399efbffedb8348b05f20ab5f0317b254f1f86aa81b9c4ad31a1cf0bd7c1
-active_request_id: cs-analyst-001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: cs-analyst-001
-    status: dispatched
+    status: completed
     input_digest: sha256:4e64399efbffedb8348b05f20ab5f0317b254f1f86aa81b9c4ad31a1cf0bd7c1
-artifacts: []
+artifacts:
+  - path: feature-docs/agent-notification-body-exact-pin/TASK.md
+    produced_by: orchestrator
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
 last_error: null
+notes: >-
+  minimal tier: spec-writer not dispatched; orchestrator wrote TASK.md directly.
+  requirements-analyst cs-analyst-001 completed with no questions. Codex consulted
+  on assertion form / comment rewrite / coverage scope (see batch-audit.yaml).
+  design_system resolved per batch policy create-spec.design-system (top candidate
+  -> project_native). Step A.5: both component commands already approved in the
+  approval store; nothing recorded.
+assumptions:
+  - 'as-1: Expected strings derived from current code: sanitize_title strips CSI then C0/DEL/C1; body format "{name}: {title} ({state})"; test helper transition() name = "claude".'
+  - 'as-2: Exact assert_eq! form adopted (Codex Q1=A); the negative asserts are removed.'
+  - 'as-3: A later markup-escaping task may need to update these expected strings (accepted per task description).'
+  - 'as-4: Test names, inputs, locale and state stay unchanged; only assertions and comments change.'
