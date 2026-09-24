@@ -1,0 +1,110 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - notifications::tests::sanitized_title_accessor_and_display_agree
+    red_confirmed: false
+    red_reason: >-
+      sanitize_title returned String before this task; String already has
+      as_str()/to_string() in agreement, so this test's assertion holds
+      unchanged whether SanitizedTitle exists or not — it pins the new
+      type's accessor/Display agreement rather than distinguishing old
+      from new behavior. The "no raw-text constructor or conversion" half
+      of AC-1 is explicitly not --lib-testable per the task plan's
+      "Awkward to TDD" section; verified instead by inspecting the type's
+      public surface: one private field, no public field, no public
+      constructor taking raw text, no From/Into/FromStr/Deref/AsRef/
+      Borrow, no Default, no deserialization. Permitted derives only
+      (Debug, Clone, PartialEq, Eq).
+  AC-2:
+    tests:
+      - notifications::tests::sanitize_strips_csi_sequences
+      - notifications::tests::sanitize_strips_control_chars
+      - notifications::tests::sanitize_truncates_at_100_chars
+      - notifications::tests::sanitize_passes_plain_titles_through
+      - notifications::tests::sanitize_bounds_pathological_input
+      - callbacks::tests::escape_body_markup_after_sanitize_title_truncation_keeps_entity_intact
+      - callbacks::tests::confirmed_capabilities_escape_a_sanitize_title_truncated_title_intact
+    red_confirmed: false
+    red_reason: >-
+      sanitize_title's algorithm is explicitly unchanged (FR6, out of
+      scope); these tests assert the same literals they asserted before
+      the refactor, reached through .as_str() instead of the type itself.
+      String::as_str() (the old return type) and SanitizedTitle::as_str()
+      (the new one) both satisfy the same assertions, so the refactor
+      deliberately produces no observable difference here — no red state
+      exists to watch.
+  AC-3:
+    tests:
+      - notifications::tests::body_formats_match_webview_strings
+      - notifications::tests::body_formats_match_webview_ja_strings
+      - notifications::tests::body_strips_csi_from_sanitized_title_for_every_activity_kind
+    red_confirmed: false
+    red_reason: >-
+      notification_body's output text is unchanged by this task. Under
+      the pre-task signature (title: &str) a &String argument
+      deref-coerces to &str, and under the new signature (title:
+      &SanitizedTitle) Display produces identical text, so both the
+      pre- and post-refactor code produce the same body for these
+      inputs — including the new CSI test, since sanitize_title's
+      stripping behavior is unchanged. No compile or runtime red was
+      observed.
+  AC-4:
+    tests:
+      - notifications::tests::agent_notification_body_uses_sanitized_name_and_tab_title
+      - notifications::tests::agent_notification_body_falls_back_to_neutral_name_when_absent
+      - notifications::tests::agent_notification_body_strips_csi_sequences_from_tab_title
+      - notifications::tests::agent_notification_body_strips_control_chars_from_tab_title
+    red_confirmed: false
+    red_reason: >-
+      the pre-task agent_notification_body already sanitized its raw
+      tab_title internally; calling it with an already-sanitized value is
+      idempotent (sanitizing sanitized text is a no-op), so passing
+      sanitize_title(...) through the old &str signature produced the
+      identical body these tests assert. The "contains no sanitize_title
+      call" half of AC-4 was verified by reading the function body (the
+      call was deleted), not by a runtime test — the task plan's own
+      design note (IMPLEMENTATION.md D2/D4) treats this as a structural,
+      not behavioral, guarantee.
+  AC-5:
+    tests:
+      - app::tests::agent_status::maybe_notify_agent_transition_sanitizes_a_csi_bearing_tab_title_on_fire
+    red_confirmed: false
+    red_reason: >-
+      for the same idempotency reason as AC-4, the pre-task code path
+      (agent_notification_body sanitizing internally) already produced
+      the asserted body "claude: red title (blocked)" before this task's
+      change, so this test does not distinguish old from new behavior by
+      itself. A genuine, unrelated red WAS observed and fixed during
+      implementation: App::new() resolves Language::Auto via the OS
+      locale (crate::i18n::resolve), and this worktree's environment
+      (LANG=ja_JP.UTF-8) made the test fail with a Japanese body
+      ("claude: red title (ブロック中)") before the test explicitly
+      pinned app.locale = Locale::En. Recorded for traceability, not as
+      evidence for the sanitize-on-fire criterion itself. The "pending
+      pump_all tab-activity list only accepts SanitizedTitle" half of
+      AC-5 is a compile-time guarantee (the element type of
+      pending_notifications), shown by the whole crate compiling, per
+      the task plan's Test Notes.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      doc-comment content is not --lib-testable. Verified by grep (no
+      remaining occurrence of "single choke point for both existing call
+      sites and any future one" in notifications.rs) and by reading the
+      rewritten notification_body / agent_notification_body /
+      AgentTransition::name doc comments for the four required
+      statements.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      NFR1/NFR2 are verified by running commands, not unit tests:
+      `cargo check` (default features) and `cargo check
+      --no-default-features` both succeed; `cargo test --lib --
+      --test-threads=1` passes with 0 regressions. No dependency was
+      added to src-tauri/Cargo.toml, and src-tauri/src/lib.rs (the gui
+      gating of the notifications module) was not touched by this task.
