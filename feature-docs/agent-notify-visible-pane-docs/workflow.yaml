@@ -69,7 +69,8 @@ workflow:
       TS-1〜TS-6 pass (TS-6 の大文字小文字無視の "PR" 一致は suppressed/produce の部分一致のみ).
   - id: retrospect
     artifacts: [retrospect.yaml]
-    status: pending
+    status: completed
+    completed_at_commit: ead4bbe4cc2599ddae88a88d4dac929377f10845
 
 tasks:
   task0001:

@@ -1,0 +1,34 @@
+feature: agent-notify-visible-pane-docs
+collected_at: "2026-09-24T23:58:00+09:00"
+session_ids: [01a0d3e8-84b2-7503-aeb0-76e4d9fabe7a]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: reduced
+    rationale: >-
+      score.probabilities['0']=0.4 >= 0.4 (p0_floor) and score.probabilities['0'] +
+      score.probabilities['1']=1.0 >= 0.85 (bucket_sum_floor)。注記：最初に独自文言の質問セットで
+      Jev を呼んだ結果（P(0)=0.03/0.04）は、過去 run と質問セットが揃っていなかったため採用せず、
+      既存 run と同一の質問文で再判定した
+    bases:
+      - basis: description_only
+        probabilities: {"0": 0.4, "1": 0.6, "2": 0.0, "3": 0.0}
+      - basis: description_plus_code
+        probabilities: {"0": 0.48, "1": 0.52, "2": 0.0, "3": 0.0}
+    pre_survey_estimate:
+      files_expected: [doc/SPECIFICATION.md, doc/AGENT-STATUS.md]
+      changed_lines_approx: 8
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "タスク記述は doc/SPECIFICATION.md の更新を求めていたが、main では既に agent_notify_visible_pane が記載済みで、実変更は doc/AGENT-STATUS.md のみだった。起票時点の行番号が古くなるケースがある"
