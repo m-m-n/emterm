@@ -1,0 +1,32 @@
+feature: agent-notification-body-exact-pin
+collected_at: "2026-09-24T23:46:30+09:00"
+session_ids:
+  - 01a0d3e0-83ff-7574-80c7-6c8dacd956e9
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: minimal
+    rationale: "score.probabilities['0']=0.96 >= 0.8 (p0_floor) and score.expectation_clear=0.9 >= 0.5 (expectation_clear_floor)"
+    bases:
+      - basis: description_only
+        probabilities: {'0': 0.96, '1': 0.04, '2': 0.0, '3': 0.0}
+      - basis: description_plus_code
+        probabilities: {'0': 0.97, '1': 0.03, '2': 0.0, '3': 0.0}
+    pre_survey_estimate:
+      files_expected: [src-tauri/src/notifications.rs]
+      changed_lines_approx: 20
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "task0001 changed 2 files (notifications.rs +9/-15 net, test-docs/.../task0001.tests.yaml new) vs pre-survey estimate of ~20 lines in 1 file; the tests.yaml is the TDD test-doc artifact, not a prediction miss."
+  - "Review evaluator noted (below medium): TASK.md Expected Result reads as if both tests fail on CSI-removal loss, but the control-char test has no CSI in its input, so only the CSI test catches that mutation."

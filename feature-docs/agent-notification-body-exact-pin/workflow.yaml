@@ -136,7 +136,8 @@ workflow:
 - id: retrospect
   artifacts:
   - retrospect.yaml
-  status: in_progress
+  status: completed
+  completed_at_commit: 5412c5e6db5e510a2fe28ebfb3e93b9fd84b93fd
 tasks:
   task0001:
     title: agent_notification_body のサニタイズ固定テストを本文全体の一致に強化する
