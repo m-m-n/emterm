@@ -1,0 +1,7 @@
+schema_version: 1
+feature: anchor-scan-const-generic-angle
+phase: create-spec
+status: in_progress
+last_input_digest: sha256:6d55f75a5fa545a0c77a956a8a132858ebf171fde364b97320eddc3f85a01094
+answers: []
+written_artifacts: []
