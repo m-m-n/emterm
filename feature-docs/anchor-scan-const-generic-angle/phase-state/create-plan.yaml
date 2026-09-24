@@ -1,0 +1,37 @@
+schema_version: 1
+feature: anchor-scan-const-generic-angle
+phase: create-plan
+status: completed
+generation: 1
+base_revision: b809c00af00339cb29200aba78104dfab3e6f243
+last_input_digest: sha256:87db350f93c27a142a30aa151d0769b41f3ed89af240ff7bcc7897d56e16a0f6
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: completed
+    input_digest: sha256:87db350f93c27a142a30aa151d0769b41f3ed89af240ff7bcc7897d56e16a0f6
+artifacts: []
+patches:
+  - patch_id: anchor-scan-const-generic-angle-p0001
+    status: applied
+    base_input_digest: sha256:87db350f93c27a142a30aa151d0769b41f3ed89af240ff7bcc7897d56e16a0f6
+    base_workflow_blob: 8a73c99e69381f57e99ac8bfaeb2088063652ca7
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
+notes: >-
+  minimal tier: IMPLEMENTATION.md / VERIFICATION.md / task splitting are
+  subtracted, so the planner wrote no artifacts (written_artifacts empty) and
+  returned only the replace_planning patch registering task0001 with
+  plan: TASK.md (complexity low, domains [input-handling], skills []).
+  Validation layers 1/2/3/6 passed via validate-worker-output.py with
+  --registries / --workflow / --feature-dir / --digest-source / --dry-run-apply
+  (--phase-state omitted: no prior create-plan phase-state existed, so no
+  prior patch ids to collide with); layers 4/5/7 verified by the orchestrator
+  (worktree clean, no declared artifacts, input_digest unchanged on return).
+  Planner warning: the unmerged sibling branch
+  em-workflow/anchor-scan-turbofish-arrow/integration edits the same function
+  find_balancing_angle_close (merge-conflict risk, out of scope here).

@@ -101,7 +101,20 @@ workflow:
   artifacts:
   - retrospect.yaml
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: anchor_scan の山括弧対応付けで括弧内の < / > を数えないよう修正
+    plan: TASK.md
+    files:
+    - src-tauri/src/window_host/tests.rs
+    skills: []
+    domains:
+    - input-handling
+    complexity: low
+    requirements: []
+    status: pending
+    branch: null
+    notes: null
 review:
   status: pending
   rounds_completed: 0
