@@ -131,7 +131,11 @@ workflow:
   status: completed
   completed_at_commit: 2ef87bc80b4ef2a0a5087620b8d084f72ca8205b
 - id: verify
-  status: in_progress
+  status: completed
+  completed_at_commit: 6cddac72d2267c70c65d1bcf5d7438c2cc204081
+  result: pass
+  failed_items: []
+  summary: 'minimal tier: TASK.md Expected Result evaluated. build (cargo check) ok; test (cargo test --lib) 3626 passed, 0 failed, 3 ignored. Every Expected Result case has a dedicated anchor_locate_call_* regression test in src-tauri/src/window_host/tests.rs, all green. format_command / e2e_test_command empty.'
 - id: retrospect
   artifacts:
   - retrospect.yaml
