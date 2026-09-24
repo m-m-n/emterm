@@ -71,7 +71,8 @@ workflow:
       （YAML のテスト記録のみの変更で、UI・API・コード設計の対象が無い）。
   - id: create-plan
     artifacts: [tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 8f94c1cbda17bbd57f5915af480d33a945656f57
   - id: implement
     status: pending
   - id: review
