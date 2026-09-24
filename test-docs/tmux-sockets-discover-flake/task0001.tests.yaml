@@ -32,6 +32,7 @@ acceptance_tests:
       weakened) and still pass after the fixture change.
   AC-3:
     tests: []
+    red_confirmed: false
     red_reason: >
       Verified by `git diff --stat` / `git diff`: the entire diff is one
       hunk inside `#[cfg(test)] mod tests` in tmux_sockets.rs (a new
@@ -40,12 +41,14 @@ acceptance_tests:
       module changed.
   AC-4:
     tests: []
+    red_confirmed: false
     red_reason: >
       Verified by running the full command `CARGO_TARGET_DIR=src-tauri/target
       cargo test --manifest-path src-tauri/Cargo.toml --lib`: 3217
       passed, 0 failed, 3 ignored, both before and after the change.
   AC-5:
     tests: []
+    red_confirmed: false
     red_reason: >
       Verified by inspection: no `--test-threads` flag was added to any
       command used to verify this task; the fix (never calling listen()
@@ -53,6 +56,7 @@ acceptance_tests:
       of relying on serialized execution.
   AC-6:
     tests: []
+    red_confirmed: false
     red_reason: >
       Verified by inspection: `bind_unlistened_socket`'s doc comment in
       tmux_sockets.rs explains the fork-window race mechanism (a
