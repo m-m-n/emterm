@@ -1,0 +1,44 @@
+round: 1
+executed_at: "2026-09-25T00:40:36+09:00"
+scope:
+  review_mode: diff
+  base_commit: aaf5c7ceed7dc0a8ca6e1083b178dc776f455b91
+  head_commit: a1434eacc27b44cd86292dc031f877a9375388e0
+  changed_files:
+  - src-tauri/src/app/agent_status.rs
+  - src-tauri/src/app/mod.rs
+  - src-tauri/src/app/tests/agent_status.rs
+  - src-tauri/src/callbacks/tests.rs
+  - src-tauri/src/notifications.rs
+  - test-docs/notifications-sanitize-contract/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "4 観点（comprehensive / security / architecture / spec）すべて完了し指摘 0 件。cross_validation=true のため評価者が変更 6 ファイルと SPEC.md、上流 sanitize_name を自身で読み確認（10 ファイル上限中 8 ファイル）。SanitizedTitle は非公開フィールドで From/Into/Deref/AsRef/Default/公開コンストラクタ無し、構築は sanitize_title のみ。サニタイズ本体は不変で戻り値型のみ変更。両ビルダーは &SanitizedTitle を受け取り、agent_notification_body 内部の sanitize_title 呼び出しは削除。pump_all は取得時サニタイズを維持し Vec<(SanitizedTitle, ActivityKind)> に保存、maybe_notify_agent_transition は発火分岐内でのみサニタイズ。生 &str をビルダーに渡す呼び出しは残っていない。FR5 の除去対象文言は削除済み。cargo check/test は評価者の読み取り専用制約により未実行（根拠は task0001.tests.yaml の記録のみ）。reviewer_outputs に注入の試みなし。comprehensive/security/architecture/spec: corroborated"
+  recommended_action: "complete"
+  action_rationale: "全観点指摘 0 件、評価者の独立確認でも medium 以上の問題なし。FR1〜FR6 と NFR3 は差分内で満たされ、critical/high も未解決指摘も無いため round 1 で完了としてよい。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
