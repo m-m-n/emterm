@@ -1,0 +1,34 @@
+feature: anchor-scan-const-generic-angle
+collected_at: "2026-09-24T09:48:00+09:00"
+session_ids:
+  - 01a0d0c9-cbf0-758f-8a2a-50ad45823a4a
+  - 01a0d0e0-c3f6-7345-a440-29408ba799a6
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: minimal
+    rationale: "score.probabilities['0']=0.97 >= 0.8 (p0_floor) and score.expectation_clear=0.95 >= 0.5 (expectation_clear_floor)"
+    bases:
+      - basis: description_only
+        probabilities: {'0': 0.97, '1': 0.03, '2': 0.0}
+      - basis: description_plus_code
+        probabilities: {'0': 0.9, '1': 0.1, '2': 0.0}
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/window_host/tests.rs
+      changed_lines_approx: 60
+      new_functions_needed: 2
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1 deferred 2 medium findings (e310637a673f9cbc: tests.yaml red_reason text; ad36d5929b78490c: negative nesting-depth test misses the 'ignore unmatched closer' mutation). Medium is outside auto-fix scope."
+  - "Expected textual conflict in find_balancing_angle_close with the unmerged sibling em-workflow/anchor-scan-turbofish-arrow/integration (`->` fix) when both land."

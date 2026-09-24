@@ -139,7 +139,8 @@ workflow:
 - id: retrospect
   artifacts:
   - retrospect.yaml
-  status: in_progress
+  status: completed
+  completed_at_commit: 45c211c39c9e9b7227ca6dc790fe2204e15b1d7b
 tasks:
   task0001:
     title: anchor_scan の山括弧対応付けで括弧内の < / > を数えないよう修正
