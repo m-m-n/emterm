@@ -59,7 +59,14 @@ workflow:
     status: completed
     completed_at_commit: 95767737146e142233f9f33890df5d46094167af
   - id: verify
-    status: in_progress
+    status: completed
+    completed_at_commit: 1c2031c478928867dc372dfff852a45bc72f8297
+    result: pass
+    failed_items: []
+    summary: >-
+      cargo check / cargo test --lib (3637 pass) / bun build:viewer+settings /
+      bun test (402 pass) / cargo fmt --check / biome check all exit 0.
+      TS-1〜TS-6 pass (TS-6 の大文字小文字無視の "PR" 一致は suppressed/produce の部分一致のみ).
   - id: retrospect
     artifacts: [retrospect.yaml]
     status: pending
