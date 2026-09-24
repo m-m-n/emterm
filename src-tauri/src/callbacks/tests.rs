@@ -733,10 +733,10 @@ mod body_markup_escape {
         title.push_str("TRAILING-SHOULD-BE-TRUNCATED>");
 
         let sanitized = crate::notifications::sanitize_title(&title);
-        assert_eq!(sanitized.chars().count(), 100);
-        assert!(sanitized.ends_with('<'));
+        assert_eq!(sanitized.as_str().chars().count(), 100);
+        assert!(sanitized.as_str().ends_with('<'));
 
-        let escaped = escape_body_markup(&sanitized);
+        let escaped = escape_body_markup(sanitized.as_str());
         assert!(
             escaped.ends_with("&lt;"),
             "entity reference was split or missing: {escaped}"
@@ -824,9 +824,10 @@ mod body_markup_escape {
             new_state: crate::notifications::AgentState::Blocked,
             name: Some("<script>evil</script>".to_string()),
         };
+        let agent_title = crate::notifications::sanitize_title("my-tab");
         let agent_body = crate::notifications::agent_notification_body(
             &transition,
-            "my-tab",
+            &agent_title,
             crate::i18n::Locale::En,
         );
         assert!(
@@ -945,11 +946,11 @@ mod summary_markup_escape {
         title.push_str("TRAILING-SHOULD-BE-TRUNCATED>");
 
         let sanitized = crate::notifications::sanitize_title(&title);
-        assert_eq!(sanitized.chars().count(), 100);
-        assert!(sanitized.ends_with('<'));
+        assert_eq!(sanitized.as_str().chars().count(), 100);
+        assert!(sanitized.as_str().ends_with('<'));
 
         let confirmed: Result<Vec<String>, ()> = Ok(vec!["body-markup".to_string()]);
-        let (escaped_title, _) = escape_for_send(&sanitized, "body", &confirmed);
+        let (escaped_title, _) = escape_for_send(sanitized.as_str(), "body", &confirmed);
         assert!(
             escaped_title.ends_with("&lt;"),
             "entity reference was split or missing: {escaped_title}"
