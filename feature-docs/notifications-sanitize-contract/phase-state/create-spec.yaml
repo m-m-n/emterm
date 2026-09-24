@@ -1,11 +1,11 @@
 schema_version: 1
 feature: notifications-sanitize-contract
 phase: create-spec
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 72b7e5fcf9c832f0ee3078cfcc1db853818769c2
 last_input_digest: sha256:98633833ab19a3aeba68fd0c62595e06a10f4f64ddf5d177ef4cc8567a3b2701
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -63,6 +63,18 @@ answers:
       (accept analyst recommendation). Packet offered option_ids skip/run rather than
       decide_autonomously; orchestrator applied the policy''s meaning (accept recommendation=skip)
       instead of aborting on the vocabulary mismatch.'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-25T00:06:28+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: doc/UI-DESIGN-GUIDELINES.yaml (+ mirrors md3.rs,
+      styles.css)'
+    resolution_note: gate create-spec.design-system; batch policy top_candidate_or_none;
+      3 candidates found
 worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
