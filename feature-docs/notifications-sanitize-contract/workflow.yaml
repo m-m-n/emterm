@@ -1,0 +1,208 @@
+schema_version: 1
+feature: notifications-sanitize-contract
+created: '2026-09-25'
+base_branch: main
+goal: |
+  # notifications モジュールのサニタイズ契約を一本化する
+
+  ## やりたいこと（必須）
+  `notifications` モジュールの本文ビルダー 2 種で分裂しているサニタイズ契約を一本化する。
+  ## 背景・なぜ（必須）
+  PR https://github.com/m-m-n/emterm/pull/31 で `agent_notification_body` は「呼び出し側は生の `tab_title` を渡してよい（内部で `sanitize_title` する）」契約になったが、同一モジュールの兄弟関数 `notification_body(sanitized_title: &str, ...)` は逆に「呼び出し側がサニタイズ済みを渡す」契約のまま残っている（実際 `src-tauri/src/app/mod.rs:1224` が `sanitize_title(&tab.title)` をキャプチャ時に呼んでいる）。
+  結果として「OS 通知本文に制御バイト / CSI を出さない」という同一の不変条件が、モジュール内で 2 つの相反する規約で守られる状態になった。区別は引数名とドキュメントだけで、型では強制されていない。
+  具体的な失敗経路は PR #31 が直したバグそのもの。新しい呼び出し側が `notification_body(&tab.title, ...)` のように生タイトルを渡すと、エスケープがそのまま OS 通知へ漏れる。`AgentTransition::name` はさらに別レイヤ（`agent_status::sanitize_name` のパース時サニタイズ）に依存しており、同一関数の 2 引数が別々の信頼契約を持つ形にもなっている。
+  加えて PR #31 で追加した doc コメントは「both existing call sites and any future one の single choke point」と書いているが、choke point になったのはエージェント通知経路だけで、タブアクティビティ経路は依然として呼び出し側責務。読み手に「notifications モジュールが全経路でサニタイズする」と誤読させうる。
+  現時点で実バグは無い。
+  - 該当箇所: `src-tauri/src/notifications.rs:164`（`notification_body`）、`src-tauri/src/notifications.rs:352`（doc コメント）、`src-tauri/src/app/mod.rs:1224`（呼び出し元）
+  - 検出元: PR https://github.com/m-m-n/emterm/pull/31 のレビュー round1、finding `6d2232a64f62dbdf`（severity medium / category architecture / confidence 60）
+  - 記録: `feature-docs/agent-notification-sanitize-title/reviews/round1.yaml`
+  ## 受け入れ条件 / 完了の定義（必須）
+  - [ ] `notifications` モジュールの本文ビルダーが単一のサニタイズ規約に従う
+  - [ ] 生タイトルを誤って渡す新規呼び出し側が、レビューではなく仕組みで検知される
+  - [ ] `agent_notification_body` の doc コメントの「single choke point」の記述を、実際の適用範囲に合わせて書き直す
+  - [ ] `cargo test --manifest-path src-tauri/Cargo.toml --lib` が通る
+  ## スコープ外（任意）
+  - 通知の発火条件・レート制限・ディスパッチの変更
+  - `sanitize_title` の挙動変更
+  ## 制約・前提（任意）
+  - 案は 2 つある。(a) `notification_body` 側も内部で `sanitize_title` を呼び、引数名を `title` に変える。`sanitize_title` は冪等（CSI 除去 → 制御文字除去 → 100 文字 take）なので `app/mod.rs:1224` の早期サニタイズはサイズ抑制の最適化としてそのまま残せる。(b) `sanitize_title` だけが生成できる `SanitizedTitle` newtype を導入し、両ビルダーがそれを受け取る。呼び出し側で生 `String` を渡すとコンパイルエラーになるため同種のバグが再発しない。
+  - PR #31 が main にマージされた後の状態を前提に着手すること。
+parent_branch: em-workflow/notifications-sanitize-contract/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    bases:
+    - basis: description_only
+      probabilities:
+        '0': 0.65
+        '1': 0.35
+        '2': 0.0
+        '3': 0.0
+      expectation_clear: 0.84
+      confidence: 0.64
+      observed_at: '2026-09-24T23:55:10+09:00'
+    - basis: description_plus_code
+      probabilities:
+        '0': 0.35
+        '1': 0.61
+        '2': 0.04
+        '3': 0.0
+      expectation_clear: 0.82
+      confidence: 0.61
+      observed_at: '2026-09-24T23:55:20+09:00'
+  at: '2026-09-24T23:56:05+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/src/ui/md3.rs
+    - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: b61283ab80a827c1f3d8459e0f289bf0bb93e9c9
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI 変更なし（Rust 内部の型・シグネチャ・doc コメントの変更のみ）
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: aaf5c7ceed7dc0a8ca6e1083b178dc776f455b91
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: SanitizedTitle newtype
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS3
+    - TS6
+  FR2:
+    title: Both body builders take &SanitizedTitle
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS3
+    - TS6
+  FR3:
+    title: Call-site migration
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS6
+  FR4:
+    title: Agent name keeps its upstream contract
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS3
+  FR5:
+    title: Doc comment rewrite
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS7
+  FR6:
+    title: Behavior preservation
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS2
+    - TS3
+    - TS4
+    - TS5
+  NFR1:
+    title: lib テスト
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS2
+    - TS3
+    - TS4
+    - TS5
+  NFR2:
+    title: 両 feature 構成のビルド
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: 保存タイトルの長さ上限
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: コンパイル時保証の検証方法
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS6
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
