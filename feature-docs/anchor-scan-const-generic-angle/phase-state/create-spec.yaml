@@ -1,7 +1,18 @@
 schema_version: 1
 feature: anchor-scan-const-generic-angle
 phase: create-spec
-status: in_progress
+status: completed
 last_input_digest: sha256:6d55f75a5fa545a0c77a956a8a132858ebf171fde364b97320eddc3f85a01094
 answers: []
-written_artifacts: []
+written_artifacts:
+- path: feature-docs/anchor-scan-const-generic-angle/TASK.md
+notes: 'minimal tier: spec-writer not dispatched; orchestrator wrote TASK.md directly.
+  requirements-analyst cs-analyst-001 completed with no questions. Codex consulted
+  on nesting handling / paren treatment / base branch (see batch-audit.yaml).
+  design_system resolved per batch policy create-spec.design-system (top candidate
+  -> project_native).'
+assumptions:
+- 'as-1: `->` inside a turbofish stays out of scope; its `>` at nesting depth 0 still closes the list.'
+- 'as-2: A closer that would make the nesting depth negative ends the walk with None (Codex option A).'
+- 'as-3: `{ N >> 1 }` / `[u8; 1 << 2]` are tested as the same defect, beyond the completion definition.'
+- 'as-4: No production impact (module is #[cfg(test)]).'
