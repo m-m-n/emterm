@@ -1,0 +1,116 @@
+schema_version: 1
+feature: anchor-scan-const-generic-angle
+created: '2026-09-24'
+base_branch: main
+parent_branch: em-workflow/anchor-scan-const-generic-angle/integration
+goal: |
+  # anchor_scan: turbofish の山括弧対応付けが const ジェネリクスのブロック・配列長内の比較/シフト演算子を閉じ > と誤認し、呼び出しが 2 つでも Ok を返す
+
+  Notion: https://www.notion.so/3e43509ec8ee813695a6d8c2537e1ac5 (種別: バグ)
+
+  ## 現象 (必須)
+  `src-tauri/src/window_host/tests.rs` のテスト専用モジュール `anchor_scan` で、turbofish の山括弧を対応付ける `find_balancing_angle_close` が、型引数リストの中の `{...}` / `[...]` に入った `<` / `>` も数える。const ジェネリクスのブロックや配列長の中の比較・シフト演算子を、型引数リストの閉じ `>` と誤認する。
+  - 誤った成功: `probe_call::<{ 1 > 0 }>(w, x, y, z); probe_call(a, b, c, d);` では、走査が const ブロック内の `>` で止まる。その次のトークンは `(` ではなく `0` なので turbofish 呼び出しを数えず、step 2 の hits が 1 件になり、`locate_call` が通常形式の呼び出しの範囲を `Ok` で返す。`{ N >> 1 }` や `[u8; 1 << 2]` でも同様。
+  - 誤った拒否: `let f = probe_call::<{ 1 > (0) }>; probe_call(a, b, c, d);` では、呼び出しではない参照を turbofish 呼び出しとして数え、`Err` を返す（安全側の失敗）。
+
+  ## 再現手順 (必須)
+  1. `anchor_scan::locate_call` に、本体が `probe_call::<{ 1 > 0 }>(w, x, y, z); probe_call(a, b, c, d);` の関数を 4 引数期待で通す
+  2. `Err` ではなく `Ok` が返ることを確認する
+
+  ## 期待する挙動 (必須)
+  callee の呼び出しが 2 つある本体では `locate_call` が `Err` を返す。`let f = probe_call::<{ 1 > (0) }>; probe_call(a, b, c, d);` では `a, b, c, d` の範囲で `Ok` を返す。
+
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  - [ ] `probe_call::<{ 1 > 0 }>(w, x, y, z); probe_call(a, b, c, d);` で `Err` を期待するテストがある
+  - [ ] `let f = probe_call::<{ 1 > (0) }>; probe_call(a, b, c, d);` で `a, b, c, d` の `Ok` を期待するテストがある
+
+  ## 該当箇所 (任意)
+  - `src-tauri/src/window_host/tests.rs:7375-7390` — `find_balancing_angle_close`
+  - 行番号は `em-workflow/anchor-scan-callee-miscount/integration` ブランチ時点
+
+  修正案: `find_balancing_angle_close` で `(` / `[` / `{` の入れ子の深さを追い、入れ子の深さが 0 の `<` / `>` だけで山括弧の深さを増減する。`->` の形は `feature-docs/anchor-scan-callee-miscount/tasks/task0001.md` の Out of Scope で除外済みのため、対象外のまま残す。
+
+  ## 実害・発生条件 (任意)
+  現在は未発現。`anchor_scan` は `#[cfg(test)]` 下で本番コードは通らない。
+  出典: em-workflow `anchor-scan-callee-miscount` の review round 1（stable_id `2504a44086ff5f89`、severity medium）。medium は review の自動修正の対象外のため、`resolution: deferred` として記録した。
+tier: minimal
+tier_decision:
+  by: orchestrator
+  confidence:
+  - basis: description_only
+    probabilities:
+      '0': 0.97
+      '1': 0.03
+      '2': 0.0
+    expectation_clear: 0.95
+  - basis: description_plus_code
+    probabilities:
+      '0': 0.9
+      '1': 0.1
+      '2': 0.0
+    expectation_clear: 0.95
+  at: '2026-09-24T09:12:26+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - IMPLEMENTATION.md
+  - design
+  - SPEC.md (replaced by TASK.md)
+  - task splitting
+  - VERIFICATION.md
+  - task-level parallelism
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - TASK.md
+  status: completed
+  completed_at_commit: f7d04fa304bed036940de944818de92fd9de2d32
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'minimal tier subtracts the design step; requirements-analyst also recommended skip:
+    test-only token-scanner logic fix in a #[cfg(test)] module with no UI, visual, or interaction surface.'
+- id: create-plan
+  artifacts:
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  artifacts:
+  - retrospect.yaml
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements: {}
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
