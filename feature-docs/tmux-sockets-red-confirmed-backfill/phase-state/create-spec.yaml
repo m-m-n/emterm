@@ -1,0 +1,20 @@
+schema_version: 1
+feature: tmux-sockets-red-confirmed-backfill
+phase: create-spec
+status: dispatching
+generation: 1
+mode: batch
+base_revision: ee9e5455038cdb6d1479d60e959fe24b7ea716f5
+last_input_digest: sha256:8f44c0f8cb83637e7057433158cd2d7e73ac2da02ffc89377336e1dd510e00a2
+active_request_id: cs-analyst-001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: cs-analyst-001
+  status: dispatched
+  input_digest: sha256:8f44c0f8cb83637e7057433158cd2d7e73ac2da02ffc89377336e1dd510e00a2
+artifacts: []
+patches: []
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
