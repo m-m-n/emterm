@@ -1,0 +1,20 @@
+schema_version: 1
+feature: tmux-sockets-red-confirmed-backfill
+phase: create-plan
+status: dispatching
+generation: 1
+mode: batch
+base_revision: d36b1de75ea1d7982eaf369d8f08d47398bd6830
+last_input_digest: sha256:44deb64f6484fb90e81c46209775eded637b3bd241a4bc207f55e9a5245cf3fd
+active_request_id: create-plan-tmux-sockets-red-confirmed-backfill-001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-tmux-sockets-red-confirmed-backfill-001
+    status: dispatched
+    input_digest: sha256:44deb64f6484fb90e81c46209775eded637b3bd241a4bc207f55e9a5245cf3fd
+artifacts: []
+patches: []
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
