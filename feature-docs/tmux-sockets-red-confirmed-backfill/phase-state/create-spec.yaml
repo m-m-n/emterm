@@ -1,19 +1,51 @@
 schema_version: 1
 feature: tmux-sockets-red-confirmed-backfill
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 mode: batch
-base_revision: ee9e5455038cdb6d1479d60e959fe24b7ea716f5
+base_revision: 88aea0c74f64beced488a330acf4152a70c8d721
 last_input_digest: sha256:8f44c0f8cb83637e7057433158cd2d7e73ac2da02ffc89377336e1dd510e00a2
-active_request_id: cs-analyst-001
+active_request_id: null
 packets: {}
-answers: {}
+answers:
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-09-25T00:40:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: 'skipped: YAML test-record-only change, no UI; also removed by tier minimal'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-25T00:40:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [top_candidate_or_none]
+    freeform: null
+    normalized_answer: 'project_native: doc/UI-DESIGN-GUIDELINES.yaml (top candidate of 3 detected)'
+assumptions:
+- id: A-1
+  statement: AC-3..AC-6 に追記する値はすべて false（受け入れ条件どおり。各 red_reason は red 観測なしの検証を記述している）
+  reversible: true
+- id: A-2
+  statement: 前提「PR #32 マージ済み」は満たされている（対象ファイルが main / 統合ブランチに存在する）
+  reversible: true
+- id: A-3
+  statement: feature-docs/tmux-sockets-discover-flake/reviews/round1.yaml の deferred finding e86544305169d904 は編集しない
+  reversible: true
+- id: A-4
+  statement: AC-3..AC-6 の red_reason の本文は変更しない
+  reversible: true
 worker_runs:
 - request_id: cs-analyst-001
-  status: dispatched
+  status: completed
   input_digest: sha256:8f44c0f8cb83637e7057433158cd2d7e73ac2da02ffc89377336e1dd510e00a2
-artifacts: []
+artifacts:
+- path: feature-docs/tmux-sockets-red-confirmed-backfill/TASK.md
+  sha256: sha256:70e30426ef2b1a2719e25192c759941e57478dee18641617797531524ada86c1
+  produced_by: orchestrator
 patches: []
 stale_redispatch_count: 0
 resolved_input_cache: {}

@@ -1,0 +1,102 @@
+schema_version: 1
+feature: tmux-sockets-red-confirmed-backfill
+created: 2026-09-25
+base_branch: main
+goal: |
+  task0001.tests.yaml の AC-3〜AC-6 に red_confirmed が無い（記録フォーマットのドリフト）
+
+  ## やりたいこと（必須）
+  `test-docs/tmux-sockets-discover-flake/task0001.tests.yaml` の AC-3〜AC-6 に欠けている `red_confirmed` フィールドを補い、implementer の tests.yaml 記録フォーマットを既存ファイル群と揃える。
+  ## 背景・なぜ（必須）
+  ### 現象
+  em-workflow の feature `tmux-sockets-discover-flake`（PR https://github.com/m-m-n/emterm/pull/32 ）の review round 1 で検出された medium finding（stable_id: `e86544305169d904`）。
+  implementer の tests.yaml 契約では `acceptance_tests` の各エントリが `tests` / `red_confirmed` / `red_reason` を持ち、`tests: []`（ビルド・lint・目視検査で検証する AC）でも `red_confirmed` を書くことになっている。本リポジトリの既存 test-docs もこの形で揃っている（既存 tests.yaml 群で 85 箇所）。
+  しかし当該ファイルは AC-1 / AC-2 にしか `red_confirmed` が無く、AC-3〜AC-6 は `red_reason` だけになっている。
+  ### 該当箇所
+  `test-docs/tmux-sockets-discover-flake/task0001.tests.yaml:33` 以降（AC-3〜AC-6 の各エントリ）
+  ### 実害
+  この記録は後続タスクや失敗時の原因帰属で読まれる証跡なので、フィールド欠落は「red を観測したのか否か」が機械的に判定できないドリフトを生む。欠落を `false` と読むか未記入と読むかが読み手次第になる。
+  実装の正しさには影響しない（Rust 側の修正は 7 観点レビューで critical / high ゼロ、検証も全項目パス）。review では medium のため R4 auto-fix ゲート（critical / high のみ）の対象外で `deferred` として記録した。
+  ## 受け入れ条件 / 完了の定義（必須）
+  - [ ] `test-docs/tmux-sockets-discover-flake/task0001.tests.yaml` の AC-3・AC-4・AC-5・AC-6 の各エントリに `red_confirmed: false` が追記されている
+  - [ ] 既存 test-docs 群の記録フォーマットと一致している
+  ## スコープ外（任意）
+  `src-tauri/src/tmux_sockets.rs` の実装変更。tests.yaml の記録フォーマットのみが対象。
+  ## 制約・前提（任意）
+  - PR https://github.com/m-m-n/emterm/pull/32 がマージされた後に着手する（未マージのうちはブランチ `em-workflow/tmux-sockets-discover-flake/integration` 側にしかファイルが無い）
+  - review 記録は `feature-docs/tmux-sockets-discover-flake/reviews/round1.yaml` にある
+parent_branch: em-workflow/tmux-sockets-red-confirmed-backfill/integration
+tier: minimal
+tier_decision:
+  by: orchestrator
+  confidence:
+    - basis: description_only
+      probabilities: {"0": 0.99, "1": 0.01, "2": 0.0, "3": 0.0}
+      expectation_clear: 0.94
+    - basis: description_plus_code
+      probabilities: {"0": 0.98, "1": 0.02, "2": 0.0, "3": 0.0}
+      expectation_clear: 0.94
+  at: "2026-09-25T00:32:00+09:00"
+  reductions: [REQUIREMENTS.md, IMPLEMENTATION.md, design, SPEC.md, task-split, VERIFICATION.md, task-parallelism]
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths: [doc/UI-DESIGN-GUIDELINES.yaml]
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: "bunx biome check ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [TASK.md]
+    status: completed
+    completed_at_commit: 88aea0c74f64beced488a330acf4152a70c8d721
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      tier minimal により design ステップを削減した。requirements-analyst の推奨も skip
+      （YAML のテスト記録のみの変更で、UI・API・コード設計の対象が無い）。
+  - id: create-plan
+    artifacts: [tasks/]
+    status: pending
+  - id: implement
+    status: pending
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    artifacts: [retrospect.yaml]
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements: {}
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
