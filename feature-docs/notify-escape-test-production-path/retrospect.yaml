@@ -1,5 +1,5 @@
 feature: notify-escape-test-production-path
-collected_at: "2026-09-25T19:45:00+09:00"
+collected_at: "2026-09-25T19:33:27+09:00"
 session_ids: [01a0d81f-1d29-7718-bb7f-1c93bb5485a4, 01a0d7fd-1523-7340-a729-77198ddae666]
 signals:
   review_critical_high: []
