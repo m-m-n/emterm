@@ -1,0 +1,102 @@
+schema_version: 1
+feature: notifications-sanitize-contract
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 72b7e5fcf9c832f0ee3078cfcc1db853818769c2
+last_input_digest: sha256:98633833ab19a3aeba68fd0c62595e06a10f4f64ddf5d177ef4cc8567a3b2701
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-09-25T00:01:00+09:00'
+    questions:
+    - question_id: requirement.sanitize-contract-shape
+      status: answered
+    - question_id: requirement.agent-name-scope
+      status: answered
+    - question_id: design-step.decision
+      status: answered
+answers:
+  requirement.sanitize-contract-shape:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-25T00:01:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - sanitized_title_newtype
+    freeform: null
+    normalized_answer: SanitizedTitle newtype produced only by sanitize_title; both
+      builders take &SanitizedTitle
+    resolution_note: 'gate: create-spec.requirement-clarification; policy codex_consultation;
+      codex_consulted: true (harness entry: codex, 1 turn); opus_escalation: not run;
+      Codex chose sanitized_title_newtype: AC2 requires detection of raw input, internal
+      sanitize only neutralizes and cannot detect misuse; wrapping sanitize_title
+      output keeps behavior. Risk noted: compile_fail doctests do not run under --lib.
+      Orchestrator mapping judgement: maps to sanitized_title_newtype (also worker''s
+      tentative position).'
+  requirement.agent-name-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-25T00:01:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - title_only_document_name
+    freeform: null
+    normalized_answer: Unify tab title only; AgentTransition::name stays upstream-sanitized,
+      doc states it explicitly
+    resolution_note: 'gate: create-spec.requirement-clarification; policy codex_consultation;
+      codex_consulted: true (harness entry: codex, 1 turn); opus_escalation: not run;
+      Codex chose title_only_document_name: sanitize_name applies a different rule
+      (control strip + 80 char cap); widening scope enlarges blast radius. Orchestrator
+      mapping: title_only_document_name.'
+  design-step.decision:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-25T00:01:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: skip design step
+    resolution_note: 'gate: create-spec.design-step; policy option_id decide_autonomously
+      (accept analyst recommendation). Packet offered option_ids skip/run rather than
+      decide_autonomously; orchestrator applied the policy''s meaning (accept recommendation=skip)
+      instead of aborting on the vocabulary mismatch.'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-25T00:06:28+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: doc/UI-DESIGN-GUIDELINES.yaml (+ mirrors md3.rs,
+      styles.css)'
+    resolution_note: gate create-spec.design-system; batch policy top_candidate_or_none;
+      3 candidates found
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:9cd22663d78083a7067082a904ffe09032002b63403ab18d9c113fa7a60d925c
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:98633833ab19a3aeba68fd0c62595e06a10f4f64ddf5d177ef4cc8567a3b2701
+  output_digest: null
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: null
+  output_digest: null
+artifacts:
+- path: feature-docs/notifications-sanitize-contract/REQUIREMENTS.md
+  sha256: sha256:1ae435e8448f392f4118462f87a9d0d94904383233b6fd255e409b6bed4d4cab
+  produced_by: create-spec-run-0003
+- path: feature-docs/notifications-sanitize-contract/SPEC.md
+  sha256: sha256:7694d9dcb5563f41dff2bf1fa6b3ae3bc506e5fc6f612c735796067db5cfa2ca
+  produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
