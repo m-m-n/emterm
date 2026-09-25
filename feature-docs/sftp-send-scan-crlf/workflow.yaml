@@ -105,12 +105,13 @@ tasks:
     branch: em-workflow/sftp-send-scan-crlf/task0001
 
 review:
-  status: in_progress
+  status: completed
   plan:
     floor: [comprehensive, security, spec]
     discretionary: []
     cross_validation: false
-  rounds_completed: 0
+  rounds_completed: 1
+  perspectives: [comprehensive, security, spec]
   residual_critical_high: 0
   needs_rework: false
 
