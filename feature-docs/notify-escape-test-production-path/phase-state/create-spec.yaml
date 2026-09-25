@@ -1,7 +1,7 @@
 schema_version: 1
 feature: notify-escape-test-production-path
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 mode: batch
 base_revision: f5b661b446841c77d557d2a21f3e9f9ac3c050b5
