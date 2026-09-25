@@ -1,0 +1,31 @@
+feature: test-seam-serialization
+collected_at: "2026-09-25T10:40:00+09:00"
+session_ids: [01a0d625-03ab-70d3-b4ae-da5cae3ec7b3]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "readings disagree: description_only=full, description_plus_code=reduced -> full"
+    bases:
+      - basis: description_only
+        probabilities: {"0": 0.22, "1": 0.78, "2": 0.0, "3": 0.0}
+      - basis: description_plus_code
+        probabilities: {"0": 0.71, "1": 0.29, "2": 0.0, "3": 0.0}
+    pre_survey_estimate:
+      files_expected: [src-tauri/src/sftp/service.rs]
+      changed_lines_approx: 40
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: []
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "RESTART_REQUIRED 直列化（FR1-FR3）は事前調査の時点で実装済みだった。残作業は sftp/service.rs のみで、事前見積りは reduced を示したが判定の不一致で full になった"
+  - "review round1 の medium finding 4efb8bedd4409a07（CRLF 作業コピーで構造検査の境界検出が失敗）は unresolved のまま"
