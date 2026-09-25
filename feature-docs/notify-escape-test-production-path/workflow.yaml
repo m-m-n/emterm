@@ -76,7 +76,7 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: [FR1, FR3, FR6, NFR2, NFR3, NFR4]
-    status: in_progress
+    status: merged
     branch: em-workflow/notify-escape-test-production-path/task0002
     notes: null
 
