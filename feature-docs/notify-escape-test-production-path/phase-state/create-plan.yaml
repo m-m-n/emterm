@@ -1,0 +1,21 @@
+schema_version: 1
+feature: notify-escape-test-production-path
+phase: create-plan
+status: dispatching
+generation: 1
+mode: batch
+base_revision: 2bf3ed3d79bda49ff64cfb7abf3d8f4c4166248d
+last_input_digest: sha256:80b75b184a963c1de5a908b6d92bb724c508c9000409f87e2db2ca45bcfcf871
+active_request_id: cp-planner-001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: cp-planner-001
+  status: dispatched
+  input_digest: sha256:80b75b184a963c1de5a908b6d92bb724c508c9000409f87e2db2ca45bcfcf871
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
