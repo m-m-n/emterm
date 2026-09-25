@@ -72,7 +72,7 @@ tasks:
     domains: [input-handling]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/erase-edge-repair-dead-sides/task0001
     notes: null
 
