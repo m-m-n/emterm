@@ -61,7 +61,7 @@ workflow:
     completed_at_commit: 22535675afc2c6e4fce3bad552c01070ddfb6214
     base_commit: 9079eaf9a5c56f261c320c578e95922171037083
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
   - id: retrospect
@@ -81,9 +81,13 @@ tasks:
     branch: em-workflow/test-seam-serialization/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
   perspectives: []
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    cross_validation: true
   residual_critical_high: 0
   needs_rework: false
 
