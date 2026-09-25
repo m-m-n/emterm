@@ -100,7 +100,7 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2]
-    status: in_progress
+    status: merged
     branch: em-workflow/sftp-send-scan-crlf/task0001
 
 review:
