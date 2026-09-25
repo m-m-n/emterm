@@ -32,6 +32,25 @@ answers:
       C follows existing injection idiom (NotificationSink, injected clock) and verifies
       real arguments without D-Bus mocking. Adding only a pure prepare_notification()
       would just move the hole. Orchestrator adopted C. Opus escalation: not run.'
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-09-25T19:00:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: 'skipped: 内部リファクタリングで UI 変更なし (requirements-analyst 推奨)'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-25T19:00:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: doc/UI-DESIGN-GUIDELINES.yaml (top candidate
+      of 3 detected)'
 worker_runs:
 - request_id: cs-analyst-001
   status: completed
@@ -39,7 +58,16 @@ worker_runs:
 - request_id: cs-analyst-002
   status: completed
   input_digest: sha256:71cc5f8c83e559fc23eb565ef4d5f52987c70cb9e41cbbc7369cc982b8f0a67c
-artifacts: []
+- request_id: cs-specwriter-001
+  status: completed
+  input_digest: sha256:9b85c0f6594acddc1fc5e7dfe86d9d8e8ae9bcf888810b9c766f65756405f53c
+artifacts:
+- path: feature-docs/notify-escape-test-production-path/REQUIREMENTS.md
+  sha256: sha256:d55b171f0dc87f9a02018ab68f943c11734a3fc1ef6f466d878f4f41b7c097da
+  produced_by: cs-specwriter-001
+- path: feature-docs/notify-escape-test-production-path/SPEC.md
+  sha256: sha256:f9e60c0024037999960cfbfe43ac8ba457c3610a2401b32e4865333647c2606e
+  produced_by: cs-specwriter-001
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
