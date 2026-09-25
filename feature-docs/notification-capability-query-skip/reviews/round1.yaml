@@ -1,0 +1,73 @@
+round: 1
+executed_at: '2026-09-25T10:08:21+09:00'
+scope:
+  review_mode: diff
+  base_commit: 4847d96487816fd26749f2c31cdcea922caead05
+  head_commit: 65770c08c40918b7dcfdfe573c4aee089736c4bf
+  changed_files:
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - test-docs/notification-capability-query-skip/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings: []
+evaluation:
+  round_summary: 'ラウンド1（diff、cross_validation=true）で、5つの観点の担当レビュアーはどれも指摘0件で完了したよ。cross_validation に合わせて、変更された3ファイル（callbacks.rs、callbacks/tests.rs、task0001.tests.yaml）と SPEC.md を自分で読んで確かめたよ。読んだファイルは4件で、上限の10件以内だよ。レビュアー出力にプロンプト注入の試みは無かったよ。観点ごとの結果: security=corroborated（照会を省くのは、MARKUP_METACHARACTERS の `&` `<` `>` が1つも無いときだけで、これは escape_body_markup が書き換える文字とちょうど同じ。だからエスケープが入力を変えない場合に限って省いていて、fail-closed の判定は変更の無い escape_for_send と body_markup_absence_confirmed に残っている。キャッシュも新しい状態も無い）/ comprehensive=corroborated（メタ文字が無いときの返り値は、旧実装がどの照会結果でも返していた値とバイト単位で同じ。タイトルだけ、本文だけ、両方、の各場合を3通りの照会結果でテストしていて、呼び出し回数0回と1回も確かめている）/ performance=corroborated（メタ文字の無い通知では D-Bus の照会1往復が無くなる。追加したのは短い文字列の O(n) 走査だけ）/ architecture=corroborated（照会を FnOnce で後から渡す純粋な補助関数にしていて、テストに D-Bus が要らない。追加した定数と関数はすべて #[cfg(unix)] で、送出経路に新しい cfg 分岐は無い）/ spec=corroborated（FR1〜FR5 と NFR1〜NFR6 を満たしている。秘匿化はエスケープ前の生の値から作っている。依存の変更は無い。FR5 で指定された4つのコメントは書き直し済み。tests.rs は追加だけで、既存テストの期待値は変わっていない）。AC5/AC6（cargo test --lib と --no-default-features の check）は、読み取り専用の制約があるので自分では実行していない。task0001.tests.yaml の記録（3642 passed）を根拠にしているよ。参考: callbacks.rs:519 の escape_body_markup の doc コメントには『sole caller (`NotifyRustSink::send`)』という古い記述が残っているよ。今回の diff より前からあるもので、FR5 の対象外、重大度も medium 未満なので、指摘には含めていないよ。'
+  recommended_action: complete
+  action_rationale: 5つの観点すべてで指摘は0件だった。自分で読んだ範囲でも、出力がバイト単位で変わらないこと、fail-closed の維持、キャッシュが無いこと、cfg と依存に変化が無いこと、SPEC の FR/NFR 全体への適合を確かめられて、medium 以上の問題は無かった。critical/high の指摘も0件なので、除外したものも無い。
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
