@@ -1,0 +1,37 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - callbacks::tests::capability_query_skip_gate::no_metacharacter_skips_the_query_and_returns_inputs_unchanged
+    red_confirmed: true
+    red_reason: "cannot find function `escape_for_send_on_demand` in this scope (E0425) — the gate did not exist before implementation"
+  AC-2:
+    tests:
+      - callbacks::tests::capability_query_skip_gate::metacharacter_in_title_or_body_queries_exactly_once_and_matches_escape_for_send
+      - callbacks::tests::capability_query_skip_gate::tab_title_fallback_escapes_under_a_failed_query
+    red_confirmed: true
+    red_reason: "cannot find function `escape_for_send_on_demand` in this scope (E0425) — the gate did not exist before implementation"
+  AC-3:
+    tests:
+      - callbacks::tests::capability_query_skip_gate::consecutive_calls_never_share_a_query_result
+    red_confirmed: true
+    red_reason: "cannot find function `escape_for_send_on_demand` in this scope (E0425) — the gate did not exist before implementation"
+  AC-4:
+    tests:
+      - callbacks::tests::capability_query_skip_gate::escape_body_markup_is_identity_outside_the_metacharacter_set
+    red_confirmed: true
+    red_reason: "cannot find value `MARKUP_METACHARACTERS` in this scope (E0425) — the constant did not exist before implementation"
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: "Structural/static-review criterion (VERIFICATION TS-10), not a red-green test: verified by reading the diff — notify_worker hands notify_rust::get_capabilities to escape_for_send_on_demand un-invoked (no parens), the only other get_capabilities() reference in callbacks.rs is a doc comment, redaction still runs first from the raw title/body, the new const/fn/fn are all #[cfg(unix)], and no new cfg branch or caching primitive (static, Cell, OnceLock, memoization) was introduced."
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: "Structural/static-review criterion (VERIFICATION TS-9), not a red-green test: the four doc comments (notify_worker, the D3 comment above the escape step, NotifyRustSink, escape_for_send) were rewritten to describe the conditional query; grep for 'once per notification' and 'exactly once per send' over src-tauri/src/callbacks.rs returns no matches, and no comment claims a synchronous D-Bus round-trip on the PTY-processing or UI thread."
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "Non-regression/build criterion, not a red-green test: existing escape_for_send / body_markup_absence_confirmed / escape_body_markup tests in src-tauri/src/callbacks/tests.rs are byte-identical to the base (git diff shows only additions, zero deletions in that file); cargo test --lib (3642 passed, 0 failed) and cargo check --no-default-features both succeeded; git diff shows no Cargo.toml or Cargo.lock change anywhere in the repository."
