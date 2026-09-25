@@ -96,7 +96,8 @@ workflow:
   completed_at_commit: 217724632f54bcc17f455f3fefa0dabf041b4521
   base_commit: 4847d96487816fd26749f2c31cdcea922caead05
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 65770c08c40918b7dcfdfe573c4aee089736c4bf
 - id: verify
   status: pending
   result: null
@@ -116,8 +117,9 @@ tasks:
     branch: em-workflow/notification-capability-query-skip/task0001
     notes: null
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, performance, architecture, spec]
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
