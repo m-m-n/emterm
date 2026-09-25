@@ -65,8 +65,8 @@ tasks:
     domains: [input-handling, external-io, concurrency]
     complexity: high
     requirements: [FR1, FR2, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/notify-escape-test-production-path/task0001
     notes: null
   task0002:
     title: "Route the body_markup_escape tests through escape_for_send"
@@ -76,8 +76,8 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: [FR1, FR3, FR6, NFR2, NFR3, NFR4]
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/notify-escape-test-production-path/task0002
     notes: null
 
 review:
