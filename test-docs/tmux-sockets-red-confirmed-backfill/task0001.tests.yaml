@@ -1,0 +1,35 @@
+task_id: task0001
+baseline_failures: []          # full --lib suite, pre-change: 3637 passed, 0 failed, 3 ignored
+final_failures: []             # full --lib suite, post-change: 3637 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >
+      Read test-docs/tmux-sockets-discover-flake/task0001.tests.yaml before
+      making any change and confirmed the red state described in the task
+      plan: AC-1 and AC-2 had a `red_confirmed` field but AC-3, AC-4, AC-5,
+      AC-6 had only `tests` and `red_reason` — `red_confirmed` was absent
+      from all four. After the edit, `git diff --stat` reports exactly
+      "1 file changed, 4 insertions(+)" for
+      test-docs/tmux-sockets-discover-flake/task0001.tests.yaml (no
+      deletions, no other file touched), and parsing the file with
+      `python3 -c "import yaml; ..."` confirms every AC-1..AC-6 entry now
+      has keys in order `['tests', 'red_confirmed', 'red_reason']`, with
+      AC-3/AC-4/AC-5/AC-6 each `red_confirmed: False` (Python bool for
+      YAML `false`), AC-1 `True`, AC-2 `False` (both unchanged from before
+      the edit).
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >
+      Before the edit, the target entries' key set (`tests`, `red_reason`
+      only) did not match the `tests` / `red_confirmed` / `red_reason`
+      pattern used by AC-1, AC-2 in the same file and by every entry in the
+      project's other ~85 test-docs/**/*.tests.yaml records — this was the
+      observed drift the task exists to fix. After the edit, the same YAML
+      parse check used for AC-1 confirms AC-3..AC-6 now carry
+      `red_confirmed` as a boolean in the same key position (between
+      `tests` and `red_reason`) and with the same 4-space indentation as
+      the pre-existing `red_confirmed` lines on AC-1/AC-2, matching the
+      format used across the existing test-docs corpus.
