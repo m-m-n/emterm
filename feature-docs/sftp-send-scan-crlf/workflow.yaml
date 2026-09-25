@@ -1,0 +1,172 @@
+schema_version: 1
+feature: sftp-send-scan-crlf
+created: 2026-09-25
+base_branch: main
+goal: |
+  SFTP send-site 構造検査が CRLF 作業コピーで MissingBoundary になる
+
+  ## 現象 (必須)
+  `src-tauri/src/sftp/service.rs` の構造検査テスト `every_progress_and_result_send_site_routes_through_the_wake_helpers` が、CRLF 改行の作業コピーでは正しいコードでも panic する。
+  `find_mod_tests_boundary` は `"#[cfg(test)]" + "\n" + "mod tests"` を連結した文字列を `src.find` で探している。テストは `std::fs::read_to_string` で自分のソースを読むため、CRLF の作業コピーでは `#[cfg(test)]\r\nmod tests` になって一致せず、`MissingBoundary` になる。
+  変更前の実装（`split("#[cfg(test)]")`）は改行コードに依存していなかったので、feature `test-seam-serialization` で入った後退になる。
+  ## 再現手順 (必須)
+  1. リポジトリに `.gitattributes` が無い状態で、`core.autocrlf=true`（Git for Windows の既定）でチェックアウトする
+  2. `cargo test --lib` を実行する
+  3. `every_progress_and_result_send_site_routes_through_the_wake_helpers` が `MissingBoundary` で panic する
+  ## 期待する挙動 (必須)
+  改行コードが LF でも CRLF でも `mod tests` の境界を検出し、bare send が無ければテストが通る。
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  ## 該当箇所 (任意)
+  - `src-tauri/src/sftp/service.rs:1013`（`find_mod_tests_boundary` の検索条件）
+  - 対処案: `scan_for_bare_send_sites` の先頭で `src.replace("\r\n", "\n")` で改行を正規化してから境界を探して走査する（オフセットは正規化後の文字列に対して取る）。`send_site_scan_detection_routine_red_cases` に CRLF の合成テキストのケースを追加し、境界が見つかることと境界より前の bare send を検出することを固定する
+  ## 実害・発生条件 (任意)
+  Windows 上で `cargo test --lib` を実行すると、無関係な変更でも赤が出続ける。失敗はテストが赤になる形で表に出るため、誤って通ってしまう危険は無い。
+  em-workflow feature `test-seam-serialization` の review round 1 で残った medium 指摘（stable_id `4efb8bedd4409a07`）。記録は `feature-docs/test-seam-serialization/reviews/round1.yaml`（ブランチ `em-workflow/test-seam-serialization/integration`）。
+parent_branch: em-workflow/sftp-send-scan-crlf/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    - basis: description_only
+      probabilities: {"0": 0.21, "1": 0.79, "2": 0.0, "3": 0.0}
+      expectation_clear: 0.88
+    - basis: description_plus_code
+      probabilities: {"0": 0.51, "1": 0.49, "2": 0.0, "3": 0.0}
+      expectation_clear: 0.88
+  at: "2026-09-25T13:38:10+09:00"
+  reductions: []
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths: [doc/UI-DESIGN-GUIDELINES.yaml]
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    main-cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    main-windows:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --lib --tests"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 8d21aebe0cbced1d65132374ed5b4d895125d618
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      requirements-analyst の推奨が skip で、gate create-spec.design-step をバッチポリシー（decide_autonomously）で解決した。
+      UI・画面・見た目の変更が無く、テストコード内の文字列処理だけの修正のため。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 709f0b8513dad0157589906b846bf7a9ab6920f8
+  - id: implement
+    status: completed
+    completed_at_commit: a83398ace7b5bf8109084cb80389aeff15303b2f
+    base_commit: 46e99d8d4bf0917e17f9522c38d82b53cd5bcf0b
+  - id: review
+    status: completed
+    completed_at_commit: d3b60b0060b2ff8e714d0dde49010f22534490aa
+  - id: verify
+    status: completed
+    completed_at_commit: a9354e921cbf3ed7fef6e389ccffa5d748ace5c5
+    result: pass
+    failed_items: []
+  - id: retrospect
+    artifacts: [retrospect.yaml]
+    status: completed
+    completed_at_commit: 4859028301b3f4570570cd4c90c040e9f17224e6
+
+tasks:
+  task0001:
+    title: Line-ending independent send-site scan with CRLF regression cases
+    plan: tasks/task0001.md
+    files: [src-tauri/src/sftp/service.rs]
+    skills: []
+    domains: [input-handling]
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2]
+    status: merged
+    branch: em-workflow/sftp-send-scan-crlf/task0001
+
+review:
+  status: completed
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary: []
+    cross_validation: false
+  rounds_completed: 1
+  perspectives: [comprehensive, security, spec]
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: 改行コードに依存しない境界検出
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-3, TS-4]
+  FR2:
+    title: 正規化後の文字列でオフセットを取る
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-3, TS-4, TS-5]
+  FR3:
+    title: CRLF の回帰テスト
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1]
+  FR4:
+    title: 既存の検出挙動を保つ
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-2]
+  NFR1:
+    title: 変更範囲
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-2, TS-7]
+  NFR2:
+    title: 禁止形の組み立て
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-6]
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2

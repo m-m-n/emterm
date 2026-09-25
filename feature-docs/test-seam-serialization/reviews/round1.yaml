@@ -1,0 +1,62 @@
+round: 1
+executed_at: "2026-09-25T10:12:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 9079eaf9a5c56f261c320c578e95922171037083
+  head_commit: d85032b7c6b601a052a966727ba349814a6a27a7
+  changed_files:
+    - src-tauri/src/sftp/service.rs
+    - test-docs/test-seam-serialization/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: 4efb8bedd4409a07
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/sftp/service.rs
+    line: 1013
+    title: "CRLF 改行の作業コピーで構造検査の境界検出が失敗する"
+    description: >-
+      find_mod_tests_boundary は "#[cfg(test)]" + "\n" + "mod tests" を連結した文字列を src.find で探している。
+      std::fs::read_to_string で読んだ自分のソースが CRLF の作業コピー（.gitattributes 無し + core.autocrlf=true）だと一致せず
+      MissingBoundary になり、正しいコードでも every_progress_and_result_send_site_routes_through_the_wake_helpers が panic する。
+      変更前の split("#[cfg(test)]") 実装は改行コードに依存していなかったため後退にあたる。失敗はテストが赤になる形で表に出る。
+    suggestion: >-
+      scan_for_bare_send_sites の先頭で src.replace("\r\n", "\n") で改行を正規化してから境界を探して走査する。
+      send_site_scan_detection_routine_red_cases に CRLF の合成テキストのケースを追加する。修正は service.rs 内で済ませる。
+    sources: [codex:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "severity medium は auto-fix 対象外（critical/high のみ）"
+unreviewed_perspectives: []
+evaluation:
+  round_summary: >-
+    Round 1（diff モード、cross_validation=true）。変更は service.rs の #[cfg(test)] シームブロックと mod tests 本体、および test-docs の記録ファイルだけで、
+    本番の関数本体・シグネチャ・cfg ゲートは変わっていない（NFR1）。指摘は comprehensive#0 の medium 1 件（CRLF の作業コピーで境界検出が失敗する）を
+    コード上で確認して採用した。critical/high は無し。プロンプトインジェクションの試みは無し。全観点 corroborated。読んだファイルは 8 件（上限 10 件内）。
+  recommended_action: auto_fix
+  action_rationale: "残りは medium 1 件で、service.rs 内で閉じるテスト専用の小さな修正で済む。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-test-seam-serialization-20260925T011137Z.md

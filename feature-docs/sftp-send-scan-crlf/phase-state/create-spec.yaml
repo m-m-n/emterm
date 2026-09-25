@@ -1,0 +1,67 @@
+schema_version: 1
+feature: sftp-send-scan-crlf
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 986c48c0febe511db0d6f19e6aec3f90eff37178
+last_input_digest: sha256:b5c229113680ccef3cc8aa0997c6c834efcad4249e71bac4f4a00560a315b99b
+active_request_id: null
+packets: {}
+answers:
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-09-25T13:44:31+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: 'requirements-analyst の推奨（skipped: UI・画面・見た目の変更が無く、テストコード内の文字列処理だけの修正）を採用'
+    resolution_note: batch-policies.yaml create-spec.design-step -> decide_autonomously
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-25T13:44:31+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'kind: project_native, paths: [doc/UI-DESIGN-GUIDELINES.yaml]（最上位候補）'
+    resolution_note: batch-policies.yaml create-spec.design-system -> top_candidate_or_none;
+      候補 2 件のうち最上位の doc/UI-DESIGN-GUIDELINES.yaml
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:c9ada5385493103c754b83f11236ed26a53e460b37cbeb5c59a0d95f46fa7295
+  output_digest: sha256:348e1afa4d86747eadb8c65fa432070b46a763cb5f872cb0ea73be67a69977f3
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:b5c229113680ccef3cc8aa0997c6c834efcad4249e71bac4f4a00560a315b99b
+  output_digest: sha256:(spec-writer result; body not retained)
+artifacts:
+- path: feature-docs/sftp-send-scan-crlf/REQUIREMENTS.md
+  sha256: sha256:0e81a8de484619c311ee9246cbf5f24fb982278770dbce898813caf830c1537e
+  produced_by: create-spec-run-0002
+- path: feature-docs/sftp-send-scan-crlf/SPEC.md
+  sha256: sha256:292146d9080ca0702e492d182aa0d63d414748085c9354bbd7ef0f278730426f
+  produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    digests: {}
+    truncated: false
+  reference_scan_targets:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths:
+    - src-tauri/src/sftp/service.rs
+    digests: {}
+    truncated: false
+last_error: null
