@@ -1,0 +1,21 @@
+schema_version: 1
+feature: sftp-send-scan-crlf
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 1593fe66d6e8cb3f16a257fbd99e9487f6a4a688
+last_input_digest: sha256:e7d7f6446937705930852985750480cda32f7490d38352527a8e1fb64bf1ddc6
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:e7d7f6446937705930852985750480cda32f7490d38352527a8e1fb64bf1ddc6
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
