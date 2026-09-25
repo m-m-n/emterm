@@ -1,0 +1,31 @@
+feature: notify-escape-test-production-path
+collected_at: "2026-09-25T19:45:00+09:00"
+session_ids: [01a0d81f-1d29-7718-bb7f-1c93bb5485a4, 01a0d7fd-1523-7340-a729-77198ddae666]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_only / description_plus_code の両 basis とも level 1 が最頻（0.92 / 0.77）。評価器の結果 full"
+    bases:
+      - basis: description_only
+        probabilities: {"0": 0.01, "1": 0.92, "2": 0.07, "3": 0.0}
+      - basis: description_plus_code
+        probabilities: {"0": 0.22, "1": 0.77, "2": 0.01, "3": 0.0}
+    pre_survey_estimate:
+      files_expected: [src-tauri/src/callbacks/tests.rs]
+      changed_lines_approx: 50
+      new_functions_needed: 1
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "task0001 の implementer が赤確認用に共有 stash へ 'task0001-red-check-9f3a1c' を積んだまま残した（review round1 の evaluator が検出）。赤確認は stash ではなく一時 WIP コミットか revert で行う方が共有 stash を汚さない"
+  - "事前調査の見積もりは tests.rs 1 ファイル・約 50 行だったが、Codex 相談で notify_worker への注入点追加（callbacks.rs も変更）を採用し計画は 2 ファイルに広がった。見積もりは相談前の AC 解釈に基づく"
