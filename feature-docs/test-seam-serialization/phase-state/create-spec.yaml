@@ -1,0 +1,47 @@
+schema_version: 1
+feature: test-seam-serialization
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: b952527a90e8acdac53a67e3add912aaa109388f
+last_input_digest: sha256:4153474904e6b9e15a7d15bbb1e8a6fd9e808ea8cc29629a24c41d84b09ad54c
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:4153474904e6b9e15a7d15bbb1e8a6fd9e808ea8cc29629a24c41d84b09ad54c
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    resolved_at_generation: 1
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/md3.rs
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
+      src-tauri/src/ui/md3.rs: sha256:8165557d9c2a3ea1a64c2d952de2e932b61b3514f03b52c03b9bc810e8acdc7b
+    truncated: false
+  reference_scan_targets:
+    resolved_at_generation: 1
+    paths:
+    - src-tauri/src/sftp/service.rs
+    - src-tauri/src/self_exec.rs
+    - src-tauri/src/app/tests/timing.rs
+    - .claude/rules/core-commands.md
+    - .claude/rules/core-build-location.md
+    digests:
+      src-tauri/src/sftp/service.rs: sha256:2f83a227ca46e2374fbe5db28617078c03eb29c0804186f21fdf18f67590e47b
+      src-tauri/src/self_exec.rs: sha256:af943fc458bac9f0a8a93c3b183a013320afda664c68fe1236f7cbd660bf33c4
+      src-tauri/src/app/tests/timing.rs: sha256:84af271d6016d28fb180747af04685073792ba0bb5963211faf67328da1a8520
+      .claude/rules/core-commands.md: sha256:465aa0f93c609f4f06917a28657302b71eda04cf7c4e1e5e3ff4bcf2a1dbb5bc
+      .claude/rules/core-build-location.md: sha256:7acb910f306179b6ba46e3584cb7098284d247c1583a415df99f3cbf8011de3e
+    truncated: false
+last_error: null
