@@ -1277,3 +1277,158 @@ mod worker_thread {
         );
     }
 }
+
+// ── notify-escape-test-production-path task0001: notify_worker
+// injection-point tests (unix only — the capability-fetch injection
+// point and `escape_for_send` are unix-only). These drive the production
+// `notify_worker` loop directly with fakes; no test here reaches
+// notify-rust or a D-Bus connection (AC-5).
+#[cfg(unix)]
+mod worker_injection_points {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    /// A fixed capability-fetch outcome, returned on every call, with a
+    /// shared call counter (Test Notes: counters shared between the fake
+    /// and the test body).
+    struct FixedCapabilityFetch {
+        outcome: Result<Vec<String>, ()>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl FixedCapabilityFetch {
+        fn new(outcome: Result<Vec<String>, ()>) -> (Self, Arc<AtomicUsize>) {
+            let calls = Arc::new(AtomicUsize::new(0));
+            (
+                Self {
+                    outcome,
+                    calls: calls.clone(),
+                },
+                calls,
+            )
+        }
+
+        fn call(&self) -> Result<Vec<String>, ()> {
+            self.calls.fetch_add(1, AtomicOrdering::SeqCst);
+            self.outcome.clone()
+        }
+    }
+
+    /// Records every `(summary, body)` pair the send injection point
+    /// receives, in call order, and counts calls. Always reports success.
+    #[derive(Default)]
+    struct SendRecorder {
+        received: Mutex<Vec<(String, String)>>,
+    }
+
+    impl SendRecorder {
+        fn new() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+
+        fn record(&self, summary: &str, body: &str) -> Result<(), String> {
+            self.received
+                .lock()
+                .push((summary.to_string(), body.to_string()));
+            Ok(())
+        }
+
+        fn received(&self) -> Vec<(String, String)> {
+            self.received.lock().clone()
+        }
+
+        fn call_count(&self) -> usize {
+            self.received.lock().len()
+        }
+    }
+
+    /// Enqueue `notifications`, close the sending side, and run
+    /// `notify_worker` to completion on the current thread. Never leave
+    /// the queue open while running the worker (Test Notes) — the loop
+    /// would hang forever waiting for the next item.
+    fn run_worker_to_completion(
+        notifications: &[(&str, &str)],
+        fetch: &FixedCapabilityFetch,
+        send: &SendRecorder,
+    ) {
+        let (tx, rx) = crossbeam_channel::bounded(notifications.len().max(1));
+        for (title, body) in notifications {
+            tx.send((title.to_string(), body.to_string()))
+                .expect("channel has enough capacity for every notification");
+        }
+        drop(tx); // Close the sending side so `rx.iter()` terminates.
+        notify_worker(
+            rx,
+            || fetch.call(),
+            |summary, body| send.record(summary, body),
+        );
+    }
+
+    // AC-2 (TS-4): fetch success with a list containing `body-markup` →
+    // the send injection point receives both fields escaped.
+    #[test]
+    fn confirmed_body_markup_capability_escapes_both_fields() {
+        let (fetch, _calls) = FixedCapabilityFetch::new(Ok(vec!["body-markup".to_string()]));
+        let send = SendRecorder::new();
+
+        run_worker_to_completion(&[("a<b", "Tom & <b>")], &fetch, &send);
+
+        assert_eq!(
+            send.received(),
+            vec![("a&lt;b".to_string(), "Tom &amp; &lt;b&gt;".to_string())]
+        );
+    }
+
+    // AC-2 (TS-5): fetch success with the list `actions` only (omits
+    // `body-markup`) → the send injection point receives both fields
+    // unchanged.
+    #[test]
+    fn absent_body_markup_capability_leaves_both_fields_unchanged() {
+        let (fetch, _calls) = FixedCapabilityFetch::new(Ok(vec!["actions".to_string()]));
+        let send = SendRecorder::new();
+
+        run_worker_to_completion(&[("a<b", "Tom & <b>")], &fetch, &send);
+
+        assert_eq!(
+            send.received(),
+            vec![("a<b".to_string(), "Tom & <b>".to_string())]
+        );
+    }
+
+    // AC-2 (TS-6): a fetch failure escapes both fields (fail-closed).
+    #[test]
+    fn fetch_failure_escapes_both_fields() {
+        let (fetch, _calls) = FixedCapabilityFetch::new(Err(()));
+        let send = SendRecorder::new();
+
+        run_worker_to_completion(&[("a<b", "Tom & <b>")], &fetch, &send);
+
+        assert_eq!(
+            send.received(),
+            vec![("a&lt;b".to_string(), "Tom &amp; &lt;b&gt;".to_string())]
+        );
+    }
+
+    // AC-3 (TS-7): with at least 3 distinct notifications enqueued and the
+    // sending side closed, `notify_worker` returns; the capability-fetch
+    // call count and the send call count both equal the number of
+    // notifications, and the send receives them in enqueue order.
+    #[test]
+    fn worker_calls_fetch_and_send_once_per_notification_in_enqueue_order() {
+        let (fetch, calls) = FixedCapabilityFetch::new(Ok(vec!["actions".to_string()]));
+        let send = SendRecorder::new();
+        let notifications = [("first", "one"), ("second", "two"), ("third", "three")];
+
+        run_worker_to_completion(&notifications, &fetch, &send);
+
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), notifications.len());
+        assert_eq!(send.call_count(), notifications.len());
+        assert_eq!(
+            send.received(),
+            notifications
+                .iter()
+                .map(|(t, b)| (t.to_string(), b.to_string()))
+                .collect::<Vec<_>>()
+        );
+    }
+}
