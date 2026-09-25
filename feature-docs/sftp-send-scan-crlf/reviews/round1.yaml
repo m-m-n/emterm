@@ -1,0 +1,39 @@
+round: 1
+executed_at: "2026-09-25T14:08:08+09:00"
+scope:
+  review_mode: diff
+  base_commit: 46e99d8d4bf0917e17f9522c38d82b53cd5bcf0b
+  head_commit: 7340d87a1283693f01310b398b48212746897581
+  changed_files:
+    - src-tauri/src/sftp/service.rs
+    - test-docs/sftp-send-scan-crlf/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "ラウンド1（diff モード、cross_validation=false）。3本のレビュー（security#0 / comprehensive#0 / spec#0）はどれも findings が空で、critical/high の指摘も無かった。レビュー出力に注入の試みは無し。security=corroborated（変更は #[cfg(test)] mod tests の中だけで、新しい入出力は無い）、comprehensive=corroborated（正規化後の同じ文字列で境界検索と切り出しを行っている。CRLF 変換した service.rs で LF と同じ境界オフセットを再現）、spec=corroborated（FR1〜FR4、NFR1・NFR2 を満たす。禁止形 grep 0件）。所見外の軽微な点: \\r\\r\\n は1回の置換で \\r\\n が残るが、A-1（CR 単独は対象外）の範囲外。"
+  recommended_action: complete
+  action_rationale: "どのレビューも中程度以上の指摘を出しておらず、評価者自身の確認でも3観点すべて corroborated。修正すべき点が無いため、このラウンドで完了してよい。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
