@@ -83,7 +83,7 @@ workflow:
     completed_at_commit: a83398ace7b5bf8109084cb80389aeff15303b2f
     base_commit: 46e99d8d4bf0917e17f9522c38d82b53cd5bcf0b
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -105,7 +105,11 @@ tasks:
     branch: em-workflow/sftp-send-scan-crlf/task0001
 
 review:
-  status: pending
+  status: in_progress
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary: []
+    cross_validation: false
   rounds_completed: 0
   residual_critical_high: 0
   needs_rework: false
