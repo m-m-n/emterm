@@ -1,7 +1,7 @@
 schema_version: 1
 feature: erase-edge-repair-dead-sides
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 8a6111a9d3ecade711a6f68ed1319fa065480269
 last_input_digest: sha256:cc7ee6ec3963fab6092fa599902fcb45faa4f95f3c1d02d1b86d5ce79dc459d6
