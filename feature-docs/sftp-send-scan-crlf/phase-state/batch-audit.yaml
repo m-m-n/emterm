@@ -1,0 +1,12 @@
+schema_version: 1
+feature: sftp-send-scan-crlf
+records:
+  - question_id: develop.completion.pr-base
+    packet_id: null
+    answered_at: "2026-09-25T14:17:04+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "PR base = main (base_branch)"
+    normalized_answer: "PR base = main (base_branch)"
+    resolution_note: "gate: Step C PR base (integration branch stacked on em-workflow/test-seam-serialization/integration = PR #99, unmerged); options: A=main / B=stacked on #99 branch; codex_consulted: true; Codex recommended A (follows explicit base_branch instruction, fix depends on #99 code so A carries it, independently mergeable); caveat: PR diff includes #99 commits and review scope overlaps #99"

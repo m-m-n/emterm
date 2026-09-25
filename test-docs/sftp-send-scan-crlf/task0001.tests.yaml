@@ -1,0 +1,74 @@
+task_id: task0001
+baseline_failures: []          # cargo test --lib: 3640 passed; 0 failed; 3 ignored
+final_failures: []             # cargo test --lib: 3642 passed; 0 failed; 3 ignored (2 new test fns)
+acceptance_tests:
+  AC-1:
+    tests:
+      - sftp::service::tests::send_site_scan_detection_routine_red_cases
+    red_confirmed: true
+    red_reason: >-
+      Case (v) (full-CRLF variant of case (i)) panicked with
+      "(v): boundary must be found on CRLF input" before normalization was
+      added — find_mod_tests_boundary's LF-only marker never matched the
+      CRLF text, so scan_for_bare_send_sites returned MissingBoundary.
+  AC-2:
+    tests:
+      - sftp::service::tests::send_site_scan_detection_routine_crlf_offset_and_scope_cases
+    red_confirmed: true
+    red_reason: >-
+      Case (a) panicked with "(a): boundary must be found" before
+      normalization was added, for the same reason as AC-1 (the CRLF
+      boundary marker was never matched). Case (b) was not separately
+      observed failing on its own (the function panicked at case (a)
+      first), but it exercises the same detection routine and the same
+      pre-fix code path, so it shared the identical MissingBoundary defect;
+      after the fix both (a) and (b) pass with the expected flags.
+  AC-3:
+    tests:
+      - sftp::service::tests::send_site_scan_detection_routine_crlf_and_mixed_variants_match_lf_originals
+    red_confirmed: true
+    red_reason: >-
+      Failed with "assertion `left == right` failed: (i): full-CRLF variant
+      must match the LF original / left: None / right: Some((true,
+      false))" before normalization was added — the CRLF variant reported
+      MissingBoundary while the LF original reported Found.
+  AC-4:
+    tests:
+      - sftp::service::tests::send_site_scan_detection_routine_red_cases
+    red_confirmed: false
+    red_reason: >-
+      Existing cases (i)-(iv) were already present and passing before this
+      task (this task must not change their behavior). Only case (v),
+      appended in the same test function, was newly red; cases (i)-(iv)
+      are carried forward unchanged and continue to pass, which is exactly
+      what this criterion requires.
+  AC-5:
+    tests:
+      - sftp::service::tests::every_progress_and_result_send_site_routes_through_the_wake_helpers
+    red_confirmed: false
+    red_reason: >-
+      This existing structural test already passed before and after this
+      task (its LF working-copy input was never affected by the
+      normalization change, which is a no-op on text with no CRLF). The
+      criterion's other clause — the full `--lib` run exits 0 — is a
+      build/suite outcome verified directly (3642 passed; 0 failed; 3
+      ignored), not a single red-then-green unit test.
+  AC-6:
+    tests: []
+    red_reason: >-
+      Static whole-file text search, not a unit test:
+      `grep -n 'progress_tx\.send(\|result_tx\.send(' src-tauri/src/sftp/service.rs`
+      returns zero matches (exit code 1) after the change, confirming no
+      joined forbidden shape was spelled verbatim by the new test code.
+  AC-7:
+    tests: []
+    red_reason: >-
+      Static diff review, not a unit test: `git diff` shows every changed
+      hunk starts at line 1006, inside the `#[cfg(test)] mod tests` item
+      (which begins at line 672 in the pre-change file). The boundary
+      locator's signature (`fn find_mod_tests_boundary(src: &str) ->
+      Option<usize>`) and its anchor marker
+      (`["#[cfg(test)]", "\n", "mod tests"].concat()`) are byte-for-byte
+      unchanged; only its doc comment gained a clarifying sentence.
+      Production code and the `#[cfg(test)] impl SftpService` seam block
+      (lines 1-670) are untouched.

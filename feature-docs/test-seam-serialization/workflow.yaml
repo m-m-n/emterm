@@ -1,0 +1,161 @@
+schema_version: 1
+feature: test-seam-serialization
+created: 2026-09-25
+base_branch: main
+parent_branch: em-workflow/test-seam-serialization/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    - basis: description_only
+      probabilities: {"0": 0.22, "1": 0.78, "2": 0.0, "3": 0.0}
+      expectation_clear: 0.85
+    - basis: description_plus_code
+      probabilities: {"0": 0.71, "1": 0.29, "2": 0.0, "3": 0.0}
+      expectation_clear: 0.82
+  at: "2026-09-25T09:29:30+09:00"
+  reductions: []
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths: [doc/UI-DESIGN-GUIDELINES.yaml]
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    main-cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    main-windows:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --lib --tests"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: bb1b6d14235aafd9dd96204698bbd51fee2180ea
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      requirements-analyst の推奨が skip で、gate create-spec.design-step をバッチポリシー（decide_autonomously）で解決した。
+      #[cfg(test)] のテストシーム・テスト・doc コメントのみの変更で、UI・画面・ビジュアルの変更が無い。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: df5e2c94544f99f74d7e1b80f7a24b8dfdbfa9c6
+  - id: implement
+    status: completed
+    completed_at_commit: 22535675afc2c6e4fce3bad552c01070ddfb6214
+    base_commit: 9079eaf9a5c56f261c320c578e95922171037083
+  - id: review
+    status: completed
+    completed_at_commit: babd6ed819da40f4b371dc493a31a256d60de356
+  - id: verify
+    status: completed
+    completed_at_commit: 24757fbe3c48290be9ab7b1549a378ce084724d5
+    result: pass
+    failed_items: []
+    excluded_requirements: []
+    summary: >-
+      TS-7: cargo check 3 構成（Linux GUI / --no-default-features / xwin --lib --tests）すべて exit 0・警告 0。
+      TS-1/2/3/6: cargo test --lib（並列・--test-threads=1 無し）3640 passed / 0 failed / 3 ignored、除外・フレーク扱い無し。
+      TS-11: cargo fmt --check（crate 全体）差分無し。TS-4/5/8/9/10: 点検で合格（single-threaded 記述無し、FR7 監査記録あり、
+      変更は sftp/service.rs の #[cfg(test)] 項目とコメントのみ、Cargo.toml / lock 変更無し）。
+  - id: retrospect
+    artifacts: [retrospect.yaml]
+    status: completed
+    completed_at_commit: e968ed09c8daf16a6c1a651e95d3ddccae8bf6b8
+
+tasks:
+  task0001:
+    title: "SFTP seams through wake helpers, widened send-site check, restart-flag guard audit"
+    plan: tasks/task0001.md
+    files: [src-tauri/src/sftp/service.rs]
+    skills: []
+    domains: [concurrency]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3, NFR4, NFR5]
+    status: merged
+    branch: em-workflow/test-seam-serialization/task0001
+
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, performance, architecture, spec]
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    cross_validation: true
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1: {title: "RESTART_REQUIRED のテスト直列化を保全する（実装済み）", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-3, TS-5]}
+  FR2: {title: "フラグ復元の panic 安全性を保全する（実装済み）", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-3]}
+  FR3: {title: "self_exec.rs の直列化 doc を保全する（実装済み）", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-4]}
+  FR4: {title: "SFTP テストシームをヘルパ経由にする", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-1, TS-2]}
+  FR5: {title: "テストシームの doc を実装に合わせる", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-8]}
+  FR6: {title: "構造チェックの走査範囲をテストシームまで広げる", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-2]}
+  FR7: {title: "スキャン範囲外のフラグ接触テストを確認する", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-5]}
+  NFR1: {title: "本番挙動は不変", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-9]}
+  NFR2: {title: "新規依存を追加しない", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-10]}
+  NFR3: {title: "`cargo check` 3 構成で警告ゼロ", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-7]}
+  NFR4: {title: "フォーマットは本機能が触れるファイルに限る", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-11]}
+  NFR5: {title: "既知の無関係な並列フレークは対象外", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-6]}
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+
+goal: |
+  # テストシーム経由のプロセスグローバル状態を直列化する（RESTART_REQUIRED の無同期アクセス / SFTP bare send）
+
+  ## やりたいこと（必須）
+  `#[cfg(test)]` テストシーム経由で触るプロセスグローバル状態を直列化し、並列 `cargo test --lib` でも決定的にする。あわせて SFTP のテストシームを既存の送信ヘルパ経由に戻す。
+  ## 背景・なぜ（必須）
+  em-workflow（feature `frame-skip-pending-work`、PR [https://github.com/m-m-n/emterm/pull/33](https://github.com/m-m-n/emterm/pull/33)）のレビューで、Claude レビュアー 3 観点が独立に同じ根本原因へ到達した。いずれも severity medium で auto-fix ゲート（critical/high）に乗らず、未対応のまま残っている。記録は `feature-docs/frame-skip-pending-work/reviews/round1.yaml`。
+  **1. \`RESTART_REQUIRED\` の無同期アクセス**（stable_id `e7d6f3a3da4d9ee2` / `19614e858f1d741b`）
+  `src-tauri/src/self_exec.rs` に追加した `test_set_restart_required()` により、プロセス全体で 1 つしかない `RESTART_REQUIRED` を 7 本のテストがロック無しで読み書きする状態になった。
+  - 書き手: `self_exec::tests::restart_pending_reports_true_across_consecutive_peeks` / `restart_required_still_consumes_once_after_peeks` / `app::tests::timing::frame_work_pending_*`（4 本）
+  - 消費者: 既存の `app::tests::timing::pump_toasts_runs_both_pumps_unconditionally`（`pump_restart_toast` → `restart_required()` が swap で奪う）
+  - 新たに依存するようになった読み手: 既存の `next_toast_deadline_none_when_no_toast_active` — FR5 の決定で `next_toast_deadline()` が `frame_work_pending()` 起点になったため
+  SPEC.md の AC5 は `--test-threads=1` を伴わない `cargo test --lib` の全通過を要求しているが、Rust の既定ハーネスは並列実行なので、この条件では非決定的に落ちうる。`self_exec.rs:176` のドックコメント「The suite runs single-threaded」もプロジェクトの既定コマンドと一致していない。
+  さらにフラグ復元（`test_set_restart_required(false)`）が成功パス上にしか無いため、途中の assert が panic すると raised のまま後続テストへ波及する。逐次実行でも順序依存が残る。
+  **2. SFTP テストシームが bare send 禁止の不変条件を破っている**（stable_id `6c0ec12db00184a9`）
+  `src-tauri/src/sftp/service.rs` の `send_progress` / `send_result` は doc コメントで「このモジュールの送信サイトはすべてこのヘルパを通す（`progress_tx` への bare `.send(` は禁止）」と明言しており、これが wake 漏れを防ぐ唯一の enforcement になっている（コンパイラでもテストでも強制されない純粋なコメント規約）。新規の `test_push_progress_event` / `test_push_result_event` はチャネルへ直接 `.send()` しており、この規約に対する反例をモジュール内に作った。
+  `#[cfg(test)]` 限定なので production 挙動への影響は今は無いが、SSOT である doc コメントと実装が食い違い、以後この形をコピーした送信サイトが `wake()` 抜きで追加される足がかりになる。副次的に、このシームを使うテストは wake チェーンの回帰を検出できない。
+  ## 受け入れ条件 / 完了の定義（必須）
+  - [ ] `RESTART_REQUIRED` を読む/書くテストが並列実行でも決定的に通る（新規 4 本 + `self_exec` の 2 本 + `next_toast_deadline` 系の既存テスト）
+  - [ ] assert が panic してもフラグが raised のまま残らない（復元が panic 安全）
+  - [ ] `self_exec.rs` の「The suite runs single-threaded」記述を、実際に採用した直列化手段の説明へ差し替える
+  - [ ] `test_push_progress_event` / `test_push_result_event` が `send_progress` / `send_result` 経由になる。ヘルパ経由にできない事情があるなら、その例外を `send_progress` の doc に明記し、不変条件の記述を「production の送信サイトはすべて」に訂正する
+  - [ ] `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib`（`--test-threads=1` **無し**）が全通過する
+  - [ ] `cargo check` 3 構成（Linux GUI / `--no-default-features` / `cargo xwin check --lib --tests`）が警告ゼロ
+  ## スコープ外（任意）
+  - `frame_work_pending()` 述語そのものの式・3 消費者への配線（PR #33 で確定済み）
+  - `restart_required()` の swap 消費セマンティクス
+  - `src-tauri/` 全体に既存する rustfmt ドリフト（本件が触れていない 7 ファイル）
+  ## 制約・前提（任意）
+  - 直列化の手段は 2 案ある。`self_exec` に test-only の `Mutex` + Drop でフラグを必ず戻す RAII ガードを置いて全テストをガード経由にするか、`serial_test` を dev-dependency に追加して `#[serial(restart_flag)]` を付けるか。前者は依存を増やさない
+  - 各テストへ `test_set_restart_required(false)` を足すだけでは順序依存しか塞げず、並列衝突は残る
+  - 代替として SPEC.md AC5 のコマンドを `-- --test-threads=1` 付きに改める案もあるが、テスト側を直せば済むので優先度は低い
+  - 前提ブランチ: `em-workflow/frame-skip-pending-work/integration`（PR #33）。マージ後に着手するのが前提
+

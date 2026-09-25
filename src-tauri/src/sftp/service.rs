@@ -635,9 +635,9 @@ fn detect_sftp_windows() -> String {
     String::new()
 }
 
-/// Test-only seam (frame-skip-pending-work task0001, FR7): place a
-/// synthetic event on the progress / duplicate-check-result channels
-/// directly, bypassing the real upload / duplicate-check pipeline, so
+/// Test-only seam (frame-skip-pending-work task0001, FR7): send a
+/// synthetic event through `send_progress` / `send_result`, bypassing the
+/// real upload / duplicate-check pipeline (not the helpers), so
 /// `App::frame_work_pending` predicate tests can observe a non-empty
 /// receiver without spawning a subprocess. Production channel layout and
 /// the public `SftpService` API (used outside `cfg(test)`) are unchanged —
@@ -645,21 +645,27 @@ fn detect_sftp_windows() -> String {
 #[cfg(test)]
 impl SftpService {
     pub(crate) fn test_push_progress_event(&self) {
-        let _ = self.progress_tx.send(SftpUploadProgress {
-            session_id: "test-pending".to_string(),
-            file_name: "test.txt".to_string(),
-            bytes_transferred: 0,
-            total_bytes: 0,
-            status: SftpUploadStatus::Uploading,
-            error_message: None,
-        });
+        send_progress(
+            &self.progress_tx,
+            SftpUploadProgress {
+                session_id: "test-pending".to_string(),
+                file_name: "test.txt".to_string(),
+                bytes_transferred: 0,
+                total_bytes: 0,
+                status: SftpUploadStatus::Uploading,
+                error_message: None,
+            },
+        );
     }
 
     pub(crate) fn test_push_result_event(&self) {
-        let _ = self.result_tx.send(DuplicateCheckResult {
-            request_id: 0,
-            outcome: Ok(Vec::new()),
-        });
+        send_result(
+            &self.result_tx,
+            DuplicateCheckResult {
+                request_id: 0,
+                outcome: Ok(Vec::new()),
+            },
+        );
     }
 }
 
@@ -939,38 +945,348 @@ mod tests {
         assert_eq!(r.outcome.unwrap(), vec!["dup.txt".to_string()]);
     }
 
+    // ── FR4: test seams route through send_progress / send_result ──────
+
+    #[test]
+    fn test_push_progress_event_delivers_the_pinned_event_through_send_progress() {
+        // AC-1: the seam sends through `send_progress`, and one call
+        // delivers exactly one event whose fields equal the FR4 values on
+        // the channel the App drains — then nothing more.
+        let (service, progress_rx, _result_rx) = SftpService::new(4);
+        service.test_push_progress_event();
+        let p = progress_rx
+            .try_recv()
+            .expect("the seam must deliver exactly one progress event");
+        assert_eq!(p.session_id, "test-pending");
+        assert_eq!(p.file_name, "test.txt");
+        assert_eq!(p.bytes_transferred, 0);
+        assert_eq!(p.total_bytes, 0);
+        assert_eq!(p.status, SftpUploadStatus::Uploading);
+        assert_eq!(p.error_message, None);
+        assert!(
+            progress_rx.try_recv().is_err(),
+            "the seam must deliver exactly one event, not more"
+        );
+    }
+
+    #[test]
+    fn test_push_result_event_delivers_the_pinned_event_through_send_result() {
+        // AC-1: same contract as above, for the result channel/seam.
+        let (service, _progress_rx, result_rx) = SftpService::new(4);
+        service.test_push_result_event();
+        let r = result_rx
+            .try_recv()
+            .expect("the seam must deliver exactly one result event");
+        assert_eq!(r.request_id, 0);
+        assert_eq!(r.outcome.unwrap(), Vec::<String>::new());
+        assert!(
+            result_rx.try_recv().is_err(),
+            "the seam must deliver exactly one event, not more"
+        );
+    }
+
+    // ── FR6 (D3): structural send-site check, widened to include the
+    // #[cfg(test)] seam block ──────────────────────────────────────────
+
+    /// Detection routine's report: which forbidden bare-send shapes were
+    /// found in the scanned region, or that the region boundary itself
+    /// could not be located.
+    enum SendSiteScan {
+        /// The `mod tests` item could not be located.
+        MissingBoundary,
+        /// The boundary was found; which forbidden shapes appear in the
+        /// region before it.
+        Found { progress: bool, result: bool },
+    }
+
+    /// Locates the start of the `mod tests` item: the `#[cfg(test)]`
+    /// attribute on its own line directly above the `mod tests`
+    /// declaration line. Anchored to the item itself, not to a prose
+    /// mention of `mod tests` in a doc comment, so the first such
+    /// declaration is used. Returns the byte offset where the attribute
+    /// begins, or `None` when no such declaration is found. The returned
+    /// offset is relative to `src` alone — a caller that normalizes line
+    /// endings before calling this function must slice that same
+    /// normalized text with the offset, never the original.
+    fn find_mod_tests_boundary(src: &str) -> Option<usize> {
+        // Anchored to the `#[cfg(test)]` attribute immediately followed by
+        // `mod tests` on the next line — not just any `#[cfg(test)]` (the
+        // seam block's own attribute would otherwise be mistaken for the
+        // boundary, per D3).
+        let marker = ["#[cfg(test)]", "\n", "mod tests"].concat();
+        src.find(&marker)
+    }
+
+    /// Detection routine (FR6): the scanned region is everything before
+    /// the `mod tests` boundary — production items plus the
+    /// `#[cfg(test)] impl SftpService` seam block. Only the `mod tests`
+    /// body is excluded, because it spells the forbidden shapes as data.
+    /// Both the real check below and the red-case test feed this the same
+    /// way — the real check with the module's own source, the red-case
+    /// test with synthetic text. Forbidden shapes are assembled from parts
+    /// so this routine's own source never spells one verbatim.
+    ///
+    /// Line endings: `src` may use LF, CRLF, or a mixture of both. Every
+    /// CR LF pair is normalized to a single LF first; the boundary search
+    /// and the region extraction below both operate on that normalized
+    /// copy only, so no offset computed on one string is ever applied to
+    /// another. A lone CR (not part of a CR LF pair) is left untouched.
+    fn scan_for_bare_send_sites(src: &str) -> SendSiteScan {
+        let normalized = src.replace("\r\n", "\n");
+        let Some(boundary) = find_mod_tests_boundary(&normalized) else {
+            return SendSiteScan::MissingBoundary;
+        };
+        let region = &normalized[..boundary];
+        let forbidden_progress = ["progress_tx", ".send("].concat();
+        let forbidden_result = ["result_tx", ".send("].concat();
+        SendSiteScan::Found {
+            progress: region.contains(&forbidden_progress),
+            result: region.contains(&forbidden_result),
+        }
+    }
+
     #[test]
     fn every_progress_and_result_send_site_routes_through_the_wake_helpers() {
         // AC-3: every progress/result channel send in this module must go
         // through the wake helpers rather than a direct call on the named
         // sender — so no send site can be added later without the
-        // accompanying wake. Structural check on the module's own
-        // production source (the sites span a UI-thread method, the
-        // background dispatcher loop, and short-lived worker threads); the
-        // job queue send is a distinct, intentionally-untouched channel —
-        // an internal queue consumed by the dispatcher's own background
-        // thread, not a progress/result channel the egui loop drains, so
-        // it needs no wake.
+        // accompanying wake. Structural check on the module's own source
+        // (the sites span a UI-thread method, the background dispatcher
+        // loop, short-lived worker threads, AND the `#[cfg(test)] impl
+        // SftpService` seam block); the job queue send is a distinct,
+        // intentionally-untouched channel — an internal queue consumed by
+        // the dispatcher's own background thread, not a progress/result
+        // channel the egui loop drains, so it needs no wake.
         //
-        // Scanned text is cut at the `#[cfg(test)]` marker so this test's
-        // own source — which necessarily spells out the forbidden call
-        // shape in string literals — is never included in the scan.
+        // The scanned region ends at the `mod tests` item (D3): only that
+        // body is excluded, because it necessarily spells the forbidden
+        // call shape in string literals to build its own synthetic inputs
+        // (see `send_site_scan_detection_routine_red_cases`).
         let src =
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sftp/service.rs"))
                 .expect("read own source for the structural send-site check");
-        let production_src = src
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields at least one piece");
-        let forbidden_progress = ["progress_tx", ".send("].concat();
-        let forbidden_result = ["result_tx", ".send("].concat();
-        assert!(
-            !production_src.contains(&forbidden_progress),
-            "found a bare progress_tx send — route it through send_progress instead"
+        match scan_for_bare_send_sites(&src) {
+            SendSiteScan::MissingBoundary => {
+                panic!("mod tests boundary not found — cannot scope the send-site scan")
+            }
+            SendSiteScan::Found { progress, result } => {
+                assert!(
+                    !progress,
+                    "found a bare progress_tx send — route it through send_progress instead"
+                );
+                assert!(
+                    !result,
+                    "found a bare result_tx send — route it through send_result instead"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn send_site_scan_detection_routine_red_cases() {
+        // AC-4/D4: standing regression coverage for the detection routine
+        // itself (not the real file), fed synthetic module texts. Forbidden
+        // shapes are assembled from parts so this test never spells one
+        // verbatim either.
+        let bare_progress_send = ["progress_tx", ".send(x)"].concat();
+        let bare_result_send = ["result_tx", ".send(x)"].concat();
+
+        // (i) a #[cfg(test)] impl block placed before `mod tests` with a
+        // bare progress send → reported as a progress violation.
+        let text = format!(
+            "#[cfg(test)]\nimpl SftpService {{\n    fn seam(&self) {{ {bare_progress_send} }}\n}}\n\n#[cfg(test)]\nmod tests {{}}\n"
         );
-        assert!(
-            !production_src.contains(&forbidden_result),
-            "found a bare result_tx send — route it through send_result instead"
+        match scan_for_bare_send_sites(&text) {
+            SendSiteScan::Found { progress, result } => {
+                assert!(
+                    progress,
+                    "(i): a bare progress send before mod tests must be detected"
+                );
+                assert!(!result, "(i): no result send was present");
+            }
+            SendSiteScan::MissingBoundary => panic!("(i): boundary must be found"),
+        }
+
+        // (ii) the same shape with a bare result send → reported as a
+        // result violation.
+        let text = format!(
+            "#[cfg(test)]\nimpl SftpService {{\n    fn seam(&self) {{ {bare_result_send} }}\n}}\n\n#[cfg(test)]\nmod tests {{}}\n"
         );
+        match scan_for_bare_send_sites(&text) {
+            SendSiteScan::Found { progress, result } => {
+                assert!(!progress, "(ii): no progress send was present");
+                assert!(
+                    result,
+                    "(ii): a bare result send before mod tests must be detected"
+                );
+            }
+            SendSiteScan::MissingBoundary => panic!("(ii): boundary must be found"),
+        }
+
+        // (iii) the same bare sends, placed only inside the `mod tests`
+        // body → no violation reported, pinning the exclusion boundary.
+        let text = format!(
+            "#[cfg(test)]\nmod tests {{\n    fn seam() {{ {bare_progress_send} {bare_result_send} }}\n}}\n"
+        );
+        match scan_for_bare_send_sites(&text) {
+            SendSiteScan::Found { progress, result } => {
+                assert!(
+                    !progress,
+                    "(iii): a send inside mod tests must not be reported"
+                );
+                assert!(
+                    !result,
+                    "(iii): a send inside mod tests must not be reported"
+                );
+            }
+            SendSiteScan::MissingBoundary => panic!("(iii): boundary must be found"),
+        }
+
+        // (iv) no `mod tests` declaration at all → missing boundary.
+        let text = "fn not_a_test_module() {}\n".to_string();
+        match scan_for_bare_send_sites(&text) {
+            SendSiteScan::MissingBoundary => {}
+            SendSiteScan::Found { .. } => {
+                panic!("(iv): must report a missing boundary when mod tests is absent")
+            }
+        }
+
+        // (v) CRLF regression (AC-1/FR3): the same shape as (i) — a bare
+        // progress send inside the #[cfg(test)] impl seam block, before
+        // the #[cfg(test)] / mod tests boundary — with every line break
+        // written as CRLF. Must report Found with the progress flag set,
+        // not MissingBoundary, pinning line-ending independence.
+        let case_i_lf = format!(
+            "#[cfg(test)]\nimpl SftpService {{\n    fn seam(&self) {{ {bare_progress_send} }}\n}}\n\n#[cfg(test)]\nmod tests {{}}\n"
+        );
+        let text = case_i_lf.replace('\n', "\r\n");
+        match scan_for_bare_send_sites(&text) {
+            SendSiteScan::Found { progress, result } => {
+                assert!(
+                    progress,
+                    "(v): a bare progress send before mod tests must be detected on CRLF input"
+                );
+                assert!(!result, "(v): no result send was present");
+            }
+            SendSiteScan::MissingBoundary => {
+                panic!("(v): boundary must be found on CRLF input")
+            }
+        }
+    }
+
+    /// Reduces a [`SendSiteScan`] to a comparable value for the CRLF/mixed
+    /// parity tests below: `None` for `MissingBoundary`, `Some((progress,
+    /// result))` for `Found`.
+    fn scan_flags(text: &str) -> Option<(bool, bool)> {
+        match scan_for_bare_send_sites(text) {
+            SendSiteScan::MissingBoundary => None,
+            SendSiteScan::Found { progress, result } => Some((progress, result)),
+        }
+    }
+
+    #[test]
+    fn send_site_scan_detection_routine_crlf_offset_and_scope_cases() {
+        // AC-2/FR2: distinguishes "offsets taken on one string" (correct)
+        // from "offsets mixed across strings" (buggy) — enough preceding
+        // CRLF line breaks that slicing the ORIGINAL text at the boundary
+        // offset computed on the NORMALIZED text would cut the bare send
+        // off, because each CRLF pair is one byte longer than the LF it
+        // normalizes to.
+        let bare_progress_send = ["progress_tx", ".send(x)"].concat();
+        let bare_result_send = ["result_tx", ".send(x)"].concat();
+
+        // (a) bare send on the line directly above the boundary line,
+        // preceded by enough CRLF filler lines that the CR excess exceeds
+        // the few bytes between the end of the send and the boundary.
+        let mut text_a = String::new();
+        for i in 0..20 {
+            text_a.push_str(&format!("// filler line {i}\r\n"));
+        }
+        text_a.push_str(&format!("fn seam() {{ {bare_progress_send} }}\r\n"));
+        text_a.push_str("#[cfg(test)]\r\nmod tests {}\r\n");
+        match scan_for_bare_send_sites(&text_a) {
+            SendSiteScan::Found { progress, result } => {
+                assert!(
+                    progress,
+                    "(a): a bare send directly above the boundary must still be \
+                     detected when preceding CRLF lines would misplace an \
+                     offset mixed across the original and normalized text"
+                );
+                assert!(!result, "(a): no result send was present");
+            }
+            SendSiteScan::MissingBoundary => panic!("(a): boundary must be found"),
+        }
+
+        // (b) CRLF text with sends only inside the `mod tests` body → no
+        // violation reported, pinning the exclusion boundary on CRLF input.
+        let text_b = format!(
+            "#[cfg(test)]\r\nmod tests {{\r\n    fn seam() {{ {bare_progress_send} {bare_result_send} }}\r\n}}\r\n"
+        );
+        match scan_for_bare_send_sites(&text_b) {
+            SendSiteScan::Found { progress, result } => {
+                assert!(
+                    !progress,
+                    "(b): a send inside mod tests must not be reported on CRLF input"
+                );
+                assert!(
+                    !result,
+                    "(b): a send inside mod tests must not be reported on CRLF input"
+                );
+            }
+            SendSiteScan::MissingBoundary => panic!("(b): boundary must be found"),
+        }
+    }
+
+    #[test]
+    fn send_site_scan_detection_routine_crlf_and_mixed_variants_match_lf_originals() {
+        // AC-3/FR1: for each of the LF texts of existing cases (i), (ii)
+        // and (iii), a full-CRLF variant and a mixed LF/CRLF variant must
+        // report exactly the same progress/result flags as the LF
+        // original. `full-CRLF` converts every line break; `mixed` leaves
+        // some as LF — case (i)'s mixed variant includes the break between
+        // the `#[cfg(test)]` line and the `mod tests` line as CRLF.
+        let bare_progress_send = ["progress_tx", ".send(x)"].concat();
+        let bare_result_send = ["result_tx", ".send(x)"].concat();
+
+        let case_i = format!(
+            "#[cfg(test)]\nimpl SftpService {{\n    fn seam(&self) {{ {bare_progress_send} }}\n}}\n\n#[cfg(test)]\nmod tests {{}}\n"
+        );
+        let case_i_mixed = format!(
+            "#[cfg(test)]\r\nimpl SftpService {{\n    fn seam(&self) {{ {bare_progress_send} }}\n}}\n\n#[cfg(test)]\r\nmod tests {{}}\n"
+        );
+
+        let case_ii = format!(
+            "#[cfg(test)]\nimpl SftpService {{\n    fn seam(&self) {{ {bare_result_send} }}\n}}\n\n#[cfg(test)]\nmod tests {{}}\n"
+        );
+        let case_ii_mixed = format!(
+            "#[cfg(test)]\nimpl SftpService {{\r\n    fn seam(&self) {{ {bare_result_send} }}\n}}\n\n#[cfg(test)]\nmod tests {{}}\n"
+        );
+
+        let case_iii = format!(
+            "#[cfg(test)]\nmod tests {{\n    fn seam() {{ {bare_progress_send} {bare_result_send} }}\n}}\n"
+        );
+        let case_iii_mixed = format!(
+            "#[cfg(test)]\r\nmod tests {{\n    fn seam() {{ {bare_progress_send} {bare_result_send} }}\r\n}}\n"
+        );
+
+        for (name, lf_text, mixed_text) in [
+            ("(i)", &case_i, &case_i_mixed),
+            ("(ii)", &case_ii, &case_ii_mixed),
+            ("(iii)", &case_iii, &case_iii_mixed),
+        ] {
+            let expected = scan_flags(lf_text);
+            let full_crlf_text = lf_text.replace('\n', "\r\n");
+
+            assert_eq!(
+                scan_flags(&full_crlf_text),
+                expected,
+                "{name}: full-CRLF variant must match the LF original"
+            );
+            assert_eq!(
+                scan_flags(mixed_text),
+                expected,
+                "{name}: mixed LF/CRLF variant must match the LF original"
+            );
+        }
     }
 }
