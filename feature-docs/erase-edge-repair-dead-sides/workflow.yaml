@@ -58,9 +58,19 @@ workflow:
     status: completed
     completed_at_commit: 8a55857969ab05719af16e2c3515141ddfa09b95
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: b8add2f5e4d7930f2034d6d407851216cde66e65
+    result: pass
     failed_items: []
+    summary: >-
+      Build 3/3 pass (term_core check, src-tauri check default / --no-default-features).
+      term_core --lib 858 passed / 0 failed / 13 ignored; src-tauri --lib (--test-threads=1)
+      3637 passed / 0 failed / 3 ignored; cargo fmt --check (term_core) clean.
+      TS-1..TS-5 pass via the suites. TS-6..TS-9 confirmed by inspection of csi_screen.rs /
+      terminal_cells.rs and git diff from base_commit. TS-8 note: besides csi_screen.rs the
+      diff adds test-docs/erase-edge-repair-dead-sides/task0001.tests.yaml, the implementer's
+      standard test-documentation artifact (not code); terminal_cells.rs is unchanged and its
+      blank_wide_pair_half caller list is already accurate. No excluded requirements.
   - id: retrospect
     artifacts: [retrospect.yaml]
     status: pending
