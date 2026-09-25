@@ -76,7 +76,7 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3, NFR4, NFR5]
-    status: in_progress
+    status: merged
     branch: em-workflow/test-seam-serialization/task0001
 
 review:
