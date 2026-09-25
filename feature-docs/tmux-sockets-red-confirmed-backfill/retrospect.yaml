@@ -1,0 +1,33 @@
+feature: tmux-sockets-red-confirmed-backfill
+collected_at: "2026-09-25T00:58:26+09:00"
+session_ids:
+  - 01a0d413-2b78-75de-a786-1e727f4177f8
+  - 01a0d422-9dcd-772f-b563-05ee03b0e60e
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: minimal
+    rationale: "YAML テスト記録 1 ファイルへの 4 行追記のみ。両 basis とも最小段階（0）の確率が 0.98 以上で一致"
+    bases:
+      - basis: description_only
+        probabilities: {"0": 0.99, "1": 0.01, "2": 0.0, "3": 0.0}
+      - basis: description_plus_code
+        probabilities: {"0": 0.98, "1": 0.02, "2": 0.0, "3": 0.0}
+    pre_survey_estimate:
+      files_expected: [test-docs/tmux-sockets-discover-flake/task0001.tests.yaml]
+      changed_lines_approx: 4
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1 の evaluator 観察（finding ではない）: test-docs 配下の他ファイルにも red_confirmed を欠く 'tests: []' エントリが 15 件残っている。今回のスコープ外"
+  - "comprehensive レビュアーが TASK.md tier の実装者証跡（test-docs/{feature}/{task}.tests.yaml）をスコープ逸脱と誤検知した（evaluator が却下）"
