@@ -1,0 +1,65 @@
+schema_version: 1
+feature: notification-capability-query-skip
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 3cb46956b50a9d034a270cbbade23d6c79c0e9d3
+last_input_digest: sha256:27efea4240d0dc45cbd69d6858a919908f12e75ce5cf1d600866178358c2b08d
+active_request_id: null
+packets: {}
+answers:
+  create-spec.option-choice-consultation:
+    packet_id: null
+    answered_at: '2026-09-25T09:40:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: adopt (a) metacharacter short-circuit only; reject (b) caching; (c)
+      already implemented
+    normalized_answer: (a) only
+    resolution_note: 'Not a worker packet: the analyst resolved option choice as reversible
+      assumption A1; per launch instruction the orchestrator consulted Codex (readonly),
+      which independently chose (a) and confirmed (c) is already implemented. Discussion
+      recorded as a Notion comment on the task page.'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-25T09:50:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: project_native
+    resolution_note: 'batch-policies.yaml create-spec.design-system: 3 candidates
+      found -> project_native'
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-09-25T09:50:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: skipped
+    resolution_note: 'analyst recommendation accepted: backend-only change'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:5e176bb1ca3fee11bb333eda428b4fbeb78684b96875451813c933def2cbb54b
+  output_digest: sha256:83c8b64cd3e3809025932664c0a72f4b1fc17eab420b39132f61d68a7cd2a72e
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:27efea4240d0dc45cbd69d6858a919908f12e75ce5cf1d600866178358c2b08d
+  output_digest: null
+artifacts:
+- path: feature-docs/notification-capability-query-skip/REQUIREMENTS.md
+  sha256: sha256:7bf8a05c10b50369de9b230cc2af5aca0444f2305913b0ed821a56854f1efed9
+  produced_by: create-spec-run-0002
+- path: feature-docs/notification-capability-query-skip/SPEC.md
+  sha256: sha256:66f2e8e01c987e9a2ca2bf7bdc9834cdabc7bf69daff392fc9150cb97edb7415
+  produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

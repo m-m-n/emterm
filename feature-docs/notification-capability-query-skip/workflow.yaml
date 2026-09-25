@@ -1,0 +1,222 @@
+schema_version: 1
+feature: notification-capability-query-skip
+created: '2026-09-25'
+base_branch: main
+goal: |+
+  # 通知 1 件ごとの同期 D-Bus 往復が 2 回に倍増している
+
+  ## やりたいこと（必須）
+  通知 1 件あたりの同期 D-Bus 往復が 1 回増えている状態を解消する。`get_capabilities()` を毎送信・無条件に発行するのをやめる。
+  ## 背景・なぜ（必須）
+  `NotifyRustSink::send` は 2 つのホットパスから同期的に呼ばれる。
+  1. `NativeCallbacks::handle_notify`（`src-tauri/src/callbacks.rs:458`）は `TerminalCore::process_pty_data` の中の OSC コールバックなので、PTY 読み取りスレッドが往復ぶん停止する
+  2. `App::notify`（`src-tauri/src/app/mod.rs:827`）は `App::pump_all` のフレーム内ループ（`:1328`）と agent_status / link_hover から呼ばれるため、winit の UI スレッドがフレーム中に停止する
+  そこへ PR #35 が `notify_rust::get_capabilities()` を毎送信・無条件に追加した。notify-rust 4.12 の zbus バックエンドでは `get_capabilities()` は `zbus::Connection::session()`（ソケット接続 + SASL 認証 + Hello ハンドシェイク）を新規に張ってから GetCapabilities を 1 往復し、それを `block_on` する。`.show()` も同様に接続を張るため、1 通知あたりのブロッキング D-Bus コストが接続 1 + 往復 1 から接続 2 + 往復 2 へ倍増する。
+  `NotificationRateLimiter` は同一 (title, body) を 1 秒抑止するだけなので、body が異なる OSC 9 を連続で吐くスクリプトでは抑止が効かず、倍増分がそのままレンダースレッドの停止時間として積み上がる。
+  なお `pending_notifications` のドキュメントコメント（`src-tauri/src/callbacks.rs:279-281`）は「バッファリングによって process_pty_data 内で D-Bus 往復をしない」と述べているが、実装は既にインラインで送っており、PR #35 でその乖離がさらに広がっている。
+  - 該当箇所: `src-tauri/src/callbacks.rs:157`
+  - 検出元: PR https://github.com/m-m-n/emterm/pull/35 のレビュー round1、finding `c1b7251a310b62cc`（severity medium / category performance / confidence 100）および `ba32033b6ad194af`（comprehensive）
+  - Claude と vertex-deepseek-v3.2 が独立に同一箇所を指摘しており、クロスモデル合意あり
+  - 記録: `feature-docs/notification-body-markup-escape/reviews/round1.yaml`
+  ## 受け入れ条件 / 完了の定義（必須）
+  - [ ] 対処方針を選ぶ: (a) メタ文字ショートサーキット（body に `&` `<` `>` が無ければ結果は入力と同一なので capability 問い合わせ自体を省く。IMPLEMENTATION.md D2 の「キャッシュしない」判断と両立する）、(b) capability を短時間キャッシュする（`OnceLock<bool>` または TTL 付き。D2 の決定を覆す形になるので明示的に判断する）、(c) `send` 自体を `pending_notifications` のドレイン経路に寄せて PTY 処理スレッドと UI フレームから同期 D-Bus を外す
+  - [ ] いずれも取らない場合は `src-tauri/src/callbacks.rs:279-281` のドキュメントコメントを実態（コールバック内で同期 D-Bus 往復が 2 回起きる）に合わせて更新する
+  - [ ] `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` が通る
+  ## スコープ外（任意）
+  - 通知経路そのものの完全な非同期化（(c) を選ぶ場合を除く）
+  - エスケープ処理の内容変更
+  ## 制約・前提（任意）
+  - PR #35 がマージされた後の状態を前提に着手すること
+  - (a) と (b) は併用可能
+
+parent_branch: em-workflow/notification-capability-query-skip/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+  - basis: description_only
+    probabilities:
+      '0': 0.01
+      '1': 0.81
+      '2': 0.17
+      '3': 0.01
+    observed_at: '2026-09-25T09:27:30+09:00'
+  - basis: description_plus_code
+    probabilities:
+      '0': 0.0
+      '1': 0.68
+      '2': 0.3
+      '3': 0.02
+    observed_at: '2026-09-25T09:27:35+09:00'
+  at: '2026-09-25T09:27:47+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/src/ui/md3.rs
+    - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    cli_feature_gate:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      test_command: ''
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 3d86426f00f081508b4c03c03d414e77919c0214
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: src-tauri/src/callbacks.rs の通知ワーカー内に閉じたバックエンドの Rust 変更で、UI の追加・変更が無いため。
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: 53d02890be652bd44bed98b9e9ab379275e46157
+- id: implement
+  status: completed
+  completed_at_commit: 217724632f54bcc17f455f3fefa0dabf041b4521
+  base_commit: 4847d96487816fd26749f2c31cdcea922caead05
+- id: review
+  status: completed
+  completed_at_commit: 65770c08c40918b7dcfdfe573c4aee089736c4bf
+- id: verify
+  status: completed
+  completed_at_commit: e7d4a3e9530563e6d1539202a595aebc13109f9e
+  result: pass
+  failed_items: []
+  summary: >-
+    Build (main, cli_feature_gate) OK. cargo test --lib: 3642 passed, 0 failed,
+    3 ignored. TS-1..TS-8 covered by new unit tests in callbacks/tests.rs;
+    TS-9/TS-10 static review OK (no unconditional-query comment, no caching,
+    no Cargo.toml/lock change, gate is cfg(unix) only). Manual D-Bus
+    observation items not executed (unattended batch run).
+- id: retrospect
+  status: completed
+  completed_at_commit: 33d1445ccebfd4049e4f060269ac6d80f38ddbe1
+tasks:
+  task0001:
+    title: Query notification capabilities only when a markup metacharacter is present
+    plan: tasks/task0001.md
+    files: [src-tauri/src/callbacks.rs, src-tauri/src/callbacks/tests.rs]
+    skills: [backend-impl]
+    domains: [input-handling, external-io]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6]
+    status: merged
+    branch: em-workflow/notification-capability-query-skip/task0001
+    notes: null
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, performance, architecture, spec]
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    cross_validation: true
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Skip the capability query for text without metacharacters
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-5, TS-10]
+  FR2:
+    title: Query once per notification when a metacharacter is present
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-2, TS-3, TS-4]
+  FR3:
+    title: Dispatched text stays byte-identical
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-8]
+  FR4:
+    title: Unit-testable query decision
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-5]
+  FR5:
+    title: Doc comments match the new behavior
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-9]
+  NFR1:
+    title: No capability caching
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-7, TS-10]
+  NFR2:
+    title: Escape output unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-6, TS-8]
+  NFR3:
+    title: Platform gating unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-6, TS-10]
+  NFR4:
+    title: Redaction ordering unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-6, TS-10]
+  NFR5:
+    title: No new dependency
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-10]
+  NFR6:
+    title: Existing escape test expectations unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-6]
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
