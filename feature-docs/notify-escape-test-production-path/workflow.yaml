@@ -43,7 +43,8 @@ workflow:
       変える内部リファクタリングで、UI・画面・利用者から見える振る舞いは変わらない。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 5df57218ce031d628529772b14d8dd95c5d61ac8
   - id: implement
     status: pending
   - id: review
