@@ -67,7 +67,8 @@ workflow:
       comments name notify_worker). No excluded requirements.
   - id: retrospect
     artifacts: [retrospect.yaml]
-    status: pending
+    status: completed
+    completed_at_commit: 8094f591a95d458a16217b5bcee99f8877261b9e
 
 tasks:
   task0001:
