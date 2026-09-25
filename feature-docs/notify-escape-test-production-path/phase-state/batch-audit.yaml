@@ -1,0 +1,23 @@
+schema_version: 1
+feature: notify-escape-test-production-path
+records:
+- question_id: requirement.call-site-mutation-detection
+  packet_id: null
+  answered_at: '2026-09-25T18:45:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - inject_worker_io
+  freeform: null
+  normalized_answer: notify_worker の呼び出し箇所から escape_for_send を外す変異も単体テストで検出できるようにする。notify_worker
+    を、capability 取得と送出（Notification::new().summary().body().show()）をクロージャ（または同等の注入点）として受け取る形にし、本番は現在と同じ
+    get_capabilities() と notify-rust 送出を渡す。テストは notify_worker 本体に有限個の通知を流し、capability
+    取得を『body-markup あり / なし / 取得失敗』に差し替え、送出クロージャが受け取る summary / body を期待値と完全一致で比較する。D-Bus
+    自体の模擬実装・.show() の検証・非同期化はしない（スコープ外を維持）。redaction の位置、通知ごとに capability を 1 回だけ取得すること、ログ文言、Windows
+    の送出フロー（capability 取得・エスケープなし）は変えない。escape_for_send は残し、tests.rs の 3 箇所はその呼び出しに置き換える。
+  resolution_note: 'gate: create-spec.requirement-clarification; option chosen: C
+    (inject capability query + dispatch into notify_worker); options not chosen: A
+    (known limitation), B (source-text static test); key points: A misses the AC,
+    B checks only text presence/order, C follows the existing injection idiom and
+    verifies real arguments without D-Bus mocking; codex_consulted: true; opus_escalation:
+    not run'

@@ -1,0 +1,35 @@
+schema_version: 1
+feature: notify-escape-test-production-path
+tier: full
+bases:
+- basis: description_only
+  probabilities:
+    '0': 0.01
+    '1': 0.92
+    '2': 0.07
+    '3': 0.0
+  expectation_clear: 0.95
+  confidence: 0.92
+  observed_at: '2026-09-25T18:28:30+09:00'
+- basis: description_plus_code
+  probabilities:
+    '0': 0.22
+    '1': 0.77
+    '2': 0.01
+    '3': 0.0
+  expectation_clear: 0.92
+  confidence: 0.77
+  observed_at: '2026-09-25T18:28:40+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/callbacks/tests.rs
+  changed_lines_approx: 50
+  new_functions_needed: 1
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  notes: AC1・AC2の意図は実装済みで、Unix限定の純関数escape_for_sendをnotify_workerが呼び、sendはキュー投入だけを行っているよ。AC3はtests.rsの784・813・836行に分岐コピーが残っているため置換が必要だよ。既存テストは共通関数の条件反転を検出できる構造だけど、ワーカー側の呼出し削除は検出できないため、接続を確認する静的テスト1関数の追加を見積もっているよ。AC4の改変時の失敗確認とAC5の指定cargo
+    testは、ファイル変更禁止のため未実施だよ
+decided_at: '2026-09-25T18:28:53+09:00'

@@ -1,0 +1,75 @@
+schema_version: 1
+feature: notify-escape-test-production-path
+phase: create-spec
+status: completed
+generation: 1
+mode: batch
+base_revision: f5b661b446841c77d557d2a21f3e9f9ac3c050b5
+last_input_digest: sha256:71cc5f8c83e559fc23eb565ef4d5f52987c70cb9e41cbbc7369cc982b8f0a67c
+active_request_id: null
+packets: {}
+answers:
+  requirement.call-site-mutation-detection:
+    packet_id: null
+    answered_at: '2026-09-25T18:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - inject_worker_io
+    freeform: null
+    normalized_answer: notify_worker の呼び出し箇所から escape_for_send を外す変異も単体テストで検出できるようにする。notify_worker
+      を、capability 取得と送出（Notification::new().summary().body().show()）をクロージャ（または同等の注入点）として受け取る形にし、本番は現在と同じ
+      get_capabilities() と notify-rust 送出を渡す。テストは notify_worker 本体に有限個の通知を流し、capability
+      取得を『body-markup あり / なし / 取得失敗』に差し替え、送出クロージャが受け取る summary / body を期待値と完全一致で比較する。D-Bus
+      自体の模擬実装・.show() の検証・非同期化はしない（スコープ外を維持）。redaction の位置、通知ごとに capability を 1 回だけ取得すること、ログ文言、Windows
+      の送出フロー（capability 取得・エスケープなし）は変えない。escape_for_send は残し、tests.rs の 3 箇所はその呼び出しに置き換える。
+    resolution_note: 'gate: create-spec.requirement-clarification (orchestrator-raised
+      unclear point: analyst assumption A-3 left the call-site-removal mutation undetected).
+      Options: A=known limitation, B=source-text static test, C=inject capability
+      query + dispatch into notify_worker, D=other. Codex consulted (readonly): chose
+      C — A fails the AC that removing the escape call must turn a test red; B only
+      checks text presence/order, not that the escaped values reach .summary()/.body();
+      C follows existing injection idiom (NotificationSink, injected clock) and verifies
+      real arguments without D-Bus mocking. Adding only a pure prepare_notification()
+      would just move the hole. Orchestrator adopted C. Opus escalation: not run.'
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-09-25T19:00:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: 'skipped: 内部リファクタリングで UI 変更なし (requirements-analyst 推奨)'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-25T19:00:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: doc/UI-DESIGN-GUIDELINES.yaml (top candidate
+      of 3 detected)'
+worker_runs:
+- request_id: cs-analyst-001
+  status: completed
+  input_digest: sha256:37a6fbd4af49bb7eabf8722b8ca565a78d79e1483a06d09d45d25871bd0a8c51
+- request_id: cs-analyst-002
+  status: completed
+  input_digest: sha256:71cc5f8c83e559fc23eb565ef4d5f52987c70cb9e41cbbc7369cc982b8f0a67c
+- request_id: cs-specwriter-001
+  status: completed
+  input_digest: sha256:9b85c0f6594acddc1fc5e7dfe86d9d8e8ae9bcf888810b9c766f65756405f53c
+artifacts:
+- path: feature-docs/notify-escape-test-production-path/REQUIREMENTS.md
+  sha256: sha256:d55b171f0dc87f9a02018ab68f943c11734a3fc1ef6f466d878f4f41b7c097da
+  produced_by: cs-specwriter-001
+- path: feature-docs/notify-escape-test-production-path/SPEC.md
+  sha256: sha256:f9e60c0024037999960cfbfe43ac8ba457c3610a2401b32e4865333647c2606e
+  produced_by: cs-specwriter-001
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
