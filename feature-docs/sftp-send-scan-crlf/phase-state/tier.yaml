@@ -1,0 +1,38 @@
+schema_version: 1
+feature: sftp-send-scan-crlf
+tier: full
+decided_by: fallback_matrix:readings_disagree
+rationale: 'readings disagree: description_only=full, description_plus_code=reduced
+  -> full'
+bases:
+- basis: description_only
+  probabilities:
+    '0': 0.21
+    '1': 0.79
+    '2': 0.0
+    '3': 0.0
+  expectation_clear: 0.88
+  confidence: 0.78
+  observed_at: '2026-09-25T13:37:30+09:00'
+- basis: description_plus_code
+  probabilities:
+    '0': 0.51
+    '1': 0.49
+    '2': 0.0
+    '3': 0.0
+  expectation_clear: 0.88
+  confidence: 0.51
+  observed_at: '2026-09-25T13:37:30+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/sftp/service.rs
+  changed_lines_approx: 20
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: []
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  evidence: 対象ブランチの src-tauri/src/sftp/service.rs:1013 は LF 固定で境界を検索しているため、CRLF では見つからないことを確認した。同ファイル:1025
+    の冒頭で CRLF を LF へ正規化し、境界検索と切り出しに同じ文字列を使えば対応できる。同ファイル:1076 に既存テストがあり、CRLF の回帰ケース追加が必要
+decided_at: '2026-09-25T13:38:10+09:00'
