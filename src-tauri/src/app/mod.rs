@@ -1013,8 +1013,10 @@ impl App {
         // Desktop notifications collected during the tab loop and
         // dispatched after it — `tab` holds `&mut self.tabs`, so
         // `self.notify()` (a `&self` call) can't run inside the loop.
-        let mut pending_notifications: Vec<(String, crate::notifications::ActivityKind)> =
-            Vec::new();
+        let mut pending_notifications: Vec<(
+            crate::notifications::SanitizedTitle,
+            crate::notifications::ActivityKind,
+        )> = Vec::new();
         // Absolute-row selection bookkeeping, captured from the active tab in
         // the loop and applied after it (the loop holds `&mut self.tabs`, so
         // mutating `self.selection` must wait until the borrow ends).

@@ -76,6 +76,30 @@ fn maybe_notify_agent_transition_ac1_fires_for_blocked_on_non_visible_pane() {
     assert_eq!(sink.calls().len(), 1);
 }
 
+// AC-5 (notifications-sanitize-contract task0001): a CSI-bearing raw tab
+// title reaching `maybe_notify_agent_transition` on the fire branch is
+// sanitized before it reaches the notification body — no ESC byte, no CSI
+// remnant in the delivered body.
+#[test]
+fn maybe_notify_agent_transition_sanitizes_a_csi_bearing_tab_title_on_fire() {
+    let (mut app, sink) = app_with_test_sink();
+    // Pin the locale: the asserted body text is English, but `App::new()`
+    // resolves `Language::Auto` from the OS locale (see `crate::i18n`),
+    // which is not deterministic across test environments.
+    app.locale = crate::i18n::Locale::En;
+    let fired = app.maybe_notify_agent_transition(
+        "pane-1",
+        false,
+        &agent_transition(crate::notifications::AgentState::Blocked),
+        "\x1b[31mred\x1b[0m title",
+    );
+    assert!(fired);
+    let calls = sink.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, crate::notifications::NOTIFICATION_TITLE);
+    assert_eq!(calls[0].1, "claude: red title (blocked)");
+}
+
 // AC-1: working/idle transitions never fire.
 #[test]
 fn maybe_notify_agent_transition_ac1_working_and_idle_never_fire() {

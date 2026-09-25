@@ -1,0 +1,28 @@
+schema_version: 1
+feature: notifications-sanitize-contract
+tier: full
+bases:
+  - basis: description_only
+    probabilities: {"0": 0.65, "1": 0.35, "2": 0.0, "3": 0.0}
+    expectation_clear: 0.84
+    confidence: 0.64
+    observed_at: "2026-09-24T23:55:10+09:00"
+  - basis: description_plus_code
+    probabilities: {"0": 0.35, "1": 0.61, "2": 0.04, "3": 0.0}
+    expectation_clear: 0.82
+    confidence: 0.61
+    observed_at: "2026-09-24T23:55:20+09:00"
+pre_survey_estimate:
+  files_expected:
+    - src-tauri/src/notifications.rs
+    - src-tauri/src/app/mod.rs
+    - src-tauri/src/app/agent_status.rs
+    - src-tauri/src/callbacks/tests.rs
+  changed_lines_approx: 120
+  new_functions_needed: 2
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: [app, app::agent_status, callbacks::tests]
+  work_still_required: true
+decided_at: "2026-09-24T23:56:05+09:00"

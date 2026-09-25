@@ -1,0 +1,12 @@
+schema_version: 1
+feature: notifications-sanitize-contract
+records:
+  - question_id: create-spec.design-step.vocabulary-mismatch
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-25T00:01:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [skip]
+    freeform: null
+    normalized_answer: "design step skipped per analyst recommendation"
+    resolution_note: "batch-policies option_id decide_autonomously is not among the packet's option_ids (skip/run); treated as 'accept recommendation' rather than aborting. Recorded for audit."
