@@ -4,15 +4,32 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: 3cb46956b50a9d034a270cbbade23d6c79c0e9d3
-last_input_digest: sha256:5e176bb1ca3fee11bb333eda428b4fbeb78684b96875451813c933def2cbb54b
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:27efea4240d0dc45cbd69d6858a919908f12e75ce5cf1d600866178358c2b08d
+active_request_id: create-spec-run-0002
 packets: {}
-answers: {}
+answers:
+  create-spec.option-choice-consultation:
+    packet_id: null
+    answered_at: '2026-09-25T09:40:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: adopt (a) metacharacter short-circuit only; reject (b) caching; (c)
+      already implemented
+    normalized_answer: (a) only
+    resolution_note: 'Not a worker packet: the analyst resolved option choice as reversible
+      assumption A1; per launch instruction the orchestrator consulted Codex (readonly),
+      which independently chose (a) and confirmed (c) is already implemented. Discussion
+      recorded as a Notion comment on the task page.'
 worker_runs:
-  - request_id: create-spec-run-0001
-    status: dispatched
-    input_digest: sha256:5e176bb1ca3fee11bb333eda428b4fbeb78684b96875451813c933def2cbb54b
-    output_digest: null
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:5e176bb1ca3fee11bb333eda428b4fbeb78684b96875451813c933def2cbb54b
+  output_digest: sha256:83c8b64cd3e3809025932664c0a72f4b1fc17eab420b39132f61d68a7cd2a72e
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:27efea4240d0dc45cbd69d6858a919908f12e75ce5cf1d600866178358c2b08d
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
