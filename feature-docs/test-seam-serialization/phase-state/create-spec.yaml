@@ -1,11 +1,11 @@
 schema_version: 1
 feature: test-seam-serialization
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: b952527a90e8acdac53a67e3add912aaa109388f
 last_input_digest: sha256:b7eab670cc59546caa071947cbd80d75334c3f88f02b8bb8a579b91473e36c0a
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -47,6 +47,19 @@ answers:
       change, no UI).'
     resolution_note: gate create-spec.design-step resolved by batch-policies.yaml
       option decide_autonomously.
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-25T09:39:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'kind: project_native, paths: [doc/UI-DESIGN-GUIDELINES.yaml]
+      (top candidate)'
+    resolution_note: 'gate create-spec.design-system resolved by batch-policies.yaml
+      option top_candidate_or_none; candidates: doc/UI-DESIGN-GUIDELINES.yaml, src-tauri/web-shared/styles.css,
+      src-tauri/src/ui/md3.rs'
 worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
@@ -57,10 +70,16 @@ worker_runs:
   input_digest: sha256:71b9b67e3fcf9ff25bcdfbebf74fc21be45cc6e73515852232a78f1d450c0a7d
   output_digest: sha256:e6313c23c29cad7a7bf680d89ac2aaf694abe4229827887ab1bd1f65eb9b538a
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:b7eab670cc59546caa071947cbd80d75334c3f88f02b8bb8a579b91473e36c0a
   output_digest: null
-artifacts: []
+artifacts:
+- path: feature-docs/test-seam-serialization/REQUIREMENTS.md
+  sha256: sha256:4f7a2605eab1e97e0f15473eb7f5fd88c606c039126b6df7d021a505f567c35f
+  produced_by: create-spec-run-0003
+- path: feature-docs/test-seam-serialization/SPEC.md
+  sha256: sha256:dc6cbcc4c27567b461b7c4d71af8e52f87f4c66baef414224754cbff3ae48306
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: sha256:905de69af5c3917e62b6755e869fd96cc19d19b9e3f75c48d04345424735f0aa
 stale_redispatch_count: 0
