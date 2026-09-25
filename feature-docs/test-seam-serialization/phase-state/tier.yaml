@@ -1,0 +1,39 @@
+schema_version: 1
+feature: test-seam-serialization
+tier: full
+decided_by: fallback_matrix:readings_disagree
+rationale: 'readings disagree: description_only=full, description_plus_code=reduced
+  -> full'
+bases:
+- basis: description_only
+  probabilities:
+    '0': 0.22
+    '1': 0.78
+    '2': 0.0
+    '3': 0.0
+  expectation_clear: 0.85
+  confidence: 0.78
+  observed_at: '2026-09-25T09:28:27+09:00'
+- basis: description_plus_code
+  probabilities:
+    '0': 0.71
+    '1': 0.29
+    '2': 0.0
+    '3': 0.0
+  expectation_clear: 0.82
+  confidence: 0.7
+  observed_at: '2026-09-25T09:28:27+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/sftp/service.rs
+  changed_lines_approx: 40
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: []
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  evidence: src-tauri/src/self_exec.rs:173,206,239,382 で排他制御の説明、Mutex、Dropによる復元、panic後の回帰テストは実装済み。src-tauri/src/app/tests/timing.rs
+    の関連テストもガード取得済み。残作業は src-tauri/src/sftp/service.rs:648,659 の直接送信を既存ヘルパ（同:70,77）経由へ変更し、同:962
+    の既存検査をテスト用メソッドまで広げること。cargo は未実行
+decided_at: '2026-09-25T09:29:30+09:00'
