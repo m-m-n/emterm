@@ -1,0 +1,110 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - test_erase_in_line_to_end_spacer_at_cursor_blanks_left_base
+      - test_erase_in_display_below_spacer_at_cursor_blanks_left_base
+      - test_erase_in_line_to_end_base_at_cursor_no_extra_blank
+      - test_erase_in_line_to_end_cursor_at_col_zero_no_left_partner
+      - test_handle_erase_in_display_below
+      - test_handle_erase_in_line_to_end
+    red_confirmed: false
+    red_reason: >-
+      Behavior-preserving refactor (SPEC A-3 / NFR3): no new tests, no test
+      edits. These pre-existing characterization tests were already green
+      before this change and stayed green after. The structural claim (right-
+      edge capture/repair skipped on the EL 0 path) is verified by code
+      inspection of the diff: EL mode 0 now passes RangeEdges::Left into
+      erase_range_with_edge_repair, and last_is_base is computed as
+      `edges.right() && ...`, so with edges.right() == false the
+      right-hand get_cell_width read and the blank_wide_pair_half(end, row)
+      repair never execute (short-circuit `&&`).
+  AC-2:
+    tests:
+      - test_erase_in_line_to_start_base_at_cursor_blanks_right_spacer
+      - test_erase_in_display_above_base_at_cursor_blanks_right_spacer
+      - test_erase_in_line_to_start_spacer_at_cursor_no_extra_blank
+      - test_erase_in_line_to_start_cursor_at_last_col_no_right_partner
+      - test_handle_erase_in_display_above
+      - test_handle_erase_in_line_to_start
+    red_confirmed: false
+    red_reason: >-
+      Same as AC-1: behavior-preserving refactor, pre-existing tests stayed
+      green throughout. Structural claim verified by code inspection: EL
+      mode 1 passes RangeEdges::Right, so edges.left() == false and the
+      left-edge get_cell_width(start, row) read plus the start-1 repair
+      branch never execute for that path.
+  AC-3:
+    tests:
+      - test_erase_characters_spacer_start_blanks_left_base
+      - test_erase_characters_base_at_range_end_blanks_right_spacer
+      - test_erase_characters_cursor_on_spacer_of_overflow_base_blanks_left_base
+      - test_handle_erase_characters_normal
+      - test_handle_erase_characters_overflow_clamped
+      - test_handle_erase_characters_dirty
+    red_confirmed: false
+    red_reason: >-
+      Behavior-preserving refactor; ECH passes RangeEdges::Both so both
+      edges.left() and edges.right() are true, matching pre-change behavior
+      exactly. Pre-existing tests stayed green throughout. Empty-range
+      short-circuit (end <= start) is unchanged code, run for every
+      selection.
+  AC-4:
+    tests:
+      - test_handle_erase_in_display_below
+      - test_handle_erase_in_display_above
+      - test_erase_in_display_below_spacer_at_cursor_blanks_left_base
+      - test_erase_in_display_above_base_at_cursor_blanks_right_spacer
+    red_confirmed: false
+    red_reason: >-
+      Structural criterion, verified primarily by code inspection per the
+      task plan's Test Notes: handle_erase_in_display mode 0 now calls
+      self.handle_erase_in_line(0) (no local erase_range_with_edge_repair
+      call) before the below-cursor row loop; mode 1 runs the above-cursor
+      row loop then calls self.handle_erase_in_line(1). `git diff` /
+      `grep -n erase_range_with_edge_repair crates/term_core/src/csi_screen.rs`
+      confirms the chokepoint is called exactly 3 times in the non-test
+      body: EL mode 0, EL mode 1, and ECH — ED contains no direct call.
+      The listed tests are the pre-existing characterization tests that
+      exercise the ED 0/1 cursor-row and other-row outcomes end to end;
+      they stayed green throughout.
+  AC-5:
+    tests:
+      - test_handle_erase_in_display_all
+      - test_handle_erase_in_line_all
+      - test_erase_in_line_all_wide_pair_no_partner_cleanup
+      - test_erase_in_display_all_wide_pair_no_partner_cleanup
+      - test_handle_erase_in_display_scrollback_returns_sentinel
+      - test_handle_erase_in_display_invalid_mode
+    red_confirmed: false
+    red_reason: >-
+      clear_line_range, clear_line, EL mode 2 and ED mode 2 branches are
+      byte-for-byte unchanged in the diff (confirmed by `git diff`); these
+      pre-existing tests stayed green throughout with no code touching
+      their paths.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by command outcomes, not a single test: `cargo test
+      --manifest-path crates/term_core/Cargo.toml --lib` passed 858/858
+      (same count as the pre-implementation baseline) both before and
+      after; `git diff` against the task base shows changes confined to
+      the non-test body of crates/term_core/src/csi_screen.rs only (no
+      #[cfg(test)] module line changed, terminal_cells.rs has zero diff);
+      `cargo check --manifest-path src-tauri/Cargo.toml` and the same with
+      `--no-default-features` both succeeded.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Doc-comment criterion, verified by inspection: the chokepoint's doc
+      comment now names RangeEdges::Both (ECH), RangeEdges::Left (EL 0, ED
+      0 via delegation) and RangeEdges::Right (EL 1, ED 1 via delegation),
+      plus the structural no-op fact for each one-sided site. No edit was
+      needed to blank_wide_pair_half's caller list in terminal_cells.rs
+      (git diff shows zero changes to that file) because its entry "the
+      range-erase edge-repair chokepoint" remains true — the chokepoint
+      keeps its name and role, per the task plan's stated expected outcome.

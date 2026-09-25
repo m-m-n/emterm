@@ -3,6 +3,27 @@ use crate::terminal_core::TerminalCore;
 
 pub(crate) const SCROLLBACK_SENTINEL: u8 = 0xFF;
 
+/// Which edge(s) of an in-row erase range the chokepoint must capture and
+/// repair. Exactly three cases exist among the chokepoint's callers: EL
+/// mode 0 orphans only the left edge, EL mode 1 orphans only the right
+/// edge, and ECH can orphan both.
+#[derive(Clone, Copy)]
+enum RangeEdges {
+    Left,
+    Right,
+    Both,
+}
+
+impl RangeEdges {
+    fn left(self) -> bool {
+        matches!(self, RangeEdges::Left | RangeEdges::Both)
+    }
+
+    fn right(self) -> bool {
+        matches!(self, RangeEdges::Right | RangeEdges::Both)
+    }
+}
+
 impl TerminalCore {
     /// CSI J - Erase in Display.
     /// mode: 0=Below, 1=Above, 2=All, 3=Scrollback.
@@ -10,11 +31,9 @@ impl TerminalCore {
     pub fn handle_erase_in_display(&mut self, mode: u8) -> u8 {
         match mode {
             0 => {
-                // Below: clear from cursor to end of screen
-                let row = self.cursor.row;
-                let start = self.cursor.col;
-                let end = self.cols;
-                self.erase_range_with_edge_repair(row, start, end);
+                // Below: erase the cursor row via EL 0, then clear every
+                // row below it.
+                self.handle_erase_in_line(0);
 
                 for r in (self.cursor.row + 1)..self.rows {
                     self.clear_line(r);
@@ -22,15 +41,13 @@ impl TerminalCore {
                 0
             }
             1 => {
-                // Above: clear from start to cursor (inclusive)
+                // Above: clear every row above the cursor row, then erase
+                // the cursor row via EL 1.
                 for r in 0..self.cursor.row {
                     self.clear_line(r);
                 }
 
-                let row = self.cursor.row;
-                let start = 0;
-                let end = self.cursor.col + 1;
-                self.erase_range_with_edge_repair(row, start, end);
+                self.handle_erase_in_line(1);
                 0
             }
             2 => {
@@ -53,18 +70,22 @@ impl TerminalCore {
     pub fn handle_erase_in_line(&mut self, mode: u8) {
         match mode {
             0 => {
-                // ToEnd: clear from cursor to end of line
+                // ToEnd: clear from cursor to end of line. The right
+                // partner is always outside the row (end == self.cols), so
+                // only the left edge can be orphaned.
                 let row = self.cursor.row;
                 let start = self.cursor.col;
                 let end = self.cols;
-                self.erase_range_with_edge_repair(row, start, end);
+                self.erase_range_with_edge_repair(row, start, end, RangeEdges::Left);
             }
             1 => {
-                // ToStart: clear from start to cursor (inclusive)
+                // ToStart: clear from start to cursor (inclusive). The left
+                // partner's start > 0 guard never holds (start is always
+                // 0), so only the right edge can be orphaned.
                 let row = self.cursor.row;
                 let start = 0;
                 let end = self.cursor.col + 1;
-                self.erase_range_with_edge_repair(row, start, end);
+                self.erase_range_with_edge_repair(row, start, end, RangeEdges::Right);
             }
             2 => {
                 // All: clear entire line
@@ -80,14 +101,23 @@ impl TerminalCore {
         let row = self.cursor.row;
         let start = self.cursor.col;
         let end = start.saturating_add(count).min(self.cols);
-        self.erase_range_with_edge_repair(row, start, end);
+        self.erase_range_with_edge_repair(row, start, end, RangeEdges::Both);
     }
 
     /// The single capture → clear → repair chokepoint for in-row range
-    /// erases (ECH, EL 0/1, ED 0/1): captures, before clearing, whether the
-    /// wide-pair edges of `[start, end)` would be orphaned by the erase,
+    /// erases: captures, before clearing, whether the wide-pair edges of
+    /// `[start, end)` selected by `edges` would be orphaned by the erase,
     /// performs the plain invariant-unaware range clear, then repairs those
-    /// edges via the partner-blanking primitive.
+    /// edges via the partner-blanking primitive. Its only callers are ECH
+    /// (`RangeEdges::Both`), EL mode 0 (`RangeEdges::Left`; ED mode 0 also
+    /// erases its cursor row through EL mode 0, so it repairs the same edge
+    /// by delegation), and EL mode 1 (`RangeEdges::Right`; ED mode 1
+    /// likewise delegates through it).
+    ///
+    /// - EL 0's range always ends at the column count, so its unselected
+    ///   right edge's repair would always be a no-op anyway.
+    /// - EL 1's range always starts at 0, so its unselected left edge's
+    ///   `start > 0` guard would never hold anyway.
     ///
     /// `row` is a viewport row; `[start, end)` is the half-open erase
     /// range. Empty range (`end` not greater than `start`) delegates to the
@@ -98,15 +128,16 @@ impl TerminalCore {
     /// `clear_line_range` itself, because that function is a shared
     /// primitive whose full-row callers (`clear_line`, EL 2, ED 2) must not
     /// gain partner behavior.
-    fn erase_range_with_edge_repair(&mut self, row: u16, start: u16, end: u16) {
+    fn erase_range_with_edge_repair(&mut self, row: u16, start: u16, end: u16, edges: RangeEdges) {
         if end <= start {
             self.clear_line_range(row, start, end);
             return;
         }
 
-        // Capture pre-clear state: does the erase orphan a wide-pair edge?
-        let start_is_spacer = self.get_cell_width(start, row) == 0;
-        let last_is_base = self.get_cell_width(end - 1, row) == 2;
+        // Capture pre-clear state: does the erase orphan a selected
+        // wide-pair edge? The cell of an unselected edge is not read.
+        let start_is_spacer = edges.left() && self.get_cell_width(start, row) == 0;
+        let last_is_base = edges.right() && self.get_cell_width(end - 1, row) == 2;
 
         self.clear_line_range(row, start, end);
 
