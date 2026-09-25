@@ -55,7 +55,7 @@ workflow:
     completed_at_commit: d1d0125fb6dcf17a52c8d46761b395e60b2ef726
     base_commit: 3e8c8cb5f14bbbf2b0c818380321a4b45eba5e15
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -78,8 +78,12 @@ tasks:
     notes: null
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary: []
+    cross_validation: false
 
 requirements:
   FR1: {title: "EL 0 / ED 0 \u306f\u5de6\u7aef\u3060\u3051\u3092\u4fee\u5fa9\u3059\u308b", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-2, TS-6]}
