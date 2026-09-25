@@ -1,0 +1,157 @@
+schema_version: 1
+feature: notify-escape-test-production-path
+created: 2026-09-25
+base_branch: main
+parent_branch: em-workflow/notify-escape-test-production-path/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    - basis: description_only
+      probabilities: {"0": 0.01, "1": 0.92, "2": 0.07, "3": 0.0}
+      expectation_clear: 0.95
+    - basis: description_plus_code
+      probabilities: {"0": 0.22, "1": 0.77, "2": 0.01, "3": 0.0}
+      expectation_clear: 0.92
+  at: "2026-09-25T18:28:53+09:00"
+  reductions: []
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths: [doc/UI-DESIGN-GUIDELINES.yaml]
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: a22b687e40d71731d6a2c02f80c699a8d4946bb2
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      requirements-analyst の推奨が skip で、gate create-spec.design-step を
+      バッチポリシー（decide_autonomously）で解決した。ワーカーの注入点とテストだけを
+      変える内部リファクタリングで、UI・画面・利用者から見える振る舞いは変わらない。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 5df57218ce031d628529772b14d8dd95c5d61ac8
+  - id: implement
+    status: completed
+    completed_at_commit: f041939d4e2e005b1d76153ccb5e5fc5f2c38cc2
+    base_commit: 18ab2fbc3b1d31f65e9777184491e119540e9ac4
+  - id: review
+    status: completed
+    completed_at_commit: 481a683dbc63929e545315bca597aa2c7c66d87b
+  - id: verify
+    status: completed
+    completed_at_commit: b27ef9e87c4e2cfe97edd8667e1fb804552b8c64
+    result: pass
+    failed_items: []
+    summary: >-
+      build check (linux) exit 0 / Windows target check (cargo xwin check) exit 0 /
+      --lib tests 3641 passed 0 failed / cargo fmt --check exit 0 /
+      TS-8 mutations a, b(title, body, both), c, d(title, body) each turned
+      at least one --lib test red and were reverted (none committed) /
+      TS-10, TS-11, TS-12 diff inspection ok (no Cargo.toml/Cargo.lock diff,
+      no inline escape branch left in tests.rs, redaction before escape,
+      comments name notify_worker). No excluded requirements.
+  - id: retrospect
+    artifacts: [retrospect.yaml]
+    status: completed
+    completed_at_commit: 8094f591a95d458a16217b5bcee99f8877261b9e
+
+tasks:
+  task0001:
+    title: "Inject capability fetch and send into notify_worker, with worker-level tests"
+    plan: tasks/task0001.md
+    files: [src-tauri/src/callbacks.rs, src-tauri/src/callbacks/tests.rs]
+    skills: [backend-impl]
+    domains: [input-handling, external-io, concurrency]
+    complexity: high
+    requirements: [FR1, FR2, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
+    status: merged
+    branch: em-workflow/notify-escape-test-production-path/task0001
+    notes: null
+  task0002:
+    title: "Route the body_markup_escape tests through escape_for_send"
+    plan: tasks/task0002.md
+    files: [src-tauri/src/callbacks/tests.rs]
+    skills: []
+    domains: [input-handling]
+    complexity: low
+    requirements: [FR1, FR3, FR6, NFR2, NFR3, NFR4]
+    status: merged
+    branch: em-workflow/notify-escape-test-production-path/task0002
+    notes: null
+
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, performance, architecture, spec]
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    cross_validation: true
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1: {title: "I/O と body 決定の境界を純関数にする", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001, task0002], tests: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6, TS-8, TS-9]}
+  FR2: {title: "notify_worker に capability 取得と送出の注入点を設ける", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-4, TS-5, TS-6, TS-7, TS-8]}
+  FR3: {title: "テスト内の inline な if/else 3 箇所を純関数の呼び出しに置き換える", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0002], tests: [TS-1, TS-2, TS-3, TS-8]}
+  FR4: {title: "notify_worker 本体を通すワーカー単位のテストを追加する", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-4, TS-5, TS-6, TS-7, TS-8]}
+  FR5: {title: "cfg(unix) を保ち Windows の送出フローを変えない", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-9, TS-10]}
+  FR6: {title: "呼び出し元を示すコメントを実際の呼び出し元に合わせる", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001, task0002], tests: [TS-11]}
+  NFR1: {title: "振る舞いを変えない", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001], tests: [TS-4, TS-5, TS-6, TS-7, TS-9, TS-10, TS-12]}
+  NFR2: {title: "テストは D-Bus を使わない", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001, task0002], tests: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6, TS-7]}
+  NFR3: {title: "依存を増やさない", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001, task0002], tests: [TS-12]}
+  NFR4: {title: "既存テストをすべて通す", status: ok, tbd_reason: null, excluded_reason: null, tasks: [task0001, task0002], tests: [TS-9]}
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+
+goal: |
+  # NotifyRustSink::send の body 決定を純関数に切り出してテストが本番経路を通るようにする
+  
+  Notion: https://www.notion.so/3ba3509ec8ee81f0baf7c955232d3371 (種別: 改善)
+  
+  ## やりたいこと（必須）
+  `NotifyRustSink::send` の body 決定ロジックを純関数に切り出し、テストが本番と同一の分岐を通るようにする。
+  
+  ## 背景・なぜ（必須）
+  `send` が `notify_rust::get_capabilities()`（実 D-Bus 接続が必要）を直接呼び、その結果でエスケープ有無を決めているため、`send` 自体を検証するテストが書けない。結果として `src-tauri/src/callbacks/tests.rs` は `if body_markup_confirmed(&caps) { escape_body_markup(x) } else { x.to_string() }` という送信側と同じ分岐を 3 箇所で自前に再実装しており、PR #35 の AC-1〜AC-5 が検証しているのは本番の判断ではなくテスト内のコピーになっている。
+  具体的な損失として、`send` の条件を反転しても、`let body = body_owned.as_str();` の shadowing を消して未エスケープの引数を `.body()` に渡してしまっても、8 本の新規テストは全てグリーンのまま通る。SPEC.md の TS5 が主張する「単一チョークポイントが両プロデューサをカバーする」という性質も、実際には `send` ではなくテスト内のコピーについて証明しているだけになっている。
+  - 該当箇所: `src-tauri/src/callbacks.rs:156`、`src-tauri/src/callbacks/tests.rs:754` / `:768`
+  - 検出元: PR https://github.com/m-m-n/emterm/pull/35 のレビュー round1、findings `f51da7aab1499d43`（architecture）/ `409f4a029ce8169d`（spec）/ `e587c1b6f27875e4`（comprehensive）— 3 観点が独立に同根を指摘
+  - 記録: `feature-docs/notification-body-markup-escape/reviews/round1.yaml`
+  
+  ## 受け入れ条件 / 完了の定義（必須）
+  - [ ] capability 取得（I/O）と body 決定（純粋ロジック）の境界を関数として切り出す（例: `body_for_send(body, &capabilities) -> String`）
+  - [ ] `NotifyRustSink::send` はその関数を呼ぶだけにする
+  - [ ] `callbacks/tests.rs` の 3 箇所の inline な if/else を切り出した関数の呼び出しに置き換える
+  - [ ] `send` からエスケープ呼び出しを外す・条件を反転すると、いずれかのテストが赤になることを確認する
+  - [ ] `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` が通る
+  
+  ## スコープ外（任意）
+  - `send` 全体（`.show()` を含む）の D-Bus モック化
+  - 通知経路の非同期化
+  
+  ## 制約・前提（任意）
+  - PR #35 がマージされた後の状態を前提に着手すること
+  - 切り出す関数は `#[cfg(unix)]` 配下に置き、Windows 側の送出フローを変更しないこと

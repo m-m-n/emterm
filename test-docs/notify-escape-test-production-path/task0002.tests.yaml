@@ -1,0 +1,92 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Not a unit test; verified by direct source inspection / grep. Before
+      the change, tests.rs contained three
+      `if body_markup_absence_confirmed(...) { <literal> } else {
+      escape_body_markup(...) }` branches (in
+      unconfirmed_capabilities_leave_the_body_unchanged and both halves of
+      tab_activity_and_agent_bodies_are_both_escaped_when_confirmed) — the
+      criterion was violated pre-change. After the change,
+      `grep -n body_markup_absence_confirmed
+      src-tauri/src/callbacks/tests.rs` matches only the three direct unit
+      tests of body_markup_absence_confirmed itself; no remaining call
+      selects between the unescaped value and escape_body_markup based on
+      its result.
+  AC-2:
+    tests:
+      - callbacks::tests::body_markup_escape::unconfirmed_capabilities_leave_the_body_unchanged
+    red_confirmed: false
+    red_reason: >-
+      This test already existed and already passed before this task
+      (previously it re-implemented the branch inline and asserted against
+      its own copy). The task's Test Notes explicitly say the red step for
+      these three tests is shown by mutation, not by a fail-before-implement
+      cycle, because no new behavior is added — only the value source
+      changes from a copied branch to escape_for_send. See AC-4 for the
+      mutation-based red evidence that this test now actually depends on
+      escape_for_send's production decision.
+  AC-3:
+    tests:
+      - callbacks::tests::body_markup_escape::tab_activity_and_agent_bodies_are_both_escaped_when_confirmed
+    red_confirmed: false
+    red_reason: >-
+      Same situation as AC-2: the test pre-existed and passed before this
+      task; only its value source changed (both the tab-activity and
+      agent-status branches now call escape_for_send instead of a copied
+      branch). Red evidence is via mutation (AC-4), not fail-before-implement.
+  AC-4:
+    tests:
+      - callbacks::tests::body_markup_escape::unconfirmed_capabilities_leave_the_body_unchanged
+      - callbacks::tests::body_markup_escape::tab_activity_and_agent_bodies_are_both_escaped_when_confirmed
+    red_confirmed: true
+    red_reason: >-
+      Manually applied three mutations to the (uncommitted, restored)
+      production escape_for_send in src-tauri/src/callbacks.rs and re-ran
+      `cargo test --lib body_markup_escape` after each:
+      (a) inverted the absence condition
+      (`if !body_markup_absence_confirmed(...)`)  ->
+      unconfirmed_capabilities_leave_the_body_unchanged FAILED
+      ("assertion `left == right` failed") and
+      tab_activity_and_agent_bodies_are_both_escaped_when_confirmed FAILED
+      ("assertion failed: !tab_escaped.contains('<')");
+      (b1) skipped escape_body_markup on the body only for the escaped
+      branch -> tab_activity_and_agent_bodies_are_both_escaped_when_confirmed
+      FAILED (tab-activity side, same assertion);
+      (b2) skipped escape_body_markup on both title and body for the
+      escaped branch -> tab_activity_and_agent_bodies_are_both_escaped_when_confirmed
+      FAILED (same assertion). All three mutations were reverted
+      (git diff --stat on callbacks.rs shows no changes) before continuing;
+      none were committed.
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Comment-only criterion, verified by reading the diff. Before the
+      change, the module-head comment (~line 693) and the comment before
+      unconfirmed_capabilities_leave_the_body_unchanged (~line 778) named
+      `NotifyRustSink::send` as making the escape decision. After the
+      change, both now name `escape_for_send` as the path and `notify_worker`
+      as the production caller, and state that `NotifyRustSink::send` only
+      enqueues. No other comment in the file was touched (confirmed by
+      `git diff`).
+  AC-6:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Composite non-test criterion, verified directly: `git diff --stat`
+      shows only src-tauri/src/callbacks/tests.rs changed (no production
+      file, no Cargo.toml); the direct unit tests of
+      body_markup_absence_confirmed (lines ~756-775) and escape_body_markup
+      (lines ~706-747, plus the sanitize_title-boundary test) are
+      byte-for-byte unchanged; none of the three tests calls notify-rust or
+      D-Bus (they call only the pure escape_for_send /
+      body_markup_absence_confirmed / escape_body_markup functions and pure
+      fixture builders); `CARGO_TARGET_DIR=src-tauri/target cargo test
+      --manifest-path src-tauri/Cargo.toml --lib` passes (3637 passed, 0
+      failed, 3 ignored).

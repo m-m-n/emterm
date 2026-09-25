@@ -288,10 +288,9 @@ impl NotifyQueue {
     }
 }
 
-/// Worker body (ワーカー本体): the receive loop that performs every
-/// D-Bus round-trip previously run on the caller's thread — redaction,
-/// then (Unix only) an on-demand capability-query gate, dispatch, log, in
-/// that order, once per received notification. The capability query
+/// Worker body (unix): the receive loop that performs, once per received
+/// notification, the redaction, the on-demand capability-query gate, the
+/// escape decision and the send, in that order. The capability query
 /// itself is conditional (notification-capability-query-skip D1): it runs
 /// zero times when neither the title nor the body contains a markup
 /// metacharacter (`&`, `<`, `>`), and at most once otherwise — never
@@ -300,7 +299,24 @@ impl NotifyQueue {
 /// (D5/FR8): `Receiver::iter` blocks on each receive and stops
 /// automatically at that point, so there is no busy-poll and no explicit
 /// stop signal to manage.
-fn notify_worker(rx: Receiver<(String, String)>) {
+///
+/// notify-escape-test-production-path task0001: `fetch_capabilities` and
+/// `send` are injection points, so worker-level tests can drive this loop
+/// with fakes and reach no D-Bus connection. [`NotifyRustSink::new`]
+/// passes notify-rust's capability query (`notify_rust::get_capabilities`)
+/// and notify-rust's send (`notify_rust::Notification::show`) as the
+/// production values. The escape decision itself is delegated entirely to
+/// [`escape_for_send_on_demand`] — this loop forwards only its return
+/// values to `send` and never inspects or branches on the capability list
+/// itself.
+#[cfg(unix)]
+fn notify_worker<FetchErr, SendErr>(
+    rx: Receiver<(String, String)>,
+    fetch_capabilities: impl Fn() -> Result<Vec<String>, FetchErr>,
+    send: impl Fn(&str, &str) -> Result<(), SendErr>,
+) where
+    SendErr: std::fmt::Display,
+{
     for (title, body) in rx.iter() {
         // osc9-notify-log-redaction task0001 (IMPLEMENTATION.md D2) /
         // notification-worker-thread D4: redact the values exactly as
@@ -324,27 +340,77 @@ fn notify_worker(rx: Receiver<(String, String)>) {
         // confirmed `body-markup` capability; only an explicit,
         // successful "body-markup absent" report passes text through
         // unescaped. Windows notify-rust has no `get_capabilities()`
-        // export (XDG-only surface), so the whole gate stays
-        // `#[cfg(unix)]`, same as before this task — the dispatch call
-        // itself right below carries no cfg branching (FR9).
-        #[cfg(unix)]
-        let (title, body) = escape_for_send_on_demand(&title, &body, notify_rust::get_capabilities);
+        // export (XDG-only surface), so the capability fetch and the
+        // escape decision only exist in this unix `notify_worker` — the
+        // `#[cfg(not(unix))]` definition below has neither (FR9).
+        let (summary, body) = escape_for_send_on_demand(&title, &body, &fetch_capabilities);
 
-        match notify_rust::Notification::new()
-            .summary(&title)
-            .body(&body)
-            .show()
-        {
+        match send(&summary, &body) {
             // osc9-notify-log-redaction task0001 (FR5): the literal
             // prefix and colon-space separator are unchanged; only the
             // interpolated content changes, from raw title text to the
             // allow-listed redacted rendering.
-            Ok(_) => log::debug!("notify-rust dispatched: {redacted}"),
+            Ok(()) => log::debug!("notify-rust dispatched: {redacted}"),
             // task0001 (FR7): the dispatch-error record is unchanged —
             // the notify-rust error value carries no notification text.
             Err(e) => log::warn!("notify-rust failed: {e}"),
         }
     }
+}
+
+/// Worker body (Windows): notify-rust has no `get_capabilities()` export
+/// on Windows (XDG-only surface), so there is no capability fetch and no
+/// escape here — the received title/body are sent directly, unchanged
+/// from before this task. No injection points on this platform (task
+/// plan "Out of Scope").
+#[cfg(not(unix))]
+fn notify_worker(rx: Receiver<(String, String)>) {
+    for (title, body) in rx.iter() {
+        let redacted = redact_notification(&title, &body);
+        match notify_rust::Notification::new()
+            .summary(&title)
+            .body(&body)
+            .show()
+        {
+            Ok(_) => log::debug!("notify-rust dispatched: {redacted}"),
+            Err(e) => log::warn!("notify-rust failed: {e}"),
+        }
+    }
+}
+
+/// Start the worker thread with the production injection points on unix
+/// (notify-rust's capability query and notify-rust's send), or with none
+/// on Windows. Kept as a separate function, split by platform, so
+/// [`NotifyRustSink::new`] itself stays a single, unbranched body — only
+/// the injection points differ by platform.
+#[cfg(unix)]
+fn spawn_notify_worker(rx: Receiver<(String, String)>) -> JoinHandle<()> {
+    thread::Builder::new()
+        .name("emterm-notify".to_string())
+        .spawn(move || {
+            notify_worker(
+                rx,
+                || notify_rust::get_capabilities(),
+                |summary, body| {
+                    notify_rust::Notification::new()
+                        .summary(summary)
+                        .body(body)
+                        .show()
+                        .map(|_| ())
+                },
+            )
+        })
+        .expect("failed to spawn the notification worker thread")
+}
+
+/// Windows counterpart of [`spawn_notify_worker`]: the thread-start call
+/// site, unchanged from before this task — no injection points.
+#[cfg(not(unix))]
+fn spawn_notify_worker(rx: Receiver<(String, String)>) -> JoinHandle<()> {
+    thread::Builder::new()
+        .name("emterm-notify".to_string())
+        .spawn(move || notify_worker(rx))
+        .expect("failed to spawn the notification worker thread")
 }
 
 /// Production sink that uses `notify-rust` to deliver desktop
@@ -375,10 +441,7 @@ impl NotifyRustSink {
     /// well-behaved under `cargo test`, SPEC A9).
     pub fn new() -> Self {
         let (queue, rx) = NotifyQueue::new(NOTIFY_QUEUE_CAPACITY);
-        let worker = thread::Builder::new()
-            .name("emterm-notify".to_string())
-            .spawn(move || notify_worker(rx))
-            .expect("failed to spawn the notification worker thread");
+        let worker = spawn_notify_worker(rx);
         Self {
             queue: Some(queue),
             worker: Mutex::new(Some(worker)),
@@ -516,8 +579,8 @@ fn escape_for_send_on_demand<E>(
 /// that SPEC). Pure: no I/O. Unchanged by the notification-markup-fail-
 /// closed SPEC (NFR3) — that SPEC only inverts the capability decision
 /// that gates which of `escape_for_send`'s two branches calls this
-/// function. Unix-only because the sole caller (`NotifyRustSink::send`)
-/// only reaches it behind the `#[cfg(unix)]` capability gate above.
+/// function. Unix-only because the sole caller (`notify_worker`) only
+/// reaches it behind the `#[cfg(unix)]` capability gate above.
 #[cfg(unix)]
 fn escape_body_markup(input: &str) -> String {
     input
