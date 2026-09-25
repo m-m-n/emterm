@@ -989,6 +989,182 @@ mod summary_markup_escape {
     }
 }
 
+// ── notification-capability-query-skip task0001: on-demand capability
+// query gate. Mirrors the escape-gate test modules above; pins the
+// short-circuit's output-equivalence to `escape_for_send`, the "exactly
+// one call when needed" property, and the no-caching property
+// (IMPLEMENTATION.md D1-D3). ──────────────────────────────────────────
+
+#[cfg(unix)]
+mod capability_query_skip_gate {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// Build a `FnOnce` supplier that increments `calls` when invoked (at
+    /// most once, since `escape_for_send_on_demand` consumes it) and
+    /// returns a clone of `outcome`.
+    fn counting_supplier(
+        calls: Rc<Cell<u32>>,
+        outcome: Result<Vec<String>, ()>,
+    ) -> impl FnOnce() -> Result<Vec<String>, ()> {
+        move || {
+            calls.set(calls.get() + 1);
+            outcome
+        }
+    }
+
+    fn all_outcomes() -> Vec<Result<Vec<String>, ()>> {
+        vec![
+            Err(()),
+            Ok(vec!["body-markup".to_string()]),
+            Ok(vec!["actions".to_string()]),
+        ]
+    }
+
+    // AC-1 (FR1, FR3, FR4; TS-1/TS-5): no metacharacter in title or body —
+    // ASCII, non-ASCII, empty title, empty body, the fallback title
+    // "emterm", and text with quotes/other symbols. The supplier is never
+    // invoked, and the result is output-equivalent to what
+    // `escape_for_send` would produce for each of the three outcomes
+    // (D2: `escape_body_markup` is the identity on text without a
+    // metacharacter).
+    #[test]
+    fn no_metacharacter_skips_the_query_and_returns_inputs_unchanged() {
+        let cases: &[(&str, &str)] = &[
+            ("hello", "world"),
+            ("こんにちは", "世界"),
+            ("", "body only"),
+            ("title only", ""),
+            ("emterm", "fallback title body"),
+            (
+                r#"quote " apos ' symbols !@#$%^*()"#,
+                r#"more "quoted" 'text'"#,
+            ),
+        ];
+
+        for (title, body) in cases.iter().copied() {
+            for outcome in all_outcomes() {
+                let calls = Rc::new(Cell::new(0));
+                let supplier = counting_supplier(calls.clone(), outcome.clone());
+                let (out_title, out_body) = escape_for_send_on_demand(title, body, supplier);
+                assert_eq!(calls.get(), 0, "supplier called for {title:?}/{body:?}");
+                assert_eq!(out_title, title);
+                assert_eq!(out_body, body);
+
+                // Output-equivalent to the previous always-query behavior.
+                let expected = escape_for_send(title, body, &outcome);
+                assert_eq!((out_title, out_body), expected);
+            }
+        }
+    }
+
+    // AC-2 (FR2, FR3, FR4; TS-2/TS-3/TS-4): a metacharacter in the title
+    // only (including the OSC 9 fallback title `<tab title>`), the body
+    // only (including a lone `&` and a pre-existing `&amp;`), or both
+    // fields — under each of the three outcomes the supplier is called
+    // exactly once and the returned pair equals `escape_for_send` for the
+    // same title, body and outcome.
+    #[test]
+    fn metacharacter_in_title_or_body_queries_exactly_once_and_matches_escape_for_send() {
+        let cases: &[(&str, &str)] = &[
+            ("<tab title>", "all green"),
+            ("plain title", "a & b"),
+            ("plain title", "already &amp; escaped"),
+            ("<script>", "<b>bold</b> & co"),
+        ];
+
+        for (title, body) in cases.iter().copied() {
+            for outcome in all_outcomes() {
+                let calls = Rc::new(Cell::new(0));
+                let supplier = counting_supplier(calls.clone(), outcome.clone());
+                let (out_title, out_body) = escape_for_send_on_demand(title, body, supplier);
+                assert_eq!(
+                    calls.get(),
+                    1,
+                    "supplier not called exactly once for {title:?}/{body:?}"
+                );
+
+                let expected = escape_for_send(title, body, &outcome);
+                assert_eq!((out_title, out_body), expected);
+            }
+        }
+    }
+
+    // AC-2 spot check: a hard-coded expectation independent of
+    // `escape_for_send`, for the OSC 9 fallback title under a failed
+    // query (fail-closed).
+    #[test]
+    fn tab_title_fallback_escapes_under_a_failed_query() {
+        let calls = Rc::new(Cell::new(0));
+        let supplier = counting_supplier(calls.clone(), Err(()));
+        let (title, _body) = escape_for_send_on_demand("<tab title>", "all green", supplier);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(title, "&lt;tab title&gt;");
+    }
+
+    // AC-3 (NFR1; TS-7): two consecutive calls with metacharacter input,
+    // each given its own counting stub with a different outcome, each
+    // calls its own stub exactly once and follows its own outcome — no
+    // result is carried over between calls.
+    #[test]
+    fn consecutive_calls_never_share_a_query_result() {
+        let calls_a = Rc::new(Cell::new(0));
+        let supplier_a = counting_supplier(calls_a.clone(), Err(()));
+        let (title_a, body_a) = escape_for_send_on_demand("<a>", "body", supplier_a);
+        assert_eq!(calls_a.get(), 1);
+        assert_eq!((title_a.as_str(), body_a.as_str()), ("&lt;a&gt;", "body"));
+
+        let calls_b = Rc::new(Cell::new(0));
+        let supplier_b = counting_supplier(calls_b.clone(), Ok(vec!["actions".to_string()]));
+        let (title_b, body_b) = escape_for_send_on_demand("<b>", "body", supplier_b);
+        assert_eq!(calls_b.get(), 1);
+        assert_eq!((title_b.as_str(), body_b.as_str()), ("<b>", "body"));
+
+        // The first call's outcome did not leak into the second call.
+        assert_eq!(calls_a.get(), 1);
+    }
+
+    // AC-4 (FR3, NFR2; TS-8): the identity property the short-circuit
+    // relies on — `escape_body_markup` is a no-op on every printable
+    // ASCII character outside the metacharacter set, and on a sample of
+    // non-ASCII characters, but changes each of `&`, `<`, `>`. The
+    // metacharacter constant contains exactly those three characters.
+    #[test]
+    fn escape_body_markup_is_identity_outside_the_metacharacter_set() {
+        for c in ' '..='~' {
+            let s = c.to_string();
+            if MARKUP_METACHARACTERS.contains(&c) {
+                assert_ne!(
+                    escape_body_markup(&s),
+                    s,
+                    "{c:?} should be escaped but was not"
+                );
+            } else {
+                assert_eq!(
+                    escape_body_markup(&s),
+                    s,
+                    "{c:?} should be left unchanged but was not"
+                );
+            }
+        }
+
+        for c in ['こ', '世', 'é', '🎉', 'あ'] {
+            let s = c.to_string();
+            assert_eq!(
+                escape_body_markup(&s),
+                s,
+                "non-ASCII {c:?} should be left unchanged"
+            );
+        }
+
+        assert_eq!(MARKUP_METACHARACTERS.len(), 3);
+        assert!(MARKUP_METACHARACTERS.contains(&'&'));
+        assert!(MARKUP_METACHARACTERS.contains(&'<'));
+        assert!(MARKUP_METACHARACTERS.contains(&'>'));
+    }
+}
+
 // ── task0001: notification log redaction (IMPLEMENTATION.md "Redaction
 // renderer" / "Diagnostic ID" contracts, "Redacted record format"). NOT
 // Unix-gated (D4) — both log sites this feeds (the rate-limit warn record
