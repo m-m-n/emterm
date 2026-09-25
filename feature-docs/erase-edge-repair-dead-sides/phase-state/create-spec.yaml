@@ -5,19 +5,43 @@ status: dispatching
 generation: 1
 base_revision: 8a6111a9d3ecade711a6f68ed1319fa065480269
 last_input_digest: sha256:cc7ee6ec3963fab6092fa599902fcb45faa4f95f3c1d02d1b86d5ce79dc459d6
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
-answers: {}
+answers:
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-25T18:36:07+09:00'
+    source: batch_policy
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: doc/UI-DESIGN-GUIDELINES.yaml (top candidate)'
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-09-25T18:36:07+09:00'
+    source: batch_policy
+    answer_mode: select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step skipped per analyst recommendation (no UI change)
 worker_runs:
 - request_id: create-spec-run-0001
   status: completed
   input_digest: sha256:31b3b508a99296c1b348b18527f0c742963ceee42d1b26efe151812cd24d658d
   output_digest: null
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:cc7ee6ec3963fab6092fa599902fcb45faa4f95f3c1d02d1b86d5ce79dc459d6
   output_digest: null
-artifacts: []
+artifacts:
+- path: feature-docs/erase-edge-repair-dead-sides/REQUIREMENTS.md
+  sha256: sha256:99abe854c637d6a8fb84448d42965b205ff574dbd753ee29cbc595c0943882c5
+  produced_by: create-spec-run-0002
+- path: feature-docs/erase-edge-repair-dead-sides/SPEC.md
+  sha256: sha256:959aa0322cbfcca0da837c2a5c1519b150eca7024cde6502bac911746517f0b1
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
