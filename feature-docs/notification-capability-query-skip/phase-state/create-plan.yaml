@@ -1,0 +1,21 @@
+schema_version: 1
+feature: notification-capability-query-skip
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: bcd3f0d93c8362226258504222e1793dd1c016ee
+last_input_digest: sha256:b7f5be241b7d2d7d0e854681892fc61231c28a886a13685f3cda3d8f157cda05
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:b7f5be241b7d2d7d0e854681892fc61231c28a886a13685f3cda3d8f157cda05
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
