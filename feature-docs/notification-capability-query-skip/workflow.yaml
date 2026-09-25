@@ -99,9 +99,16 @@ workflow:
   status: completed
   completed_at_commit: 65770c08c40918b7dcfdfe573c4aee089736c4bf
 - id: verify
-  status: pending
-  result: null
+  status: completed
+  completed_at_commit: e7d4a3e9530563e6d1539202a595aebc13109f9e
+  result: pass
   failed_items: []
+  summary: >-
+    Build (main, cli_feature_gate) OK. cargo test --lib: 3642 passed, 0 failed,
+    3 ignored. TS-1..TS-8 covered by new unit tests in callbacks/tests.rs;
+    TS-9/TS-10 static review OK (no unconditional-query comment, no caching,
+    no Cargo.toml/lock change, gate is cfg(unix) only). Manual D-Bus
+    observation items not executed (unattended batch run).
 - id: retrospect
   status: pending
 tasks:
