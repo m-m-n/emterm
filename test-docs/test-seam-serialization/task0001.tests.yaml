@@ -1,0 +1,202 @@
+task_id: task0001
+baseline_failures: []          # 4a: `cargo test --lib` before any change — 3637 passed, 0 failed, 3 ignored
+final_failures: []             # after implementation — 3640 passed, 0 failed, 3 ignored (2 runs, both clean)
+
+acceptance_tests:
+  AC-1:
+    tests:
+      - sftp::service::tests::test_push_progress_event_delivers_the_pinned_event_through_send_progress
+      - sftp::service::tests::test_push_result_event_delivers_the_pinned_event_through_send_result
+      - app::tests::timing::frame_work_pending_true_when_progress_channel_nonempty_and_consumes_nothing
+      - app::tests::timing::frame_work_pending_true_when_result_channel_nonempty_and_consumes_nothing
+      - app::tests::timing::next_toast_deadline_some_when_pretoast_progress_event_pending
+    red_confirmed: false
+    red_reason: >
+      The two new content-pinning tests assert the same field values
+      (session_id "test-pending" / file_name "test.txt" / bytes 0 / total 0
+      / Uploading / no error; request_id 0 / Ok([])) the seams already
+      produced via a bare `.send(` before this task. Routing through
+      `send_progress` / `send_result` does not change what lands on the
+      channel — only the call path — so this content assertion holds
+      identically before and after Part A and has no observable red state
+      of its own. The routing change itself IS proven red-then-green: see
+      AC-3/AC-4 below, where the structural check fails against the
+      not-yet-rerouted seams and passes once Part A routes them through
+      the helpers. The three `timing.rs` seam-caller tests
+      (TS-1, pre-existing, unmodified) were green at baseline and remain
+      green — they exercise `frame_work_pending` /
+      `next_toast_deadline`, not seam content, and needed no change.
+
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Documentation-only criterion (inspection, not a test). Verified by
+      reading the updated `#[cfg(test)] impl SftpService` doc comment
+      (src-tauri/src/sftp/service.rs, seam block): it now says the
+      synthetic events go through `send_progress` / `send_result` and no
+      longer says they are placed on the channels directly; it still
+      states the seams exist only in test builds and the production API
+      is unchanged. `send_progress`'s own doc comment
+      ("Every progress-channel send in this module goes through this
+      helper...") was not touched — `git diff` confirms no change to
+      those lines.
+
+  AC-3:
+    tests:
+      - sftp::service::tests::every_progress_and_result_send_site_routes_through_the_wake_helpers
+    red_confirmed: true
+    red_reason: >
+      After widening `find_mod_tests_boundary` to anchor specifically on
+      the `#[cfg(test)]\nmod tests` pair (not the seam block's own
+      `#[cfg(test)]`), this test failed against the real, not-yet-rerouted
+      file: "found a bare progress_tx send — route it through
+      send_progress instead" (panic at
+      src-tauri/src/sftp/service.rs:1017, `cargo test --lib
+      sftp::service::tests::`). The seam block's `self.progress_tx.send(`
+      was now inside the scanned region for the first time. Went green
+      immediately after Part A rerouted both seams through the helpers —
+      rerun same command, 20/20 passed.
+
+  AC-4:
+    tests:
+      - sftp::service::tests::send_site_scan_detection_routine_red_cases
+    red_confirmed: true
+    red_reason: >
+      Observed against an intentionally naive/wrong `find_mod_tests_boundary`
+      (`src.find("#[cfg(test)]")` — reproducing the exact D3 bug: cutting at
+      ANY `#[cfg(test)]`, including the seam block's own attribute). Case
+      (i) failed: "assertion failed: (i): a bare progress send before mod
+      tests must be detected" (panic at
+      src-tauri/src/sftp/service.rs:1046). With the naive boundary, the
+      synthetic case (i)/(ii) inputs place their bare send inside a
+      `#[cfg(test)] impl` block whose own attribute the naive finder
+      matches first, producing an empty scanned region and hiding the
+      violation. Fixed by anchoring to the `#[cfg(test)]\nmod tests` pair
+      specifically; rerun after the fix: all four synthetic cases (i)-(iv)
+      passed. Separately, and as required by the plan: the *real* check
+      (`every_progress_and_result_send_site_routes_through_the_wake_helpers`,
+      AC-3 above) failed against the actual pre-Part-A file once the scan
+      region was correctly widened — that is the "widened check failed
+      against the pre-change bare seams before Part A was applied"
+      observation the plan asks this record to note.
+
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      FR7 audit, not a test — see `fr7_audit` below. Zero hits in the
+      search scope, so no code change and no guard was needed; no file
+      outside sftp/service.rs was modified.
+
+  AC-6:
+    tests:
+      - self_exec::tests::restart_pending_reports_true_across_consecutive_peeks
+      - self_exec::tests::restart_required_still_consumes_once_after_peeks
+      - self_exec::tests::restart_flag_test_guard_clears_the_flag_when_the_span_ends
+      - self_exec::tests::restart_flag_test_guard_stays_usable_after_a_panicking_span
+      - app::tests::timing::next_toast_deadline_none_when_no_toast_active
+      - app::tests::timing::next_toast_deadline_some_when_restart_toast_active
+      - app::tests::timing::next_toast_deadline_some_when_sftp_toast_active
+      - app::tests::timing::pump_toasts_runs_both_pumps_unconditionally
+      - app::tests::timing::frame_work_pending_false_on_fresh_app
+      - app::tests::timing::frame_work_pending_true_when_progress_channel_nonempty_and_consumes_nothing
+      - app::tests::timing::frame_work_pending_true_when_result_channel_nonempty_and_consumes_nothing
+      - app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing
+      - app::tests::timing::next_toast_deadline_some_when_pretoast_progress_event_pending
+      # + all 22 tests under sftp::service::tests (full module)
+    red_confirmed: false
+    red_reason: >
+      Suite-level invariant, not a single test with a meaningful
+      pre-implementation red state. Verified by running
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib` (default parallelism, no
+      `--test-threads=1`) twice: 3640 passed, 0 failed, 3 ignored both
+      times (baseline was 3637/0/3 — the +3 are the new tests added by
+      this task). The 4 named self_exec.rs tests, the 9 named timing.rs
+      tests, and all 22 sftp::service tests are included and passing in
+      that run. self_exec.rs contains no "single-threaded" wording (file
+      unmodified by this task) and its guard/doc are byte-identical to the
+      base (git diff shows no changes to self_exec.rs).
+
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Build/format verification, not a test. `git status`/`git diff
+      --stat` show only src-tauri/src/sftp/service.rs changed (no
+      Cargo.toml / Cargo.lock diff). The diff itself is confined to the
+      `#[cfg(test)] impl SftpService` seam block and the `#[cfg(test)] mod
+      tests` body — no production function body, signature, or cfg gating
+      changed. The three `cargo check` configurations (default,
+      --no-default-features, xwin --target x86_64-pc-windows-msvc --lib
+      --tests) each exited 0 with zero warnings attributable to the
+      `emterm` crate's own code (the "emterm@1.12.0: viewer/dist is
+      missing" / "settings/dist is missing" lines are pre-existing
+      build-script notices from `build.rs` about un-built bun bundles, are
+      present regardless of this diff, and are not compiler warnings about
+      changed code).
+      `/home/sakura/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustfmt
+      --check --edition 2024 src-tauri/src/sftp/service.rs` exited 0 (no
+      reformatting needed); no other file was touched so no other file
+      could have been reformatted.
+
+# FR7 audit record (Part C), required by AC-5 and the plan's "Record" note.
+fr7_audit:
+  touch_set:
+    - RESTART_REQUIRED (direct reference)
+    - restart_pending
+    - restart_required
+    - App::frame_work_pending
+    - App::next_toast_deadline
+    - App::pump_toasts
+    - App::pump_restart_toast
+    - note_spawn_failure (raise path)
+    - spawn_self (raise-path caller of note_spawn_failure)
+    - any function whose call chain reaches the above (expanded transitively)
+  search_method: >
+    Repository-wide `grep -rln` for the touch-set symbol names across
+    `src-tauri/src` (all `.rs` files), then manual inspection of every
+    matching file to classify each hit as production code, a doc
+    comment/prose mention, or test code (`#[cfg(test)]` modules /
+    `app/tests/*.rs`).
+  search_scope: >
+    All test code under src-tauri/src (#[cfg(test)] modules and
+    app/tests/), excluding self_exec.rs and app/tests/timing.rs (already
+    compliant, out of scope per the plan).
+  files_matched_by_grep:
+    - settings_launcher.rs      # production spawn_self call site; only its #[cfg(test)] mod (unrelated tests) has no touch-set reference
+    - self_exec.rs               # excluded (already compliant)
+    - main.rs                    # doc-comment mention only, no #[cfg(test)] module
+    - window_host/frame_pacing.rs   # production code / doc comments only
+    - window_host/render_surface.rs # production code / doc comments only
+    - window_host/event_loop.rs     # production code / doc comment only
+    - window_host/tests.rs          # doc-comment mention only, no actual call
+    - mux/daemon/connect.rs         # production note_spawn_failure call site; no #[cfg(test)] module at all
+    - app/timing.rs                 # production (pump_restart_toast's own definition)
+    - app/mod.rs                    # production (frame_work_pending/next_toast_deadline/pump_toasts definitions + doc comments)
+    - app/tests/timing.rs           # excluded (already compliant)
+    - viewer/mod.rs                  # production spawn_self call site; its #[cfg(test)] mod tests (routing/parsing) has no touch-set reference
+    - viewer/image.rs                # production note_spawn_failure call site; its #[cfg(test)] mod tests (image routing) has no touch-set reference
+    - sftp/service.rs                # doc-comment mention only ("App::frame_work_pending predicate tests")
+  other_test_files_checked_no_match:
+    - app/tests/agent_status.rs
+    - app/tests/chooser.rs
+    - app/tests/font_settings.rs
+    - app/tests/ime.rs
+    - app/tests/misc.rs
+    - app/tests/mux_ui.rs
+    - app/tests/scroll_search_fold.rs
+    - app/tests/sftp.rs
+    - app/tests/tab_lifecycle.rs
+  hits: []
+  disposition: >
+    Zero hits: no test file outside self_exec.rs / app/tests/timing.rs
+    contains test code that touches the restart-flag touch set. Every
+    grep match outside the two excluded files is either production code
+    (a spawn_self / note_spawn_failure call site, or the
+    frame_work_pending / next_toast_deadline / pump_toasts /
+    pump_restart_toast definitions themselves in app/mod.rs and
+    app/timing.rs) or a doc-comment / prose mention with no actual call.
+    Per the plan (Part C, "Zero hits"): no code change for Part C, and no
+    file outside sftp/service.rs was modified by this task.
