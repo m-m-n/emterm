@@ -1,0 +1,37 @@
+schema_version: 1
+feature: erase-edge-repair-dead-sides
+tier: full
+bases:
+- basis: description_only
+  probabilities:
+    '0': 0.0
+    '1': 0.15
+    '2': 0.8
+    '3': 0.05
+  expectation_clear: 0.83
+  confidence: 0.8
+  observed_at: '2026-09-25T18:28:48+09:00'
+- basis: description_plus_code
+  probabilities:
+    '0': 0.02
+    '1': 0.83
+    '2': 0.15
+    '3': 0.0
+  expectation_clear: 0.82
+  confidence: 0.83
+  observed_at: '2026-09-25T18:28:48+09:00'
+pre_survey_estimate:
+  files_expected:
+  - crates/term_core/src/csi_screen.rs
+  changed_lines_approx: 25
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  evidence: crates/term_core/src/csi_screen.rs:101で既に共通化済みだが、:108-123に不要な幅取得と右端への呼び出しが残っている。幅取得前にstart
+    > 0とend < self.colsで短絡させ、:14-17と:30-33をELへ委譲する修正を推奨する。:38、:71の全行消去は維持する。現行の共通部品はcrates/term_core/src/terminal_cells.rs:277のblank_wide_pair_half。相方掃除と全行消去の既存テストはcrates/term_core/src/csi_screen.rs:328-806にある。ファイル変更とテスト実行はしていない
+rationale: 'description_only: P(0)=0.0 < 0.40 -> full; description_plus_code: P(0)=0.02
+  < 0.40 -> full. decide-tier.py: threshold_rows:full'
+decided_at: '2026-09-25T18:28:48+09:00'
