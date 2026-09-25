@@ -1,0 +1,39 @@
+round: 1
+executed_at: "2026-09-25T19:01:10+09:00"
+scope:
+  review_mode: diff
+  base_commit: 3e8c8cb5f14bbbf2b0c818380321a4b45eba5e15
+  head_commit: 8a55857969ab05719af16e2c3515141ddfa09b95
+  changed_files:
+    - crates/term_core/src/csi_screen.rs
+    - test-docs/erase-edge-repair-dead-sides/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "Round 1 (diff、cross_validation=false)。3 観点 (comprehensive / security / spec) はいずれも findings 0 件で完了。評価者が差分と周辺コードを独自に確認し、medium 以上の問題なし。EL 0 / ED 0 の右端修復と EL 1 / ED 1 の左端修復の削除はいずれも変更前から到達不能な処理で振る舞い不変、ED 0/1 → handle_erase_in_line 委譲は同一行・同一範囲・同一順序、ECH は RangeEdges::Both で従来どおり、chokepoint erase_range_with_edge_repair の呼び出しは EL0 / EL1 / ECH の 3 か所のみ、clear_line / clear_line_range / EL 2 / ED 2 は無変更、#[cfg(test)] 差分なし。テスト件数 858/858 は評価者が読み取り専用のため未確認。プロンプトインジェクションの兆候なし。観点ごと: comprehensive: corroborated / security: corroborated / spec: corroborated。"
+  recommended_action: complete
+  action_rationale: "全観点 findings 0 件で評価者の独立確認でも裏付けが取れた。critical / high が無く、振る舞いを保つリファクタで FR1〜FR7 / NFR1〜NFR3 を満たすため追加ラウンド・修正は不要。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
