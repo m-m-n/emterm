@@ -1,0 +1,48 @@
+feature: notification-capability-query-skip
+collected_at: '2026-09-25T10:14:30+09:00'
+session_ids:
+- 01a0d61f-211d-7422-8331-d96b516d08f0
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: 両 basis とも tier 1 が最大確率（0.81 / 0.68）で一致し、full を採用した
+    bases:
+    - basis: description_only
+      probabilities:
+        '0': 0.01
+        '1': 0.81
+        '2': 0.17
+        '3': 0.01
+      observed_at: '2026-09-25T09:27:30+09:00'
+    - basis: description_plus_code
+      probabilities:
+        '0': 0.0
+        '1': 0.68
+        '2': 0.3
+        '3': 0.02
+      observed_at: '2026-09-25T09:27:35+09:00'
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/callbacks.rs
+      - src-tauri/src/callbacks/tests.rs
+      - feature-docs/notification-worker-thread/IMPLEMENTATION.md
+      changed_lines_approx: 90
+      new_functions_needed: 4
+      new_files_needed: 0
+      new_dependencies_needed: []
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+      evidence: 案(c)相当の別スレッド化は実装済みで、sendはキュー投入だけを行う（src-tauri/src/callbacks.rs:385、src-tauri/src/app/mod.rs:835）。ただし通知ごとの無条件get_capabilitiesは残る（src-tauri/src/callbacks.rs:323）。必須の問い合わせ削減には案(a)を推奨する。現在はタイトルもエスケープするため、本文とタイトル双方の判定が必要になる（src-tauri/src/callbacks.rs:444）。既存テストはあるが、問い合わせ省略の検証を追加する必要がある（src-tauri/src/callbacks/tests.rs:860）。毎通知照会を定める設計記述も更新する（feature-docs/notification-worker-thread/IMPLEMENTATION.md:123）。ファイル生成を避けるためcargo
+        testは実行していない
+follow_up_drafts: []
+lessons_candidates:
+- escape_body_markup の doc コメントに「sole caller (NotifyRustSink::send)」という古い記述が残っている（review
+  round1 評価者の参考メモ。medium 未満のため finding 化せず）
+- verify の手動 D-Bus 観測項目は無人 batch のため未実施
