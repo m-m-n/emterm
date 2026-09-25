@@ -1,7 +1,7 @@
 schema_version: 1
 feature: sftp-send-scan-crlf
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 986c48c0febe511db0d6f19e6aec3f90eff37178
 last_input_digest: sha256:b5c229113680ccef3cc8aa0997c6c834efcad4249e71bac4f4a00560a315b99b
