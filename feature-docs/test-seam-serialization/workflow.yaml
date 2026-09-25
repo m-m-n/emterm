@@ -64,7 +64,16 @@ workflow:
     status: completed
     completed_at_commit: babd6ed819da40f4b371dc493a31a256d60de356
   - id: verify
-    status: in_progress
+    status: completed
+    completed_at_commit: 24757fbe3c48290be9ab7b1549a378ce084724d5
+    result: pass
+    failed_items: []
+    excluded_requirements: []
+    summary: >-
+      TS-7: cargo check 3 構成（Linux GUI / --no-default-features / xwin --lib --tests）すべて exit 0・警告 0。
+      TS-1/2/3/6: cargo test --lib（並列・--test-threads=1 無し）3640 passed / 0 failed / 3 ignored、除外・フレーク扱い無し。
+      TS-11: cargo fmt --check（crate 全体）差分無し。TS-4/5/8/9/10: 点検で合格（single-threaded 記述無し、FR7 監査記録あり、
+      変更は sftp/service.rs の #[cfg(test)] 項目とコメントのみ、Cargo.toml / lock 変更無し）。
   - id: retrospect
     artifacts: [retrospect.yaml]
     status: pending
