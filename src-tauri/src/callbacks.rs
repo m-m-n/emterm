@@ -290,10 +290,14 @@ impl NotifyQueue {
 
 /// Worker body (ワーカー本体): the receive loop that performs every
 /// D-Bus round-trip previously run on the caller's thread — redaction,
-/// capability query, escape decision, dispatch, log, in that order, once
-/// per received notification. Runs until `rx` disconnects, i.e. until the
-/// owning [`NotifyRustSink`] (the sole holder of the matching `Sender`)
-/// drops it (D5/FR8): `Receiver::iter` blocks on each receive and stops
+/// then (Unix only) an on-demand capability-query gate, dispatch, log, in
+/// that order, once per received notification. The capability query
+/// itself is conditional (notification-capability-query-skip D1): it runs
+/// zero times when neither the title nor the body contains a markup
+/// metacharacter (`&`, `<`, `>`), and at most once otherwise — never
+/// cached. Runs until `rx` disconnects, i.e. until the owning
+/// [`NotifyRustSink`] (the sole holder of the matching `Sender`) drops it
+/// (D5/FR8): `Receiver::iter` blocks on each receive and stops
 /// automatically at that point, so there is no busy-poll and no explicit
 /// stop signal to manage.
 fn notify_worker(rx: Receiver<(String, String)>) {
@@ -308,19 +312,23 @@ fn notify_worker(rx: Receiver<(String, String)>) {
         // FR3 exists for.
         let redacted = redact_notification(&title, &body);
 
-        // notification-worker-thread D3: capability query happens here,
-        // once per notification, never cached — the same query this used
-        // to make from `send` before this task. notification-markup-
-        // fail-closed SPEC: the gate is fail-closed — a failed capability
-        // query escapes both fields, same as a confirmed `body-markup`
-        // capability; only an explicit, successful "body-markup absent"
-        // report passes text through unescaped. Windows notify-rust has
-        // no `get_capabilities()` export (XDG-only surface), so the whole
-        // gate stays `#[cfg(unix)]`, same as before this task — the
-        // dispatch call itself right below carries no cfg branching
-        // (FR9).
+        // notification-worker-thread D3, superseded by
+        // notification-capability-query-skip D1: the capability query now
+        // runs only when the title or the body contains a markup
+        // metacharacter (`&`, `<`, `>`) — never more than one query for
+        // this notification, never cached. When neither field has one,
+        // the query is skipped entirely and the gate below returns the
+        // inputs unchanged.
+        // notification-markup-fail-closed SPEC: the gate is fail-closed —
+        // a failed capability query escapes both fields, same as a
+        // confirmed `body-markup` capability; only an explicit,
+        // successful "body-markup absent" report passes text through
+        // unescaped. Windows notify-rust has no `get_capabilities()`
+        // export (XDG-only surface), so the whole gate stays
+        // `#[cfg(unix)]`, same as before this task — the dispatch call
+        // itself right below carries no cfg branching (FR9).
         #[cfg(unix)]
-        let (title, body) = escape_for_send(&title, &body, &notify_rust::get_capabilities());
+        let (title, body) = escape_for_send_on_demand(&title, &body, notify_rust::get_capabilities);
 
         match notify_rust::Notification::new()
             .summary(&title)
@@ -346,10 +354,12 @@ fn notify_worker(rx: Receiver<(String, String)>) {
 ///
 /// notification-worker-thread task0001: `send` only enqueues onto a
 /// bounded queue (capacity [`NOTIFY_QUEUE_CAPACITY`]) and returns; every
-/// D-Bus round-trip — capability query, dispatch — runs on a dedicated
-/// worker thread started at construction time (never lazily, D5), so the
-/// caller (the winit/egui event loop thread) never blocks on the
-/// notification daemon (NFR1).
+/// D-Bus round-trip this used to make on the caller's thread — the
+/// capability query (conditional since notification-capability-query-skip
+/// D1: only when the title or the body contains a markup metacharacter)
+/// and the dispatch — runs on a dedicated worker thread started at
+/// construction time (never lazily, D5), so the caller (the winit/egui
+/// event loop thread) never blocks on the notification daemon (NFR1).
 pub struct NotifyRustSink {
     /// `None` only after `Drop::drop` has explicitly closed the channel
     /// (the first step of the bounded shutdown, D2); `Some` for the
@@ -428,18 +438,20 @@ impl Drop for NotifyRustSink {
     }
 }
 
-/// (task0001, notification-markup-fail-closed SPEC) Apply the per-send
-/// escape decision to both `title` (summary) and `body` under a SINGLE
-/// evaluation of `capabilities` (D2: the caller queries
-/// `get_capabilities()` exactly once per `send` and passes the result
-/// here, so the two fields can never diverge within one send). Fail-closed
-/// (FR1/FR3): pass-through applies ONLY when the query succeeded and the
-/// returned list explicitly omits `body-markup`; every other outcome — a
-/// query failure, or a successful list that contains `body-markup` —
-/// escapes both fields via [`escape_body_markup`].
-/// Private to this module — the only caller is `NotifyRustSink::send`;
-/// pulled out of `send` so it is unit-testable without a real D-Bus
-/// connection.
+/// (task0001, notification-markup-fail-closed SPEC) Apply the escape
+/// decision to both `title` (summary) and `body` under a SINGLE
+/// already-evaluated `capabilities` result (D2: the caller passes one
+/// evaluation of the query, so the two fields can never diverge within one
+/// decision). Fail-closed (FR1/FR3): pass-through applies ONLY when the
+/// query succeeded and the returned list explicitly omits `body-markup`;
+/// every other outcome — a query failure, or a successful list that
+/// contains `body-markup` — escapes both fields via
+/// [`escape_body_markup`].
+/// Private to this module — the only caller is
+/// [`escape_for_send_on_demand`], which invokes this function only when
+/// the title or the body contains a markup metacharacter
+/// (notification-capability-query-skip D1); pulled out on its own so it
+/// stays unit-testable without a real D-Bus connection.
 #[cfg(unix)]
 fn escape_for_send<E>(
     title: &str,
@@ -450,6 +462,50 @@ fn escape_for_send<E>(
         (title.to_string(), body.to_string())
     } else {
         (escape_body_markup(title), escape_body_markup(body))
+    }
+}
+
+/// (notification-capability-query-skip, IMPLEMENTATION.md "Shared
+/// Components") The markup metacharacters whose presence in the title or
+/// the body makes a capability query necessary — exactly the three
+/// characters [`escape_body_markup`] rewrites. Quotes and every other
+/// character are excluded. Defined once so [`contains_markup_meta`]'s
+/// short-circuit cannot silently drift from the set actually escaped
+/// (IMPLEMENTATION.md Risk Assessment).
+#[cfg(unix)]
+const MARKUP_METACHARACTERS: [char; 3] = ['&', '<', '>'];
+
+/// (notification-capability-query-skip) Report whether `text` contains at
+/// least one [`MARKUP_METACHARACTERS`] character. Pure and total: no I/O,
+/// and the empty string never contains one.
+#[cfg(unix)]
+fn contains_markup_meta(text: &str) -> bool {
+    text.chars().any(|c| MARKUP_METACHARACTERS.contains(&c))
+}
+
+/// (notification-capability-query-skip D1/D2/D3) On-demand capability-
+/// query gate: query notify-rust capabilities only when `title` or `body`
+/// contains a markup metacharacter, and never more than once. `query` is
+/// a deferred supplier consumed at most once — "at most once" holds by
+/// the function signature, not by discipline. When neither field needs
+/// escaping, `query` is dropped un-invoked and the inputs are returned
+/// unchanged; that result is byte-identical to what [`escape_for_send`]
+/// would produce for any query outcome, because [`escape_body_markup`] is
+/// the identity on text without a metacharacter (D2). Otherwise `query`
+/// is invoked exactly once and its result is handed to the unchanged
+/// [`escape_for_send`], which owns the fail-closed decision. Holds no
+/// state between calls: two consecutive calls never share a query result
+/// (NFR1).
+#[cfg(unix)]
+fn escape_for_send_on_demand<E>(
+    title: &str,
+    body: &str,
+    query: impl FnOnce() -> Result<Vec<String>, E>,
+) -> (String, String) {
+    if contains_markup_meta(title) || contains_markup_meta(body) {
+        escape_for_send(title, body, &query())
+    } else {
+        (title.to_string(), body.to_string())
     }
 }
 
