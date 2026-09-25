@@ -1004,7 +1004,10 @@ mod tests {
     /// declaration line. Anchored to the item itself, not to a prose
     /// mention of `mod tests` in a doc comment, so the first such
     /// declaration is used. Returns the byte offset where the attribute
-    /// begins, or `None` when no such declaration is found.
+    /// begins, or `None` when no such declaration is found. The returned
+    /// offset is relative to `src` alone — a caller that normalizes line
+    /// endings before calling this function must slice that same
+    /// normalized text with the offset, never the original.
     fn find_mod_tests_boundary(src: &str) -> Option<usize> {
         // Anchored to the `#[cfg(test)]` attribute immediately followed by
         // `mod tests` on the next line — not just any `#[cfg(test)]` (the
@@ -1022,11 +1025,18 @@ mod tests {
     /// way — the real check with the module's own source, the red-case
     /// test with synthetic text. Forbidden shapes are assembled from parts
     /// so this routine's own source never spells one verbatim.
+    ///
+    /// Line endings: `src` may use LF, CRLF, or a mixture of both. Every
+    /// CR LF pair is normalized to a single LF first; the boundary search
+    /// and the region extraction below both operate on that normalized
+    /// copy only, so no offset computed on one string is ever applied to
+    /// another. A lone CR (not part of a CR LF pair) is left untouched.
     fn scan_for_bare_send_sites(src: &str) -> SendSiteScan {
-        let Some(boundary) = find_mod_tests_boundary(src) else {
+        let normalized = src.replace("\r\n", "\n");
+        let Some(boundary) = find_mod_tests_boundary(&normalized) else {
             return SendSiteScan::MissingBoundary;
         };
-        let region = &src[..boundary];
+        let region = &normalized[..boundary];
         let forbidden_progress = ["progress_tx", ".send("].concat();
         let forbidden_result = ["result_tx", ".send("].concat();
         SendSiteScan::Found {
@@ -1139,6 +1149,144 @@ mod tests {
             SendSiteScan::Found { .. } => {
                 panic!("(iv): must report a missing boundary when mod tests is absent")
             }
+        }
+
+        // (v) CRLF regression (AC-1/FR3): the same shape as (i) — a bare
+        // progress send inside the #[cfg(test)] impl seam block, before
+        // the #[cfg(test)] / mod tests boundary — with every line break
+        // written as CRLF. Must report Found with the progress flag set,
+        // not MissingBoundary, pinning line-ending independence.
+        let case_i_lf = format!(
+            "#[cfg(test)]\nimpl SftpService {{\n    fn seam(&self) {{ {bare_progress_send} }}\n}}\n\n#[cfg(test)]\nmod tests {{}}\n"
+        );
+        let text = case_i_lf.replace('\n', "\r\n");
+        match scan_for_bare_send_sites(&text) {
+            SendSiteScan::Found { progress, result } => {
+                assert!(
+                    progress,
+                    "(v): a bare progress send before mod tests must be detected on CRLF input"
+                );
+                assert!(!result, "(v): no result send was present");
+            }
+            SendSiteScan::MissingBoundary => {
+                panic!("(v): boundary must be found on CRLF input")
+            }
+        }
+    }
+
+    /// Reduces a [`SendSiteScan`] to a comparable value for the CRLF/mixed
+    /// parity tests below: `None` for `MissingBoundary`, `Some((progress,
+    /// result))` for `Found`.
+    fn scan_flags(text: &str) -> Option<(bool, bool)> {
+        match scan_for_bare_send_sites(text) {
+            SendSiteScan::MissingBoundary => None,
+            SendSiteScan::Found { progress, result } => Some((progress, result)),
+        }
+    }
+
+    #[test]
+    fn send_site_scan_detection_routine_crlf_offset_and_scope_cases() {
+        // AC-2/FR2: distinguishes "offsets taken on one string" (correct)
+        // from "offsets mixed across strings" (buggy) — enough preceding
+        // CRLF line breaks that slicing the ORIGINAL text at the boundary
+        // offset computed on the NORMALIZED text would cut the bare send
+        // off, because each CRLF pair is one byte longer than the LF it
+        // normalizes to.
+        let bare_progress_send = ["progress_tx", ".send(x)"].concat();
+        let bare_result_send = ["result_tx", ".send(x)"].concat();
+
+        // (a) bare send on the line directly above the boundary line,
+        // preceded by enough CRLF filler lines that the CR excess exceeds
+        // the few bytes between the end of the send and the boundary.
+        let mut text_a = String::new();
+        for i in 0..20 {
+            text_a.push_str(&format!("// filler line {i}\r\n"));
+        }
+        text_a.push_str(&format!("fn seam() {{ {bare_progress_send} }}\r\n"));
+        text_a.push_str("#[cfg(test)]\r\nmod tests {}\r\n");
+        match scan_for_bare_send_sites(&text_a) {
+            SendSiteScan::Found { progress, result } => {
+                assert!(
+                    progress,
+                    "(a): a bare send directly above the boundary must still be \
+                     detected when preceding CRLF lines would misplace an \
+                     offset mixed across the original and normalized text"
+                );
+                assert!(!result, "(a): no result send was present");
+            }
+            SendSiteScan::MissingBoundary => panic!("(a): boundary must be found"),
+        }
+
+        // (b) CRLF text with sends only inside the `mod tests` body → no
+        // violation reported, pinning the exclusion boundary on CRLF input.
+        let text_b = format!(
+            "#[cfg(test)]\r\nmod tests {{\r\n    fn seam() {{ {bare_progress_send} {bare_result_send} }}\r\n}}\r\n"
+        );
+        match scan_for_bare_send_sites(&text_b) {
+            SendSiteScan::Found { progress, result } => {
+                assert!(
+                    !progress,
+                    "(b): a send inside mod tests must not be reported on CRLF input"
+                );
+                assert!(
+                    !result,
+                    "(b): a send inside mod tests must not be reported on CRLF input"
+                );
+            }
+            SendSiteScan::MissingBoundary => panic!("(b): boundary must be found"),
+        }
+    }
+
+    #[test]
+    fn send_site_scan_detection_routine_crlf_and_mixed_variants_match_lf_originals() {
+        // AC-3/FR1: for each of the LF texts of existing cases (i), (ii)
+        // and (iii), a full-CRLF variant and a mixed LF/CRLF variant must
+        // report exactly the same progress/result flags as the LF
+        // original. `full-CRLF` converts every line break; `mixed` leaves
+        // some as LF — case (i)'s mixed variant includes the break between
+        // the `#[cfg(test)]` line and the `mod tests` line as CRLF.
+        let bare_progress_send = ["progress_tx", ".send(x)"].concat();
+        let bare_result_send = ["result_tx", ".send(x)"].concat();
+
+        let case_i = format!(
+            "#[cfg(test)]\nimpl SftpService {{\n    fn seam(&self) {{ {bare_progress_send} }}\n}}\n\n#[cfg(test)]\nmod tests {{}}\n"
+        );
+        let case_i_mixed = format!(
+            "#[cfg(test)]\r\nimpl SftpService {{\n    fn seam(&self) {{ {bare_progress_send} }}\n}}\n\n#[cfg(test)]\r\nmod tests {{}}\n"
+        );
+
+        let case_ii = format!(
+            "#[cfg(test)]\nimpl SftpService {{\n    fn seam(&self) {{ {bare_result_send} }}\n}}\n\n#[cfg(test)]\nmod tests {{}}\n"
+        );
+        let case_ii_mixed = format!(
+            "#[cfg(test)]\nimpl SftpService {{\r\n    fn seam(&self) {{ {bare_result_send} }}\n}}\n\n#[cfg(test)]\nmod tests {{}}\n"
+        );
+
+        let case_iii = format!(
+            "#[cfg(test)]\nmod tests {{\n    fn seam() {{ {bare_progress_send} {bare_result_send} }}\n}}\n"
+        );
+        let case_iii_mixed = format!(
+            "#[cfg(test)]\r\nmod tests {{\n    fn seam() {{ {bare_progress_send} {bare_result_send} }}\r\n}}\n"
+        );
+
+        for (name, lf_text, mixed_text) in [
+            ("(i)", &case_i, &case_i_mixed),
+            ("(ii)", &case_ii, &case_ii_mixed),
+            ("(iii)", &case_iii, &case_iii_mixed),
+        ] {
+            let expected = scan_flags(lf_text);
+            let full_crlf_text = lf_text.replace('\n', "\r\n");
+
+            assert_eq!(
+                scan_flags(&full_crlf_text),
+                expected,
+                "{name}: full-CRLF variant must match the LF original"
+            );
+            assert_eq!(
+                scan_flags(mixed_text),
+                expected,
+                "{name}: mixed LF/CRLF variant must match the LF original"
+            );
         }
     }
 }
