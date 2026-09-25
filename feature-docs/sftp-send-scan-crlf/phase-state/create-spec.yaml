@@ -1,17 +1,36 @@
 schema_version: 1
 feature: sftp-send-scan-crlf
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
 base_revision: 986c48c0febe511db0d6f19e6aec3f90eff37178
-last_input_digest: null
-active_request_id: null
+last_input_digest: sha256:c9ada5385493103c754b83f11236ed26a53e460b37cbeb5c59a0d95f46fa7295
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:c9ada5385493103c754b83f11236ed26a53e460b37cbeb5c59a0d95f46fa7295
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    digests: {}
+    truncated: false
+  reference_scan_targets:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths:
+    - src-tauri/src/sftp/service.rs
+    digests: {}
+    truncated: false
 last_error: null
