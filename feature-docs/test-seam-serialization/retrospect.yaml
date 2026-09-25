@@ -1,5 +1,5 @@
 feature: test-seam-serialization
-collected_at: "2026-09-25T10:40:00+09:00"
+collected_at: "2026-09-25T10:19:48+09:00"
 session_ids: [01a0d625-03ab-70d3-b4ae-da5cae3ec7b3]
 signals:
   review_critical_high: []
