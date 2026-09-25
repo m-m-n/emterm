@@ -1,0 +1,112 @@
+task_id: task0001
+baseline_failures: []          # `cargo test --manifest-path src-tauri/Cargo.toml --lib`
+                                # before any change: 3637 passed; 0 failed; 3 ignored.
+final_failures: []             # after implementation: 3641 passed (3637 + 4 new);
+                                # 0 failed; 3 ignored. final_failures ⊆ baseline_failures (both empty).
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      AC-1 is a structural/build constraint (notify_worker takes the two
+      injection points; no escape branch or direct escape call in
+      notify_worker; escape_for_send is the sole decision point).
+      Verified by `CARGO_TARGET_DIR=src-tauri/target cargo check
+      --manifest-path src-tauri/Cargo.toml` (exit 0) and by code review of
+      src-tauri/src/callbacks.rs (the unix notify_worker body calls only
+      fetch_capabilities, escape_for_send and send; it never calls
+      escape_body_markup or body_markup_absence_confirmed directly). The
+      delegation is exercised indirectly by the AC-2/AC-3 tests below,
+      which fail under every escape-bypassing mutation tried for AC-4.
+  AC-2:
+    tests:
+      - callbacks::tests::worker_injection_points::confirmed_body_markup_capability_escapes_both_fields
+      - callbacks::tests::worker_injection_points::absent_body_markup_capability_leaves_both_fields_unchanged
+      - callbacks::tests::worker_injection_points::fetch_failure_escapes_both_fields
+    red_confirmed: true
+    red_reason: >-
+      Verified by temporarily reverting only src-tauri/src/callbacks.rs to
+      its pre-task state (via a scoped `git stash push -- src-tauri/src/callbacks.rs`)
+      while keeping the new tests in src-tauri/src/callbacks/tests.rs, then
+      running `cargo test --lib callbacks::tests::worker_injection_points`:
+      "error[E0061]: this function takes 1 argument but 3 arguments were
+      supplied" at callbacks/tests.rs:1360, against the old
+      `fn notify_worker(rx: Receiver<(String, String)>)`. The stash was
+      then re-applied (not popped) to restore the implementation, verified
+      identical via `git diff --stat`.
+  AC-3:
+    tests:
+      - callbacks::tests::worker_injection_points::worker_calls_fetch_and_send_once_per_notification_in_enqueue_order
+    red_confirmed: true
+    red_reason: >-
+      Same compile-time red as AC-2 (single scoped revert covered all four
+      new tests in the module at once): "error[E0061]: this function takes
+      1 argument but 3 arguments were supplied".
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Manual mutation run (VERIFICATION TS-8), performed after the
+      implementation was green, each mutation applied alone against
+      escape_for_send/notify_worker, `cargo test --lib
+      callbacks::tests::worker_injection_points` re-run, then reverted
+      before the next mutation (none committed — confirmed via `git diff`
+      after the final revert). Results:
+        (a) invert the absence condition (`if !body_markup_absence_confirmed(...)`)
+            -> 3 of 4 tests failed (confirmed_body_markup_capability_escapes_both_fields,
+            absent_body_markup_capability_leaves_both_fields_unchanged,
+            fetch_failure_escapes_both_fields).
+        (b) skip escape_body_markup on the title only
+            -> 2 failed (confirmed_body_markup_capability_escapes_both_fields,
+            fetch_failure_escapes_both_fields).
+        (b) skip escape_body_markup on the body only
+            -> same 2 failed.
+        (b) skip escape_body_markup on both
+            -> same 2 failed.
+        (c) remove the escape_for_send call from notify_worker, forward
+            the received title/body unmodified
+            -> 2 failed (confirmed_body_markup_capability_escapes_both_fields,
+            fetch_failure_escapes_both_fields).
+        (d) keep the escape_for_send call but forward the pre-escape
+            title/body to send
+            -> same 2 failed.
+      Every mutation made at least one AC-2/AC-3 test fail, satisfying
+      AC-4. `git diff` after the final revert showed no mutation-testing
+      residue.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Structural property, not a red/green behavior: the worker-level
+      tests never import or call anything from the `notify_rust` crate —
+      they pass FixedCapabilityFetch/SendRecorder fakes directly into
+      notify_worker — and the whole `worker_injection_points` module is
+      gated `#[cfg(unix)]`. Verified by code review of
+      src-tauri/src/callbacks/tests.rs and by the tests passing without a
+      D-Bus session in this sandboxed environment.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by `CARGO_TARGET_DIR=src-tauri/target cargo test
+      --manifest-path src-tauri/Cargo.toml --lib` (3641 passed, 0 failed,
+      3 ignored — the pre-task baseline was 3637 passed, 0 failed, 3
+      ignored; the 4 new tests account for the difference; every
+      pre-existing test, including summary_markup_escape and
+      worker_thread, is unmodified and still passes) and by diff review:
+      `git diff --stat -- src-tauri/Cargo.toml` is empty; the
+      `#[cfg(not(unix))]` notify_worker body, log texts/levels, the
+      redaction position (before the fetch/escape), NOTIFY_QUEUE_CAPACITY,
+      and the worker thread start/stop procedure in NotifyRustSink::new /
+      Drop are all unchanged from before this task.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Doc-comment-only criterion, verified by diff review: escape_for_send's
+      doc now reads "the only caller is `notify_worker`" (was
+      `NotifyRustSink::send`); escape_body_markup's doc now reads "the sole
+      caller (`notify_worker`)" (was `NotifyRustSink::send`); the unix
+      notify_worker's doc describes both injection points
+      (fetch_capabilities, send) and names the production values
+      (notify_rust::get_capabilities, notify_rust::Notification::show).
