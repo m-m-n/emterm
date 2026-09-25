@@ -1,0 +1,21 @@
+schema_version: 1
+feature: test-seam-serialization
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: dc0d3ef5dbc17ba8e57a63eb7647d8c1732a72fc
+last_input_digest: sha256:6e78f87a5c9ea526da3517f12ccb69d00f72e4d5fd43595be85bfc9f17532299
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:6e78f87a5c9ea526da3517f12ccb69d00f72e4d5fd43595be85bfc9f17532299
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
