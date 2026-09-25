@@ -73,7 +73,8 @@ workflow:
       blank_wide_pair_half caller list is already accurate. No excluded requirements.
   - id: retrospect
     artifacts: [retrospect.yaml]
-    status: in_progress
+    status: completed
+    completed_at_commit: 13ac46a1f810c1a8324aa229e6e6d5b0f2ee1562
 
 tasks:
   task0001:

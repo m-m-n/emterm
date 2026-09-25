@@ -1,0 +1,31 @@
+feature: erase-edge-repair-dead-sides
+collected_at: "2026-09-25T19:07:00+09:00"
+session_ids: [01a0d7f5-24d6-740d-a417-77fc870b4dc4, 01a0d807-b1b6-74d5-9250-149059737f2c]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_only: P(0)=0.0 < 0.40 -> full; description_plus_code: P(0)=0.02 < 0.40 -> full. decide-tier.py: threshold_rows:full"
+    bases:
+      - basis: description_only
+        probabilities: {"0": 0.0, "1": 0.15, "2": 0.8, "3": 0.05}
+      - basis: description_plus_code
+        probabilities: {"0": 0.02, "1": 0.83, "2": 0.15, "3": 0.0}
+    pre_survey_estimate:
+      files_expected: [crates/term_core/src/csi_screen.rs]
+      changed_lines_approx: 25
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "task0001 は files に terminal_cells.rs を予測したが実際は無変更。追加ファイルは implementer 標準の test-docs/erase-edge-repair-dead-sides/task0001.tests.yaml のみ（コードではない）。"
+  - "Codex 事前調査の見積もりは 1 ファイル・約 25 行で tier 1 相当の確率が高かったが、P(0) 閾値により full で走行した。"
