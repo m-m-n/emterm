@@ -50,7 +50,8 @@ workflow:
     completed_at_commit: f041939d4e2e005b1d76153ccb5e5fc5f2c38cc2
     base_commit: 18ab2fbc3b1d31f65e9777184491e119540e9ac4
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 481a683dbc63929e545315bca597aa2c7c66d87b
   - id: verify
     status: pending
   - id: retrospect
@@ -82,9 +83,9 @@ tasks:
     notes: null
 
 review:
-  status: in_progress
-  rounds_completed: 0
-  perspectives: []
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, performance, architecture, spec]
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
