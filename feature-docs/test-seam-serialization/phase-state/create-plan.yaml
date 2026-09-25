@@ -1,11 +1,11 @@
 schema_version: 1
 feature: test-seam-serialization
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
-base_revision: 5d90495061361f69bcba82b05f73f8bfdcaa4fdb
+base_revision: df5e2c94544f99f74d7e1b80f7a24b8dfdbfa9c6
 last_input_digest: sha256:6e78f87a5c9ea526da3517f12ccb69d00f72e4d5fd43595be85bfc9f17532299
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:

@@ -54,7 +54,8 @@ workflow:
       #[cfg(test)] のテストシーム・テスト・doc コメントのみの変更で、UI・画面・ビジュアルの変更が無い。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: df5e2c94544f99f74d7e1b80f7a24b8dfdbfa9c6
   - id: implement
     status: pending
   - id: review
