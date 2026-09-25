@@ -4,18 +4,61 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: b952527a90e8acdac53a67e3add912aaa109388f
-last_input_digest: sha256:4153474904e6b9e15a7d15bbb1e8a6fd9e808ea8cc29629a24c41d84b09ad54c
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+last_input_digest: sha256:71b9b67e3fcf9ff25bcdfbebf74fc21be45cc6e73515852232a78f1d450c0a7d
+active_request_id: create-spec-run-0002
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-09-25T09:36:00+09:00'
+    questions:
+    - question_id: requirement.parallel-lib-pass-scope
+      status: answered
+    - question_id: design-step.decision
+      status: answered
+answers:
+  requirement.parallel-lib-pass-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-25T09:40:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - scope_to_touched_tests
+    freeform: null
+    normalized_answer: Pass = RESTART_REQUIRED- and SFTP-seam-related tests pass deterministically
+      in a parallel --lib run. The full parallel --lib run is still executed; a failure
+      is excluded only when it is confirmed to be a known, unrelated flake (e.g. tabs.rs
+      replay tests per test/README.md:40); it is re-run and recorded, never reported
+      as a full-suite pass. New failures or failures in related tests are never excluded.
+      Fixing unrelated flakes is out of scope.
+    resolution_note: 'gate create-spec.requirement-clarification (policy codex_consultation,
+      record_as_assumption). Codex (1 turn, harness codex) chose scope_to_touched_tests:
+      do not widen scope to unrelated known flakes; run the full parallel suite, exclude
+      only confirmed-known unrelated failures as an explicit AC exception, never claim
+      full-suite pass. Orchestrator mapped to option scope_to_touched_tests.'
+  design-step.decision:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-25T09:40:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: 'Accept analyst recommendation: skip the design step (test-only
+      change, no UI).'
+    resolution_note: gate create-spec.design-step resolved by batch-policies.yaml
+      option decide_autonomously.
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:4153474904e6b9e15a7d15bbb1e8a6fd9e808ea8cc29629a24c41d84b09ad54c
+  output_digest: sha256:1288a7a8b8f772e777234e01e21cd6ef2cf07eebbfd310b01312a48ae2ac2a60
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:71b9b67e3fcf9ff25bcdfbebf74fc21be45cc6e73515852232a78f1d450c0a7d
   output_digest: null
 artifacts: []
 patches: []
-progress_fingerprint: null
+progress_fingerprint: sha256:905de69af5c3917e62b6755e869fd96cc19d19b9e3f75c48d04345424735f0aa
 stale_redispatch_count: 0
 resolved_input_cache:
   design_system_candidates:
