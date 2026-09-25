@@ -691,7 +691,10 @@ fn parse_osc9_empty_title_uses_fallback() {
 }
 
 // ── task0001: body-markup escape (Unix only — notify-rust's
-// `get_capabilities()` is an XDG-only export, see `NotifyRustSink::send`) ─
+// `get_capabilities()` is an XDG-only export). These tests exercise the
+// production decision via `escape_for_send`; the production caller of
+// `escape_for_send` is `notify_worker`, not `NotifyRustSink::send` (which
+// only enqueues) ─
 
 #[cfg(unix)]
 mod body_markup_escape {
@@ -773,19 +776,16 @@ mod body_markup_escape {
     }
 
     // AC-2 (TS2, composed): when body-markup absence is explicitly
-    // confirmed (a successful list omitting it), the same escape/no-escape
-    // decision `NotifyRustSink::send` makes leaves the body byte-for-byte
-    // unchanged — a literal `&amp;` in the input must not become visible
-    // as anything else (no partial/accidental transform).
+    // confirmed (a successful list omitting it), `escape_for_send` — the
+    // same escape/no-escape decision `notify_worker` makes (not
+    // `NotifyRustSink::send`, which only enqueues) — leaves the body
+    // byte-for-byte unchanged — a literal `&amp;` in the input must not
+    // become visible as anything else (no partial/accidental transform).
     #[test]
     fn unconfirmed_capabilities_leave_the_body_unchanged() {
         let body = r#"Tom & Jerry &amp; <b>bold</b>"#;
         let absence_confirmed: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
-        let out = if body_markup_absence_confirmed(&absence_confirmed) {
-            body.to_string()
-        } else {
-            escape_body_markup(body)
-        };
+        let (_, out) = escape_for_send("title", body, &absence_confirmed);
         assert_eq!(out, body);
     }
 
@@ -810,11 +810,7 @@ mod body_markup_escape {
             tab_body.contains('<'),
             "fixture lost its markup: {tab_body}"
         );
-        let tab_escaped = if body_markup_absence_confirmed(&confirmed) {
-            tab_body.clone()
-        } else {
-            escape_body_markup(&tab_body)
-        };
+        let (_, tab_escaped) = escape_for_send("title", &tab_body, &confirmed);
         assert!(!tab_escaped.contains('<'));
         assert!(!tab_escaped.contains('>'));
 
@@ -833,11 +829,7 @@ mod body_markup_escape {
             agent_body.contains('<'),
             "fixture lost its markup: {agent_body}"
         );
-        let agent_escaped = if body_markup_absence_confirmed(&confirmed) {
-            agent_body.clone()
-        } else {
-            escape_body_markup(&agent_body)
-        };
+        let (_, agent_escaped) = escape_for_send("title", &agent_body, &confirmed);
         assert!(!agent_escaped.contains('<'));
         assert!(!agent_escaped.contains('>'));
     }
