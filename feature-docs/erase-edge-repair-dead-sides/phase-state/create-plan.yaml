@@ -1,0 +1,21 @@
+schema_version: 1
+feature: erase-edge-repair-dead-sides
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 8d7fa95559b576b72d282ac441f6d6fee1b4ea78
+last_input_digest: sha256:329c410df6599d271f35e9ef8630e51ef2c0d78c20abdbb03ca465865c7c6c76
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:329c410df6599d271f35e9ef8630e51ef2c0d78c20abdbb03ca465865c7c6c76
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
