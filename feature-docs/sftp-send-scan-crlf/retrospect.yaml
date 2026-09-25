@@ -1,0 +1,36 @@
+feature: sftp-send-scan-crlf
+collected_at: "2026-09-25T14:14:35+09:00"
+session_ids: [01a0d6fb-d554-76b1-94de-7323cd752fc7]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "readings disagree: description_only=full, description_plus_code=reduced -> full"
+    decided_by: fallback_matrix:readings_disagree
+    bases:
+      - basis: description_only
+        probabilities: {"0": 0.21, "1": 0.79, "2": 0.0, "3": 0.0}
+        expectation_clear: 0.88
+        confidence: 0.78
+      - basis: description_plus_code
+        probabilities: {"0": 0.51, "1": 0.49, "2": 0.0, "3": 0.0}
+        expectation_clear: 0.88
+        confidence: 0.51
+    pre_survey_estimate:
+      files_expected: [src-tauri/src/sftp/service.rs]
+      changed_lines_approx: 20
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: []
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "tier 判定の 2 本の読みが割れて full にフォールバックしたが、実際は 1 タスク・1 ファイル・review findings 0 件で完了した。description_plus_code の読み（reduced）が実態に近かった"
+  - "review 評価者の所見外メモ: \\r\\r\\n は 1 回の置換で \\r\\n が残る（A-1 で CR 単独は対象外としたため範囲外）"
