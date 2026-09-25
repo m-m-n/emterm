@@ -1,0 +1,52 @@
+round: 1
+executed_at: "2026-09-25T19:19:48+09:00"
+scope:
+  review_mode: diff
+  base_commit: 18ab2fbc3b1d31f65e9777184491e119540e9ac4
+  head_commit: 481a683dbc63929e545315bca597aa2c7c66d87b
+  changed_files:
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - test-docs/notify-escape-test-production-path/task0001.tests.yaml
+    - test-docs/notify-escape-test-production-path/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    5 観点すべてが指摘なし。evaluator が変更ファイル 4 つと SPEC.md を独自に読み、全観点を
+    corroborated と判定した。unix の notify_worker は redaction → capability 取得（通知ごと 1 回）→
+    escape_for_send → send 注入点の順で、ログ文言・Windows 側の送出フローは不変。tests.rs の
+    inline if/else 3 箇所は escape_for_send 呼び出しに置換済み。worker_injection_points の 4 本
+    （TS-4〜TS-7）が本番の notify_worker を偽物で駆動し、AC-4 の変異 (a)〜(d) を検出できる。
+    NFR4（全テスト合格）は実装記録に基づき、このラウンドでは再実行していない。
+    手順上の注意: 共有 stash に task0001 の赤確認用エントリ 'task0001-red-check-9f3a1c' が残っている（コード上の指摘ではない）。
+  recommended_action: complete
+  action_rationale: >-
+    どの観点も critical/high/medium を出さず、evaluator の独自確認とも一致。AC-1〜AC-5・AC-7 は
+    コードとテストで満たされ、AC-6 は実装記録で全テスト合格。
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-notify-escape-test-production-path-20260925T101933Z.md
