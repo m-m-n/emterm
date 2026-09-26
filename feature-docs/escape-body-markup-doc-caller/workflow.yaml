@@ -126,6 +126,15 @@ tasks:
 review:
   status: pending
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    discretionary: []
+    cross_validation: false
+    skipped:
+    - perspective: spec
+      reason: SPEC.md not available (minimal tier uses TASK.md)
 requirements: {}
 batch:
   review_rework_count: 0
