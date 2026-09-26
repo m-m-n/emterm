@@ -53,7 +53,16 @@ workflow:
     status: completed
     completed_at_commit: c26a809452d942b5cc5d7e65de6f34310f38cbcb
   - id: verify
-    status: in_progress
+    status: completed
+    completed_at_commit: 0fdf2a215e09a83f7ad31f4dd73ddc243dd813bc
+    result: pass
+    failed_items: []
+    summary: >-
+      cargo check（既定 / --no-default-features）成功・警告なし、cargo test --lib
+      3662 passed / 0 failed / 3 ignored、cargo fmt --check 成功。TS-1〜TS-6・TS-8 は
+      自動テストで合格、TS-7・TS-9〜TS-13 はレビューで合格（Cargo.toml / Cargo.lock 不変、
+      新規ログは warn のみ、状態はワーカーローカルの Option<String>、秘匿化はエスケープ前のまま）。
+      除外要件なし。MT-1（任意の実機確認）は未実施。
   - id: retrospect
     artifacts: [retrospect.yaml]
     status: pending
