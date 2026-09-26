@@ -102,7 +102,8 @@ workflow:
   base_commit: 70a32be1e7a8d49f98a51e235b603024f145761a
   completed_at_commit: 4f1058768bcb531cd67cdd3f21e7a057605a6b53
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 8e351dc0145fd6e57a307e5fe28f6387f351d5bf
 - id: verify
   status: pending
 - id: retrospect
@@ -124,8 +125,13 @@ tasks:
     notes: null
     branch: em-workflow/escape-body-markup-doc-caller/task0001
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive
