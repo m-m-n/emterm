@@ -46,3 +46,18 @@ records:
       escape_body_markup doc comment) and filed as a follow-up task:
       https://app.notion.com/p/escape_for_send-3e73509ec8ee81f9a9fae32b3eac37bf
       No Opus escalation ran. Recorded as a comment on the Notion task page.
+  - question_id: develop.once-pr-scope
+    packet_id: null
+    answered_at: "2026-09-26T14:31:00+09:00"
+    source: skill-rule
+    answer_mode: option
+    selected_option_ids: [honor_once]
+    freeform: null
+    normalized_answer: "--once を字義どおり守り、create-plan のフェーズ境界で終了する"
+    resolution_note: >-
+      gate: none. 起動引数 --batch --once --pr と、散文「実装完了後に push して
+      gh pr create」の関係。develop SKILL.md が「--pr は Step C を実行する起動でのみ
+      効き、--once の境界で終わる起動では PR を作らない」と明記しているため不明点では
+      なく、Codex には相談していない。tests-ac-reference-alignment の同一状況で Codex が
+      (A) --once を守る案を comparatively better と判定した前例とも一致。PR は Step C に
+      到達する起動（--pr 付き）で作成する。codex_consulted: false.

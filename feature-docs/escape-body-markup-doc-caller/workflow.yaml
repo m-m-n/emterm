@@ -95,7 +95,8 @@ workflow:
 - id: create-plan
   artifacts:
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: b93e6ff629c7342589f5b39b6240b4689396c4ae
 - id: implement
   status: pending
 - id: review
@@ -106,7 +107,20 @@ workflow:
   artifacts:
   - retrospect.yaml
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: escape_body_markup の doc コメントの呼び出し元記述を実態に合わせる
+    plan: TASK.md
+    files:
+    - src-tauri/src/callbacks.rs
+    skills: []
+    domains:
+    - input-handling
+    complexity: low
+    requirements: []
+    status: pending
+    notes: null
+    branch: null
 review:
   status: pending
   rounds_completed: 0
