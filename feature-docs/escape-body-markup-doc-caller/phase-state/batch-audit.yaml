@@ -1,0 +1,47 @@
+schema_version: 1
+feature: escape-body-markup-doc-caller
+records:
+  - question_id: create-spec.design-system
+    packet_id: null
+    answered_at: "2026-09-26T14:30:00+09:00"
+    source: batch-decision-table
+    answer_mode: option
+    selected_option_ids: [project_native]
+    freeform: null
+    normalized_answer: "project_native: doc/UI-DESIGN-GUIDELINES.yaml"
+    resolution_note: >-
+      gate: create-spec.design-system; resolved by batch-policies.yaml (top
+      candidate -> project_native). Options: project_native / em_workflow /
+      none. Chosen: project_native (doc/UI-DESIGN-GUIDELINES.yaml, named by
+      .claude/rules/ui-design.md as the normative token source). codex_consulted:
+      false. Design step is skipped (minimal tier; comment-only change).
+  - question_id: create-spec.codex-consultation
+    packet_id: null
+    answered_at: "2026-09-26T14:30:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: option
+    selected_option_ids: [A]
+    freeform: "A: name escape_for_send as the only production caller; keep the Unix-only rationale on that caller."
+    normalized_answer: "Q1=A, Q2=capability-gate-wording-inaccurate, Q3=keep-scope-to-escape_body_markup"
+    resolution_note: >-
+      gate: none (user-instructed Codex consultation, per the run's argument
+      "Consult Codex on any unclear points and adopt the option judged to be
+      comparatively better"); codex_consulted: true (run_codex_exec.sh readonly).
+      Q1 how to state the callers. Options: A name only the direct production
+      caller escape_for_send (intra-doc link) as "the only production caller";
+      B list the full chain notify_worker -> escape_for_send_on_demand ->
+      escape_for_send plus the unit tests in callbacks/tests.rs; C A plus a
+      mention of the chain, no tests. Chosen A (Codex). Not chosen: B — longer,
+      duplicates the neighbouring doc comments that already describe the chain,
+      and a list of test modules goes stale; C — the chain is already documented
+      on escape_for_send_on_demand. The requirements analyst had proposed also
+      naming the test callers (B-like); "only production caller" is accurate
+      without contradicting the direct test calls, so A was adopted.
+      Q2 "capability gate above" is inaccurate: the #[cfg(unix)] attributes are
+      platform conditional compilation, not the capability decision; the phrase
+      is removed. Q3 Codex also noted two adjacent comments (callbacks.rs
+      escape_for_send doc "the only caller is escape_for_send_on_demand" and a
+      tests.rs comment naming notify_worker as escape_for_send's caller) that
+      could be tightened; kept out of scope (task scope is the
+      escape_body_markup doc comment) and filed as a follow-up task.
+      No Opus escalation ran. Recorded as a comment on the Notion task page.
