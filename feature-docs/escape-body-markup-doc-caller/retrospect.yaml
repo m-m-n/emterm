@@ -12,7 +12,7 @@ signals:
   declined_findings: []
   tier_decision:
     tier: minimal
-    rationale: "Both bases agree on the no-subtraction-free minimal reading: comment-only change in src-tauri/src/callbacks.rs (~4 lines, no new functions/files/dependencies, covering tests exist)."
+    rationale: "Both bases read the task as minimal: comment-only change in src-tauri/src/callbacks.rs (~4 lines, no new functions/files/dependencies, covering tests exist)."
     bases:
       - basis: description_only
         probabilities: {"0": 0.82, "1": 0.18, "2": 0.0, "3": 0.0}
