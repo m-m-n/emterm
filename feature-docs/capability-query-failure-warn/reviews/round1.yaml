@@ -1,0 +1,42 @@
+round: 1
+executed_at: "2026-09-26T14:43:15+09:00"
+scope:
+  review_mode: diff
+  base_commit: 91c67407d0b3de72bcdc9ab56ed7f5ed511cbb34
+  head_commit: c26a809452d942b5cc5d7e65de6f34310f38cbcb
+  changed_files:
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - test-docs/capability-query-failure-warn/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "5観点（comprehensive / security / performance / architecture / spec）すべて findings なし。cross_validation のため evaluator が差分と周辺コード（notify_worker、escape_for_send_on_demand、capability_query_warn_decision、tests.rs、SPEC.md）を独自に再読し、全観点 corroborated。照会結果の単一束縛、fail-closed 出力の不変、worker ローカル状態、warn 文面が定数マーカー＋エラー Display のみであることを確認。参考: notify_worker 側の配線（状態代入と warn 出力）は worker 単位テストでは未検証だが、SPEC A6 / TS5 / NFR5 による意図的な範囲のため指摘にしない。プロンプトインジェクションの痕跡なし。"
+  recommended_action: complete
+  action_rationale: "全観点で evaluator の再読結果が空 findings と一致。critical/high/medium なし、FR1-FR5・NFR1-NFR7 を変更箇所から確認。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
