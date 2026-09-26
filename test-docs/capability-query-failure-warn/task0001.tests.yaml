@@ -1,0 +1,40 @@
+task_id: task0001
+baseline_failures: []          # 4a: full `cargo test --lib` before any change: 3654 passed, 0 failed, 3 ignored
+final_failures: []             # actual re-run after implementation: 3662 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - callbacks::tests::capability_query_warn_decision::first_failure_warns_with_its_text_as_next_state
+      - callbacks::tests::capability_query_warn_decision::changed_error_text_warns_with_the_new_text_as_next_state
+      - callbacks::tests::capability_query_warn_decision::failure_after_a_success_warns_even_when_it_repeats_the_earlier_text
+    red_confirmed: true
+    red_reason: "Before the helper and marker constant existed, running these tests failed to compile: E0423 'expected function, found module `capability_query_warn_decision`' at each call site (the only thing named `capability_query_warn_decision` in scope was the new test module itself)."
+  AC-2:
+    tests:
+      - callbacks::tests::capability_query_warn_decision::repeated_error_text_does_not_warn_and_keeps_the_state
+      - callbacks::tests::capability_query_warn_decision::success_after_a_failure_resets_the_state_without_a_warn
+      - callbacks::tests::capability_query_warn_decision::success_with_no_previous_failure_stays_at_no_warn_and_none
+    red_confirmed: true
+    red_reason: "Same compile failure as AC-1 (E0423 'expected function, found module `capability_query_warn_decision`') before the helper existed."
+  AC-3:
+    tests:
+      - callbacks::tests::worker_injection_points::worker_queries_only_notifications_with_a_metacharacter_and_sends_all_in_order
+    red_confirmed: false
+    red_reason: "Searched callbacks/tests.rs by both module path and filename before writing this: no existing worker-level test mixes metacharacter-bearing and metacharacter-free notifications in one run, so this test is new. To isolate it, I temporarily disabled the unrelated new capability_query_warn_decision test module (the only thing blocking compilation) and ran this test against the pre-task notify_worker: it already passed (2 queries, 3 sends, correct escape/unchanged fields, correct order). The query-count/order/escape-output assertions verify the pre-existing on-demand skip-gate wiring (notification-capability-query-skip D1), which D2 explicitly requires this task preserve byte-for-byte; only the fetch fake's error type (text vs the old unit type) is new to this task, and it does not affect this outcome. No red state occurred for this test, and the criterion has no other executable angle: the warn-count/log-emission side of this scenario is explicitly out of scope for this test per the task plan's own Test Notes (NFR5 bans log capture; AC-1/AC-2 cover the warn count)."
+  AC-4:
+    tests:
+      - callbacks::tests::capability_query_warn_decision::marker_constant_value_equals_its_name
+    red_confirmed: true
+    red_reason: "The marker-equality assertion failed to compile before the constant existed: E0425 'cannot find value `LOG_NOTIFY_CAPABILITY_QUERY_FAILED` in this scope'. The criterion's other clause (the warn record references no title/body/escaped value/redacted rendering) has no executable check: log capture is disallowed (NFR5), and I found no existing log-capture test in callbacks/tests.rs (searched by module path and filename). That clause is verified structurally by review (TS-7/TS-10): the emission site `log::warn!(\"{LOG_NOTIFY_CAPABILITY_QUERY_FAILED}: {text}\")` interpolates only the marker constant and the helper's next-state text, never `title`, `body`, `summary`, or `redacted`."
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: "Per the task plan's own Test Notes, AC-5 is verified by running the full pre-existing callbacks suite before and after the change and reviewing the test-file diff, not by a dedicated new test — the criterion's content is 'nothing else in the pre-existing suite changed', which cannot be posed as a single red-then-green check. Searched callbacks/tests.rs for an existing test that already asserts non-regression as a unit; found none (each pre-existing test only asserts its own behavior). Verified instead: baseline (3654 passed/0 failed/3 ignored) and final (3662 passed/0 failed/3 ignored) full-suite runs, plus a diff review confirming only FixedCapabilityFetch's error type and the fetch_failure_escapes_both_fields construction changed among pre-existing tests, and that escape_for_send_on_demand / escape_for_send / body_markup_absence_confirmed / escape_body_markup were not touched."
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: "Per the task plan's own Test Notes ('AC-6/AC-7: review checks on the diff plus the two build commands'), this criterion is structural (no static/global/thread-local storage, never read by an escape function) and is verified by reviewing the diff, not by an executable test. Searched callbacks/tests.rs for any existing test that inspects notify_worker's internal state; found none — the state is a local variable with no accessor. Diff review: `previous_capability_failure: Option<String>` is declared with `let mut` inside notify_worker's body (not `static`/thread-local), is read only via `.as_deref()` when passed to capability_query_warn_decision, and no capability result (Vec<String> or the Result itself) is stored anywhere across iterations."
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "Per the task plan's own Test Notes, AC-7 (doc comments present, both build commands pass, Windows notify_worker/spawn_notify_worker unchanged, Cargo.toml/Cargo.lock unchanged) is a documentation/build/diff-scope criterion verified by review and the two build commands, not by a test. Both commands were run and passed: `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` (3662 passed, 0 failed, 3 ignored) and `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features` (clean). `git status`/`git diff --stat` confirm only src-tauri/src/callbacks.rs and src-tauri/src/callbacks/tests.rs changed — Cargo.toml, Cargo.lock, and the `#[cfg(not(unix))]` notify_worker/spawn_notify_worker definitions are untouched."

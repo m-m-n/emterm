@@ -1158,6 +1158,99 @@ mod capability_query_skip_gate {
     }
 }
 
+// ── capability-query-failure-warn task0001: capability-query warn
+// decision helper tests (AC-1/AC-2). The helper is pure — no I/O, no
+// static/global/thread-local state — so its transition table is verified
+// entirely through return values (NFR5: no log capture). Unix-only: the
+// helper only exists on unix (see `notify_worker`'s doc). ────────────────
+#[cfg(unix)]
+mod capability_query_warn_decision {
+    use super::*;
+
+    // AC-1 (TS-1): no previous failure, a failure "e1" warns with "e1" as
+    // the next state.
+    #[test]
+    fn first_failure_warns_with_its_text_as_next_state() {
+        let result: Result<Vec<String>, String> = Err("e1".to_string());
+        let (warn, next) = capability_query_warn_decision(None, &result);
+        assert!(warn);
+        assert_eq!(next.as_deref(), Some("e1"));
+    }
+
+    // AC-1 (TS-3): previous failure "e1", a different failure "e2" warns
+    // with "e2" as the next state.
+    #[test]
+    fn changed_error_text_warns_with_the_new_text_as_next_state() {
+        let result: Result<Vec<String>, String> = Err("e2".to_string());
+        let (warn, next) = capability_query_warn_decision(Some("e1"), &result);
+        assert!(warn);
+        assert_eq!(next.as_deref(), Some("e2"));
+    }
+
+    // AC-1 (TS-4): chained through the returned next state — previous
+    // "e1", then a success (no warn, next state none), then a failure
+    // "e1" fed the success's next state as its own previous state: warns,
+    // with next state "e1" again, even though the text repeats the
+    // earlier failure (a success in between resets the comparison).
+    #[test]
+    fn failure_after_a_success_warns_even_when_it_repeats_the_earlier_text() {
+        let success: Result<Vec<String>, String> = Ok(vec!["actions".to_string()]);
+        let (warn1, next1) = capability_query_warn_decision(Some("e1"), &success);
+        assert!(!warn1);
+        assert_eq!(next1, None);
+
+        let failure: Result<Vec<String>, String> = Err("e1".to_string());
+        let (warn2, next2) = capability_query_warn_decision(next1.as_deref(), &failure);
+        assert!(warn2);
+        assert_eq!(next2.as_deref(), Some("e1"));
+    }
+
+    // AC-2 (TS-2): the same error text repeated does not warn and keeps
+    // the state at the same text.
+    #[test]
+    fn repeated_error_text_does_not_warn_and_keeps_the_state() {
+        let result: Result<Vec<String>, String> = Err("e1".to_string());
+        let (warn, next) = capability_query_warn_decision(Some("e1"), &result);
+        assert!(!warn);
+        assert_eq!(next.as_deref(), Some("e1"));
+    }
+
+    // AC-2 (TS-4): a success after a failure resets the state to none
+    // without a warn, whatever the returned list contains — a list
+    // containing body-markup and an empty list are both successes.
+    #[test]
+    fn success_after_a_failure_resets_the_state_without_a_warn() {
+        let outcomes: Vec<Result<Vec<String>, String>> =
+            vec![Ok(vec!["body-markup".to_string()]), Ok(Vec::new())];
+        for result in outcomes {
+            let (warn, next) = capability_query_warn_decision(Some("e1"), &result);
+            assert!(!warn, "{result:?} should not warn");
+            assert_eq!(next, None, "{result:?} should reset the state to none");
+        }
+    }
+
+    // AC-2: no previous failure and a success stays at no warn / none.
+    #[test]
+    fn success_with_no_previous_failure_stays_at_no_warn_and_none() {
+        let result: Result<Vec<String>, String> = Ok(vec!["actions".to_string()]);
+        let (warn, next) = capability_query_warn_decision(None, &result);
+        assert!(!warn);
+        assert_eq!(next, None);
+    }
+
+    // AC-4: the marker constant's value equals its own name, the same
+    // shape as the existing LOG_* marker constants (see
+    // `rate_limit_marker_constant_value_is_unchanged` below for the
+    // established pattern).
+    #[test]
+    fn marker_constant_value_equals_its_name() {
+        assert_eq!(
+            LOG_NOTIFY_CAPABILITY_QUERY_FAILED,
+            "LOG_NOTIFY_CAPABILITY_QUERY_FAILED"
+        );
+    }
+}
+
 // ── task0001: notification log redaction (IMPLEMENTATION.md "Redaction
 // renderer" / "Diagnostic ID" contracts, "Redacted record format"). NOT
 // Unix-gated (D4) — both log sites this feeds (the rate-limit warn record
@@ -1460,13 +1553,18 @@ mod worker_injection_points {
     /// A fixed capability-fetch outcome, returned on every call, with a
     /// shared call counter (Test Notes: counters shared between the fake
     /// and the test body).
+    ///
+    /// capability-query-failure-warn task0001: the error type is a text
+    /// type (`String`), not the unit type, because `notify_worker`'s
+    /// `FetchErr` type parameter now requires a `Display` representation
+    /// like its `SendErr` parameter already had.
     struct FixedCapabilityFetch {
-        outcome: Result<Vec<String>, ()>,
+        outcome: Result<Vec<String>, String>,
         calls: Arc<AtomicUsize>,
     }
 
     impl FixedCapabilityFetch {
-        fn new(outcome: Result<Vec<String>, ()>) -> (Self, Arc<AtomicUsize>) {
+        fn new(outcome: Result<Vec<String>, String>) -> (Self, Arc<AtomicUsize>) {
             let calls = Arc::new(AtomicUsize::new(0));
             (
                 Self {
@@ -1477,7 +1575,7 @@ mod worker_injection_points {
             )
         }
 
-        fn call(&self) -> Result<Vec<String>, ()> {
+        fn call(&self) -> Result<Vec<String>, String> {
             self.calls.fetch_add(1, AtomicOrdering::SeqCst);
             self.outcome.clone()
         }
@@ -1567,7 +1665,7 @@ mod worker_injection_points {
     // AC-2 (TS-6): a fetch failure escapes both fields (fail-closed).
     #[test]
     fn fetch_failure_escapes_both_fields() {
-        let (fetch, _calls) = FixedCapabilityFetch::new(Err(()));
+        let (fetch, _calls) = FixedCapabilityFetch::new(Err("boom".to_string()));
         let send = SendRecorder::new();
 
         run_worker_to_completion(&[("a<b", "Tom & <b>")], &fetch, &send);
@@ -1605,6 +1703,39 @@ mod worker_injection_points {
                 .iter()
                 .map(|(t, b)| (t.to_string(), b.to_string()))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    // AC-3 (TS-5): a fake fetch that always fails with text error "e1".
+    // Three notifications enqueued in order: with a markup metacharacter,
+    // without one, with one again. The on-demand gate
+    // (notification-capability-query-skip D1) only queries for the 1st
+    // and 3rd, so the query count is 2 while the send count is 3, in
+    // enqueue order — the 1st and 3rd sends receive both fields escaped
+    // (fail-closed), identical to the current escape output; the 2nd
+    // receives its inputs unchanged. Log capture is intentionally not
+    // used here (NFR5) — the warn count is covered by AC-1/AC-2 above.
+    #[test]
+    fn worker_queries_only_notifications_with_a_metacharacter_and_sends_all_in_order() {
+        let (fetch, calls) = FixedCapabilityFetch::new(Err("e1".to_string()));
+        let send = SendRecorder::new();
+        let notifications = [
+            ("a<b", "with markup"),
+            ("plain title", "plain body"),
+            ("c&d", "with markup again"),
+        ];
+
+        run_worker_to_completion(&notifications, &fetch, &send);
+
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
+        assert_eq!(send.call_count(), 3);
+        assert_eq!(
+            send.received(),
+            vec![
+                ("a&lt;b".to_string(), "with markup".to_string()),
+                ("plain title".to_string(), "plain body".to_string()),
+                ("c&amp;d".to_string(), "with markup again".to_string()),
+            ]
         );
     }
 }
