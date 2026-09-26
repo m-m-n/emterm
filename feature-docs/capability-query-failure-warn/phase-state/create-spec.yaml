@@ -1,15 +1,18 @@
 schema_version: 1
 feature: capability-query-failure-warn
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
 mode: batch
 base_revision: 05af5987595488cfc003d3cab2853470697ede2f
-last_input_digest: null
-active_request_id: null
+last_input_digest: sha256:f684499a4b0f308599f1f58725f52fd9953657bba4810b6893ea1f7ceca78e13
+active_request_id: cs-analyst-001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+- request_id: cs-analyst-001
+  status: dispatched
+  input_digest: sha256:f684499a4b0f308599f1f58725f52fd9953657bba4810b6893ea1f7ceca78e13
 artifacts: []
 patches: []
 progress_fingerprint: null
