@@ -65,7 +65,8 @@ workflow:
       除外要件なし。MT-1（任意の実機確認）は未実施。
   - id: retrospect
     artifacts: [retrospect.yaml]
-    status: pending
+    status: completed
+    completed_at_commit: 8bccf902965aaa262a3c43a7ed6566acef973e3d
 
 tasks:
   task0001:
