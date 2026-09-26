@@ -1,0 +1,32 @@
+schema_version: 1
+feature: escape-body-markup-doc-caller
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 520740d2
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: cs-analyst-001
+    status: completed
+    input_digest: null
+artifacts:
+  - path: feature-docs/escape-body-markup-doc-caller/TASK.md
+    produced_by: orchestrator
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
+notes: >-
+  minimal tier: spec-writer not dispatched; orchestrator wrote TASK.md directly.
+  requirements-analyst cs-analyst-001 completed with no questions. Codex consulted
+  on the caller wording (see batch-audit.yaml). design_system resolved per batch
+  policy create-spec.design-system. Step A.5: both component commands already
+  approved in the approval store; nothing recorded.
+assumptions:
+  - 'as-1: PR #98 is closed on GitHub but its commits are already on main (653864b5 / 33771f6c); the current main tree is treated as the post-PR-98 state the task requires.'
+  - 'as-2: "Correctly states the actual callers" is satisfied by naming escape_for_send as the only production caller (Codex option A); direct unit-test calls are not listed.'
+  - 'as-3: Other stale caller comments (escape_for_send doc, callbacks/tests.rs, mux/mod.rs) are out of scope.'
