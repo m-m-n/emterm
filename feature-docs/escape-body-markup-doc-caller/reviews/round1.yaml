@@ -1,0 +1,42 @@
+round: 1
+executed_at: "2026-09-26T14:41:26+09:00"
+scope:
+  review_mode: diff
+  base_commit: 70a32be1e7a8d49f98a51e235b603024f145761a
+  head_commit: 8e351dc0145fd6e57a307e5fe28f6387f351d5bf
+  changed_files:
+    - src-tauri/src/callbacks.rs
+    - test-docs/escape-body-markup-doc-caller/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security]
+  discretionary: []
+  cross_validation: false
+  skipped:
+    - perspective: spec
+      reason: "SPEC.md not available (minimal tier uses TASK.md)"
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "Round 1（diffモード）では comprehensive#0 と security#0 がどちらも指摘0件。コード差分は src-tauri/src/callbacks.rs の escape_body_markup の doc コメント2行と test-docs/escape-body-markup-doc-caller/task0001.tests.yaml の追加のみで、実行コードの変更は無い。評価者が独自に確認: escape_for_send（callbacks.rs:518-529）が escape_body_markup の本番唯一の呼び出し元（callbacks.rs:527）で #[cfg(unix)] 付き。旧記述『sole caller (notify_worker)』『capability gate above』は削除済みで、callbacks.rs と callbacks/tests.rs に同種の古い記述は残っていない。リンク [`escape_for_send`] は同モジュールの関数を指し、同ファイルの他コメント（callbacks.rs:555, 559）と書式が揃う。AC-3 は git diff で確認、AC-4 のテスト結果は読み取り専用のため再実行せず。comprehensive / security とも corroborated。エスケープ本体（callbacks.rs:585-590）と呼び出し経路は不変。インジェクションは検出されず。"
+  recommended_action: "complete"
+  action_rationale: "差分はドキュメントコメントの修正とテスト記録の追加のみで実行時の挙動は変わらない。修正後のコメントは実際の呼び出し元（escape_for_send、Unix 限定）と一致。両観点とも指摘0件で評価者の独自確認とも一致。critical/high の指摘・見送り箇所は無い。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  note: "vulnerability perspective was not selected (no dependency manifest in diff); no unresolved vulnerability findings to file"
