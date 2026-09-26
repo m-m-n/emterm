@@ -1,0 +1,42 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Doc-comment content is not read or asserted by any test (searched
+      src-tauri/src/callbacks/tests.rs, which is the only test module that
+      calls escape_body_markup, and the repository for any other file named
+      callbacks* — none assert doc-comment text). No executable check can be
+      made to fail for wording that escape_for_send is the caller.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Same as AC-1: removal of the old "sole caller (notify_worker)" /
+      "capability gate above" wording is a doc-comment text change with no
+      test that reads doc-comment content.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Diff scope (confined to the two doc-comment lines above
+      escape_body_markup) is verified by reading `git diff`, not by an
+      executable check.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Outcome is `CARGO_TARGET_DIR=src-tauri/target cargo test
+      --manifest-path src-tauri/Cargo.toml --lib` passing. Baseline run
+      before the edit already passed (3654 passed; 0 failed; 3 ignored), so
+      no red state was observable for a doc-comment-only change; re-run
+      after the edit matched (3654 passed; 0 failed; 3 ignored).
+notes: >-
+  Doc-comment-only edit to escape_body_markup's doc comment in
+  src-tauri/src/callbacks.rs; no source behavior changed. No new test was
+  written per the orchestrator's note for this task. Full suite re-run
+  after the edit (see final_failures) since the changed file is compiled
+  by the test binary.
