@@ -626,8 +626,8 @@ fn escape_for_send_on_demand<E>(
 /// that SPEC). Pure: no I/O. Unchanged by the notification-markup-fail-
 /// closed SPEC (NFR3) — that SPEC only inverts the capability decision
 /// that gates which of `escape_for_send`'s two branches calls this
-/// function. Unix-only because the sole caller (`notify_worker`) only
-/// reaches it behind the `#[cfg(unix)]` capability gate above.
+/// function. Unix-only because [`escape_for_send`], the only production
+/// caller, is guarded by `#[cfg(unix)]`.
 #[cfg(unix)]
 fn escape_body_markup(input: &str) -> String {
     input
