@@ -100,6 +100,13 @@ pub const LOG_NOTIFY_RATE_LIMIT: &str = "LOG_NOTIFY_RATE_LIMIT";
 /// saturation episode when the outgoing notification queue is full and a
 /// submission is dropped. See [`NotifyQueue::try_submit`].
 pub const LOG_NOTIFY_QUEUE_SATURATED: &str = "LOG_NOTIFY_QUEUE_SATURATED";
+/// capability-query-failure-warn task0001: emitted once per failure
+/// transition (first failure, changed error text, or a failure after a
+/// success) when the unix notification worker's capability query fails.
+/// See [`capability_query_warn_decision`]. Unix-only, like the capability
+/// query itself (Windows notify-rust has no `get_capabilities()` export).
+#[cfg(unix)]
+pub const LOG_NOTIFY_CAPABILITY_QUERY_FAILED: &str = "LOG_NOTIFY_CAPABILITY_QUERY_FAILED";
 
 // ── task0001: notification log redaction ──────────────────────────────
 //
@@ -309,14 +316,32 @@ impl NotifyQueue {
 /// [`escape_for_send_on_demand`] — this loop forwards only its return
 /// values to `send` and never inspects or branches on the capability list
 /// itself.
+///
+/// capability-query-failure-warn task0001: a failed capability query
+/// emits one warn-level record carrying
+/// [`LOG_NOTIFY_CAPABILITY_QUERY_FAILED`], but only on a transition — the
+/// first failure, a change of error text, or a failure after a success
+/// (see [`capability_query_warn_decision`]). Recovery (a success after a
+/// failure) is silent. The previous-failure state is local to this one
+/// run of the loop, is never consulted by the escape decision above, and
+/// no capability result is cached.
 #[cfg(unix)]
 fn notify_worker<FetchErr, SendErr>(
     rx: Receiver<(String, String)>,
     fetch_capabilities: impl Fn() -> Result<Vec<String>, FetchErr>,
     send: impl Fn(&str, &str) -> Result<(), SendErr>,
 ) where
+    FetchErr: std::fmt::Display,
     SendErr: std::fmt::Display,
 {
+    // capability-query-failure-warn task0001: the previous-failure state
+    // (Shared Components), local to this one worker run — no static,
+    // global, thread-local or sink-shared storage. Reset to none before
+    // the loop starts; updated only from `capability_query_warn_decision`'s
+    // next state below, and only for a notification whose query the gate
+    // actually invokes.
+    let mut previous_capability_failure: Option<String> = None;
+
     for (title, body) in rx.iter() {
         // osc9-notify-log-redaction task0001 (IMPLEMENTATION.md D2) /
         // notification-worker-thread D4: redact the values exactly as
@@ -343,7 +368,29 @@ fn notify_worker<FetchErr, SendErr>(
         // export (XDG-only surface), so the capability fetch and the
         // escape decision only exist in this unix `notify_worker` — the
         // `#[cfg(not(unix))]` definition below has neither (FR9).
-        let (summary, body) = escape_for_send_on_demand(&title, &body, &fetch_capabilities);
+        //
+        // capability-query-failure-warn task0001 (D2): the deferred
+        // supplier binds the capability-query result once, runs the warn
+        // decision on it, replaces the previous-failure state with the
+        // decision's next state, emits one warn record on a transition,
+        // and returns the SAME bound result unmodified to the gate — the
+        // gate's fail-closed decision never sees anything different from
+        // before this task.
+        let (summary, body) = escape_for_send_on_demand(&title, &body, || {
+            let result = fetch_capabilities();
+            let (warn, next_state) =
+                capability_query_warn_decision(previous_capability_failure.as_deref(), &result);
+            if warn {
+                // Invariant (see `capability_query_warn_decision`'s doc):
+                // `next_state` is `Some` and holds exactly the current
+                // error text whenever `warn` is true.
+                if let Some(text) = next_state.as_deref() {
+                    log::warn!("{LOG_NOTIFY_CAPABILITY_QUERY_FAILED}: {text}");
+                }
+            }
+            previous_capability_failure = next_state;
+            result
+        });
 
         match send(&summary, &body) {
             // osc9-notify-log-redaction task0001 (FR5): the literal
@@ -602,6 +649,44 @@ fn escape_body_markup(input: &str) -> String {
 #[cfg(unix)]
 fn body_markup_absence_confirmed<E>(capabilities: &Result<Vec<String>, E>) -> bool {
     matches!(capabilities, Ok(caps) if !caps.iter().any(|c| c == "body-markup"))
+}
+
+/// (capability-query-failure-warn task0001) Decide whether a capability-
+/// query outcome for the unix [`notify_worker`] is a warn-worthy
+/// transition, and compute the next previous-failure state. Depends on
+/// nothing else in this module — not the escape gate, not the redaction
+/// renderer, not any notification text (IMPLEMENTATION.md "Layer
+/// Structure"). Pure: no I/O, no logging, no static/global/thread-local
+/// state; total over every `(previous_failure, result)` pair.
+///
+/// Transition table (`E` is the current failure's `Display` text):
+///
+/// | previous | current result | warn | next state |
+/// |----------|-----------------|------|------------|
+/// | none | success (any list) | no | none |
+/// | none | failure `E` | yes | `E` |
+/// | `P` | success (any list) | no | none |
+/// | `P` | failure `E`, `E == P` | no | `P` |
+/// | `P` | failure `E`, `E != P` | yes | `E` |
+///
+/// Invariant: whenever this returns `(true, next)`, `next` is `Some` and
+/// holds exactly the current failure's `Display` text — the only variable
+/// content of the warn record `notify_worker` builds from it.
+#[cfg(unix)]
+fn capability_query_warn_decision<E: std::fmt::Display>(
+    previous_failure: Option<&str>,
+    result: &Result<Vec<String>, E>,
+) -> (bool, Option<String>) {
+    match result {
+        Ok(_) => (false, None),
+        Err(e) => {
+            let text = e.to_string();
+            match previous_failure {
+                Some(p) if p == text => (false, Some(p.to_string())),
+                _ => (true, Some(text)),
+            }
+        }
+    }
 }
 
 /// Rate limiter that suppresses identical `(title, body)` pairs within a
