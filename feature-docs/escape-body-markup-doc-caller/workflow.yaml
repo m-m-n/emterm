@@ -1,0 +1,121 @@
+schema_version: 1
+feature: escape-body-markup-doc-caller
+created: '2026-09-26'
+base_branch: main
+parent_branch: em-workflow/escape-body-markup-doc-caller/integration
+goal: '# escape_body_markup の doc コメントに古い「sole caller」記述が残っている
+
+
+  Notion: https://www.notion.so/3e63509ec8ee81449cdfe16c1a363c02 (種別: 改善)
+
+
+  ## やりたいこと (必須)
+
+  `src-tauri/src/callbacks.rs` の `escape_body_markup` の doc コメントを実態に合わせて更新する。
+
+  ## 背景・なぜ (必須)
+
+  `escape_body_markup` の doc コメントに「sole caller (`NotifyRustSink::send`)」という記述が残っているが、通知ワーカースレッド化と PR https://github.com/m-m-n/emterm/pull/98
+  以降の呼び出し関係と合っていない。
+
+  - 検出元: em-workflow feature `notification-capability-query-skip` の review round1 評価者メモ（medium 未満のため finding
+  化されていない）
+
+  - 記録: `feature-docs/notification-capability-query-skip/reviews/round1.yaml`、`feature-docs/notification-capability-query-skip/retrospect.yaml`
+
+  ## 受け入れ条件 / 完了の定義 (必須)
+
+  - [ ] `escape_body_markup` の doc コメントが実際の呼び出し元を正しく述べている
+
+  - [ ] `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` が通る
+
+  ## スコープ外 (任意)
+
+  - エスケープ処理の内容変更
+
+  ## 制約・前提 (任意)
+
+  - PR https://github.com/m-m-n/emterm/pull/98 がマージされた後の状態を前提に着手すること
+
+  '
+tier: minimal
+tier_decision:
+  by: orchestrator
+  confidence:
+  - basis: description_only
+    probabilities:
+      '0': 0.82
+      '1': 0.18
+      '2': 0.0
+      '3': 0.0
+    expectation_clear: 0.82
+  - basis: description_plus_code
+    probabilities:
+      '0': 0.99
+      '1': 0.01
+      '2': 0.0
+      '3': 0.0
+    expectation_clear: 0.89
+  at: '2026-09-26T14:23:30+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - IMPLEMENTATION.md
+  - design
+  - SPEC.md (replaced by TASK.md)
+  - task splitting
+  - VERIFICATION.md
+  - task-level parallelism
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - TASK.md
+  status: completed
+  completed_at_commit: 3bdf39c89aba62c15af77400cc33f0a621564a3f
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'minimal tier subtracts the design step; requirements-analyst also recommended skip:
+    comment-only change in Rust source with no UI, visual, or interaction surface.'
+- id: create-plan
+  artifacts:
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  artifacts:
+  - retrospect.yaml
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements: {}
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
