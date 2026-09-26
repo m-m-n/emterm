@@ -1,0 +1,19 @@
+schema_version: 1
+feature: escape-body-markup-doc-caller
+phase: create-plan
+status: applying_patch
+generation: 1
+base_revision: 266d034c9d9707a0ba11f0712f8377365244f1a5
+last_input_digest: sha256:852c22c6c6200f1dc78ef22cca3d7fbcfe6e42ef071b548e16e744b7130278c6
+active_request_id: create-plan-escape-body-markup-doc-caller-001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-escape-body-markup-doc-caller-001
+    status: completed
+    input_digest: sha256:852c22c6c6200f1dc78ef22cca3d7fbcfe6e42ef071b548e16e744b7130278c6
+    output_digest: sha256:e0f75df1b42716f0dc4ca3093bca344cea397cf1eff6b67449498f972aa27064
+    patch_id: create-plan-p0001
+    patch_applied: false
+    validated: true
+    validator_exit: 0
