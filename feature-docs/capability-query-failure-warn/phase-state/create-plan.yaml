@@ -1,0 +1,21 @@
+schema_version: 1
+feature: capability-query-failure-warn
+phase: create-plan
+status: dispatching
+generation: 1
+mode: batch
+base_revision: 889e54488e0b7ebd68cff270dc8b8e73db8af684
+last_input_digest: sha256:93b5f935f636bc79d2d4bd936f553f9faa4dfaa44f1258011570fb88b36ac5f9
+active_request_id: cp-planner-001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: cp-planner-001
+  status: dispatched
+  input_digest: sha256:93b5f935f636bc79d2d4bd936f553f9faa4dfaa44f1258011570fb88b36ac5f9
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
