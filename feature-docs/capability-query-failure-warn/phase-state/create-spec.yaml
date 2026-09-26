@@ -6,13 +6,34 @@ generation: 1
 mode: batch
 base_revision: 05af5987595488cfc003d3cab2853470697ede2f
 last_input_digest: sha256:f684499a4b0f308599f1f58725f52fd9953657bba4810b6893ea1f7ceca78e13
-active_request_id: cs-analyst-001
+active_request_id: null
 packets: {}
-answers: {}
+answers:
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-09-26T14:12:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: 'skipped: UI の追加・変更がない。通知ワーカー内のログ出力だけで完結するバックエンド変更 (requirements-analyst
+      推奨)'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-26T14:12:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: doc/UI-DESIGN-GUIDELINES.yaml (top candidate
+      of 3 detected)'
 worker_runs:
 - request_id: cs-analyst-001
-  status: dispatched
+  status: completed
   input_digest: sha256:f684499a4b0f308599f1f58725f52fd9953657bba4810b6893ea1f7ceca78e13
+  output_digest: sha256:2aa7da2546e15ea9ceb0096a8acee1f89ccf43dbce6f4afe105e0ad43989e7dc
 artifacts: []
 patches: []
 progress_fingerprint: null
