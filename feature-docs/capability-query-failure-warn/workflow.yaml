@@ -50,7 +50,8 @@ workflow:
     base_commit: 91c67407d0b3de72bcdc9ab56ed7f5ed511cbb34
     completed_at_commit: 40f1f895b9192bcb39fe07acafc12f26730ddcfe
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: c26a809452d942b5cc5d7e65de6f34310f38cbcb
   - id: verify
     status: pending
   - id: retrospect
@@ -70,13 +71,13 @@ tasks:
     branch: em-workflow/capability-query-failure-warn/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
     cross_validation: true
-  perspectives: []
+  perspectives: [comprehensive, security, performance, architecture, spec]
   residual_critical_high: 0
   needs_rework: false
 
