@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 mode: batch
 base_revision: 05af5987595488cfc003d3cab2853470697ede2f
-last_input_digest: sha256:f684499a4b0f308599f1f58725f52fd9953657bba4810b6893ea1f7ceca78e13
+last_input_digest: sha256:33c58fa644dc85412e8e5d68502f02526fe63d841b88ff40dc183769d601dcda
 active_request_id: null
 packets: {}
 answers:
@@ -34,7 +34,16 @@ worker_runs:
   status: completed
   input_digest: sha256:f684499a4b0f308599f1f58725f52fd9953657bba4810b6893ea1f7ceca78e13
   output_digest: sha256:2aa7da2546e15ea9ceb0096a8acee1f89ccf43dbce6f4afe105e0ad43989e7dc
-artifacts: []
+- request_id: cs-specwriter-001
+  status: completed
+  input_digest: sha256:33c58fa644dc85412e8e5d68502f02526fe63d841b88ff40dc183769d601dcda
+artifacts:
+- path: feature-docs/capability-query-failure-warn/REQUIREMENTS.md
+  sha256: sha256:565b05ba09e64eabe6d49c88f48753291c3b5cf712a5f8000684ff27470eb165
+  produced_by: cs-specwriter-001
+- path: feature-docs/capability-query-failure-warn/SPEC.md
+  sha256: sha256:b2fe0e6e96b5d2273231f2187eb8087b38c1930b06b439d4924963cf9b1e0fd9
+  produced_by: cs-specwriter-001
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
