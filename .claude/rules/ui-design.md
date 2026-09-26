@@ -1,3 +1,12 @@
+---
+paths:
+  - "doc/UI-DESIGN-GUIDELINES.yaml"
+  - "src-tauri/src/ui/**"
+  - "src-tauri/web-shared/**"
+  - "src-tauri/settings/web/**"
+  - "src-tauri/viewer/web/**"
+---
+
 # UI Design
 
 The UI follows a Material Design 3 baseline. Design tokens (color / typescale /

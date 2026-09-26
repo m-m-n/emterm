@@ -1,3 +1,10 @@
+---
+paths:
+  - "src-tauri/src/cli/**"
+  - "src-tauri/src/main.rs"
+  - "src-tauri/tests/cli_subcommands.rs"
+---
+
 # CLI Commands
 
 The application binary doubles as a CLI helper. These subcommands are available
