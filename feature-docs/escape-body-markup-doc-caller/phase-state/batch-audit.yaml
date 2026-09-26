@@ -43,5 +43,6 @@ records:
       escape_for_send doc "the only caller is escape_for_send_on_demand" and a
       tests.rs comment naming notify_worker as escape_for_send's caller) that
       could be tightened; kept out of scope (task scope is the
-      escape_body_markup doc comment) and filed as a follow-up task.
+      escape_body_markup doc comment) and filed as a follow-up task:
+      https://app.notion.com/p/escape_for_send-3e73509ec8ee81f9a9fae32b3eac37bf
       No Opus escalation ran. Recorded as a comment on the Notion task page.
