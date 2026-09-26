@@ -102,7 +102,7 @@ workflow:
   base_commit: 70a32be1e7a8d49f98a51e235b603024f145761a
   completed_at_commit: 4f1058768bcb531cd67cdd3f21e7a057605a6b53
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
