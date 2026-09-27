@@ -110,7 +110,7 @@ tasks:
     - api-contract
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
-    status: in_progress
+    status: merged
     branch: em-workflow/notify-queue-worker-gone/task0001
 review:
   status: pending
