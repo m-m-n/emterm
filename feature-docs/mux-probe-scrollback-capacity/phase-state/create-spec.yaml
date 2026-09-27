@@ -1,18 +1,30 @@
 schema_version: 1
 feature: mux-probe-scrollback-capacity
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: 50329c188eeb4237cedd324949278e654517f7f4
 last_input_digest: sha256:1affdd6a3633edfac8d6e55b8a6d970791a24390cac9188cfe4b162d5ffd0b4d
-active_request_id: create-spec-run-0001
-packets: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: issued
+    issued_at: '2026-09-27T20:55:00+09:00'
+    questions:
+    - question_id: fix-approach
+      status: issued
+    - question_id: protocol-compat
+      status: issued
+    - question_id: large-capacity-cost
+      status: issued
+    - question_id: design-step
+      status: issued
 answers: {}
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:1affdd6a3633edfac8d6e55b8a6d970791a24390cac9188cfe4b162d5ffd0b4d
-  output_digest: null
+  output_digest: sha256:bae6e6bdcb145d71fc1e5e7cbd0eaba37db1ee9d0ccb1d5da10aa74812039589
 artifacts: []
 patches: []
 progress_fingerprint: null
