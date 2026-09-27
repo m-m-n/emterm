@@ -26,6 +26,7 @@ use crate::mux::session::pane::{
     AgentStatusReportSender, ChunkKind, DeferredOutputQueue, NotificationSender, PtyOutputChunk,
     SharedPaneExitSender, TitleChangeSender,
 };
+use crate::mux::snapshot_bytes::resolve_probe_capacity;
 use mux_ipc::protocol::{
     ClientType, HelloMsg, MessageType, MuxMessage, PROTOCOL_VERSION, PtyExitedMsg, RenameWindowMsg,
     WelcomeMsg,
@@ -241,6 +242,17 @@ pub async fn handle_connection<S>(
     // at the top of `route_message` so a newly-arrived client message also
     // gives the queue a chance to progress.
     let mut deferred_output = DeferredOutputQueue::new();
+
+    // The most recent scrollback capacity this connection's GUI reported via
+    // `MessageType::ClientScrollbackCapacity` (mux-probe-scrollback-capacity
+    // D1/D2/D3). `None` until the first report arrives (or forever, for an
+    // older GUI/bridge that never sends one) — `resolve_probe_capacity`
+    // treats that the same as the legacy fixed cap. Resolved into a probe
+    // capacity FRESH at each of the four snapshot-assembly points below
+    // (`route_message`'s own resolution, and the two points here), never
+    // cached once per connection lifetime, so a report that arrives between
+    // snapshots takes effect on the very next one.
+    let mut reported_scrollback_capacity: Option<u32> = None;
 
     // Fair-reservation state for `deferred_output` (mux-window-switch-output-
     // hang task0003 rework, AC-3/G2) — see `arm_pending_deferred_reserve`'s
@@ -472,6 +484,7 @@ pub async fn handle_connection<S>(
                             &visible_state,
                             &upgrade_tx,
                             &mut deferred_output,
+                            &mut reported_scrollback_capacity,
                         ).await {
                             if should_break {
                                 break;
@@ -561,6 +574,16 @@ pub async fn handle_connection<S>(
                 pending_deferred_reserve = None;
                 match permit_result {
                     Ok(permit) => {
+                        // Resolved FRESH here rather than reusing any value
+                        // computed earlier this iteration: a report can
+                        // arrive on the client-message arm and this arm can
+                        // resolve on a LATER iteration than the one that
+                        // received it (the reservation is polled across
+                        // iterations while pending), so caching would risk
+                        // using a stale value (mux-probe-scrollback-capacity
+                        // D1/D2).
+                        let probe_capacity =
+                            resolve_probe_capacity(reported_scrollback_capacity);
                         apply_fair_permit_to_front_deferred_item(
                             &mut deferred_output,
                             permit,
@@ -568,6 +591,7 @@ pub async fn handle_connection<S>(
                             &session_manager,
                             active_session_id,
                             &visible_state,
+                            probe_capacity,
                         )
                         .await;
                     }
@@ -719,12 +743,20 @@ pub async fn handle_connection<S>(
                     // remainder — this is about `pane_output_tx` capacity,
                     // which this arm just freed by consuming, not about
                     // outbound-socket capacity.
+                    // Resolved FRESH at this drain point too (see the
+                    // `permit_result` arm's identical comment above) — this
+                    // is the ONLY place `pane_output_tx` capacity is freed,
+                    // so it must see the most recently reported capacity,
+                    // not whatever was resolved when the deferral was first
+                    // queued.
+                    let probe_capacity = resolve_probe_capacity(reported_scrollback_capacity);
                     flush_deferred_output(
                         &mut deferred_output,
                         &pane_output_tx,
                         &session_manager,
                         active_session_id,
                         &visible_state,
+                        probe_capacity,
                     )
                     .await;
                     // task0003 (AC-3/G2): if the ordinary try-based flush
