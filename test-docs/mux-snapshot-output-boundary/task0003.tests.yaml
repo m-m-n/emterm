@@ -1,0 +1,110 @@
+task_id: task0003
+baseline_failures: []          # 4a: `cargo test --lib` before any change: 3712 passed; 0 failed; 3 ignored
+final_failures: []             # re-run after implementation: 3716 passed; 0 failed; 3 ignored (net +4 new tests)
+acceptance_tests:
+  AC-1:
+    tests: [mux::session::pane::tests::resume_pane_with_permit_drives_the_paused_reader_to_suppress_the_paused_chunk_and_matches_the_raw_stream_reference]
+    red_confirmed: true
+    red_reason: >
+      Production code for this task pre-existed (tests-only task), so red was
+      forced by temporarily disabling the exact production line
+      `pane.output_capture.record_boundary(owned_tx, boundary);` in
+      `src-tauri/src/mux/session/pane/output_target.rs` (`resume_pane_with_permit`)
+      and re-running this test. It failed with:
+      "the paused chunk's raw bytes must never reach S after the snapshot"
+      (panic at src-tauri/src/mux/session/pane/tests.rs:2166). The line was
+      restored immediately afterward; `git diff --stat` on that file shows no
+      change in the committed state.
+  AC-2:
+    tests: [mux::session::pane::tests::resume_pane_with_permit_drives_the_paused_reader_to_suppress_the_paused_chunk_and_matches_the_raw_stream_reference]
+    red_confirmed: true
+    red_reason: >
+      This IS the AC-2 sensitivity experiment mandated by the task plan
+      ("The implementer confirms this once by temporarily disabling the
+      record"): disabling `resume_pane_with_permit`'s
+      `pane.output_capture.record_boundary(owned_tx, boundary);` call made
+      AC-1's test fail with "the paused chunk's raw bytes must never reach S
+      after the snapshot". The record was restored unchanged; the committed
+      production code is byte-identical to before the experiment
+      (verified via `git diff --stat` showing no output for that file).
+  AC-3:
+    tests: [mux::ipc::handlers::tests::handle_request_pane_snapshot_paused_reader_oversize_snapshot_never_suppresses_the_paused_chunk]
+    red_confirmed: true
+    red_reason: >
+      Forced red by temporarily disabling the oversize-rejection guard
+      (`if !mux_ipc::protocol::fits_single_snapshot_frame(encoded_snapshot.len())`)
+      in `handle_request_pane_snapshot`
+      (src-tauri/src/mux/ipc/handlers/mod.rs) via `if false && ...`. The test
+      then panicked with: "no boundary for S may be recorded when the
+      snapshot is refused for size" (src-tauri/src/mux/ipc/handlers/tests.rs:1494),
+      preceded by an arithmetic-overflow panic further downstream in
+      term_core's ring buffer — itself evidence that the disabled guard exists
+      to prevent oversized snapshots from reaching code not designed for
+      them. The guard was restored; `git diff --stat` on that file shows no
+      change in the committed state.
+  AC-4:
+    tests: [mux::ipc::handlers::tests::handle_request_pane_snapshot_paused_reader_evicted_deferred_snapshot_never_suppresses_or_delivers]
+    red_confirmed: true
+    red_reason: >
+      Forced red by temporarily disabling the eviction trigger
+      (`if chunk_count >= MAX_DEFERRED_ITEMS`) in `DeferredOutputQueue::defer_chunk`
+      (src-tauri/src/mux/session/pane/output_queue.rs) via `if false && ...`.
+      The test then panicked with: "assertion `left == right` failed: queue
+      must never grow past the documented cap\n  left: 9\n right: 8"
+      (src-tauri/src/mux/ipc/handlers/tests.rs:1621). The eviction condition
+      was restored; `git diff --stat` on that file shows no change in the
+      committed state.
+  AC-5:
+    tests: [mux::ipc::pty_spawn::tests::split_osc9_across_a_production_on_demand_snapshot_boundary_fires_at_most_once_and_never_stitches_into_a_later_detached_period]
+    red_confirmed: true
+    red_reason: >
+      Forced red by temporarily dropping the FR9/FR10 tail preservation in
+      `build_suppressed_replacement`
+      (src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs, the
+      `out.extend_from_slice(&tail_bytes);` line) so the pending OSC 9
+      introducer/partial-body bytes were no longer re-delivered. The
+      suppressed chunk's replacement then became empty and was never sent
+      (TM-2), and the test panicked with: "assertion `left == right` failed:
+      snapshot, chunk_a's replacement, chunk_b, EOF: [(31, Snapshot),
+      (10, PtyOutput), (0, PtyOutput)]\n  left: 3\n right: 4"
+      (src-tauri/src/mux/ipc/pty_spawn/tests.rs:1770). The line was restored;
+      `git diff --stat` on that file shows no change in the committed state.
+  AC-6:
+    tests: [mux::ipc::pty_spawn::tests::split_osc9_across_a_production_on_demand_snapshot_boundary_fires_at_most_once_and_never_stitches_into_a_later_detached_period]
+    red_confirmed: true
+    red_reason: >
+      Forced red by temporarily disabling the stitching guard
+      (`passthrough_scanner.lock().unwrap().discard_partial();`) in
+      `run_suppressed_pipeline` (src-tauri/src/mux/ipc/pty_spawn/mod.rs). The
+      leftover partial OSC 9 body then stitched with the later bare
+      terminator fed during the Detached period, and the test panicked with:
+      "assertion `left == right` failed: a bare terminator must fire
+      nothing, and the SEPARATE complete OSC 9 fed in the same Detached
+      period must fire exactly once: [\"spl\", \"second-notice\"]\n  left: 2\n
+      right: 1" (src-tauri/src/mux/ipc/pty_spawn/tests.rs:1871). The call was
+      restored; `git diff --stat` on that file shows no change in the
+      committed state.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      AC-7 is an aggregate criterion over the full pre-existing suite ("all
+      existing tests pass with their assertions and inputs unmodified") plus
+      the two build/test commands exiting 0. This task changes only test
+      files and never touches an already-passing existing test (prohibited
+      by the task plan), so there is no production or test change available
+      that would make this criterion fail without itself violating the task
+      plan. The baseline (4a) was already green (0 failed) before this task
+      began, and the same two commands were re-run after implementation and
+      both exited 0 (`cargo test --lib`: 3716 passed / 0 failed / 3 ignored;
+      `cargo check --no-default-features`: Finished with no errors), which is
+      the criterion's own verification, not a red/green transition.
+notes: >
+  Sensitivity checks for AC-1 through AC-6 were each performed via a
+  temporary single-line disable of the exact production behavior under test,
+  directly in the worktree, followed by re-running only the new test to
+  observe the failure, then reverting. After every experiment,
+  `git diff --stat` confirmed the touched production file was byte-identical
+  to its pre-experiment state before moving to the next check. No production
+  file appears in the final `git diff --stat` / `git status --porcelain` for
+  this task; only the three expected test files are modified.
