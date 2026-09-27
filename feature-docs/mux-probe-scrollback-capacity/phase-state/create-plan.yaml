@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-probe-scrollback-capacity
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
-base_revision: c98ae95065c4b927cedda2661058ae1f2b482599
+base_revision: 0c038860eff72523dfaa11e64777e69ce5440322
 last_input_digest: sha256:212610e86054db3de634d42c5b3c2eb57ea9e82c13464e3e018d3f569e833a80
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
