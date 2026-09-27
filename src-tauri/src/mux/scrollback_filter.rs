@@ -322,12 +322,16 @@ fn is_replayable_osc_body(body: &[u8]) -> bool {
 /// without aborting the sequence (`crates/term_core/src/parser/csi.rs`), so
 /// dropping them along with the query would change replay behavior —
 /// IMPLEMENTATION.md D2.
-struct CsiStrip {
+// mux-snapshot-output-boundary task0001: visibility widened from private to
+// `pub(in crate::mux)` so `mux::ipc::pty_spawn::suppressed_output` can reuse
+// this predicate (the CSI-device-query SSOT) to decide which CSI queries a
+// suppressed chunk must re-deliver (FR9). No behavior change.
+pub(in crate::mux) struct CsiStrip {
     /// Index just past the CSI final byte.
-    end: usize,
+    pub(in crate::mux) end: usize,
     /// C0 control bytes (other than ESC) encountered inside the query body,
     /// in order.
-    embedded_c0: Vec<u8>,
+    pub(in crate::mux) embedded_c0: Vec<u8>,
 }
 
 /// Scan a candidate CSI sequence whose body starts at `from` (the index just
@@ -365,7 +369,7 @@ struct CsiStrip {
 /// is preserved as-is and scanning resumes at that ESC" falls out of the
 /// existing fallback without special-casing), or a byte outside the CSI
 /// grammar (e.g. DEL).
-fn scan_csi_device_query(bytes: &[u8], from: usize) -> Option<CsiStrip> {
+pub(in crate::mux) fn scan_csi_device_query(bytes: &[u8], from: usize) -> Option<CsiStrip> {
     let mut j = from;
     let mut private_prefix: Option<u8> = None;
     let mut first_param: u32 = 0;

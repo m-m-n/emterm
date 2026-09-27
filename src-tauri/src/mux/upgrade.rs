@@ -936,6 +936,12 @@ fn spawn_restored_reader_thread(
     let passthrough_scanner = pane.passthrough_scanner.clone();
     let scrollback = pane.scrollback.clone();
     let pane_dims = pane.dims.clone();
+    // ASM-3: a restored LIVE pane (`MuxPane::from_restored`, which delegates
+    // to `MuxPane::new`/`new_with_process_id`) gets a FRESH `OutputCapture`
+    // at construction time, so its reader re-starts sequence numbering from
+    // the beginning rather than resuming whatever the pre-upgrade daemon
+    // had assigned.
+    let output_capture = pane.output_capture.clone();
 
     // Populate the swappable/daemon-lifetime senders BEFORE the reader
     // thread starts, mirroring `register_pane_and_start_reader`'s wiring
@@ -960,6 +966,7 @@ fn spawn_restored_reader_thread(
             scrollback,
             pane_dims,
             pane_exit_sender,
+            output_capture,
         );
     });
 }

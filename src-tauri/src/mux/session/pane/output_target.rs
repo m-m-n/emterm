@@ -126,6 +126,17 @@ pub enum EvalResult {
     /// transition) — kept correct for the day a caller needs the
     /// visible-resume path through THIS function instead of
     /// `resume_pane_with_permit`.
+    ///
+    /// mux-snapshot-output-boundary task0001 (IMPLEMENTATION.md D10): FR3
+    /// suppression (a chunk this boundary covers is never delivered to
+    /// `chunk`'s destination after it) holds regardless of which caller
+    /// drives this branch, since the boundary is recorded before this
+    /// value is even constructed. FR9/FR10 "after the snapshot" ordering
+    /// on THIS branch — re-delivering a suppressed chunk's terminal
+    /// queries / incomplete tail only after `chunk` reaches the client —
+    /// holds only when the caller honours the "MUST send `chunk` ... before
+    /// any subsequent reader chunk" contract stated above; this function
+    /// has no way to enforce that a caller actually does so.
     ResumeWithSnapshot { chunk: PtyOutputChunk },
 }
 
@@ -234,30 +245,57 @@ pub fn evaluate_output_target(
                     // tracks every `MuxPane::resize` call, so it is the
                     // pane's dims AT THE MOMENT this snapshot is assembled
                     // — what `screen_bytes` was actually produced at.
-                    let (buffered, buffered_segments, ring_wrapped) = pane
-                        .scrollback
-                        .lock()
-                        .unwrap()
-                        .read_segments_with_wrap_state();
-                    // mux-snapshot-ring-wrap-restore task0001 (D2): the
-                    // shadow dump is needed not only for alt-screen panes
-                    // but also for a WRAPPED main-buffer pane (the
-                    // wrap-aware builder's dump-block source). Non-wrapped
-                    // main-buffer panes still skip `contents_formatted()`
-                    // entirely — the helper would drop the slice anyway, so
-                    // this avoids both the computation and the longer
-                    // shadow-parser lock hold in the common case.
-                    let (screen_bytes, alt_screen, current_dims) = {
-                        let parser = lock_shadow_parser(&pane.shadow_parser);
-                        let alt = parser.screen().alternate_screen();
-                        let screen_bytes = if alt || ring_wrapped {
-                            parser.screen().contents_formatted()
-                        } else {
-                            Vec::new()
+                    //
+                    // mux-snapshot-output-boundary task0001 (IMPLEMENTATION.md
+                    // "Visibility resume"): the capture exclusion is taken
+                    // ONLY around these ring + shadow reads (NFR3) — it
+                    // also yields `boundary`, the output sequence number
+                    // this read set describes. Assembly, encoding and the
+                    // size check below all stay outside it.
+                    let (
+                        (
+                            buffered,
+                            buffered_segments,
+                            ring_wrapped,
+                            screen_bytes,
+                            alt_screen,
+                            current_dims,
+                        ),
+                        boundary,
+                    ) = pane.output_capture.captured_read(|| {
+                        let (buffered, buffered_segments, ring_wrapped) = pane
+                            .scrollback
+                            .lock()
+                            .unwrap()
+                            .read_segments_with_wrap_state();
+                        // mux-snapshot-ring-wrap-restore task0001 (D2): the
+                        // shadow dump is needed not only for alt-screen panes
+                        // but also for a WRAPPED main-buffer pane (the
+                        // wrap-aware builder's dump-block source). Non-wrapped
+                        // main-buffer panes still skip `contents_formatted()`
+                        // entirely — the helper would drop the slice anyway, so
+                        // this avoids both the computation and the longer
+                        // shadow-parser lock hold in the common case.
+                        let (screen_bytes, alt_screen, current_dims) = {
+                            let parser = lock_shadow_parser(&pane.shadow_parser);
+                            let alt = parser.screen().alternate_screen();
+                            let screen_bytes = if alt || ring_wrapped {
+                                parser.screen().contents_formatted()
+                            } else {
+                                Vec::new()
+                            };
+                            let (rows, cols) = parser.screen().size();
+                            (screen_bytes, alt, (cols, rows))
                         };
-                        let (rows, cols) = parser.screen().size();
-                        (screen_bytes, alt, (cols, rows))
-                    };
+                        (
+                            buffered,
+                            buffered_segments,
+                            ring_wrapped,
+                            screen_bytes,
+                            alt_screen,
+                            current_dims,
+                        )
+                    });
                     {
                         // raw_passthrough is drained + cleared (so it does
                         // not leak across detach cycles) but NOT concatenated
@@ -300,6 +338,12 @@ pub fn evaluate_output_target(
                         );
                         return EvalResult::Unchanged;
                     }
+                    // D3 (IMPLEMENTATION.md): record (S, B) before the swap
+                    // to Connected and before the snapshot is returned —
+                    // any chunk numbered <= boundary that later reaches
+                    // this same sender is therefore either superseded by
+                    // this snapshot or suppressed by the reader (FR11).
+                    pane.output_capture.record_boundary(owned_tx, boundary);
                     *target = PaneOutputTarget::Connected(owned_tx.clone());
                     // D6''''' (round-8 rework, review round-7 finding
                     // `426db84173e6b792`): tag as `ChunkKind::Snapshot`
@@ -346,17 +390,31 @@ impl AnyPermit<'_> {
     }
 }
 
-/// FR9 race-free Detached -> Connected resume.
+/// Race-free Detached -> Connected resume (originally documented against
+/// an earlier feature's own "FR9"; mux-snapshot-output-boundary task0001
+/// FR9/FR10 below are a DIFFERENT spec's requirements of the same number —
+/// see that paragraph, not this one, for the terminal-query re-delivery
+/// guarantee).
 ///
 /// The caller obtains a permit for `pane_output_tx` *outside* the pane lock
 /// (via `Sender::reserve().await`, `try_reserve()`, or the fair
 /// `reserve_owned()` — see [`AnyPermit`]), then hands it in here. This
 /// function holds the pane's `output_target` mutex for the full lifetime of
-/// (build snapshot, send via permit, swap to `Connected`). Because the PTY
-/// reader thread also takes the same `output_target` mutex before its
-/// `try_send` / `blocking_send`, the reader cannot push a live chunk between
-/// the snapshot enqueue and the Connected swap — the snapshot is guaranteed
-/// to land first in the channel's FIFO.
+/// (build snapshot, record the boundary, send via permit, swap to
+/// `Connected`). Because the PTY reader thread also takes the same
+/// `output_target` mutex, then the boundary exclusion, before its
+/// `try_send` / `blocking_send`, the reader cannot push a live chunk this
+/// snapshot already covers to this same destination after the snapshot: a
+/// chunk still in flight when the boundary is recorded here is suppressed
+/// by the reader instead of racing the snapshot into the channel — the
+/// mechanism the pre-existing FIFO-ordering claim below now rests on, not
+/// FIFO ordering alone.
+///
+/// mux-snapshot-output-boundary task0001 (SPEC FR9/FR10): recording the
+/// boundary here is also what lets the reader recognize, and re-deliver
+/// after this snapshot, any terminal query or incomplete trailing sequence
+/// a suppressed chunk carried — see `mux::ipc::pty_spawn::pty_reader_loop`
+/// and `mux::ipc::pty_spawn::suppressed_output`.
 ///
 /// `AnyPermit::send` is consumed and infallible (the slot is already
 /// reserved), so the entire sequence runs under the std mutex without
@@ -404,22 +462,42 @@ pub fn resume_pane_with_permit(
             // every `MuxPane::resize` call, so it is the pane's dims AT THE
             // MOMENT this snapshot is assembled — what `screen` was
             // actually produced at.
-            let (buffered, buffered_segments, ring_wrapped) = pane
-                .scrollback
-                .lock()
-                .unwrap()
-                .read_segments_with_wrap_state();
-            let (screen, alt_screen, current_dims) = {
-                let parser = lock_shadow_parser(&pane.shadow_parser);
-                let alt = parser.screen().alternate_screen();
-                let screen_bytes = if alt || ring_wrapped {
-                    parser.screen().contents_formatted()
-                } else {
-                    Vec::new()
+            //
+            // mux-snapshot-output-boundary task0001 (IMPLEMENTATION.md
+            // "Visibility resume"): the capture exclusion is taken ONLY
+            // around these ring + shadow reads (NFR3) — it also yields
+            // `boundary`, the output sequence number this read set
+            // describes. Assembly, encoding and the size check below all
+            // stay outside it.
+            let (
+                (buffered, buffered_segments, ring_wrapped, screen, alt_screen, current_dims),
+                boundary,
+            ) = pane.output_capture.captured_read(|| {
+                let (buffered, buffered_segments, ring_wrapped) = pane
+                    .scrollback
+                    .lock()
+                    .unwrap()
+                    .read_segments_with_wrap_state();
+                let (screen, alt_screen, current_dims) = {
+                    let parser = lock_shadow_parser(&pane.shadow_parser);
+                    let alt = parser.screen().alternate_screen();
+                    let screen_bytes = if alt || ring_wrapped {
+                        parser.screen().contents_formatted()
+                    } else {
+                        Vec::new()
+                    };
+                    let (rows, cols) = parser.screen().size();
+                    (screen_bytes, alt, (cols, rows))
                 };
-                let (rows, cols) = parser.screen().size();
-                (screen_bytes, alt, (cols, rows))
-            };
+                (
+                    buffered,
+                    buffered_segments,
+                    ring_wrapped,
+                    screen,
+                    alt_screen,
+                    current_dims,
+                )
+            });
             {
                 // raw_passthrough is drained + cleared (so it does not leak
                 // across detach cycles) but NOT concatenated — replaying the
@@ -480,6 +558,12 @@ pub fn resume_pane_with_permit(
                 drop(permit);
                 return ResumeOutcome::NoChange;
             }
+            // D3 (IMPLEMENTATION.md): record (S, B) before the snapshot is
+            // sent and before the swap to Connected — any chunk numbered
+            // <= boundary that later reaches this same sender is therefore
+            // either superseded by this snapshot or suppressed by the
+            // reader (FR11).
+            pane.output_capture.record_boundary(owned_tx, boundary);
             // review round-1 rework, finding `20b2bed0aaf48f94`: tag this as
             // a Snapshot-kind chunk (not the default PtyOutput) so the mux
             // connection drain (`mux::ipc::connection`) sends it as
