@@ -45,6 +45,7 @@ pub(in crate::mux::ipc) async fn handle_attach(
     title_tx: &TitleChangeSender,
     kick_rx: &mut Option<oneshot::Receiver<()>>,
     visible_state: &Arc<AtomicBool>,
+    probe_capacity: u32,
 ) -> Result<(), bool> {
     let attach_msg: AttachMsg = match msg.decode_payload() {
         Some(m) => m,
@@ -97,6 +98,7 @@ pub(in crate::mux::ipc) async fn handle_attach(
         title_tx,
         new_kick_tx,
         attach_visible,
+        probe_capacity,
     )
     .await;
 
@@ -157,6 +159,7 @@ pub(in crate::mux::ipc) async fn handle_attach(
 /// `flush_deferred_output` below for the retry, which re-validates
 /// `visible_state` fresh at flush time so a pane hidden again in the interim
 /// is never resumed incorrectly, AC-1/F1/F2/F3).
+#[allow(clippy::too_many_arguments)]
 pub(in crate::mux::ipc) async fn handle_set_visibility(
     visible: bool,
     session_manager: &Arc<Mutex<SessionManager>>,
@@ -164,6 +167,7 @@ pub(in crate::mux::ipc) async fn handle_set_visibility(
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     visible_state: &Arc<AtomicBool>,
     deferred_output: &mut DeferredOutputQueue,
+    probe_capacity: u32,
 ) {
     let prev = visible_state.swap(visible, Ordering::AcqRel);
     if prev == visible {
@@ -186,7 +190,7 @@ pub(in crate::mux::ipc) async fn handle_set_visibility(
                 if pane.exited {
                     continue;
                 }
-                let _ = evaluate_output_target(pane, false, false, pane_output_tx);
+                let _ = evaluate_output_target(pane, false, false, pane_output_tx, probe_capacity);
             }
         }
         return;
@@ -220,6 +224,7 @@ pub(in crate::mux::ipc) async fn handle_set_visibility(
                     pane_id,
                     pane_output_tx,
                     AnyPermit::Borrowed(permit),
+                    probe_capacity,
                 )
                 .await;
             }
@@ -278,6 +283,7 @@ async fn resolve_pane_and_resume(
     pane_id: PaneId,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     permit: AnyPermit<'_>,
+    probe_capacity: u32,
 ) -> ResumeOutcome {
     let mgr = session_manager.lock().await;
     let Some(session) = mgr.get_session(active_session_id) else {
@@ -293,7 +299,7 @@ async fn resolve_pane_and_resume(
         drop(permit);
         return ResumeOutcome::NoChange;
     };
-    resume_pane_with_permit(pane, pane_output_tx, permit)
+    resume_pane_with_permit(pane, pane_output_tx, permit, probe_capacity)
 }
 
 /// Retry every item in `deferred_output` against `pane_output_tx`, stopping
@@ -321,6 +327,7 @@ pub(in crate::mux::ipc) async fn flush_deferred_output(
     session_manager: &Arc<Mutex<SessionManager>>,
     active_session_id: u32,
     visible_state: &Arc<AtomicBool>,
+    probe_capacity: u32,
 ) {
     while let Some(item) = deferred_output.pop_front() {
         match item {
@@ -356,6 +363,7 @@ pub(in crate::mux::ipc) async fn flush_deferred_output(
                             pane_id,
                             pane_output_tx,
                             AnyPermit::Borrowed(permit),
+                            probe_capacity,
                         )
                         .await;
                     }
@@ -404,6 +412,7 @@ pub(in crate::mux::ipc) async fn apply_fair_permit_to_front_deferred_item(
     session_manager: &Arc<Mutex<SessionManager>>,
     active_session_id: u32,
     visible_state: &Arc<AtomicBool>,
+    probe_capacity: u32,
 ) {
     let Some(item) = deferred_output.pop_front() else {
         drop(permit);
@@ -427,6 +436,7 @@ pub(in crate::mux::ipc) async fn apply_fair_permit_to_front_deferred_item(
                 pane_id,
                 pane_output_tx,
                 AnyPermit::Owned(permit),
+                probe_capacity,
             )
             .await;
         }

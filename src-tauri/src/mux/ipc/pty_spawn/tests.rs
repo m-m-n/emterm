@@ -1078,6 +1078,7 @@ fn apt_style_recording_past_a_wrapped_ring_restores_the_shadow_parsers_screen_fa
         false,
         ring_wrapped,
         (cols, rows),
+        10_000,
     );
 
     let mut client = TerminalCore::new(cols, rows, 10_000);
@@ -1220,6 +1221,7 @@ fn apt_style_resize_and_wrap_restores_replay_state_region_active_and_after_stop(
                 false,
                 ring_wrapped,
                 current_dims,
+                10_000,
             );
 
             let last = *out_segments
@@ -1418,6 +1420,7 @@ fn apt_region_stream_past_a_wrapped_ring_matches_a_reference_after_continued_out
         false,
         ring_wrapped,
         (cols, rows),
+        10_000,
     );
 
     let mut client = TerminalCore::new(cols, rows, 10_000);

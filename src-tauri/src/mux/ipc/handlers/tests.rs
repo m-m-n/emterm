@@ -4,6 +4,9 @@ use crate::mux::ipc::reattach::build_shadow_parser_snapshot;
 use crate::mux::session::pane::{
     AgentWaiter, DeferredOutputItem, MuxPane, PaneOutputTarget, SharedOutputTarget,
 };
+use crate::mux::snapshot_bytes::{
+    build_resume_snapshot_bytes_for_ring, build_snapshot_bytes_for_ring,
+};
 use mux_ipc::protocol::{
     AgentApiErrorKind, AgentState, ReadPaneMsg, SendTextMsg, WaitAgentStateMsg,
 };
@@ -35,6 +38,329 @@ fn add_pane(
         .get_mut(&window_id)
         .unwrap()
         .add_pane(pane);
+}
+
+// ── mux-probe-scrollback-capacity task0002, AC-6: site-reach tests for the
+// on-demand and visibility paths ────────────────────────────────────────
+
+/// Seed `pane`'s scrollback + shadow parser into the same wrapped,
+/// `current_dims`-exceeds-the-last-segment shape
+/// `wrap_restore_tests.rs`'s `fixture_current_dims_exceeds_the_last_segment`
+/// and `connection/tests.rs`'s `wrapped_diverging_pane_fixture` use —
+/// confirmed to diverge between a small probe capacity and the legacy
+/// 10,000 fallback — and returns the raw materials a test can feed into
+/// `build_snapshot_bytes_for_ring` to compute the expected output at any
+/// given capacity.
+fn seed_wrapped_diverging_ring_and_shadow(
+    pane: &MuxPane,
+) -> (Vec<u8>, Vec<(usize, u16, u16)>, Vec<u8>, (u16, u16)) {
+    use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
+
+    let mut pre = Vec::new();
+    for i in 0..60u32 {
+        pre.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    let mut ring = ScrollbackRingBuffer::new(512);
+    ring.attribute_write(80, 24, &pre);
+    let (raw, segments, wrapped) = ring.read_segments_with_wrap_state();
+    assert!(wrapped, "test prerequisite: the ring must have wrapped");
+    *pane.scrollback.lock().unwrap() = ring;
+    let shadow_dump = {
+        let mut parser = pane.shadow_parser.lock().unwrap();
+        parser.process(&pre);
+        parser.screen_mut().set_size(40, 80);
+        parser.screen().contents_formatted()
+    };
+    (raw, segments, shadow_dump, (80u16, 40u16))
+}
+
+/// AC-6: `handle_request_pane_snapshot` passes its `probe_capacity`
+/// argument all the way to the enqueued chunk's bytes.
+#[tokio::test]
+async fn handle_request_pane_snapshot_site_reach_uses_the_passed_probe_capacity() {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let target: SharedOutputTarget =
+        Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+    let (session_id, raw, segments, shadow_dump, current_dims) = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        add_pane(&mut m, sid, wid, 1, target.clone());
+        let pane_ref = m
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&1)
+            .unwrap();
+        let (raw, segments, shadow_dump, current_dims) =
+            seed_wrapped_diverging_ring_and_shadow(pane_ref);
+        (sid, raw, segments, shadow_dump, current_dims)
+    };
+
+    let req = MuxMessage {
+        msg_type: MessageType::RequestPaneSnapshot,
+        pane_id: 1,
+        payload: Vec::new(),
+    };
+    let mut deferred = DeferredOutputQueue::new();
+    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred, 5)
+        .await
+        .expect("handler itself must not error");
+
+    let chunk = rx.try_recv().expect("a snapshot chunk must be enqueued");
+
+    let (expected_payload_5, expected_segments_5) =
+        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, true, current_dims, 5);
+    let expected_at_5 = encode_snapshot_segments(&expected_payload_5, &expected_segments_5);
+    let (expected_payload_default, expected_segments_default) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        true,
+        current_dims,
+        10_000,
+    );
+    let expected_at_default =
+        encode_snapshot_segments(&expected_payload_default, &expected_segments_default);
+    assert_ne!(
+        expected_at_5, expected_at_default,
+        "test prerequisite: this fixture must diverge between capacity 5 and 10,000"
+    );
+    assert_eq!(chunk.data, expected_at_5);
+}
+
+/// AC-6: `handle_set_visibility`'s IMMEDIATE resume path (channel had room)
+/// passes its `probe_capacity` argument all the way to the enqueued
+/// chunk's bytes.
+#[tokio::test]
+async fn handle_set_visibility_immediate_resume_site_reach_uses_the_passed_probe_capacity() {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
+        owner: Some(owned_tx.clone()),
+    }));
+    let (session_id, raw, segments, shadow_dump, current_dims) = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        add_pane(&mut m, sid, wid, 1, target.clone());
+        let pane_ref = m
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&1)
+            .unwrap();
+        let (raw, segments, shadow_dump, current_dims) =
+            seed_wrapped_diverging_ring_and_shadow(pane_ref);
+        (sid, raw, segments, shadow_dump, current_dims)
+    };
+
+    let visible_state = Arc::new(AtomicBool::new(false));
+    let mut deferred = DeferredOutputQueue::new();
+    handle_set_visibility(
+        true,
+        &mgr,
+        session_id,
+        &owned_tx,
+        &visible_state,
+        &mut deferred,
+        5,
+    )
+    .await;
+
+    let chunk = rx.try_recv().expect("a snapshot chunk must be enqueued");
+
+    let (expected_payload_5, expected_segments_5) = build_resume_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        true,
+        current_dims,
+        5,
+    );
+    let expected_at_5 = encode_snapshot_segments(&expected_payload_5, &expected_segments_5);
+    let (expected_payload_default, expected_segments_default) =
+        build_resume_snapshot_bytes_for_ring(
+            &raw,
+            &segments,
+            &shadow_dump,
+            false,
+            true,
+            current_dims,
+            10_000,
+        );
+    let expected_at_default =
+        encode_snapshot_segments(&expected_payload_default, &expected_segments_default);
+    assert_ne!(
+        expected_at_5, expected_at_default,
+        "test prerequisite: this fixture must diverge between capacity 5 and 10,000"
+    );
+    assert_eq!(chunk.data, expected_at_5);
+}
+
+/// AC-6: `flush_deferred_output`'s ORDINARY (try-based) retry of a deferred
+/// `VisibilityResume` item passes its `probe_capacity` argument all the way
+/// to the enqueued chunk's bytes.
+#[tokio::test]
+async fn flush_deferred_output_deferred_visibility_resume_site_reach_uses_the_passed_probe_capacity()
+ {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
+        owner: Some(owned_tx.clone()),
+    }));
+    let (session_id, raw, segments, shadow_dump, current_dims) = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        add_pane(&mut m, sid, wid, 1, target.clone());
+        let pane_ref = m
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&1)
+            .unwrap();
+        let (raw, segments, shadow_dump, current_dims) =
+            seed_wrapped_diverging_ring_and_shadow(pane_ref);
+        (sid, raw, segments, shadow_dump, current_dims)
+    };
+
+    let visible_state = Arc::new(AtomicBool::new(true));
+    let mut deferred = DeferredOutputQueue::new();
+    deferred.defer_visibility_resume(1);
+
+    flush_deferred_output(
+        &mut deferred,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        5,
+    )
+    .await;
+
+    let chunk = rx.try_recv().expect("a snapshot chunk must be enqueued");
+
+    let (expected_payload_5, expected_segments_5) = build_resume_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        true,
+        current_dims,
+        5,
+    );
+    let expected_at_5 = encode_snapshot_segments(&expected_payload_5, &expected_segments_5);
+    let (expected_payload_default, expected_segments_default) =
+        build_resume_snapshot_bytes_for_ring(
+            &raw,
+            &segments,
+            &shadow_dump,
+            false,
+            true,
+            current_dims,
+            10_000,
+        );
+    let expected_at_default =
+        encode_snapshot_segments(&expected_payload_default, &expected_segments_default);
+    assert_ne!(expected_at_5, expected_at_default);
+    assert_eq!(chunk.data, expected_at_5);
+}
+
+/// AC-6: `apply_fair_permit_to_front_deferred_item`'s FAIR-permit retry of
+/// a deferred `VisibilityResume` item passes its `probe_capacity` argument
+/// all the way to the enqueued chunk's bytes.
+#[tokio::test]
+async fn apply_fair_permit_to_front_deferred_item_visibility_resume_site_reach_uses_the_passed_probe_capacity()
+ {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
+        owner: Some(owned_tx.clone()),
+    }));
+    let (session_id, raw, segments, shadow_dump, current_dims) = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        add_pane(&mut m, sid, wid, 1, target.clone());
+        let pane_ref = m
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&1)
+            .unwrap();
+        let (raw, segments, shadow_dump, current_dims) =
+            seed_wrapped_diverging_ring_and_shadow(pane_ref);
+        (sid, raw, segments, shadow_dump, current_dims)
+    };
+
+    let visible_state = Arc::new(AtomicBool::new(true));
+    let mut deferred = DeferredOutputQueue::new();
+    deferred.defer_visibility_resume(1);
+
+    let permit = owned_tx
+        .clone()
+        .reserve_owned()
+        .await
+        .expect("reserve_owned must succeed on a fresh channel");
+    apply_fair_permit_to_front_deferred_item(
+        &mut deferred,
+        permit,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        5,
+    )
+    .await;
+
+    let chunk = rx.try_recv().expect("a snapshot chunk must be enqueued");
+
+    let (expected_payload_5, expected_segments_5) = build_resume_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        true,
+        current_dims,
+        5,
+    );
+    let expected_at_5 = encode_snapshot_segments(&expected_payload_5, &expected_segments_5);
+    let (expected_payload_default, expected_segments_default) =
+        build_resume_snapshot_bytes_for_ring(
+            &raw,
+            &segments,
+            &shadow_dump,
+            false,
+            true,
+            current_dims,
+            10_000,
+        );
+    let expected_at_default =
+        encode_snapshot_segments(&expected_payload_default, &expected_segments_default);
+    assert_ne!(expected_at_5, expected_at_default);
+    assert_eq!(chunk.data, expected_at_5);
 }
 
 /// FR3 byte-identity guard-rail: the lock-scope refactor in
@@ -153,6 +479,7 @@ async fn handle_set_visibility_false_switches_owned_pane_to_detached() {
         &owned_tx,
         &visible_state,
         &mut deferred,
+        10_000,
     )
     .await;
 
@@ -214,6 +541,7 @@ async fn handle_set_visibility_true_after_hidden_enqueues_snapshot() {
         &owned_tx,
         &visible_state,
         &mut deferred,
+        10_000,
     )
     .await;
 
@@ -289,6 +617,7 @@ async fn handle_set_visibility_resume_uses_permit_under_pane_lock() {
         &owned_tx,
         &visible_state,
         &mut deferred,
+        10_000,
     )
     .await;
 
@@ -336,6 +665,7 @@ async fn handle_set_visibility_resume_two_panes_each_gets_one_snapshot() {
         &owned_tx,
         &visible_state,
         &mut deferred,
+        10_000,
     )
     .await;
 
@@ -382,6 +712,7 @@ async fn handle_set_visibility_same_state_is_noop() {
         &owned_tx,
         &visible_state,
         &mut deferred,
+        10_000,
     )
     .await;
 
@@ -455,7 +786,7 @@ async fn handle_request_pane_snapshot_emits_snapshot_kind() {
         payload: Vec::new(),
     };
     let mut deferred = DeferredOutputQueue::new();
-    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred)
+    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred, 10_000)
         .await
         .expect("handle_request_pane_snapshot");
 
@@ -578,7 +909,7 @@ async fn handle_request_pane_snapshot_restores_the_shadow_parsers_header_row_for
         payload: Vec::new(),
     };
     let mut deferred = DeferredOutputQueue::new();
-    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred)
+    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred, 10_000)
         .await
         .expect("handle_request_pane_snapshot");
 
@@ -636,7 +967,7 @@ async fn handle_request_pane_snapshot_preserves_fifo_ordering() {
         payload: Vec::new(),
     };
     let mut deferred = DeferredOutputQueue::new();
-    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred)
+    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred, 10_000)
         .await
         .expect("handle_request_pane_snapshot");
 
@@ -727,7 +1058,7 @@ async fn handle_request_pane_snapshot_returns_promptly_when_own_pane_channel_ful
     let mut deferred = DeferredOutputQueue::new();
     tokio::time::timeout(
         std::time::Duration::from_millis(300),
-        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred),
+        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred, 10_000),
     )
     .await
     .expect(
@@ -753,7 +1084,15 @@ async fn handle_request_pane_snapshot_returns_promptly_when_own_pane_channel_ful
     // `flush_deferred_output` right after its own drain) delivers the
     // deferred snapshot now that capacity is free.
     let visible_state = Arc::new(AtomicBool::new(true));
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+    flush_deferred_output(
+        &mut deferred,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        10_000,
+    )
+    .await;
     assert!(deferred.is_empty());
 
     let snap = rx
@@ -814,7 +1153,7 @@ async fn handle_request_pane_snapshot_for_different_pane_returns_promptly_while_
     let mut deferred = DeferredOutputQueue::new();
     tokio::time::timeout(
         std::time::Duration::from_millis(300),
-        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred),
+        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred, 10_000),
     )
     .await
     .expect("handle_request_pane_snapshot must return promptly (AC-2)")
@@ -829,7 +1168,15 @@ async fn handle_request_pane_snapshot_for_different_pane_returns_promptly_while_
     assert_eq!(c2.data, b"a2");
 
     let visible_state = Arc::new(AtomicBool::new(true));
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+    flush_deferred_output(
+        &mut deferred,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        10_000,
+    )
+    .await;
     assert!(deferred.is_empty());
 
     let snap = rx
@@ -888,6 +1235,7 @@ async fn handle_set_visibility_true_returns_promptly_when_channel_full_and_resum
             &owned_tx,
             &visible_state,
             &mut deferred,
+            10_000,
         ),
     )
     .await
@@ -909,7 +1257,15 @@ async fn handle_set_visibility_true_returns_promptly_when_channel_full_and_resum
     let filler = rx.recv().await.expect("filler chunk");
     assert_eq!(filler.pane_id, 99);
 
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+    flush_deferred_output(
+        &mut deferred,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        10_000,
+    )
+    .await;
     assert!(deferred.is_empty());
 
     let resumed = rx
@@ -963,6 +1319,7 @@ async fn flush_deferred_output_drops_stale_visibility_resume_when_hidden_again()
         &owned_tx,
         &visible_state,
         &mut deferred,
+        10_000,
     )
     .await;
     assert_eq!(deferred.len(), 1);
@@ -978,6 +1335,7 @@ async fn flush_deferred_output_drops_stale_visibility_resume_when_hidden_again()
         &owned_tx,
         &visible_state,
         &mut deferred,
+        10_000,
     )
     .await;
     assert!(!visible_state.load(Ordering::Acquire));
@@ -985,7 +1343,15 @@ async fn flush_deferred_output_drops_stale_visibility_resume_when_hidden_again()
     // Now capacity frees and the queue is flushed.
     let filler = rx.recv().await.expect("filler chunk");
     assert_eq!(filler.pane_id, 99);
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+    flush_deferred_output(
+        &mut deferred,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        10_000,
+    )
+    .await;
     assert!(
         deferred.is_empty(),
         "stale item must be dropped, not requeued"
@@ -1045,7 +1411,15 @@ async fn flush_deferred_output_delivers_chunk_even_when_its_queued_visibility_re
         "the Chunk must be inserted alongside the Resume, not dropped"
     );
 
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+    flush_deferred_output(
+        &mut deferred,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        10_000,
+    )
+    .await;
     assert!(deferred.is_empty());
 
     let delivered = rx.try_recv().expect(
@@ -1123,6 +1497,7 @@ async fn handle_set_visibility_resumes_every_pane_even_when_candidates_exceed_th
         &owned_tx,
         &visible_state,
         &mut deferred,
+        10_000,
     )
     .await;
 
@@ -1140,7 +1515,15 @@ async fn handle_set_visibility_resumes_every_pane_even_when_candidates_exceed_th
         assert_eq!(filler.pane_id, 9999);
     }
 
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+    flush_deferred_output(
+        &mut deferred,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        10_000,
+    )
+    .await;
     assert!(
         deferred.is_empty(),
         "all deferred resumes must be flushed once capacity is fully free"
@@ -1228,7 +1611,7 @@ async fn handle_request_pane_snapshot_evicts_oldest_distinct_pane_per_spec_sanct
             pane_id,
             payload: Vec::new(),
         };
-        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred)
+        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred, 10_000)
             .await
             .expect("handler itself must not error");
     }
@@ -1245,7 +1628,15 @@ async fn handle_request_pane_snapshot_evicts_oldest_distinct_pane_per_spec_sanct
     }
 
     let visible_state = Arc::new(AtomicBool::new(true));
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+    flush_deferred_output(
+        &mut deferred,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        10_000,
+    )
+    .await;
     assert!(deferred.is_empty());
 
     let mut delivered_pane_ids: Vec<u32> = Vec::new();
@@ -1299,13 +1690,13 @@ async fn handle_request_pane_snapshot_repeated_request_for_same_pane_does_not_gr
     };
     let mut deferred = DeferredOutputQueue::new();
 
-    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred)
+    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred, 10_000)
         .await
         .expect("handler itself must not error");
     assert_eq!(deferred.len(), 1);
 
     // Second request for the SAME pane while still full.
-    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred)
+    handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred, 10_000)
         .await
         .expect("handler itself must not error");
     assert_eq!(
@@ -1317,7 +1708,15 @@ async fn handle_request_pane_snapshot_repeated_request_for_same_pane_does_not_gr
     let filler = rx.recv().await.expect("filler chunk");
     assert_eq!(filler.pane_id, 99);
     let visible_state = Arc::new(AtomicBool::new(true));
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+    flush_deferred_output(
+        &mut deferred,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        10_000,
+    )
+    .await;
     assert!(deferred.is_empty());
 
     let snap = rx
@@ -1359,7 +1758,7 @@ async fn flush_deferred_output_requeues_chunk_at_front_when_channel_still_full()
     assert_eq!(f1.data, b"f1");
 
     let visible_state = Arc::new(AtomicBool::new(true));
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, 0, &visible_state).await;
+    flush_deferred_output(&mut deferred, &owned_tx, &mgr, 0, &visible_state, 10_000).await;
 
     assert_eq!(
         deferred.len(),
@@ -1397,7 +1796,7 @@ async fn flush_deferred_output_clears_chunk_backlog_when_channel_closed() {
     assert_eq!(deferred.len(), 2);
 
     let visible_state = Arc::new(AtomicBool::new(true));
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, 0, &visible_state).await;
+    flush_deferred_output(&mut deferred, &owned_tx, &mgr, 0, &visible_state, 10_000).await;
 
     assert!(
         deferred.is_empty(),
@@ -1450,7 +1849,15 @@ async fn flush_deferred_output_requeues_visibility_resume_at_front_when_channel_
     assert_eq!(f1.data, b"f1");
 
     let visible_state = Arc::new(AtomicBool::new(true));
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+    flush_deferred_output(
+        &mut deferred,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        10_000,
+    )
+    .await;
 
     assert_eq!(
         deferred.len(),
@@ -1486,7 +1893,7 @@ async fn flush_deferred_output_clears_visibility_resume_backlog_when_channel_clo
     assert_eq!(deferred.len(), 2);
 
     let visible_state = Arc::new(AtomicBool::new(true));
-    flush_deferred_output(&mut deferred, &owned_tx, &mgr, 0, &visible_state).await;
+    flush_deferred_output(&mut deferred, &owned_tx, &mgr, 0, &visible_state, 10_000).await;
 
     assert!(
         deferred.is_empty(),
@@ -1524,6 +1931,7 @@ async fn apply_fair_permit_to_front_deferred_item_empty_queue_drops_permit() {
         &mgr,
         0,
         &visible_state,
+        10_000,
     )
     .await;
 
@@ -1556,6 +1964,7 @@ async fn apply_fair_permit_to_front_deferred_item_sends_front_chunk() {
         &mgr,
         0,
         &visible_state,
+        10_000,
     )
     .await;
 
@@ -1607,6 +2016,7 @@ async fn apply_fair_permit_to_front_deferred_item_drops_stale_visibility_resume(
         &mgr,
         session_id,
         &visible_state,
+        10_000,
     )
     .await;
 
@@ -1662,6 +2072,7 @@ async fn apply_fair_permit_to_front_deferred_item_resumes_live_visibility_resume
         &mgr,
         session_id,
         &visible_state,
+        10_000,
     )
     .await;
 

@@ -1,0 +1,210 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::snapshot_bytes::dump_block::tests::probe_replay_state_matches_the_oracle_at_capacity_zero_across_a_rows_only_grow_resize
+      - mux::snapshot_bytes::dump_block::tests::probe_replay_state_matches_the_oracle_at_capacity_zero_across_a_rows_and_columns_grow_resize
+      - mux::snapshot_bytes::dump_block::tests::probe_replay_state_matches_the_oracle_across_capacities_when_current_dims_exceeds_the_last_segment
+    red_confirmed: true
+    red_reason: >-
+      Per the task plan's "Red first" instruction: `probe_replay_state`'s
+      clamp line was temporarily forced to always use the fixed
+      `PROBE_SCROLLBACK_LINES` cap regardless of the caller's
+      `probe_capacity` (simulating "capacity never reaches the probe"), then
+      all three tests (each looping capacity in [0, 5, 10_000]) were run.
+      Only `...across_capacities_when_current_dims_exceeds_the_last_segment`
+      failed, at capacity 0: "assertion `left == right` failed / left: 39 /
+      right: 23" (dump_block.rs:810, probe cursor row vs the capacity-0
+      oracle's). The two grow-resize shapes
+      (`...at_capacity_zero_across_a_rows_only_grow_resize` and
+      `...rows_and_columns_grow_resize`) did NOT diverge for their specific
+      fixture shapes even under the forced fixed cap — recorded honestly,
+      the same outcome already observed for the equivalent shapes in the
+      sibling mux-snapshot-ring-wrap-restore feature's AC-5. The change was
+      reverted immediately after the run; `dump_block::tests` (19/19) and
+      the full lib suite were re-verified green afterward.
+  AC-2:
+    tests:
+      - mux::snapshot_bytes::tests::resolve_probe_capacity_unreported_gives_the_legacy_ten_thousand_cap
+      - mux::snapshot_bytes::tests::resolve_probe_capacity_an_explicit_zero_is_distinct_from_unreported
+      - mux::snapshot_bytes::tests::resolve_probe_capacity_a_reported_value_below_the_cap_passes_through
+      - mux::snapshot_bytes::tests::resolve_probe_capacity_a_reported_value_exactly_at_the_cap_passes_through
+      - mux::snapshot_bytes::tests::resolve_probe_capacity_a_reported_value_one_above_the_cap_clamps_to_the_cap
+      - mux::snapshot_bytes::tests::resolve_probe_capacity_the_maximum_u32_clamps_to_the_cap
+      - mux::snapshot_bytes::dump_block::tests::probe_replay_state_clamps_a_capacity_far_above_the_cap_to_the_cap_itself
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_at_a_reported_capacity_above_the_cap_equals_the_output_at_the_cap
+    red_confirmed: true
+    red_reason: >-
+      `resolve_probe_capacity` was temporarily replaced with a body that
+      ignores its argument and always returns the fixed cap. 2 of the 6
+      mapping-table unit tests failed as expected:
+      `..._an_explicit_zero_is_distinct_from_unreported` ("left: 10000 /
+      right: 0") and `..._a_reported_value_below_the_cap_passes_through`
+      ("left: 10000 / right: 50"); the other 4 assert values that coincide
+      with the fixed cap under that forcing (unreported, exactly-at-cap,
+      one-above-cap, u32::MAX) and could not have diverged from it, so they
+      stayed green by construction rather than by accident. The TM-1 clamp
+      test (`probe_replay_state_clamps_a_capacity_far_above_the_cap...`) and
+      the wrap_restore "above cap equals cap" test are structural equality
+      guards between two direct calls at the SAME resolved capacity; they
+      were not separately red-run (their fixture is only 90 lines, well
+      short of triggering any capacity-dependent eviction difference even
+      without clamping, so a forced-unclamped run would not have produced a
+      meaningful failure) and are included here as regression guards for the
+      same resolve_probe_capacity mapping. All temporary changes were
+      reverted immediately after the run; `mux::snapshot_bytes` (64/64) and
+      the full lib suite were re-verified green afterward.
+  AC-3:
+    tests:
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_output_at_capacity_ten_thousand_matches_the_pinned_golden_bytes
+    red_confirmed: false
+    red_reason: >-
+      Byte-identity regression pin: the golden bytes were captured directly
+      from the finished implementation (a temporary --nocapture print run,
+      then hardcoded as the fixture and the temporary print removed), so by
+      construction there is no prior-implementation red to observe — the
+      fixture pins CURRENT, correct output at probe_capacity 10,000, not a
+      behavior change. Sanity-checked instead by temporarily swapping the
+      call under test to pass capacity 5 instead of 10,000 and confirming
+      the assertion failed, then reverting to 10,000 and confirming it
+      passed again, proving the pin is actually sensitive to the capacity
+      argument rather than vacuously true. The AC's second half ("all
+      pre-existing tests pass changed only by the added capacity argument")
+      is proven by the full lib suite result (3694/3694 passed, 0 failed, 3
+      ignored — every pre-existing dump_block / wrap_restore_tests / pty_spawn
+      test call site needed only a trailing `, 10_000` to keep passing).
+  AC-4:
+    tests:
+      - mux::snapshot_bytes::wrap_restore_tests::ac4_rows_only_grow_at_capacity_zero_matches_the_capacity_zero_oracle
+      - mux::snapshot_bytes::wrap_restore_tests::ac4_rows_only_grow_at_a_small_nonzero_capacity_matches_the_same_capacity_oracle
+      - mux::snapshot_bytes::wrap_restore_tests::ac4_rows_and_cols_grow_at_capacity_zero_matches_the_capacity_zero_oracle
+      - mux::snapshot_bytes::wrap_restore_tests::ac4_rows_and_cols_grow_at_a_small_nonzero_capacity_matches_the_same_capacity_oracle
+      - mux::snapshot_bytes::wrap_restore_tests::ac4_current_dims_exceeds_the_last_segment_at_capacity_zero_matches_the_capacity_zero_oracle
+      - mux::snapshot_bytes::wrap_restore_tests::ac4_current_dims_exceeds_the_last_segment_at_a_small_nonzero_capacity_matches_the_same_capacity_oracle
+    red_confirmed: true
+    red_reason: >-
+      Per the task plan's "Red first" instruction: the shared assertion
+      helper (`assert_ac4_regression_case`) was temporarily changed to pass
+      the literal `10_000` to `build_snapshot_bytes_for_ring` instead of the
+      test's own `probe_capacity`, reproducing "the probe never sees the
+      client's reported capacity." Both "current_dims exceeds the last
+      segment" cases failed as anticipated: the capacity-zero case with
+      "cursor row must match the capacity-C oracle: left: 39, right: 24",
+      and the small-nonzero (C=5) case with "left: 39, right: 29" — both
+      against BOTH replay paths (`reset_and_replay_segments` and
+      `TerminalCore::build_from_snapshot`). The two grow-shape cases
+      (rows-only, rows+cols) at both capacities passed unmodified even under
+      the forced fixed-cap probe, i.e. did not diverge for their specific
+      fixture shapes — recorded honestly, matching the Test Notes' own
+      anticipation that not every shape necessarily reproduces ("If AC-5's
+      rows-only case does not diverge... record that in the test record").
+      Comparison is narrowed to cursor row/col and the marker row's text
+      only (not a whole-screen diff): at low capacity the oracle's own
+      delegated-payload-only reconstruction is itself an incomplete rebuild
+      of history the ring evicted — exactly the gap the dump block exists to
+      fix for the real client — so a whole-screen comparison would fail
+      even under a correct implementation. Reverted immediately after the
+      run; `wrap_restore_tests` (64/64 including these) and the full lib
+      suite were re-verified green afterward.
+  AC-5:
+    tests:
+      - mux::ipc::connection::tests::client_scrollback_capacity_malformed_payload_is_ignored_and_a_later_snapshot_still_uses_the_earlier_reported_value
+      - mux::ipc::connection::tests::client_scrollback_capacity_two_connections_each_get_snapshots_at_their_own_value
+    red_confirmed: true
+    red_reason: >-
+      The `MessageType::ClientScrollbackCapacity` dispatch arm was
+      temporarily changed to always take the `None` (malformed) branch,
+      simulating "the router never stores a reported capacity." Both live
+      round-trip tests (through the real `handle_connection` loop) failed as
+      expected: the malformed-payload test failed its "must not have
+      overwritten the earlier valid report (5)" assertion (the returned
+      snapshot bytes matched the never-reported/10,000 shape instead of the
+      capacity-5 shape), and the two-connection test failed its "connection
+      A (reported 0) must get its snapshot built at capacity 0" assertion
+      the same way. Reverted immediately after the run;
+      `mux::ipc::connection` (38/38) and the full lib suite were
+      re-verified green afterward.
+  AC-6:
+    tests:
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_site_reach_uses_the_passed_probe_capacity
+      - mux::ipc::handlers::tests::handle_set_visibility_immediate_resume_site_reach_uses_the_passed_probe_capacity
+      - mux::ipc::handlers::tests::flush_deferred_output_deferred_visibility_resume_site_reach_uses_the_passed_probe_capacity
+      - mux::ipc::handlers::tests::apply_fair_permit_to_front_deferred_item_visibility_resume_site_reach_uses_the_passed_probe_capacity
+      - mux::ipc::reattach::tests::collect_reattach_data_visible_reattach_site_reach_uses_the_passed_probe_capacity
+      - mux::session::pane::tests::test_evaluate_output_target_resume_site_reach_uses_the_passed_probe_capacity
+      - mux::session::pane::tests::test_resume_pane_with_permit_site_reach_uses_the_passed_probe_capacity
+    red_confirmed: true
+    red_reason: >-
+      Each of the 7 production call sites this AC covers (on-demand
+      RequestPaneSnapshot, visibility-resume immediate path, both deferred
+      visibility-resume flush paths, visible reattach, and both siblings of
+      the resume SSOT — `evaluate_output_target`'s resume branch and
+      `resume_pane_with_permit`) was temporarily hardcoded to pass the fixed
+      10,000 cap to its inner builder call instead of its own
+      `probe_capacity` parameter, simulating "the argument is accepted but
+      never actually reaches the builder." All 7 corresponding site-reach
+      tests failed as expected (0 passed, 7 failed) when run together
+      (`cargo test ... site_reach`), each asserting equality against a
+      directly-computed builder call at capacity 5 and divergence from the
+      same at capacity 10,000 — with the hardcoding in place, every site
+      degraded to the 10,000 shape and both assertions failed. Reverted
+      immediately after the run; `mux::ipc::handlers` (55/55),
+      `mux::ipc::reattach` (21/21), `mux::session::pane` (88/88), and the
+      full lib suite were re-verified green afterward.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Documentation and log-level audit, not an executable check. Verified
+      by direct inspection: `PROBE_SCROLLBACK_LINES`'s doc comment
+      (dump_block.rs) states both known limits under a "Known limits of the
+      cap (FR8)" heading — (a) a client-reported capacity above 10,000 still
+      runs the probe at the cap, so a residual cursor-row mismatch can
+      remain exactly as before this feature, and (b) a mixed old/new
+      deployment falls back to the legacy 10,000 cap whenever nothing was
+      reported — and explicitly states the cap does NOT change how long the
+      daemon holds any lock while assembling a snapshot. `git diff` over
+      every file this task touched shows exactly one new `log::` call (the
+      malformed-payload diagnostic in `connection/dispatch.rs`), and it is
+      `log::warn!`; no `log::debug!`/`log::info!`/`log::trace!` was added.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/test verification criterion, not a new-behavior red — there was
+      no prior failing state to observe since these commands already passed
+      before this task's changes. Verified directly: (a) default-feature lib
+      suite (`--test-threads=1`) 3694/3694 passed, 0 failed, 3 ignored,
+      up from the 3667/3667/3 baseline by exactly the 27 tests this task
+      adds (6 AC-2 + 4 AC-1/TM-1 + 1 AC-2 above-cap + 1 AC-3 golden + 6 AC-4
+      + 2 AC-5 + 7 AC-6 = 27). (b) `cargo check --no-default-features`
+      compiled cleanly. (c) CLI-only lib suite (`--no-default-features
+      --lib --test-threads=1`) 1134/1134 passed, 0 failed, 2 ignored. (d)
+      `mux_ipc` crate suite 108/108 passed, 0 failed. (e) `rustfmt
+      --edition 2024` was run scoped to exactly the 16 files this task
+      touched (not crate-wide); it reformatted 6 of them, and the full lib
+      suite was re-verified green (3694/3694) afterward.
+notes: >-
+  Baseline (Step 4a, captured correctly-ordered): the implementer had
+  already made all of this task's edits before realizing the mandatory 4a
+  baseline had not been run. Per the shared-worktree stash protocol, the
+  in-progress edits were stashed (`git stash push -u`, all 16 files, no
+  untracked additions), the baseline was run clean on the pre-task tree
+  (3667 passed / 0 failed / 3 ignored), then the edits were restored via
+  `git stash apply` (not `pop`, since linked worktrees share the stash list
+  and the drop is guarded) and re-verified. Final: 3694 passed / 0 failed /
+  3 ignored (net +27 tests, all from this task) on the default-feature lib
+  suite; CLI-only lib suite 1134/1134; mux_ipc crate suite 108/108. All 16
+  touched files match the task plan's expected_files list exactly (14
+  src-tauri files plus `crates/mux_ipc/src/protocol.rs` and
+  `crates/mux_ipc/src/protocol/tests.rs` per D3, both pre-existing and
+  edited, not newly created) — no deviations. Every AC's red-confirmation
+  was earned by a genuine temporary revert-and-rerun-and-restore cycle in
+  this session (not merely inherited from an earlier, unrecorded run):
+  AC-1/AC-2/AC-4/AC-5/AC-6 each show at least one test that actually failed
+  under the reverted behavior; AC-3 and AC-7/AC-8 are regression pins /
+  build-and-doc audits with no meaningful prior-implementation red to
+  observe, and are marked `red_confirmed: false` accordingly with the
+  verification method stated instead.
