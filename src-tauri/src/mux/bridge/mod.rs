@@ -98,6 +98,7 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
     write_welcome_to_stdout(&welcome_msg)?;
 
     let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
 
     // Owned here, for the lifetime of the whole bridge run, so a reconnect
@@ -111,6 +112,7 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
             &mut sock_reader,
             &mut sock_writer,
             &transport,
+            &last_capacity,
             &last_attach,
             &mut stdin,
             &mut stdin_parser,
@@ -119,7 +121,7 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
         match ended {
             ConnectionEnded::Normal => break,
             ConnectionEnded::Announced => {
-                match reconnect_and_reattach(sock_path, &last_attach).await {
+                match reconnect_and_reattach(sock_path, &last_capacity, &last_attach).await {
                     Some(new_stream) => {
                         let (r, w) = tokio::io::split(new_stream);
                         sock_reader = r;
@@ -163,6 +165,12 @@ async fn bridge_main_loop_windows() -> Result<(), Box<dyn std::error::Error>> {
     write_welcome_to_stdout(&welcome_msg)?;
 
     let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
+    // Owned here so `forward_loop`'s signature stays identical across
+    // platforms; Windows has no reconnect/re-send path (see the doc
+    // comment above), so nothing ever reads this slot back on this
+    // platform — the bridge still forwards and records the message
+    // (mux-probe-scrollback-capacity task0001 D3/"Bridge" Windows note).
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
 
     // Windows never reconnects (see the doc comment above), but the stdin
@@ -175,6 +183,7 @@ async fn bridge_main_loop_windows() -> Result<(), Box<dyn std::error::Error>> {
         &mut sock_reader,
         &mut sock_writer,
         &transport,
+        &last_capacity,
         &last_attach,
         &mut stdin,
         &mut stdin_parser,
@@ -284,6 +293,19 @@ fn decide_daemon_frame_effect(frame_buf: &[u8]) -> DaemonFrameEffect {
 /// re-attach (AC-4) when `msg` is an `Attach` request; `None` otherwise.
 fn capture_if_attach(msg: &MuxMessage, body: &[u8]) -> Option<Vec<u8>> {
     if msg.msg_type == MessageType::Attach {
+        Some(body.to_vec())
+    } else {
+        None
+    }
+}
+
+/// Returns the raw frame body to remember for a later reconnect's
+/// re-send (mux-probe-scrollback-capacity task0001, AC-6/AC-7) when `msg`
+/// is a `ClientScrollbackCapacity` report; `None` otherwise. The bridge
+/// never interprets the value (IMPLEMENTATION.md D1) — it only stores the
+/// latest frame body verbatim, mirroring `capture_if_attach`.
+fn capture_if_capacity(msg: &MuxMessage, body: &[u8]) -> Option<Vec<u8>> {
+    if msg.msg_type == MessageType::ClientScrollbackCapacity {
         Some(body.to_vec())
     } else {
         None

@@ -928,3 +928,120 @@ fn inbound_sequence_attach_create_switch_rename_exit() {
     assert_eq!(g.len(), 1);
     assert!(g.is_group());
 }
+
+// ── mux-probe-scrollback-capacity task0001: ClientScrollbackCapacity ──
+
+/// Build a test tab (mirrors `test_tab()`) with a specific core
+/// scrollback capacity — AC-4/AC-5 require the capacity message to carry
+/// THIS tab's own core capacity, so the fixed `test_tab()` (always built
+/// at 100) can't exercise the zero / small-non-default cases.
+fn test_tab_with_scrollback(scrollback_lines: u32) -> Tab {
+    Tab::spawn_shell(
+        "test",
+        80,
+        24,
+        scrollback_lines,
+        Arc::new(Settings::default()),
+        None,
+        None,
+        Arc::new(NoopSink),
+        None,
+    )
+}
+
+/// AC-4: on the first accepted Welcome whose session has panes and
+/// windows, the tab's first control frame is the capacity message — pane
+/// id 0, carrying the tab core's scrollback capacity. Attach follows,
+/// then the Resize frames (one per seeded pane) and RequestPaneSnapshot
+/// (for the active pane). Checked at scrollback capacity 0.
+#[test]
+fn client_scrollback_capacity_is_first_control_frame_at_capacity_zero() {
+    let mut tab = test_tab_with_scrollback(0);
+    tab.apply_mux_message(welcome_msg(&[(1, "shell", 10), (2, "editor", 20)], 0));
+    let frames = tab.test_control_frames();
+    assert_eq!(
+        frames.len(),
+        5,
+        "expected capacity, Attach, 2x Resize, RequestPaneSnapshot, got {frames:?}"
+    );
+    assert_eq!(frames[0].msg_type, MessageType::ClientScrollbackCapacity);
+    assert_eq!(frames[0].pane_id, 0);
+    let decoded =
+        mux_ipc::protocol::ClientScrollbackCapacityPayload::from_payload(&frames[0].payload)
+            .expect("capacity payload decodes");
+    assert_eq!(decoded.lines, 0);
+    assert_eq!(frames[1].msg_type, MessageType::Attach);
+    assert_eq!(frames[2].msg_type, MessageType::Resize);
+    assert_eq!(frames[2].pane_id, 10);
+    assert_eq!(frames[3].msg_type, MessageType::Resize);
+    assert_eq!(frames[3].pane_id, 20);
+    assert_eq!(frames[4].msg_type, MessageType::RequestPaneSnapshot);
+    assert_eq!(frames[4].pane_id, 10); // active window index 0 -> pane 10
+}
+
+/// AC-4: same ordering/value check as
+/// `client_scrollback_capacity_is_first_control_frame_at_capacity_zero`,
+/// at a small non-default scrollback capacity.
+#[test]
+fn client_scrollback_capacity_is_first_control_frame_at_small_nondefault_capacity() {
+    let mut tab = test_tab_with_scrollback(7);
+    tab.apply_mux_message(welcome_msg(&[(1, "shell", 10), (2, "editor", 20)], 0));
+    let frames = tab.test_control_frames();
+    assert_eq!(frames.len(), 5, "got {frames:?}");
+    assert_eq!(frames[0].msg_type, MessageType::ClientScrollbackCapacity);
+    assert_eq!(frames[0].pane_id, 0);
+    let decoded =
+        mux_ipc::protocol::ClientScrollbackCapacityPayload::from_payload(&frames[0].payload)
+            .expect("capacity payload decodes");
+    assert_eq!(decoded.lines, 7);
+    assert_eq!(frames[1].msg_type, MessageType::Attach);
+    assert_eq!(frames[2].msg_type, MessageType::Resize);
+    assert_eq!(frames[3].msg_type, MessageType::Resize);
+    assert_eq!(frames[4].msg_type, MessageType::RequestPaneSnapshot);
+}
+
+/// AC-5: on the first accepted Welcome whose session has no panes
+/// (fresh-start mux), the capacity message comes before CreateWindow.
+#[test]
+fn client_scrollback_capacity_precedes_create_window_on_fresh_start() {
+    let mut tab = test_tab_with_scrollback(7);
+    tab.apply_mux_message(welcome_msg(&[], 0));
+    let frames = tab.test_control_frames();
+    assert_eq!(
+        frames.len(),
+        2,
+        "expected capacity then CreateWindow, got {frames:?}"
+    );
+    assert_eq!(frames[0].msg_type, MessageType::ClientScrollbackCapacity);
+    assert_eq!(frames[0].pane_id, 0);
+    let decoded =
+        mux_ipc::protocol::ClientScrollbackCapacityPayload::from_payload(&frames[0].payload)
+            .expect("capacity payload decodes");
+    assert_eq!(decoded.lines, 7);
+    assert_eq!(frames[1].msg_type, MessageType::CreateWindow);
+}
+
+/// AC-5: a second Welcome in the same attach sends no further capacity
+/// message — the existing `first_welcome` guard covers it.
+#[test]
+fn client_scrollback_capacity_not_resent_on_duplicate_welcome() {
+    let mut tab = test_tab_with_scrollback(0);
+    tab.apply_mux_message(welcome_msg(&[], 0));
+    let count_after_first = tab
+        .test_control_frames()
+        .iter()
+        .filter(|f| f.msg_type == MessageType::ClientScrollbackCapacity)
+        .count();
+    assert_eq!(count_after_first, 1);
+
+    tab.apply_mux_message(welcome_msg(&[], 0));
+    let count_after_second = tab
+        .test_control_frames()
+        .iter()
+        .filter(|f| f.msg_type == MessageType::ClientScrollbackCapacity)
+        .count();
+    assert_eq!(
+        count_after_second, 1,
+        "a duplicate Welcome must not resend the capacity message"
+    );
+}
