@@ -239,7 +239,7 @@ tasks:
     - FR3
     - FR5
     - FR6
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-snapshot-output-boundary/task0003
     notes: null
     provenance:
