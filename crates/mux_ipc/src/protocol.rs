@@ -273,6 +273,24 @@ pub fn encode_snapshot_payload(segments: &[DimSegment], bytes: &[u8]) -> Vec<u8>
     out
 }
 
+/// The exact byte length [`encode_snapshot_payload`] would produce for a
+/// payload with `segment_count` segments and `byte_len` content bytes —
+/// computed arithmetically from the wire layout documented on
+/// [`encode_snapshot_payload`] (`MAGIC(8) | segment_count(u32 LE) |
+/// segment_count * 8 | bytes`), with no allocation and no copy
+/// (mux-snapshot-output-boundary task0002, AC-1 / TS-16).
+///
+/// This exists so a caller deciding [`fits_single_snapshot_frame`] for a
+/// snapshot it has already assembled (but not yet encoded) can get the
+/// EXACT answer `encode_snapshot_payload(...).len()` would have given,
+/// without paying for the O(snapshot) encode itself — `collect_reattach_data`
+/// (mux::ipc::reattach) uses this to keep that decision off the pane's
+/// `output_target` lock (NFR3). Pinned equal to the real encoder's output
+/// length by this module's own tests, for every input shape.
+pub fn encoded_snapshot_payload_len(segment_count: usize, byte_len: usize) -> usize {
+    SNAPSHOT_PAYLOAD_MAGIC.len() + 4 + segment_count * 8 + byte_len
+}
+
 /// Decode a snapshot payload produced by [`encode_snapshot_payload`],
 /// distinguishing legacy content, a successfully parsed structured payload,
 /// and a corrupted structured payload (task0005 rework D2'', review
