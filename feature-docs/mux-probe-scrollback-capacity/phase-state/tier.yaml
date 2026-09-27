@@ -1,0 +1,72 @@
+schema_version: 2
+feature: mux-probe-scrollback-capacity
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.85
+    confidence: 0.84
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread across a few files
+        together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the
+        architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.15
+      '2': 0.85
+      '3': 0.0
+  observed_at: '2026-09-27T20:37:30+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 2.08
+    confidence: 0.91
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread across a few files
+        together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the
+        architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.0
+      '2': 0.92
+      '3': 0.08
+  observed_at: '2026-09-27T20:41:10+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/snapshot_bytes/dump_block.rs
+  - src-tauri/src/mux/snapshot_bytes.rs
+  - src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+  changed_lines_approx: 0
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules:
+  - src-tauri/src/tabs/replay.rs
+  - crates/term_core/src/terminal_core/replay.rs
+  - crates/mux_ipc/src/protocol.rs
+  - src-tauri/src/mux/bridge/mod.rs
+  - src-tauri/src/mux/ipc/connection/mod.rs
+  - src-tauri/src/mux/ipc/reattach.rs
+  - src-tauri/src/mux/session/pane/output_target.rs
+  work_still_required: true
+  work_still_required_evidence: '現在も未対応。src-tauri/src/mux/snapshot_bytes/dump_block.rs:74でPROBE_SCROLLBACK_LINESは10_000固定、同:109でプローブ端末の生成に使用され、同:343-355でプローブのカーソル位置をCUPとして出力している。一方、src-tauri/src/tabs/replay.rs:303-324はクライアントのscrollback_capacity()をbuild_from_snapshotへ渡し、crates/term_core/src/terminal_core/replay.rs:508はその容量で端末を生成する。crates/term_core/src/reflow.rs:95-129では履歴行数を使ってリサイズ後のカーソル行を計算している。
+
+    設定の通信経路にも容量の受け渡しはない。src-tauri/src/mux/bridge/mod.rs:202-206が送信するHelloはclient_typeとprotocol_versionのみで、受信側はsrc-tauri/src/mux/ipc/connection/mod.rs:102で同じHelloMsgを復号する。crates/mux_ipc/src/protocol.rs:549-552、同:617-620、同:636-638、同:691-694のHello・Resize・Attach・CreateWindowにも履歴容量の項目はなく、src-tauri/src/mux/snapshot_bytes.rs:349-355、同:384-390の生成関数にも容量引数がない。
+
+    該当条件の回帰テストは確認できない。dump_block.rs:408-423の容量0の比較はリサイズを含まず、画面拡大を扱う同:660、同:695、同:733は比較端末を10_000行で生成する。src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs:411-434の継続出力テストも両端末が10_000行で、寸法は固定されている。ファイル変更とテスト実行は行っていない。変更行数・追加数の0は今回の調査で実施した変更がないことを示し、必要作業量の見積もりではない。変更対象と波及先の確定は、容量をデーモンへ渡す方式かクライアント側で計算する方式かの選択に依存する'
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 0
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 0
+  changes_external_contract: false
+  changes_behavior: true
+decided_at: '2026-09-27T20:41:19+09:00'
