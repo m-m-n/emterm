@@ -110,7 +110,8 @@ workflow:
     output_target lock). TS-13: byte-shape tests have no removed lines. No excluded requirements.
     Manual MT-1..MT-4 not run (need release build + daemon restart).
 - id: retrospect
-  status: pending
+  status: completed
+  completed_at_commit: 694273450966277f8ff32652d5ef0e2e323250f9
 tasks:
   task0001:
     title: 'Pane output boundary: sequence capture, sender-bound suppression, ordered delivery'
