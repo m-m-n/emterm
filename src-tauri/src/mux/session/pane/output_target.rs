@@ -158,6 +158,7 @@ pub fn evaluate_output_target(
     network_detach: bool,
     visible: bool,
     owned_tx: &mpsc::Sender<PtyOutputChunk>,
+    probe_capacity: u32,
 ) -> EvalResult {
     let mut target = pane.output_target.lock().unwrap();
     let new_reason = match (network_detach, visible) {
@@ -274,6 +275,7 @@ pub fn evaluate_output_target(
                         alt_screen,
                         ring_wrapped,
                         current_dims,
+                        probe_capacity,
                     );
                     let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
                     // D6''' (round-6 rework, review round-5 finding
@@ -370,6 +372,7 @@ pub fn resume_pane_with_permit(
     pane: &MuxPane,
     owned_tx: &mpsc::Sender<PtyOutputChunk>,
     permit: AnyPermit<'_>,
+    probe_capacity: u32,
 ) -> ResumeOutcome {
     let mut target = pane.output_target.lock().unwrap();
     match &mut *target {
@@ -436,6 +439,7 @@ pub fn resume_pane_with_permit(
                 alt_screen,
                 ring_wrapped,
                 current_dims,
+                probe_capacity,
             );
             let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
             // D6''' (round-6 rework, review round-5 finding

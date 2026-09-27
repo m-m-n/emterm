@@ -462,6 +462,7 @@ pub(super) async fn handle_request_pane_snapshot(
     session_manager: &Arc<Mutex<SessionManager>>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     deferred_output: &mut DeferredOutputQueue,
+    probe_capacity: u32,
 ) -> Result<(), bool> {
     let pane_id = msg.pane_id;
 
@@ -531,6 +532,7 @@ pub(super) async fn handle_request_pane_snapshot(
         &scrollback_data,
         &scrollback_segments,
         ring_wrapped,
+        probe_capacity,
     );
     let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
     // Promoted from debug -> warn so release builds (which drop debug/info)

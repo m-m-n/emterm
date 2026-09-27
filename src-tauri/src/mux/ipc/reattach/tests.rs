@@ -22,6 +22,33 @@ fn to_replay_segments(
         .collect()
 }
 
+/// AC-6 site-reach fixture: a wrapped ring whose last recorded segment dims
+/// (80x24) diverge from the shadow parser's current live size (80x40), so
+/// the wrap-aware dump block differs between a small probe capacity and the
+/// legacy 10,000 default. Mirrors `seed_wrapped_diverging_ring_and_shadow`
+/// in `handlers/tests.rs` and the analogous fixture in
+/// `connection/tests.rs`.
+fn seed_diverging_wrapped_pane(
+    pane: &MuxPane,
+) -> (Vec<u8>, Vec<(usize, u16, u16)>, Vec<u8>, (u16, u16)) {
+    let mut pre = Vec::new();
+    for i in 0..60u32 {
+        pre.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    let mut ring = ScrollbackRingBuffer::new(512);
+    ring.attribute_write(80, 24, &pre);
+    let (raw, segments, wrapped) = ring.read_segments_with_wrap_state();
+    assert!(wrapped, "test prerequisite: the ring must have wrapped");
+    *pane.scrollback.lock().unwrap() = ring;
+    let shadow_dump = {
+        let mut parser = pane.shadow_parser.lock().unwrap();
+        parser.process(&pre);
+        parser.screen_mut().set_size(40, 80);
+        parser.screen().contents_formatted()
+    };
+    (raw, segments, shadow_dump, (80u16, 40u16))
+}
+
 // ── AC-1 (FR1, FR10; TS-1): reproduction test, post-wrap main-buffer
 // snapshot restore ────────────────────────────────────────────────────
 //
@@ -134,7 +161,8 @@ async fn wrapped_main_buffer_reattach_restores_the_shadow_parsers_header_row() {
     let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
     let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
     let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-    let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
+    let data =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true, 10_000).await;
     assert_eq!(data.len(), 1);
     let (_pane_id, snapshot, segments) = &data[0];
 
@@ -275,7 +303,8 @@ async fn test_collect_reattach_data_two_windows_connected_dead() {
     // Call collect_reattach_data
     let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
     let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-    let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
+    let data =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true, 10_000).await;
 
     // CRITICAL: Must return 2 entries
     assert_eq!(
@@ -336,7 +365,8 @@ async fn test_collect_reattach_data_two_windows_detached() {
     let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
     let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
     let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-    let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
+    let data =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true, 10_000).await;
 
     assert_eq!(
         data.len(),
@@ -379,7 +409,8 @@ async fn test_collect_reattach_data_skips_exited() {
     let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
     let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
     let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-    let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
+    let data =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true, 10_000).await;
 
     assert_eq!(
         data.len(),
@@ -469,7 +500,7 @@ async fn test_collect_reattach_data_fires_old_kick() {
 
     // First client attaches: installs kick1.
     let (kick_tx1, mut kick_rx1) = oneshot::channel::<()>();
-    let _ = collect_reattach_data(&mgr, session_id, &tx1, &title_tx, kick_tx1, true).await;
+    let _ = collect_reattach_data(&mgr, session_id, &tx1, &title_tx, kick_tx1, true, 10_000).await;
 
     // Receiver must still be pending (no kick yet).
     assert!(
@@ -480,7 +511,7 @@ async fn test_collect_reattach_data_fires_old_kick() {
     // Second client attaches: should fire kick1 and install kick2.
     let (tx2, _rx2) = mpsc::channel::<PtyOutputChunk>(256);
     let (kick_tx2, mut kick_rx2) = oneshot::channel::<()>();
-    let _ = collect_reattach_data(&mgr, session_id, &tx2, &title_tx, kick_tx2, true).await;
+    let _ = collect_reattach_data(&mgr, session_id, &tx2, &title_tx, kick_tx2, true, 10_000).await;
 
     // First client's kick_rx must now resolve with Ok(()).
     assert_eq!(
@@ -611,7 +642,8 @@ async fn test_collect_reattach_data_first_attach_no_old_kick() {
     let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
     let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
     let (kick_tx, mut kick_rx) = oneshot::channel::<()>();
-    let _ = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
+    let _ =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true, 10_000).await;
 
     assert!(
         kick_rx.try_recv().is_err(),
@@ -969,7 +1001,8 @@ async fn test_collect_reattach_data_drops_raw_passthrough_and_clears_it() {
     let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
     let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
     let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-    let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
+    let data =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true, 10_000).await;
 
     assert_eq!(data.len(), 1, "expected 1 entry");
     let (pane_id, snapshot, _segments) = &data[0];
@@ -1046,7 +1079,8 @@ async fn test_collect_reattach_data_hidden_keeps_detached_and_skips_snapshot() {
     let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
     let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
     let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-    let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, false).await;
+    let data =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, false, 10_000).await;
 
     assert_eq!(data.len(), 1, "one entry for the live pane");
     let (pane_id, snapshot, _segments) = &data[0];
@@ -1125,7 +1159,8 @@ async fn test_collect_reattach_data_hidden_demotes_connected_to_detached() {
     let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
     let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
     let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-    let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, false).await;
+    let data =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, false, 10_000).await;
     assert_eq!(data.len(), 1);
     assert!(data[0].1.is_empty());
 
@@ -1177,12 +1212,14 @@ async fn test_collect_reattach_data_hidden_then_visible_round_trip() {
 
     // Hidden reattach: empty payload, pane stays Detached.
     let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-    let data1 = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, false).await;
+    let data1 =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, false, 10_000).await;
     assert!(data1[0].1.is_empty());
 
     // Visible reattach immediately after: pane flips Connected, full snapshot returned.
     let (kick_tx2, _kick_rx2) = oneshot::channel::<()>();
-    let data2 = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx2, true).await;
+    let data2 =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx2, true, 10_000).await;
     assert_eq!(data2.len(), 1);
     let (_pid, snapshot, _segments) = &data2[0];
     assert!(snapshot.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
@@ -1196,4 +1233,63 @@ async fn test_collect_reattach_data_hidden_then_visible_round_trip() {
         *target.lock().unwrap(),
         PaneOutputTarget::Connected(_)
     ));
+}
+
+/// AC-6: a visible reattach through `collect_reattach_data` passes its
+/// `probe_capacity` argument all the way to the wrap-aware snapshot builder
+/// (`build_shadow_parser_snapshot_for_ring`) it calls internally.
+#[tokio::test]
+async fn collect_reattach_data_visible_reattach_site_reach_uses_the_passed_probe_capacity() {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::NetworkDetach,
+        owner: None,
+    }));
+
+    let session_id;
+    let (raw, segments, shadow_dump, current_dims);
+    {
+        let mut m = mgr.lock().await;
+        session_id = m.create_session("default".to_string());
+        let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+        let pane = make_test_pane_with_target(1, target);
+        (raw, segments, shadow_dump, current_dims) = seed_diverging_wrapped_pane(&pane);
+        m.get_session_mut(session_id)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+    }
+
+    let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true, 5).await;
+    assert_eq!(data.len(), 1);
+    let (_pane_id, snapshot, snapshot_segments) = &data[0];
+
+    let (expected_payload_5, expected_segments_5) =
+        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, true, current_dims, 5);
+    let (expected_payload_10k, _) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        true,
+        current_dims,
+        10_000,
+    );
+
+    assert_eq!(
+        snapshot, &expected_payload_5,
+        "collect_reattach_data's visible-reattach snapshot must match the \
+         builder output at the passed probe_capacity (5)"
+    );
+    assert_eq!(snapshot_segments, &expected_segments_5);
+    assert_ne!(
+        snapshot, &expected_payload_10k,
+        "the passed probe_capacity (5) must actually reach the builder, not \
+         silently fall back to the legacy 10,000 default"
+    );
 }

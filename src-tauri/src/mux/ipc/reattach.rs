@@ -89,6 +89,7 @@ pub(super) fn build_shadow_parser_snapshot_for_ring(
     scrollback: &[u8],
     scrollback_segments: &[(usize, u16, u16)],
     ring_wrapped: bool,
+    probe_capacity: u32,
 ) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
     let (screen_data, alt_screen, current_dims) = {
         let parser = lock_shadow_parser(shadow_parser);
@@ -107,6 +108,7 @@ pub(super) fn build_shadow_parser_snapshot_for_ring(
         alt_screen,
         ring_wrapped,
         current_dims,
+        probe_capacity,
     )
 }
 
@@ -139,6 +141,7 @@ pub(super) async fn collect_reattach_data(
     title_tx: &TitleChangeSender,
     new_kick: oneshot::Sender<()>,
     visible: bool,
+    probe_capacity: u32,
 ) -> Vec<(PaneId, Vec<u8>, Vec<(usize, u16, u16)>)> {
     let mut new_kick_opt = Some(new_kick);
     let mut old_kick: Option<oneshot::Sender<()>> = None;
@@ -277,6 +280,7 @@ pub(super) async fn collect_reattach_data(
                         is_alternate_screen,
                         ring_wrapped,
                         current_dims,
+                        probe_capacity,
                     );
 
                     data.push((pane.id, combined, combined_segments));

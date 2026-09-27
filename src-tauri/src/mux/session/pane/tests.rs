@@ -257,7 +257,7 @@ async fn test_resume_snapshot_construction_with_osc133_bytes_in_scrollback_never
     assert_eq!(set_revision, 1);
 
     let permit = owned_tx.reserve().await.expect("reserve permit");
-    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit), 10_000);
     assert!(matches!(outcome, ResumeOutcome::Resumed));
 
     // The real snapshot-construction path ran (and — for a sanity
@@ -629,6 +629,7 @@ fn largest_real_wrap_restore_producer_segment_list_round_trips_cleanly() {
             false,
             ring_wrapped,
             (cols, rows),
+            10_000,
         );
     assert_eq!(
         snapshot_segments.len(),
@@ -1338,7 +1339,7 @@ fn test_evaluate_output_target_network_detached_visible_stays_detached() {
     let (owned_tx, _rx) = mpsc::channel(16);
     let target = detached_system_target();
     let pane = MuxPane::new_test(1, 80, 24, target.clone());
-    let result = evaluate_output_target(&pane, true, true, &owned_tx);
+    let result = evaluate_output_target(&pane, true, true, &owned_tx, 10_000);
     assert!(matches!(result, EvalResult::Unchanged));
     assert!(matches!(
         *target.lock().unwrap(),
@@ -1353,7 +1354,7 @@ fn test_evaluate_output_target_identity_scoped_connected_to_detached() {
     let (other_tx, _other_rx) = mpsc::channel(16);
     let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(other_tx)));
     let pane = MuxPane::new_test(1, 80, 24, target.clone());
-    let result = evaluate_output_target(&pane, false, false, &owner_tx);
+    let result = evaluate_output_target(&pane, false, false, &owner_tx, 10_000);
     assert!(matches!(result, EvalResult::Unchanged));
     assert!(matches!(
         *target.lock().unwrap(),
@@ -1367,7 +1368,7 @@ fn test_evaluate_output_target_owner_can_detach() {
     let target: SharedOutputTarget =
         Arc::new(StdMutex::new(PaneOutputTarget::Connected(owner_tx.clone())));
     let pane = MuxPane::new_test(1, 80, 24, target.clone());
-    let result = evaluate_output_target(&pane, false, false, &owner_tx);
+    let result = evaluate_output_target(&pane, false, false, &owner_tx, 10_000);
     assert!(matches!(result, EvalResult::SwitchedToDetached));
     match &*target.lock().unwrap() {
         PaneOutputTarget::Detached { reason, owner, .. } => {
@@ -1402,7 +1403,7 @@ fn test_evaluate_output_target_detached_to_connected_returns_snapshot() {
         .lock()
         .unwrap()
         .append(b"\x1b_Gi=1;ZZ\x1b\\");
-    let result = evaluate_output_target(&pane, false, true, &owned_tx);
+    let result = evaluate_output_target(&pane, false, true, &owned_tx, 10_000);
     match result {
         EvalResult::ResumeWithSnapshot { chunk } => {
             // D6''''' (AC-9): the chunk must already be tagged
@@ -1487,7 +1488,7 @@ fn test_evaluate_output_target_restores_the_shadow_parsers_header_row_for_a_wrap
         "test prerequisite: ring must have wrapped"
     );
 
-    let result = evaluate_output_target(&pane, false, true, &owned_tx);
+    let result = evaluate_output_target(&pane, false, true, &owned_tx, 10_000);
     match result {
         EvalResult::ResumeWithSnapshot { chunk } => {
             let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&chunk.data);
@@ -1513,6 +1514,84 @@ fn test_evaluate_output_target_restores_the_shadow_parsers_header_row_for_a_wrap
     }
 }
 
+/// AC-6 site-reach fixture: a wrapped ring whose last recorded segment dims
+/// (80x24) diverge from the shadow parser's current live size (80x40), so
+/// the wrap-aware dump block differs between a small probe capacity and the
+/// legacy 10,000 default. Mirrors `seed_wrapped_diverging_ring_and_shadow`
+/// in `mux::ipc::handlers::tests` and the analogous fixtures in
+/// `mux::ipc::connection::tests` / `mux::ipc::reattach::tests`.
+fn seed_diverging_wrapped_pane(
+    pane: &MuxPane,
+) -> (Vec<u8>, Vec<(usize, u16, u16)>, Vec<u8>, (u16, u16)) {
+    let mut pre = Vec::new();
+    for i in 0..60u32 {
+        pre.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    let mut ring = crate::mux::scrollback_buffer::ScrollbackRingBuffer::new(512);
+    ring.attribute_write(80, 24, &pre);
+    let (raw, segments, wrapped) = ring.read_segments_with_wrap_state();
+    assert!(wrapped, "test prerequisite: the ring must have wrapped");
+    *pane.scrollback.lock().unwrap() = ring;
+    let shadow_dump = {
+        let mut parser = pane.shadow_parser.lock().unwrap();
+        parser.process(&pre);
+        parser.screen_mut().set_size(40, 80);
+        parser.screen().contents_formatted()
+    };
+    (raw, segments, shadow_dump, (80u16, 40u16))
+}
+
+/// AC-6: `evaluate_output_target`'s resume branch passes its
+/// `probe_capacity` argument all the way to
+/// `build_resume_snapshot_bytes_for_ring`.
+#[test]
+fn test_evaluate_output_target_resume_site_reach_uses_the_passed_probe_capacity() {
+    let (owned_tx, _rx) = mpsc::channel(16);
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::HiddenByVisibility,
+        owner: Some(owned_tx.clone()),
+    }));
+    let pane = MuxPane::new_test(15, 80, 24, target.clone());
+    let (raw, segments, shadow_dump, current_dims) = seed_diverging_wrapped_pane(&pane);
+
+    let result = evaluate_output_target(&pane, false, true, &owned_tx, 5);
+    let EvalResult::ResumeWithSnapshot { chunk } = result else {
+        panic!("expected ResumeWithSnapshot");
+    };
+    let actual = decode_snapshot_content(&chunk.data);
+
+    let (expected_payload_5, _) = crate::mux::snapshot_bytes::build_resume_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        true,
+        current_dims,
+        5,
+    );
+    let (expected_payload_10k, _) =
+        crate::mux::snapshot_bytes::build_resume_snapshot_bytes_for_ring(
+            &raw,
+            &segments,
+            &shadow_dump,
+            false,
+            true,
+            current_dims,
+            10_000,
+        );
+
+    assert_eq!(
+        actual, expected_payload_5,
+        "evaluate_output_target's resume branch must match the builder \
+         output at the passed probe_capacity (5)"
+    );
+    assert_ne!(
+        actual, expected_payload_10k,
+        "the passed probe_capacity (5) must actually reach the builder, \
+         not silently fall back to the legacy 10,000 default"
+    );
+}
+
 /// D6''' (round-6 rework, review round-5 finding `89b58cd82d7aa713`):
 /// mirrors `test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit`
 /// for `evaluate_output_target`'s parallel `ResumeWithSnapshot` branch
@@ -1534,7 +1613,7 @@ fn test_evaluate_output_target_stays_detached_when_snapshot_exceeds_frame_limit(
         .unwrap()
         .write(&vec![b'x'; oversize_capacity]);
 
-    let result = evaluate_output_target(&pane, false, true, &owned_tx);
+    let result = evaluate_output_target(&pane, false, true, &owned_tx, 10_000);
     assert!(
         matches!(result, EvalResult::Unchanged),
         "oversize snapshot must not resume the pane"
@@ -1552,7 +1631,7 @@ fn test_evaluate_output_target_already_connected_visible_no_op() {
     let target: SharedOutputTarget =
         Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
     let pane = MuxPane::new_test(1, 80, 24, target.clone());
-    let result = evaluate_output_target(&pane, false, true, &owned_tx);
+    let result = evaluate_output_target(&pane, false, true, &owned_tx, 10_000);
     assert!(matches!(result, EvalResult::Unchanged));
 }
 
@@ -1569,7 +1648,7 @@ fn test_evaluate_output_target_other_connection_cannot_reclaim_hidden() {
     }));
     let pane = MuxPane::new_test(1, 80, 24, target.clone());
 
-    let result = evaluate_output_target(&pane, false, true, &b_tx);
+    let result = evaluate_output_target(&pane, false, true, &b_tx, 10_000);
     assert!(matches!(result, EvalResult::Unchanged));
     match &*target.lock().unwrap() {
         PaneOutputTarget::Detached { reason, owner, .. } => {
@@ -1592,10 +1671,10 @@ fn test_evaluate_output_target_same_connection_hide_show_roundtrip() {
         Arc::new(StdMutex::new(PaneOutputTarget::Connected(a_tx.clone())));
     let pane = MuxPane::new_test(1, 80, 24, target.clone());
 
-    let r1 = evaluate_output_target(&pane, false, false, &a_tx);
+    let r1 = evaluate_output_target(&pane, false, false, &a_tx, 10_000);
     assert!(matches!(r1, EvalResult::SwitchedToDetached));
 
-    let r2 = evaluate_output_target(&pane, false, true, &a_tx);
+    let r2 = evaluate_output_target(&pane, false, true, &a_tx, 10_000);
     assert!(matches!(r2, EvalResult::ResumeWithSnapshot { .. }));
     assert!(matches!(
         *target.lock().unwrap(),
@@ -1616,7 +1695,7 @@ fn test_evaluate_output_target_both_reasons_visible_keeps_detached() {
     }));
     let pane = MuxPane::new_test(1, 80, 24, target.clone());
 
-    let result = evaluate_output_target(&pane, false, true, &a_tx);
+    let result = evaluate_output_target(&pane, false, true, &a_tx, 10_000);
     assert!(matches!(result, EvalResult::Unchanged));
     match &*target.lock().unwrap() {
         PaneOutputTarget::Detached { reason, .. } => {
@@ -1642,7 +1721,7 @@ fn test_evaluate_output_target_system_origin_stays_detached_until_reattach() {
     let target = detached_system_target();
     let pane = MuxPane::new_test(1, 80, 24, target.clone());
 
-    let result = evaluate_output_target(&pane, false, true, &a_tx);
+    let result = evaluate_output_target(&pane, false, true, &a_tx, 10_000);
     assert!(matches!(result, EvalResult::Unchanged));
     match &*target.lock().unwrap() {
         PaneOutputTarget::Detached { reason, owner, .. } => {
@@ -1675,7 +1754,7 @@ async fn test_resume_pane_with_permit_sends_then_swaps() {
         .append(b"\x1b_Gi=7;PASS\x1b\\");
 
     let permit = owned_tx.reserve().await.expect("reserve permit");
-    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit), 10_000);
     assert!(matches!(outcome, ResumeOutcome::Resumed));
 
     // Target switched to Connected.
@@ -1748,7 +1827,7 @@ async fn test_resume_pane_with_permit_includes_screen_for_alt_screen() {
         .process(b"ALT-RESUME-SHADOW");
 
     let permit = owned_tx.reserve().await.expect("reserve permit");
-    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit), 10_000);
     assert!(matches!(outcome, ResumeOutcome::Resumed));
 
     let chunk = rx.try_recv().expect("snapshot enqueued");
@@ -1811,7 +1890,7 @@ async fn test_resume_pane_with_permit_restores_the_shadow_parsers_header_row_for
     );
 
     let permit = owned_tx.reserve().await.expect("reserve permit");
-    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit), 10_000);
     assert!(matches!(outcome, ResumeOutcome::Resumed));
 
     let chunk = rx.try_recv().expect("snapshot enqueued");
@@ -1834,6 +1913,57 @@ async fn test_resume_pane_with_permit_restores_the_shadow_parsers_header_row_for
     );
 }
 
+/// AC-6: `resume_pane_with_permit` passes its `probe_capacity` argument all
+/// the way to `build_resume_snapshot_bytes_for_ring`.
+#[tokio::test]
+async fn test_resume_pane_with_permit_site_reach_uses_the_passed_probe_capacity() {
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::HiddenByVisibility,
+        owner: Some(owned_tx.clone()),
+    }));
+    let pane = MuxPane::new_test(16, 80, 24, target.clone());
+    let (raw, segments, shadow_dump, current_dims) = seed_diverging_wrapped_pane(&pane);
+
+    let permit = owned_tx.reserve().await.expect("reserve permit");
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit), 5);
+    assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+    let chunk = rx.try_recv().expect("snapshot enqueued");
+    let actual = decode_snapshot_content(&chunk.data);
+
+    let (expected_payload_5, _) = crate::mux::snapshot_bytes::build_resume_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        true,
+        current_dims,
+        5,
+    );
+    let (expected_payload_10k, _) =
+        crate::mux::snapshot_bytes::build_resume_snapshot_bytes_for_ring(
+            &raw,
+            &segments,
+            &shadow_dump,
+            false,
+            true,
+            current_dims,
+            10_000,
+        );
+
+    assert_eq!(
+        actual, expected_payload_5,
+        "resume_pane_with_permit must match the builder output at the \
+         passed probe_capacity (5)"
+    );
+    assert_ne!(
+        actual, expected_payload_10k,
+        "the passed probe_capacity (5) must actually reach the builder, \
+         not silently fall back to the legacy 10,000 default"
+    );
+}
+
 /// F2: full Both reason cannot be cleared by `resume_pane_with_permit`
 /// alone — NetworkDetach stays. The permit is dropped without sending.
 #[tokio::test]
@@ -1846,7 +1976,7 @@ async fn test_resume_pane_with_permit_keeps_detached_when_network_bit_set() {
     let pane = MuxPane::new_test(8, 80, 24, target.clone());
 
     let permit = owned_tx.reserve().await.expect("reserve permit");
-    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit), 10_000);
     assert!(matches!(outcome, ResumeOutcome::NoChange));
 
     match &*target.lock().unwrap() {
@@ -1867,7 +1997,7 @@ async fn test_resume_pane_with_permit_no_change_when_already_connected() {
     let pane = MuxPane::new_test(9, 80, 24, target.clone());
 
     let permit = owned_tx.reserve().await.expect("reserve permit");
-    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit), 10_000);
     assert!(matches!(outcome, ResumeOutcome::NoChange));
     assert!(matches!(
         *target.lock().unwrap(),
@@ -1888,7 +2018,7 @@ async fn test_resume_pane_with_permit_owner_mismatch_keeps_detached() {
     let pane = MuxPane::new_test(10, 80, 24, target.clone());
 
     let permit = b_tx.reserve().await.expect("reserve permit");
-    let outcome = resume_pane_with_permit(&pane, &b_tx, AnyPermit::Borrowed(permit));
+    let outcome = resume_pane_with_permit(&pane, &b_tx, AnyPermit::Borrowed(permit), 10_000);
     assert!(matches!(outcome, ResumeOutcome::NoChange));
     assert!(matches!(
         *target.lock().unwrap(),
@@ -1928,7 +2058,7 @@ async fn test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame
         .write(&vec![b'x'; oversize_capacity]);
 
     let permit = owned_tx.reserve().await.expect("reserve permit");
-    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit), 10_000);
     assert!(
         matches!(outcome, ResumeOutcome::NoChange),
         "oversize snapshot must not resume the pane"
@@ -1989,7 +2119,8 @@ async fn resume_pane_with_permit_recovers_after_oversize_condition_clears() {
     // First attempt: oversize, must stay detached (same assertion as
     // `test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit`).
     let permit = owned_tx.reserve().await.expect("reserve permit");
-    let first_outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    let first_outcome =
+        resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit), 10_000);
     assert!(
         matches!(first_outcome, ResumeOutcome::NoChange),
         "first (oversize) attempt must not resume the pane"
@@ -2015,7 +2146,8 @@ async fn resume_pane_with_permit_recovers_after_oversize_condition_clears() {
     // Second attempt (what a hide -> show cycle re-drives): must
     // resume cleanly.
     let permit = owned_tx.reserve().await.expect("reserve permit");
-    let second_outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    let second_outcome =
+        resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit), 10_000);
     assert!(
         matches!(second_outcome, ResumeOutcome::Resumed),
         "the retry must resume the pane once the oversize condition \
@@ -2151,7 +2283,7 @@ fn test_evaluate_output_target_survives_poisoned_shadow_parser() {
     pane.shadow_parser.lock().unwrap().process(b"shadow-data");
     poison_shadow_parser(&pane);
 
-    let result = evaluate_output_target(&pane, false, true, &owned_tx);
+    let result = evaluate_output_target(&pane, false, true, &owned_tx, 10_000);
     match result {
         EvalResult::ResumeWithSnapshot { chunk } => {
             assert_eq!(chunk.kind, ChunkKind::Snapshot);
