@@ -492,6 +492,80 @@ async fn handle_request_pane_snapshot_emits_snapshot_kind() {
     );
 }
 
+/// mux-snapshot-output-boundary task0001, AC-4 (TM-3, authorization):
+/// the existing session-authorization rejection in
+/// `handle_request_pane_snapshot` (a `pane_id` belonging to a DIFFERENT
+/// session than the requester's `active_session_id`) still runs before
+/// any captured read. No boundary is recorded for the requester's own
+/// connection, nothing is enqueued on its channel, and — since the
+/// request never reaches assembly at all — nothing is enqueued on the
+/// pane's own (unrelated) destination channel either.
+#[tokio::test]
+async fn handle_request_pane_snapshot_for_a_pane_outside_the_requesters_session_records_no_boundary()
+ {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (owned_tx, mut owned_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (pane_tx, mut pane_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let pane_target: SharedOutputTarget =
+        Arc::new(StdMutex::new(PaneOutputTarget::Connected(pane_tx.clone())));
+
+    let (requester_session_id, output_capture) = {
+        let mut m = mgr.lock().await;
+        let requester_sid = m.create_session("requester".to_string());
+        let owner_sid = m.create_session("owner".to_string());
+        let owner_wid = m.create_window(owner_sid, "shell".to_string()).unwrap();
+        add_pane(&mut m, owner_sid, owner_wid, 42, pane_target.clone());
+        let output_capture = m
+            .get_session(owner_sid)
+            .unwrap()
+            .windows
+            .get(&owner_wid)
+            .unwrap()
+            .panes
+            .get(&42)
+            .unwrap()
+            .output_capture
+            .clone();
+        (requester_sid, output_capture)
+    };
+
+    let req = MuxMessage {
+        msg_type: MessageType::RequestPaneSnapshot,
+        pane_id: 42,
+        payload: Vec::new(),
+    };
+    let mut deferred = DeferredOutputQueue::new();
+    let result =
+        handle_request_pane_snapshot(&req, requester_session_id, &mgr, &owned_tx, &mut deferred)
+            .await;
+    assert_eq!(
+        result,
+        Ok(()),
+        "an unauthorized request is refused, not an error"
+    );
+
+    assert!(
+        owned_rx.try_recv().is_err(),
+        "nothing must be enqueued on the requester's own channel"
+    );
+    assert!(
+        pane_rx.try_recv().is_err(),
+        "nothing must be enqueued on the pane's own (unrelated) \
+         destination channel either — the request never reached assembly"
+    );
+    // `is_boundary_covered(&tx, 0)` is false exactly when no entry exists
+    // at all for `tx` (any recorded boundary, being a `u64`, covers 0).
+    assert!(
+        !output_capture.is_boundary_covered(&owned_tx, 0),
+        "no boundary must be recorded for the requester's connection"
+    );
+    assert!(
+        !output_capture.is_boundary_covered(&pane_tx, 0),
+        "no boundary must be recorded for the pane's own destination \
+         either"
+    );
+}
+
 /// AC-3 (FR2, FR5, FR6, FR7; TS-2; mux-snapshot-ring-wrap-restore
 /// task0001): the on-demand `RequestPaneSnapshot` path also restores the
 /// shadow parser's header row for a wrapped main-buffer pane — the
@@ -1038,7 +1112,10 @@ async fn flush_deferred_output_delivers_chunk_even_when_its_queued_visibility_re
     let visible_state = Arc::new(AtomicBool::new(true));
     let mut deferred = DeferredOutputQueue::new();
     deferred.defer_visibility_resume(1);
-    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"requested-snapshot".to_vec()));
+    deferred.defer_chunk(
+        PtyOutputChunk::snapshot(1, b"requested-snapshot".to_vec()),
+        None,
+    );
     assert_eq!(
         deferred.len(),
         2,
@@ -1350,8 +1427,8 @@ async fn flush_deferred_output_requeues_chunk_at_front_when_channel_still_full()
         .unwrap();
 
     let mut deferred = DeferredOutputQueue::new();
-    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"A".to_vec()));
-    deferred.defer_chunk(PtyOutputChunk::snapshot(2, b"B".to_vec()));
+    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"A".to_vec()), None);
+    deferred.defer_chunk(PtyOutputChunk::snapshot(2, b"B".to_vec()), None);
     assert_eq!(deferred.len(), 2);
 
     // Free exactly ONE slot.
@@ -1367,7 +1444,7 @@ async fn flush_deferred_output_requeues_chunk_at_front_when_channel_still_full()
         "the second chunk must be requeued at the front when Full is observed again"
     );
     match deferred.pop_front() {
-        Some(DeferredOutputItem::Chunk(chunk)) => assert_eq!(chunk.pane_id, 2),
+        Some(DeferredOutputItem::Chunk(chunk, _)) => assert_eq!(chunk.pane_id, 2),
         other => panic!("expected pane 2's chunk requeued, got {other:?}"),
     }
 
@@ -1392,8 +1469,8 @@ async fn flush_deferred_output_clears_chunk_backlog_when_channel_closed() {
     drop(rx);
 
     let mut deferred = DeferredOutputQueue::new();
-    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"A".to_vec()));
-    deferred.defer_chunk(PtyOutputChunk::snapshot(2, b"B".to_vec()));
+    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"A".to_vec()), None);
+    deferred.defer_chunk(PtyOutputChunk::snapshot(2, b"B".to_vec()), None);
     assert_eq!(deferred.len(), 2);
 
     let visible_state = Arc::new(AtomicBool::new(true));
@@ -1546,7 +1623,7 @@ async fn apply_fair_permit_to_front_deferred_item_sends_front_chunk() {
         .expect("reserve on a fresh channel must succeed");
 
     let mut deferred = DeferredOutputQueue::new();
-    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"A".to_vec()));
+    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"A".to_vec()), None);
 
     let visible_state = Arc::new(AtomicBool::new(true));
     apply_fair_permit_to_front_deferred_item(
