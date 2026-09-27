@@ -91,14 +91,14 @@ workflow:
   status: completed
   completed_at_commit: e3a50a92363cd32c76ad080ae5a7eef3db7dba53
 - id: implement
-  status: completed
+  status: pending
   completed_at_commit: b3f8733b6cc1aac91692286ee989bb8c5fa7c207
   base_commit: 7a1e81eb07a6735d9c7598211c32d95f7b6b6518
 - id: review
   status: completed
   completed_at_commit: f7f9308c10e36bda78a0a85e090335ca18be2e52
 - id: verify
-  status: failed
+  status: pending
   result: fail
   failed_items:
   - id: TS-1
@@ -179,6 +179,74 @@ tasks:
     status: merged
     notes: null
     branch: em-workflow/mux-snapshot-output-boundary/task0001
+  task0002:
+    title: 'Visible reattach: size decision off the output_target lock, and reader-level
+      reattach tests'
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/mux/ipc/reattach.rs
+    - crates/mux_ipc/src/protocol.rs
+    - crates/mux_ipc/src/protocol/tests.rs
+    - src-tauri/src/mux/session/pane/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/reattach/tests.rs
+    - src-tauri/src/mux/ipc/handlers/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR9
+    - FR10
+    - FR11
+    - NFR1
+    - NFR2
+    - NFR3
+    status: pending
+    notes: null
+    provenance:
+      source: verify
+      source_ids:
+      - TS-1
+      - TS-9
+      - TS-10
+      - TS-11
+      - TS-16
+      review_round: null
+  task0003:
+    title: 'Reader-level tests: visibility resume, undelivered snapshots, split OSC
+      9'
+    plan: tasks/task0003.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/ipc/handlers/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR5
+    - FR6
+    status: pending
+    notes: null
+    provenance:
+      source: verify
+      source_ids:
+      - TS-2
+      - TS-6
+      - TS-7
+      review_round: null
 review:
   status: completed
   rounds_completed: 1
@@ -207,6 +275,8 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
+    - task0003
     tests:
     - TS-1
     - TS-2
@@ -218,6 +288,8 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
+    - task0003
     tests:
     - TS-1
     - TS-2
@@ -231,6 +303,8 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
+    - task0003
     tests:
     - TS-1
     - TS-2
@@ -251,6 +325,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0003
     tests:
     - TS-6
   FR6:
@@ -260,6 +335,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0003
     tests:
     - TS-7
   FR7:
@@ -287,6 +363,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-9
   FR10:
@@ -296,6 +373,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-10
   FR11:
@@ -305,6 +383,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-5
     - TS-11
@@ -315,6 +394,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-13
   NFR2:
@@ -324,6 +404,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-12
     - TS-16
@@ -334,6 +415,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-16
   NFR4:
