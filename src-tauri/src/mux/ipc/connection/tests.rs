@@ -1,6 +1,9 @@
 use super::*;
 use crate::mux::ipc::reattach::collect_reattach_data;
-use mux_ipc::protocol::{AttachMsg, ErrorMsg};
+use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
+use crate::mux::session::pane::{PaneId, encode_snapshot_segments};
+use crate::mux::snapshot_bytes::build_snapshot_bytes_for_ring;
+use mux_ipc::protocol::{AttachMsg, ClientScrollbackCapacityPayload, ErrorMsg};
 
 // ── G2 starvation guard (AC-2, mux-window-switch-output-hang task0004
 // rework, review round 3 findings `dd23cfc388062939`/
@@ -2737,6 +2740,7 @@ async fn connection_level_teardown_delivers_held_remainder_then_detached_to_a_re
         &title_tx,
         new_kick_tx,
         true,
+        10_000,
     )
     .await;
 
@@ -2919,6 +2923,7 @@ async fn connection_level_teardown_completes_within_budget_for_a_never_reading_c
         &title_tx,
         new_kick_tx,
         true,
+        10_000,
     )
     .await;
 
@@ -2935,4 +2940,444 @@ async fn connection_level_teardown_completes_within_budget_for_a_never_reading_c
     );
 
     drop(client);
+}
+
+// ── mux-probe-scrollback-capacity task0002, AC-5: the ClientScrollbackCapacity
+// router arm end to end, through the real `handle_connection` select loop ──
+
+/// Build a wrapped-ring pane (small ring capacity, `current_dims` larger
+/// than the ring's only recorded segment — the shape
+/// `wrap_restore_tests.rs`'s `fixture_current_dims_exceeds_the_last_segment`
+/// and `dump_block.rs`'s AC-5(c) probe-equality test both use, confirmed to
+/// diverge between a small probe capacity and the legacy 10,000 fallback)
+/// together with the raw ring bytes/segments/shadow-dump `current_dims`
+/// tuple a test can feed straight into `build_snapshot_bytes_for_ring` to
+/// compute the EXPECTED wire payload for a given probe capacity.
+fn wrapped_diverging_pane_fixture(
+    id: PaneId,
+    output_target: SharedOutputTarget,
+) -> (
+    MuxPane,
+    Vec<u8>,
+    Vec<(usize, u16, u16)>,
+    Vec<u8>,
+    (u16, u16),
+) {
+    let mut pre = Vec::new();
+    for i in 0..60u32 {
+        pre.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+
+    let mut ring = ScrollbackRingBuffer::new(512);
+    ring.attribute_write(80, 24, &pre);
+    let (raw, segments, wrapped) = ring.read_segments_with_wrap_state();
+    assert!(wrapped, "test prerequisite: the ring must have wrapped");
+
+    let pane = MuxPane::new_test(id, 80, 24, output_target);
+    *pane.scrollback.lock().unwrap() = ring;
+    let shadow_dump = {
+        let mut parser = pane.shadow_parser.lock().unwrap();
+        parser.process(&pre);
+        // Resize the shadow parser past the ring's only recorded segment,
+        // WITHOUT a matching `ring.attribute_write` — the ring never learns
+        // about this resize (mirrors the attribution-correction scenario
+        // `build_snapshot_bytes_for_ring_uses_current_dims_even_when_it_
+        // differs_from_the_last_ring_segment` documents).
+        parser.screen_mut().set_size(40, 80);
+        parser.screen().contents_formatted()
+    };
+    let current_dims = (80u16, 40u16);
+
+    (pane, raw, segments, shadow_dump, current_dims)
+}
+
+/// Expected wire payload (D1' segment-encoded) for `wrapped_diverging_pane_fixture`'s
+/// fixture at a given `probe_capacity` — what a `Snapshot` frame for that
+/// pane must equal if the daemon resolved and used exactly that capacity.
+fn expected_snapshot_wire_payload(
+    raw: &[u8],
+    segments: &[(usize, u16, u16)],
+    shadow_dump: &[u8],
+    current_dims: (u16, u16),
+    probe_capacity: u32,
+) -> Vec<u8> {
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        raw,
+        segments,
+        shadow_dump,
+        false,
+        true,
+        current_dims,
+        probe_capacity,
+    );
+    encode_snapshot_segments(&payload, &out_segments)
+}
+
+/// Read frames off `client` until a `MessageType::Snapshot` for `pane_id`
+/// arrives, discarding anything else in between (e.g. a stray leftover
+/// `SnapshotRestore` from an earlier attach).
+async fn drain_until_snapshot(
+    client: &mut Framed<tokio::io::DuplexStream, MuxCodec>,
+    pane_id: u32,
+) -> MuxMessage {
+    loop {
+        let msg = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang waiting for the snapshot")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        if msg.msg_type == MessageType::Snapshot && msg.pane_id == pane_id {
+            return msg;
+        }
+    }
+}
+
+/// AC-5 (FR1, FR4, NFR2, TM-2), Test Notes' router-level recipe: report a
+/// valid capacity, then send a 3-byte (malformed) capacity payload, and
+/// check three things — the handler result is normal (the connection stays
+/// open: proven by the later RequestPaneSnapshot round-trip completing at
+/// all), no frame was admitted for the malformed message (nothing arrives
+/// within a short window), and a following snapshot still uses the EARLIER
+/// (valid) reported value, not the legacy default.
+#[tokio::test]
+async fn client_scrollback_capacity_malformed_payload_is_ignored_and_a_later_snapshot_still_uses_the_earlier_reported_value()
+ {
+    let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+    const PANE_A: u32 = 1;
+    let session_id;
+    let (raw, segments, shadow_dump, current_dims);
+    {
+        let mut mgr = session_manager.lock().await;
+        session_id = mgr.create_session("default".to_string());
+        let wid = mgr.create_window(session_id, "shell".to_string()).unwrap();
+        let target_a: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+        }));
+        let (pane_a, raw_, segments_, shadow_dump_, current_dims_) =
+            wrapped_diverging_pane_fixture(PANE_A, target_a);
+        raw = raw_;
+        segments = segments_;
+        shadow_dump = shadow_dump_;
+        current_dims = current_dims_;
+        mgr.get_session_mut(session_id)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane_a);
+    }
+
+    let (server_stream, client_stream) = tokio::io::duplex(16 * 1024);
+    let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+    let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+    let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+    let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+    let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+    let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+    let conn_task = tokio::spawn(handle_connection(
+        server_stream,
+        session_manager.clone(),
+        shutdown_tx,
+        title_tx,
+        notification_tx,
+        agent_status_tx,
+        pane_exit_sender,
+        upgrade_tx,
+        no_ack_slot(),
+    ));
+
+    let mut client = Framed::new(client_stream, MuxCodec::new());
+    client
+        .send(MuxMessage::control(
+            MessageType::Hello,
+            0,
+            &HelloMsg {
+                client_type: ClientType::Gui,
+                protocol_version: PROTOCOL_VERSION,
+            },
+        ))
+        .await
+        .unwrap();
+    let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+        .await
+        .expect("must not hang on Welcome")
+        .expect("stream must not end")
+        .expect("frame must decode");
+    assert_eq!(welcome.msg_type, MessageType::Welcome);
+
+    client
+        .send(MuxMessage::control(
+            MessageType::Attach,
+            0,
+            &AttachMsg { session_id },
+        ))
+        .await
+        .unwrap();
+    drain_until_pane_created(&mut client, &[PANE_A]).await;
+    // The attach's own reattach snapshot (built while unreported -> legacy
+    // 10,000) — drain and discard it so it cannot contaminate the
+    // on-demand snapshot assertion below.
+    let _initial_snapshot = tokio::time::timeout(Duration::from_secs(5), client.next())
+        .await
+        .expect("must not hang draining the initial attach's own snapshot")
+        .expect("stream must not end")
+        .expect("frame must decode");
+
+    // Report a VALID capacity (5) — small enough to diverge from the
+    // legacy 10,000 for this fixture.
+    client
+        .send(MuxMessage {
+            msg_type: MessageType::ClientScrollbackCapacity,
+            pane_id: 0,
+            payload: ClientScrollbackCapacityPayload { lines: 5 }.to_payload(),
+        })
+        .await
+        .unwrap();
+
+    // Malformed: 3 bytes, not the required 4.
+    client
+        .send(MuxMessage {
+            msg_type: MessageType::ClientScrollbackCapacity,
+            pane_id: 0,
+            payload: vec![1, 2, 3],
+        })
+        .await
+        .unwrap();
+
+    // No frame is ever admitted for THIS message type, valid or malformed
+    // (D1/D3) — confirm nothing arrives within a short window.
+    let nothing_arrived = tokio::time::timeout(Duration::from_millis(200), client.next()).await;
+    assert!(
+        nothing_arrived.is_err(),
+        "no frame must be admitted for a ClientScrollbackCapacity message, malformed or not"
+    );
+
+    // A following snapshot must still use the EARLIER (valid, capacity 5)
+    // reported value — proving the malformed message left it unchanged —
+    // and the round-trip completing at all proves route_message's result
+    // was normal (the connection stayed open).
+    client
+        .send(MuxMessage {
+            msg_type: MessageType::RequestPaneSnapshot,
+            pane_id: PANE_A,
+            payload: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let snapshot = drain_until_snapshot(&mut client, PANE_A).await;
+
+    let expected_at_5 =
+        expected_snapshot_wire_payload(&raw, &segments, &shadow_dump, current_dims, 5);
+    let expected_at_legacy_default =
+        expected_snapshot_wire_payload(&raw, &segments, &shadow_dump, current_dims, 10_000);
+    assert_ne!(
+        expected_at_5, expected_at_legacy_default,
+        "test prerequisite: this fixture must diverge between capacity 5 and the legacy default"
+    );
+    assert_eq!(
+        snapshot.payload, expected_at_5,
+        "the malformed message must not have overwritten the earlier valid report (5)"
+    );
+
+    drop(client);
+    conn_task.abort();
+}
+
+/// AC-5: two connections that reported DIFFERENT capacities (one an
+/// explicit 0, the other never reports at all) each get snapshots built at
+/// their OWN value — the per-connection state is never shared or averaged
+/// across connections, and an explicit 0 is a distinct resolution from
+/// unreported (D2/A-2).
+#[tokio::test]
+async fn client_scrollback_capacity_two_connections_each_get_snapshots_at_their_own_value() {
+    let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+    const PANE_A: u32 = 1;
+    const PANE_B: u32 = 2;
+    // Two SEPARATE sessions, one pane each: attaching both connections to
+    // the SAME session would kick the older one off (the daemon's
+    // single-active-client-per-session eviction, unrelated to what this
+    // test exercises), so independence here is proven across sessions
+    // instead — the per-connection state this feature adds lives on the
+    // connection's own task regardless of which/how-many sessions it
+    // visits.
+    let session_id_a;
+    let session_id_b;
+    let (raw_a, segments_a, shadow_dump_a, current_dims_a);
+    let (raw_b, segments_b, shadow_dump_b, current_dims_b);
+    {
+        let mut mgr = session_manager.lock().await;
+        session_id_a = mgr.create_session("session-a".to_string());
+        let wid_a = mgr
+            .create_window(session_id_a, "shell".to_string())
+            .unwrap();
+        let target_a: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+        }));
+        let (pane_a, ra, sa, da, cda) = wrapped_diverging_pane_fixture(PANE_A, target_a);
+        raw_a = ra;
+        segments_a = sa;
+        shadow_dump_a = da;
+        current_dims_a = cda;
+        mgr.get_session_mut(session_id_a)
+            .unwrap()
+            .windows
+            .get_mut(&wid_a)
+            .unwrap()
+            .add_pane(pane_a);
+
+        session_id_b = mgr.create_session("session-b".to_string());
+        let wid_b = mgr
+            .create_window(session_id_b, "shell".to_string())
+            .unwrap();
+        let target_b: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+        }));
+        let (pane_b, rb, sb, db, cdb) = wrapped_diverging_pane_fixture(PANE_B, target_b);
+        raw_b = rb;
+        segments_b = sb;
+        shadow_dump_b = db;
+        current_dims_b = cdb;
+        mgr.get_session_mut(session_id_b)
+            .unwrap()
+            .windows
+            .get_mut(&wid_b)
+            .unwrap()
+            .add_pane(pane_b);
+    }
+
+    async fn connect_attach_and_report(
+        session_manager: &Arc<Mutex<SessionManager>>,
+        session_id: u32,
+        pane_ids: &[u32],
+        reported: Option<u32>,
+    ) -> (
+        Framed<tokio::io::DuplexStream, MuxCodec>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (server_stream, client_stream) = tokio::io::duplex(16 * 1024);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let conn_task = tokio::spawn(handle_connection(
+            server_stream,
+            session_manager.clone(),
+            shutdown_tx,
+            title_tx,
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            no_ack_slot(),
+        ));
+
+        let mut client = Framed::new(client_stream, MuxCodec::new());
+        client
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        drain_until_pane_created(&mut client, pane_ids).await;
+        // No further pre-draining here: the attach's own SnapshotRestore
+        // frame(s) may have already been consumed (and silently discarded)
+        // by `drain_until_pane_created`'s loop above, or may still be
+        // pending, depending on arrival order relative to the LAST
+        // PaneCreated — either way, the later `RequestPaneSnapshot`
+        // round-trip filters for the specific `MessageType::Snapshot` reply
+        // it expects, which skips any stray leftover `SnapshotRestore`
+        // frames automatically.
+
+        if let Some(lines) = reported {
+            client
+                .send(MuxMessage {
+                    msg_type: MessageType::ClientScrollbackCapacity,
+                    pane_id: 0,
+                    payload: ClientScrollbackCapacityPayload { lines }.to_payload(),
+                })
+                .await
+                .unwrap();
+        }
+
+        (client, conn_task)
+    }
+
+    // Connection A: reports explicit 0.
+    let (mut client_a, conn_a) =
+        connect_attach_and_report(&session_manager, session_id_a, &[PANE_A], Some(0)).await;
+    // Connection B: never reports (unreported -> legacy 10,000).
+    let (mut client_b, conn_b) =
+        connect_attach_and_report(&session_manager, session_id_b, &[PANE_B], None).await;
+
+    client_a
+        .send(MuxMessage {
+            msg_type: MessageType::RequestPaneSnapshot,
+            pane_id: PANE_A,
+            payload: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let snapshot_a = drain_until_snapshot(&mut client_a, PANE_A).await;
+
+    client_b
+        .send(MuxMessage {
+            msg_type: MessageType::RequestPaneSnapshot,
+            pane_id: PANE_B,
+            payload: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let snapshot_b = drain_until_snapshot(&mut client_b, PANE_B).await;
+
+    let expected_a =
+        expected_snapshot_wire_payload(&raw_a, &segments_a, &shadow_dump_a, current_dims_a, 0);
+    let expected_b =
+        expected_snapshot_wire_payload(&raw_b, &segments_b, &shadow_dump_b, current_dims_b, 10_000);
+    assert_ne!(
+        expected_a,
+        expected_snapshot_wire_payload(&raw_a, &segments_a, &shadow_dump_a, current_dims_a, 10_000),
+        "test prerequisite: pane A's fixture must diverge between capacity 0 and the legacy default"
+    );
+
+    assert_eq!(
+        snapshot_a.payload, expected_a,
+        "connection A (reported 0) must get its snapshot built at capacity 0"
+    );
+    assert_eq!(
+        snapshot_b.payload, expected_b,
+        "connection B (never reported) must get its snapshot built at the legacy default (10,000), \
+         independent of connection A's report"
+    );
+
+    drop(client_a);
+    drop(client_b);
+    conn_a.abort();
+    conn_b.abort();
 }

@@ -6,7 +6,9 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
-use mux_ipc::protocol::{ErrorMsg, MessageType, MuxMessage, SetVisibilityPayload};
+use mux_ipc::protocol::{
+    ClientScrollbackCapacityPayload, ErrorMsg, MessageType, MuxMessage, SetVisibilityPayload,
+};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::codec::Framed;
@@ -26,6 +28,7 @@ use crate::mux::session::pane::{
     AgentStatusReportSender, DeferredOutputQueue, NotificationSender, PtyOutputChunk,
     SharedPaneExitSender, TitleChangeSender,
 };
+use crate::mux::snapshot_bytes::resolve_probe_capacity;
 
 /// Handle a CLI client after handshake.
 ///
@@ -376,13 +379,16 @@ pub(super) async fn route_message(
     visible_state: &Arc<AtomicBool>,
     upgrade_tx: &UpgradeSignalSender,
     deferred_output: &mut DeferredOutputQueue,
+    reported_scrollback_capacity: &mut Option<u32>,
 ) -> Result<(), bool> {
+    let probe_capacity = resolve_probe_capacity(*reported_scrollback_capacity);
     flush_deferred_output(
         deferred_output,
         pane_output_tx,
         session_manager,
         *active_session_id,
         visible_state,
+        probe_capacity,
     )
     .await;
 
@@ -411,6 +417,7 @@ pub(super) async fn route_message(
                 title_tx,
                 kick_rx,
                 visible_state,
+                probe_capacity,
             )
             .await?;
         }
@@ -456,6 +463,7 @@ pub(super) async fn route_message(
                 session_manager,
                 pane_output_tx,
                 deferred_output,
+                probe_capacity,
             )
             .await?;
         }
@@ -474,6 +482,7 @@ pub(super) async fn route_message(
                 pane_output_tx,
                 visible_state,
                 deferred_output,
+                probe_capacity,
             )
             .await;
         }
@@ -489,6 +498,31 @@ pub(super) async fn route_message(
                             }
                         }
                     }
+                }
+            }
+        }
+        MessageType::ClientScrollbackCapacity => {
+            // mux-probe-scrollback-capacity task0002 (D1/D2/D3): the
+            // reporting tab's own scrollback capacity, used to resolve the
+            // wrap-restore probe's capacity for every snapshot this
+            // connection is sent from now on (D1: min(reported, 10,000);
+            // D2: unreported/no-report-yet falls back to the legacy 10,000
+            // cap). A malformed payload leaves the previously stored value
+            // (if any) unchanged and is logged with the message type and
+            // payload length ONLY -- never the payload bytes, which may
+            // carry arbitrary client-controlled data. No reply is ever sent
+            // for this message type, valid or not.
+            match ClientScrollbackCapacityPayload::from_payload(&msg.payload) {
+                Some(payload) => {
+                    *reported_scrollback_capacity = Some(payload.lines);
+                }
+                None => {
+                    log::warn!(
+                        "ClientScrollbackCapacity: malformed payload ({:?}, {} bytes); \
+                         keeping previously stored value",
+                        msg.msg_type,
+                        msg.payload.len()
+                    );
                 }
             }
         }
