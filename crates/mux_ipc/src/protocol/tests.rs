@@ -23,14 +23,16 @@ fn test_message_type_round_trip() {
     // / agent-API additions; see `test_agent_api_message_type_round_trip`
     // for full per-discriminant coverage. 0x25..=0x26 (previously
     // unused) now hold the mux-daemon-hot-upgrade task0001 `Upgrade` /
-    // `Upgrading` additions; see
-    // `test_upgrade_message_type_round_trip`. The unused-space boundary
-    // this assertion pins moves to 0x27.
+    // `Upgrading` additions; see `test_upgrade_message_type_round_trip`.
+    // 0x27 (previously unused) now holds the
+    // mux-probe-scrollback-capacity task0001 `ClientScrollbackCapacity`
+    // addition; see `test_client_scrollback_capacity_message_type`. The
+    // unused-space boundary this assertion pins moves to 0x28.
     assert_eq!(
         MessageType::from_u8(0x1D),
         Some(MessageType::AgentStatusUpdate)
     );
-    assert!(MessageType::from_u8(0x27).is_none());
+    assert!(MessageType::from_u8(0x28).is_none());
     assert!(MessageType::from_u8(0xff).is_none());
 }
 
@@ -761,8 +763,10 @@ fn test_welcome_with_windows_roundtrip() {
 /// AC-3: `from_u8` maps every new discriminant. The space right after
 /// this extended range is occupied by the mux-daemon-hot-upgrade
 /// task0001 `Upgrade` / `Upgrading` additions (see
-/// `test_upgrade_message_type_round_trip`), so the still-unmapped
-/// boundary this test pins moves to 0x27.
+/// `test_upgrade_message_type_round_trip`) and then the
+/// mux-probe-scrollback-capacity task0001 `ClientScrollbackCapacity`
+/// addition (see `test_client_scrollback_capacity_message_type`), so the
+/// still-unmapped boundary this test pins moves to 0x28.
 #[test]
 fn test_agent_api_message_type_round_trip() {
     for i in 0x1Du8..=0x24u8 {
@@ -792,7 +796,7 @@ fn test_agent_api_message_type_round_trip() {
         Some(MessageType::WaitAgentStateResult)
     );
     assert_eq!(MessageType::from_u8(0x24), Some(MessageType::AgentApiError));
-    assert!(MessageType::from_u8(0x27).is_none());
+    assert!(MessageType::from_u8(0x28).is_none());
 }
 
 /// AC-1 / AC-3: APC round trip for every new discriminant, mirroring
@@ -1101,8 +1105,10 @@ fn test_public_pane_id_parse_rejects_non_numeric_pane_number() {
 // ---- mux daemon hot-upgrade: Upgrade / Upgrading message types (task0001) ----
 
 /// AC-1 / AC-3: `from_u8` maps both new discriminants to their own
-/// distinct variants, and the byte immediately after them is still
-/// unmapped.
+/// distinct variants. The byte immediately after them (0x27) is now the
+/// mux-probe-scrollback-capacity task0001 `ClientScrollbackCapacity`
+/// addition (see `test_client_scrollback_capacity_message_type`), so the
+/// still-unmapped boundary this test pins moves to 0x28.
 #[test]
 fn test_upgrade_message_type_round_trip() {
     for i in 0x25u8..=0x26u8 {
@@ -1111,7 +1117,7 @@ fn test_upgrade_message_type_round_trip() {
     }
     assert_eq!(MessageType::from_u8(0x25), Some(MessageType::Upgrade));
     assert_eq!(MessageType::from_u8(0x26), Some(MessageType::Upgrading));
-    assert!(MessageType::from_u8(0x27).is_none());
+    assert!(MessageType::from_u8(0x28).is_none());
 }
 
 /// AC-3: neither new discriminant collides with any existing value the
@@ -1174,11 +1180,13 @@ fn test_apc_round_trip_upgrade_message_types() {
 /// AC-2: a frame carrying a type byte the decoder does not recognise is
 /// reported as "not a known message" (`from_frame_body` returns `None`),
 /// not as an error that would tear the connection down — checked for
-/// the byte immediately adjacent to the new `Upgrading` discriminant.
+/// the byte immediately adjacent to the new `ClientScrollbackCapacity`
+/// discriminant (0x27), which is itself now the byte immediately after
+/// `Upgrading`.
 #[test]
 fn test_from_frame_body_returns_none_for_byte_adjacent_to_new_upgrade_types() {
-    assert!(MessageType::from_u8(0x27).is_none());
-    let mut body = vec![0x27u8];
+    assert!(MessageType::from_u8(0x28).is_none());
+    let mut body = vec![0x28u8];
     body.extend_from_slice(&0u32.to_le_bytes());
     assert!(MuxMessage::from_frame_body(&body).is_none());
 }
@@ -1694,4 +1702,146 @@ fn fits_single_snapshot_frame_boundary() {
     assert!(fits_single_snapshot_frame(0));
     assert!(fits_single_snapshot_frame(MAX_SNAPSHOT_FRAME_PAYLOAD));
     assert!(!fits_single_snapshot_frame(MAX_SNAPSHOT_FRAME_PAYLOAD + 1));
+}
+
+// ---- mux-probe-scrollback-capacity task0001: ClientScrollbackCapacity ----
+
+/// AC-1: `from_u8(0x27)` returns the new variant, and the addition does
+/// not bump `PROTOCOL_VERSION` (additive message, IMPLEMENTATION.md D4).
+#[test]
+fn test_client_scrollback_capacity_message_type() {
+    assert_eq!(
+        MessageType::from_u8(0x27),
+        Some(MessageType::ClientScrollbackCapacity)
+    );
+    assert_eq!(MessageType::ClientScrollbackCapacity as u8, 0x27);
+    assert_eq!(PROTOCOL_VERSION, 3);
+}
+
+/// AC-1: every pre-existing discriminant still maps exactly as before —
+/// adding 0x27 did not shift or collide with any earlier mapping.
+#[test]
+fn test_client_scrollback_capacity_does_not_disturb_existing_discriminants() {
+    for i in 0x01u8..=0x26u8 {
+        if i == 0x11 || i == 0x16 || i == 0x17 {
+            assert!(MessageType::from_u8(i).is_none());
+            continue;
+        }
+        let mt = MessageType::from_u8(i).unwrap();
+        assert_eq!(mt as u8, i);
+        assert_ne!(mt, MessageType::ClientScrollbackCapacity);
+    }
+}
+
+/// AC-1: a message with pane id 0 and a 4-byte payload round-trips
+/// unchanged through the frame body encode/decode helpers.
+#[test]
+fn test_client_scrollback_capacity_round_trips_through_frame_body() {
+    let payload = ClientScrollbackCapacityPayload { lines: 7 };
+    let msg = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: payload.to_payload(),
+    };
+    let body = msg.to_frame_body();
+    let decoded = MuxMessage::from_frame_body(&body).unwrap();
+    assert_eq!(decoded.msg_type, MessageType::ClientScrollbackCapacity);
+    assert_eq!(decoded.pane_id, 0);
+    let decoded_payload = ClientScrollbackCapacityPayload::from_payload(&decoded.payload).unwrap();
+    assert_eq!(decoded_payload.lines, 7);
+}
+
+/// AC-1: round-trips through the APC envelope.
+#[test]
+fn test_client_scrollback_capacity_round_trips_through_apc() {
+    let payload = ClientScrollbackCapacityPayload { lines: 10_000 };
+    let msg = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: payload.to_payload(),
+    };
+    let apc = msg.to_apc();
+    let body = &apc[2..apc.len() - 2];
+    let decoded = MuxMessage::from_apc(body).unwrap();
+    assert_eq!(decoded.msg_type, MessageType::ClientScrollbackCapacity);
+    assert_eq!(decoded.pane_id, 0);
+    let decoded_payload = ClientScrollbackCapacityPayload::from_payload(&decoded.payload).unwrap();
+    assert_eq!(decoded_payload.lines, 10_000);
+}
+
+/// AC-1: round-trips through the OSC 9999 envelope.
+#[test]
+fn test_client_scrollback_capacity_round_trips_through_osc() {
+    let payload = ClientScrollbackCapacityPayload { lines: 0 };
+    let msg = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: payload.to_payload(),
+    };
+    let osc = msg.to_osc();
+    let inner = &osc[2..osc.len() - 2];
+    let apc_payload = inner.strip_prefix("9999;").unwrap();
+    let decoded = MuxMessage::from_apc(apc_payload).unwrap();
+    assert_eq!(decoded.msg_type, MessageType::ClientScrollbackCapacity);
+    assert_eq!(decoded.pane_id, 0);
+    let decoded_payload = ClientScrollbackCapacityPayload::from_payload(&decoded.payload).unwrap();
+    assert_eq!(decoded_payload.lines, 0);
+}
+
+/// AC-1: round-trips through the EMUX plaintext envelope (Windows ConPTY
+/// input transport), mirroring
+/// `to_plaintext_round_trips_with_bridge_parser_shape`.
+#[test]
+fn test_client_scrollback_capacity_round_trips_through_plaintext() {
+    let payload = ClientScrollbackCapacityPayload { lines: u32::MAX };
+    let msg = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: payload.to_payload(),
+    };
+    let pt = msg.to_plaintext();
+    let body = pt
+        .strip_prefix("EMUX;")
+        .and_then(|s| s.strip_suffix('\r'))
+        .expect("plaintext envelope");
+    let with_apc_prefix = format!("{}{}", APC_PREFIX, body);
+    let decoded = MuxMessage::from_apc(&with_apc_prefix).expect("decoded");
+    assert_eq!(decoded.msg_type, MessageType::ClientScrollbackCapacity);
+    assert_eq!(decoded.pane_id, 0);
+    let decoded_payload = ClientScrollbackCapacityPayload::from_payload(&decoded.payload).unwrap();
+    assert_eq!(decoded_payload.lines, u32::MAX);
+}
+
+/// AC-2: the payload decoder returns the value for exactly-4-byte
+/// little-endian inputs, for every listed boundary value.
+#[test]
+fn test_client_scrollback_capacity_payload_decodes_exact_4_byte_values() {
+    for value in [0u32, 50, 10_000, 10_001, u32::MAX] {
+        let bytes = value.to_le_bytes();
+        let decoded = ClientScrollbackCapacityPayload::from_payload(&bytes).unwrap();
+        assert_eq!(decoded.lines, value);
+    }
+}
+
+/// AC-2: the payload decoder returns nothing (never panics) for inputs
+/// of every listed non-4-byte length.
+#[test]
+fn test_client_scrollback_capacity_payload_rejects_wrong_length() {
+    for len in [0usize, 3, 5, 8] {
+        let bytes = vec![0u8; len];
+        assert!(ClientScrollbackCapacityPayload::from_payload(&bytes).is_none());
+    }
+}
+
+/// AC-2: the encoder emits exactly 4 little-endian bytes, and each
+/// listed value round-trips through encode then decode.
+#[test]
+fn test_client_scrollback_capacity_payload_encoder_emits_exactly_4_bytes() {
+    for value in [0u32, 50, 10_000, 10_001, u32::MAX] {
+        let payload = ClientScrollbackCapacityPayload { lines: value };
+        let bytes = payload.to_payload();
+        assert_eq!(bytes.len(), 4);
+        let decoded = ClientScrollbackCapacityPayload::from_payload(&bytes).unwrap();
+        assert_eq!(decoded.lines, value);
+    }
 }

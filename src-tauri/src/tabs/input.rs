@@ -4,6 +4,8 @@
 
 use mux_ipc::protocol::{MessageType, MuxMessage};
 
+#[cfg(test)]
+use super::ControlFrameRecord;
 use super::Tab;
 
 impl Tab {
@@ -108,6 +110,12 @@ impl Tab {
     pub fn send_control(&self, msg: &MuxMessage) -> bool {
         #[cfg(test)]
         self.outbound_write_log.lock().push(msg.payload.clone());
+        #[cfg(test)]
+        self.control_frame_log.lock().push(ControlFrameRecord {
+            msg_type: msg.msg_type,
+            pane_id: msg.pane_id,
+            payload: msg.payload.clone(),
+        });
         let bytes = crate::mux::apc::encode_emterm_mux(msg);
         match &self.pty {
             Some(p) => {
