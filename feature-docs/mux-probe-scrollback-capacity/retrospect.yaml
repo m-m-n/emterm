@@ -1,0 +1,37 @@
+feature: mux-probe-scrollback-capacity
+collected_at: "2026-09-27T23:07:00+09:00"
+session_ids: [01a0e32e-8337-70e0-b04f-b4a844ac3e0b]
+signals:
+  review_critical_high: []
+  conflict_reworks:
+    - {task: task0002, retries: 1}
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code score 2.08 (p(2)=0.92, p(3)=0.08): new logic across several modules (protocol, bridge, daemon, snapshot probe)"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.85, confidence: 0.84, probabilities: {'0': 0.0, '1': 0.15, '2': 0.85, '3': 0.0}}
+        observed_at: "2026-09-27T20:37:30+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 2.08, confidence: 0.91, probabilities: {'0': 0.0, '1': 0.0, '2': 0.92, '3': 0.08}}
+        observed_at: "2026-09-27T20:41:10+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/mux/snapshot_bytes/dump_block.rs
+        - src-tauri/src/mux/snapshot_bytes.rs
+        - src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+      test_change_kind: new_behavior_tests
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      changes_external_contract: false
+      changes_behavior: true
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "task0001 and task0002 both declared crates/mux_ipc/src/protocol.rs; task0002 re-added the same wire message and resolved it by merging the parent (parent-side adoption, 1 retry)."
+  - "Codex pre-survey marked changes_external_contract: false, but the fix added a new IPC control message (ClientScrollbackCapacity); the actual changed files (27) far exceeded files_expected (3)."
+  - "TS-8 (manual repro on a release build) is not executable in a batch run; left to the human evaluator."

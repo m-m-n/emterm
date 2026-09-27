@@ -119,7 +119,8 @@ workflow:
     TS-8 (manual repro on a release build): not executed in the batch run; left for the human evaluator.
   completed_at_commit: 7994b7456e380b27eff18831db1ab8519ea03124
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: 7b26e3aa152cf370247a014187ea7ad8848383c7
 tasks:
   task0001:
     title: 'Client-capacity message: protocol, GUI report, bridge relay'
