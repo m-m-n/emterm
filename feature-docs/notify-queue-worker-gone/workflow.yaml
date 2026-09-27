@@ -98,7 +98,8 @@ workflow:
   result: pass
   failed_items: []
 - id: retrospect
-  status: pending
+  status: completed
+  completed_at_commit: 2a5f8bd0b954f3e81451250ad3cd0dd2841f9ab6
 tasks:
   task0001:
     title: Distinguish notification-worker loss from queue saturation in NotifyQueue::try_submit
