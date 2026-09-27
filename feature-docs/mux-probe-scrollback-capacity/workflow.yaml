@@ -74,6 +74,12 @@ project:
       test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/mux_ipc/Cargo.toml --lib
       format_command: ''
       e2e_test_command: ''
+    rust_windows:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --lib --tests
+      test_command: ''
+      format_command: ''
+      e2e_test_command: ''
 workflow:
 - id: create-spec
   artifacts:
@@ -104,7 +110,83 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: 'Client-capacity message: protocol, GUI report, bridge relay'
+    plan: tasks/task0001.md
+    files:
+    - crates/mux_ipc/src/protocol.rs
+    - crates/mux_ipc/src/protocol/tests.rs
+    - src-tauri/src/mux/ipc/codec.rs
+    - src-tauri/src/tabs/mux_link.rs
+    - src-tauri/src/tabs/input.rs
+    - src-tauri/src/tabs/mod.rs
+    - src-tauri/src/tabs/tests/mux_link.rs
+    - src-tauri/src/mux/bridge/mod.rs
+    - src-tauri/src/mux/bridge/forward.rs
+    - src-tauri/src/mux/bridge/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - api-contract
+    - input-handling
+    - external-io
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    status: pending
+    notes: null
+    branch: null
+  task0002:
+    title: Daemon per-connection capacity drives the wrap-restore probe
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/mux/snapshot_bytes/dump_block.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+    - src-tauri/src/mux/ipc/connection/mod.rs
+    - src-tauri/src/mux/ipc/connection/dispatch.rs
+    - src-tauri/src/mux/ipc/connection/tests.rs
+    - src-tauri/src/mux/ipc/handlers/attach.rs
+    - src-tauri/src/mux/ipc/handlers/mod.rs
+    - src-tauri/src/mux/ipc/handlers/tests.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/ipc/reattach/tests.rs
+    - src-tauri/src/mux/session/pane/output_target.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - crates/mux_ipc/src/protocol.rs
+    - crates/mux_ipc/src/protocol/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    - concurrency
+    - api-contract
+    complexity: high
+    requirements:
+    - FR1
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - FR8
+    - FR9
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    status: pending
+    notes: null
+    branch: null
 review:
   status: pending
   rounds_completed: 0
@@ -118,99 +200,142 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-4
+    - TS-7
   FR2:
     title: GUI reports the tab's own capacity
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
+    - TS-8
   FR3:
     title: Bridge forwards and re-sends the capacity
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-6
   FR4:
     title: Per-connection capacity in the daemon
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-2
+    - TS-7
   FR5:
     title: Probe capacity reaches all four snapshot assembly sites
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-1
+    - TS-2
+    - TS-7
+    - TS-8
   FR6:
     title: Cap above 10,000 keeps the dump
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-2
   FR7:
     title: Snapshot byte shape unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-3
   FR8:
     title: Known limits documented
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-9
   FR9:
     title: Regression test for small capacities with a grow-resize
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-1
   NFR1:
     title: Protocol compatibility
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-2
+    - TS-4
   NFR2:
     title: Bounded probe cost
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-2
+    - TS-4
+    - TS-7
   NFR3:
     title: Platforms and feature gates
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-10
   NFR4:
     title: Diagnostics
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-11
   NFR5:
     title: Formatting scope
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-12
 batch:
   review_rework_count: 0
   verify_rework:
