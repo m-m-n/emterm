@@ -1,0 +1,47 @@
+schema_version: 1
+feature: mux-probe-scrollback-capacity
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: 50329c188eeb4237cedd324949278e654517f7f4
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  resolved_at: '2026-09-27T20:44:00+09:00'
+  e2e: []
+  design_system_candidates:
+  - doc/UI-DESIGN-GUIDELINES.yaml
+  - src-tauri/web-shared/styles.css
+  - src-tauri/src/ui/md3.rs
+  package_files:
+  - package.json
+  - Cargo.toml
+  - src-tauri/Cargo.toml
+  - crates/term_core/Cargo.toml
+  - crates/mux_ipc/Cargo.toml
+  reference_scan_targets:
+  - src-tauri/src/mux/snapshot_bytes/dump_block.rs
+  - src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+  - src-tauri/src/mux/snapshot_bytes.rs
+  - src-tauri/src/tabs/replay.rs
+  - crates/term_core/src/terminal_core/replay.rs
+  - crates/term_core/src/reflow.rs
+  - crates/term_core/src/terminal_core.rs
+  - crates/mux_ipc/src/protocol.rs
+  - src-tauri/src/mux/bridge/mod.rs
+  - src-tauri/src/mux/ipc/connection/mod.rs
+  - src-tauri/src/mux/ipc/reattach.rs
+  - src-tauri/src/mux/session/pane/output_target.rs
+  - src-tauri/src/mux/session/pane/mod.rs
+  - src-tauri/src/settings/mod.rs
+  - feature-docs/mux-snapshot-ring-wrap-restore/SPEC.md
+  - feature-docs/mux-snapshot-ring-wrap-restore/IMPLEMENTATION.md
+  - feature-docs/mux-snapshot-ring-wrap-restore/reviews/round2.yaml
+last_error: null
