@@ -4,8 +4,8 @@ phase: create-plan
 status: dispatching
 generation: 1
 base_revision: a52f174673284e33932dac14d45b278677aa5fe4
-last_input_digest: sha256:a88b8e7d8427217593758baf3d7e714bb5862fd7bd2ba3513dc13b5d51a28e19
-active_request_id: create-plan-run-0002
+last_input_digest: sha256:ec57ca9395c9790c1eaa620a0e6fb210f5feb3871abdaafcd10abe6faec24c53
+active_request_id: create-plan-run-0003
 packets: {}
 answers: {}
 worker_runs:
@@ -14,25 +14,37 @@ worker_runs:
   input_digest: sha256:096fd5e8447b5cd2ef4192a8125b183b2f7e0f20950cbeb7c75402cd031f66dc
   output_digest: null
 - request_id: create-plan-run-0002
-  status: dispatched
+  status: failed
   input_digest: sha256:a88b8e7d8427217593758baf3d7e714bb5862fd7bd2ba3513dc13b5d51a28e19
+  output_digest: sha256:4793d9751cd1e18649176aa02d2caefeae38cd6cc5f0105a19885c184bb9f8b6
+- request_id: create-plan-run-0003
+  status: dispatched
+  input_digest: sha256:ec57ca9395c9790c1eaa620a0e6fb210f5feb3871abdaafcd10abe6faec24c53
   output_digest: null
 artifacts:
 - path: feature-docs/mux-snapshot-output-boundary/IMPLEMENTATION.md
-  sha256: sha256:485c5f3c05922d62eb949e692ccdc2d090b083c531746cb374d3ad8200929055
-  produced_by: create-plan-run-0001
+  sha256: sha256:d764aa8e341ff5d5e407aba572fd32576d9bdb1ac7cfb9a072c2c564bf08fbf3
+  produced_by: create-plan-run-0002
 - path: feature-docs/mux-snapshot-output-boundary/VERIFICATION.md
-  sha256: sha256:65924730a5e65097c53894ef7446df7ad4107d044ab0a9caebc26c8e1b83614e
-  produced_by: create-plan-run-0001
+  sha256: sha256:1f7065ed310c7cfbab86f9537c02a9b38ef271538a76583c9cc3ccf201c5aaa4
+  produced_by: create-plan-run-0002
+- path: feature-docs/mux-snapshot-output-boundary/THREAT-MODEL.md
+  sha256: sha256:d0f3a31245648e5d93950f432cbd512605e519768b1fbf67b2f4c26e03049fd2
+  produced_by: create-plan-run-0002
 - path: feature-docs/mux-snapshot-output-boundary/tasks/task0001.md
-  sha256: sha256:cfc94e61900f42a063f454fabfd89eaac93ab14ad4dfb6be3219bf3df3620712
-  produced_by: create-plan-run-0001
-patches: []
+  sha256: sha256:ca2212a017893013321585b731f41f011dbd0054ee29ebdcc44108e6aa0e4d63
+  produced_by: create-plan-run-0002
+patches:
+- patch_id: create-plan-p0002
+  status: rejected
+  base_input_digest: sha256:a88b8e7d8427217593758baf3d7e714bb5862fd7bd2ba3513dc13b5d51a28e19
+  base_workflow_blob: f5c4b4970bbeae1959a3480a7a422373d7a2b2d1
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
 last_error:
-  kind: stale_input
-  request_id: create-plan-run-0001
-  note: 'planner-contract.md changed during dispatch (plugin merged threat-model-stride:
-    THREAT-MODEL.md now required). Artifacts kept and revised by run-0002 via replace_own.'
+  kind: validation_failed
+  request_id: create-plan-run-0002
+  note: 'validate-worker-output.py: task-plan-files (Files bullets contain multiple
+    backtick-quoted tokens) and task-plan-files-mismatch. Re-dispatched as run-0003
+    for formatting fix.'
