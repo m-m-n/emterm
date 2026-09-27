@@ -489,13 +489,16 @@ pub enum MessageType {
     /// Same empty-payload, pane-id-zero wire shape as `Upgrade` /
     /// `Shutdown`.
     Upgrading = 0x26,
-    /// Client -> daemon: report the reporting tab's own scrollback
-    /// capacity (mux-probe-scrollback-capacity, IMPLEMENTATION.md Shared
-    /// Components). `pane_id` is 0. Payload is
-    /// [`ClientScrollbackCapacityPayload`]. The daemon never replies. An
-    /// older daemon that does not recognise this discriminant discards the
-    /// frame through the existing unknown-type path in
-    /// [`MuxMessage::from_frame_body`] rather than erroring.
+    /// Client → daemon: reports the sending GUI tab's own `TerminalCore`
+    /// scrollback capacity (mux-probe-scrollback-capacity task0001 FR2,
+    /// SPEC A-5). Direction client to daemon only. `pane_id` is 0. Payload
+    /// is a 4-byte little-endian capacity ([`ClientScrollbackCapacityPayload`]).
+    /// The daemon never replies. The sender never clamps or substitutes the
+    /// reported value — resolution (the daemon-side cap) is entirely a
+    /// daemon concern (IMPLEMENTATION.md D1). An older daemon that does not
+    /// recognise this discriminant drops the frame through the existing
+    /// unknown-type path in [`MuxMessage::from_frame_body`] rather than
+    /// erroring.
     ClientScrollbackCapacity = 0x27,
 }
 
@@ -684,21 +687,21 @@ impl SetVisibilityPayload {
     }
 }
 
-/// `ClientScrollbackCapacity` payload: the reporting tab's own
-/// `TerminalCore` scrollback capacity, sent as-is (0 and values above
-/// 10,000 are legal — the sender never clamps or substitutes; the daemon
-/// owns resolution).
+/// Payload for `MessageType::ClientScrollbackCapacity`: the reporting tab's
+/// own scrollback capacity, in lines.
 ///
-/// Carried as a raw 4-byte little-endian payload (NOT bincode), in the
-/// same style as [`SetVisibilityPayload`].
+/// Carried as a raw 4-byte little-endian payload (NOT bincode), in the same
+/// style as [`SetVisibilityPayload`], so no deserializer round-trip is
+/// required on either side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientScrollbackCapacityPayload {
     pub lines: u32,
 }
 
 impl ClientScrollbackCapacityPayload {
-    /// Decodes `payload` only when it is exactly 4 bytes (little-endian);
-    /// any other length yields `None`. Never panics; allocates nothing.
+    /// Decodes `payload` when it is exactly 4 bytes, read little-endian.
+    /// Never panics and never allocates in proportion to the input; any
+    /// other length returns `None`.
     pub fn from_payload(payload: &[u8]) -> Option<Self> {
         let bytes: [u8; 4] = payload.try_into().ok()?;
         Some(Self {
