@@ -7,13 +7,30 @@ base_revision: 07ee845bf3be965914c365c49038dffe1304e91c
 last_input_digest: sha256:e2956ce36ff36abfe2469a51792587da1c4f68040ff2f8ba620ad8d8e7f2e22c
 active_request_id: null
 packets: {}
-answers: {}
+answers:
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-27T18:21:04+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'kind: project_native, paths: [src-tauri/src/render/theme.rs]
+      (top of 3 candidates; design step skipped, Rust-only change)'
 worker_runs:
 - request_id: create-spec-run-0001
   status: completed
   input_digest: sha256:e2956ce36ff36abfe2469a51792587da1c4f68040ff2f8ba620ad8d8e7f2e22c
   output_digest: null
-artifacts: []
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:e2956ce36ff36abfe2469a51792587da1c4f68040ff2f8ba620ad8d8e7f2e22c
+  output_digest: null
+artifacts:
+- path: feature-docs/notify-queue-worker-gone/SPEC.md
+  sha256: sha256:fd9554f1209fefc021884bf75939c22e90837c8d5d1b25b2566f6e44ee3f4105
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
