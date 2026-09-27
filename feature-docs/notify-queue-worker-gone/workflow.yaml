@@ -83,7 +83,8 @@ workflow:
   artifacts:
   - VERIFICATION.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: 098f0cbe250a1bbf9f4cd319c760108a619ad08d
 - id: implement
   status: pending
   base_commit: 7b563b7f46653a201f7694f33748265633bf6e7c
@@ -95,7 +96,21 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Distinguish notification-worker loss from queue saturation in NotifyQueue::try_submit
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    - api-contract
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -105,71 +120,71 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-6]
   FR2:
     title: Full の挙動を維持する
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3, TS-5]
   FR3:
     title: ワーカー消失専用のログ定数
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-7]
   FR4:
     title: ワーカー消失報告用の独立した抑止フラグ
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2, TS-3, TS-4, TS-6]
   FR5:
     title: SubmitOutcome にワーカー消失バリアントを追加する
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2]
   FR6:
     title: 再発を検出する単体テスト
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-8]
   NFR1:
     title: NotificationSink トレイト境界を変えない
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5, TS-8]
   NFR2:
     title: 投入経路はブロックしない
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4, TS-5, TS-8]
   NFR3:
     title: ログ記録でのリダクション
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-7]
   NFR4:
     title: プラットフォーム
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-8]
 batch:
   review_rework_count: 0
   verify_rework:
