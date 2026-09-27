@@ -1323,6 +1323,79 @@ fn test_resize_holds_scrollback_lock_establishing_ordering_with_reader_thread() 
     assert_eq!(pane.rows, 40);
 }
 
+/// mux-snapshot-output-boundary task0001, AC-2 ("Resize"): `resize()`'s
+/// ring-marker + PTY-resize + shadow-resize step runs under the SAME
+/// capture exclusion (`output_capture.captured_read`) a snapshot path's
+/// own captured read uses. Proven the same way
+/// `test_resize_holds_scrollback_lock_establishing_ordering_with_reader_thread`
+/// proves scrollback-lock ordering: hold the capture exclusion open from
+/// the test thread (standing in for a concurrent snapshot's captured
+/// read) via a `captured_read` call whose closure blocks on a channel,
+/// and show `resize()` cannot complete until it is released. Once both
+/// complete, the ring's latest dimension marker equals the shadow
+/// parser's dimensions — they were never able to interleave.
+#[cfg(unix)]
+#[test]
+fn test_resize_and_a_concurrent_captured_read_are_mutually_excluded() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let pty_system = portable_pty::native_pty_system();
+    let size = portable_pty::PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    };
+    let pair = pty_system.openpty(size).unwrap();
+    let writer = pair.master.take_writer().unwrap();
+    let target = make_output_target();
+    let pane = MuxPane::new(1, 80, 24, target, writer, pair.master, None);
+    let output_capture = pane.output_capture.clone();
+
+    let (arrived_tx, arrived_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        output_capture.captured_read(|| {
+            arrived_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+    });
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the standing-in captured_read must signal arrival");
+
+    let resize_done = Arc::new(AtomicBool::new(false));
+    let rd = resize_done.clone();
+    let resizer = std::thread::spawn(move || {
+        let mut pane = pane;
+        let result = pane.resize(120, 40);
+        rd.store(true, Ordering::SeqCst);
+        (pane, result)
+    });
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(
+        !resize_done.load(Ordering::SeqCst),
+        "resize() must block on the capture exclusion while a concurrent \
+         captured_read (standing in for a snapshot path) holds it open"
+    );
+
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    let (pane, result) = resizer.join().unwrap();
+    assert!(result.is_ok());
+
+    let (_bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
+    let (shadow_rows, shadow_cols) = pane.shadow_parser.lock().unwrap().screen().size();
+    let last_marker = *segments.last().expect("resize must have recorded a marker");
+    assert_eq!(
+        (last_marker.1, last_marker.2),
+        (shadow_cols, shadow_rows),
+        "the ring's latest dimension marker must equal the shadow parser's \
+         dimensions — they were never able to interleave"
+    );
+}
+
 /// Build a `Detached` target with a `NetworkDetach`-only reason and
 /// `owner = None` (system origin), matching the daemon's pre-attach state.
 fn detached_system_target() -> SharedOutputTarget {
@@ -2644,6 +2717,7 @@ fn enqueue_pane_output_chunk_fast_path_delivers_synchronously() {
         &tx,
         PtyOutputChunk::pty_output(1, b"hi".to_vec()),
         &mut deferred,
+        None,
     );
     let chunk = rx.try_recv().expect("fast path must deliver synchronously");
     assert_eq!(chunk.data, b"hi");
@@ -2691,6 +2765,7 @@ async fn enqueue_pane_output_chunk_full_channel_defers_without_blocking() {
         &tx,
         PtyOutputChunk::snapshot(1, b"SNAP".to_vec()),
         &mut deferred,
+        None,
     );
     assert_eq!(
         deferred.len(),
@@ -2698,7 +2773,7 @@ async fn enqueue_pane_output_chunk_full_channel_defers_without_blocking() {
         "full channel must defer, not send, the chunk"
     );
     match deferred.pop_front() {
-        Some(DeferredOutputItem::Chunk(chunk)) => {
+        Some(DeferredOutputItem::Chunk(chunk, _)) => {
             assert_eq!(chunk.pane_id, 1);
             assert_eq!(chunk.kind, ChunkKind::Snapshot);
             assert_eq!(chunk.data, b"SNAP");
@@ -2727,6 +2802,7 @@ fn enqueue_pane_output_chunk_closed_channel_does_not_panic() {
         &tx,
         PtyOutputChunk::pty_output(1, b"x".to_vec()),
         &mut deferred,
+        None,
     );
     // Reaching here without a panic is the assertion.
     assert!(deferred.is_empty(), "a closed channel is not retried");
@@ -2753,6 +2829,7 @@ fn enqueue_pane_output_chunk_full_branch_does_not_panic_outside_tokio_runtime() 
         &tx,
         PtyOutputChunk::pty_output(1, b"x".to_vec()),
         &mut deferred,
+        None,
     );
     // Reaching here without a panic (no tokio runtime, no `Handle`
     // available) is the assertion.
@@ -2775,15 +2852,15 @@ fn pty_channel_capacity_is_finite_and_unchanged() {
 #[test]
 fn deferred_output_queue_coalesces_repeated_chunk_for_same_pane_newest_wins() {
     let mut deferred = DeferredOutputQueue::new();
-    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"V1".to_vec()));
-    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"V2".to_vec()));
+    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"V1".to_vec()), None);
+    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"V2".to_vec()), None);
     assert_eq!(
         deferred.len(),
         1,
         "a second chunk for the same pane must coalesce, not add a second entry"
     );
     match deferred.pop_front() {
-        Some(DeferredOutputItem::Chunk(chunk)) => {
+        Some(DeferredOutputItem::Chunk(chunk, _)) => {
             assert_eq!(
                 chunk.data, b"V2",
                 "the newest payload for the pane must survive"
@@ -2805,14 +2882,14 @@ fn deferred_output_queue_coalesces_repeated_chunk_for_same_pane_newest_wins() {
 #[test]
 fn deferred_output_queue_coalesce_preserves_position_ahead_of_a_later_visibility_resume() {
     let mut deferred = DeferredOutputQueue::new();
-    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"first".to_vec()));
+    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"first".to_vec()), None);
     deferred.defer_visibility_resume(1);
     assert_eq!(deferred.len(), 2);
 
     // Second RequestPaneSnapshot for the SAME pane while both entries
     // are still queued: must coalesce the Chunk IN PLACE, not move it
     // to the tail.
-    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"second".to_vec()));
+    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"second".to_vec()), None);
     assert_eq!(
         deferred.len(),
         2,
@@ -2820,7 +2897,7 @@ fn deferred_output_queue_coalesce_preserves_position_ahead_of_a_later_visibility
     );
 
     match deferred.pop_front() {
-        Some(DeferredOutputItem::Chunk(chunk)) => {
+        Some(DeferredOutputItem::Chunk(chunk, _)) => {
             assert_eq!(chunk.data, b"second", "the newest payload must survive");
         }
         other => panic!(
@@ -2863,7 +2940,7 @@ fn deferred_output_queue_inserts_chunk_immediately_before_queued_visibility_resu
     deferred.defer_visibility_resume(1);
     assert_eq!(deferred.len(), 1);
 
-    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"pending".to_vec()));
+    deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"pending".to_vec()), None);
     assert_eq!(
         deferred.len(),
         2,
@@ -2873,7 +2950,7 @@ fn deferred_output_queue_inserts_chunk_immediately_before_queued_visibility_resu
     );
 
     match deferred.pop_front() {
-        Some(DeferredOutputItem::Chunk(chunk)) => {
+        Some(DeferredOutputItem::Chunk(chunk, _)) => {
             assert_eq!(
                 chunk.data, b"pending",
                 "the newly-deferred Chunk must survive"
@@ -2902,7 +2979,10 @@ fn deferred_output_queue_drops_oldest_distinct_pane_chunk_past_the_cap_never_the
     let mut deferred = DeferredOutputQueue::new();
     let total = MAX_DEFERRED_ITEMS * 2;
     for pane_id in 0..(total as u32) {
-        deferred.defer_chunk(PtyOutputChunk::pty_output(pane_id, vec![pane_id as u8]));
+        deferred.defer_chunk(
+            PtyOutputChunk::pty_output(pane_id, vec![pane_id as u8]),
+            None,
+        );
     }
     assert_eq!(
         deferred.len(),
@@ -2913,7 +2993,7 @@ fn deferred_output_queue_drops_oldest_distinct_pane_chunk_past_the_cap_never_the
     let mut surviving_pane_ids = Vec::new();
     while let Some(item) = deferred.pop_front() {
         match item {
-            DeferredOutputItem::Chunk(chunk) => surviving_pane_ids.push(chunk.pane_id),
+            DeferredOutputItem::Chunk(chunk, _) => surviving_pane_ids.push(chunk.pane_id),
             other => panic!("expected only Chunk items, got {other:?}"),
         }
     }
