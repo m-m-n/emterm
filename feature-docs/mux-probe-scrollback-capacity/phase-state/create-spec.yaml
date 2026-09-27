@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-probe-scrollback-capacity
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 50329c188eeb4237cedd324949278e654517f7f4
 last_input_digest: sha256:5c259c4498d0a81ce4e063ef13c2a3dd779cd31ca33efb0253d4ee9ea8102f39
