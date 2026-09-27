@@ -2018,6 +2018,213 @@ async fn test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame
     );
 }
 
+// ── mux-snapshot-output-boundary task0003: reader-level test driving the
+// PRODUCTION resume_pane_with_permit while the PTY reader thread is
+// paused at P2 (TS-2) ───────────────────────────────────────────────────
+
+/// Test-only scripted `Read` source feeding a fixed sequence of chunks,
+/// then EOF. A file-local copy of
+/// `mux::ipc::pty_spawn::tests::ScriptedReader` (that one is private to
+/// its own module).
+struct ScriptedReader {
+    chunks: std::collections::VecDeque<Vec<u8>>,
+}
+
+impl ScriptedReader {
+    fn new(chunks: Vec<Vec<u8>>) -> Self {
+        Self {
+            chunks: chunks.into_iter().collect(),
+        }
+    }
+}
+
+impl std::io::Read for ScriptedReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.chunks.pop_front() {
+            Some(chunk) => {
+                let n = chunk.len();
+                buf[..n].copy_from_slice(&chunk);
+                Ok(n)
+            }
+            None => Ok(0),
+        }
+    }
+}
+
+/// Spawn the PRODUCTION `pty_reader_loop` against `pane`'s OWN
+/// already-set `output_target` and shared state (unlike this module's
+/// synthetic setup helpers, this drives the SAME reader flow the daemon
+/// runs), fed `chunks` by a [`ScriptedReader`]. Mirrors
+/// `mux::ipc::pty_spawn::register_pane_and_start_reader`'s own clone
+/// dance. Returns the join handle.
+fn spawn_reader_thread(pane: &MuxPane, chunks: Vec<Vec<u8>>) -> std::thread::JoinHandle<()> {
+    let output_target = pane.output_target.clone();
+    let shadow_parser = pane.shadow_parser.clone();
+    let cwd = pane.cwd.clone();
+    let title = pane.title.clone();
+    let title_sender = pane.title_sender.clone();
+    let notification_sender = pane.notification_sender.clone();
+    let agent_status_report_sender = pane.agent_status_report_sender.clone();
+    let raw_passthrough = pane.raw_passthrough.clone();
+    let passthrough_scanner = pane.passthrough_scanner.clone();
+    let scrollback = pane.scrollback.clone();
+    let dims = pane.dims.clone();
+    let output_capture = pane.output_capture.clone();
+    let pane_id = pane.id;
+    std::thread::spawn(move || {
+        crate::mux::ipc::pty_spawn::pty_reader_loop(
+            pane_id,
+            Box::new(ScriptedReader::new(chunks)),
+            output_target,
+            shadow_parser,
+            cwd,
+            title,
+            title_sender,
+            notification_sender,
+            agent_status_report_sender,
+            raw_passthrough,
+            passthrough_scanner,
+            scrollback,
+            dims,
+            Arc::new(StdMutex::new(None)),
+            output_capture,
+        );
+    })
+}
+
+/// AC-1 (FR1, FR2, FR3; TS-2): with the PTY reader paused at P2 — capture
+/// step finished, `output_target` not yet taken — on a chunk containing
+/// an insert-line sequence (`CSI L`), the PRODUCTION
+/// `resume_pane_with_permit` on a `Detached { HiddenByVisibility, owner:
+/// Some(S) }` pane owned by S returns `Resumed`. After release: S's
+/// channel holds the snapshot first, the paused chunk's raw bytes never
+/// follow it, and the client view (snapshot replay, then every later
+/// delivered byte) matches a fresh reference fed the raw stream once.
+///
+/// AC-2 (sensitivity for AC-1): this test was confirmed, once, to FAIL
+/// when `resume_pane_with_permit`'s
+/// `pane.output_capture.record_boundary(owned_tx, boundary);` call was
+/// temporarily commented out — with no boundary recorded, the reader's
+/// post-release forward decision found the paused chunk uncovered and
+/// delivered its raw bytes right after the snapshot, failing the "never
+/// follow it" assertion below (`assert!(!received.iter().any(|c| c.data
+/// == paused_chunk))`). Production code was restored byte-for-byte
+/// afterward — see this task's `*.tests.yaml` for the observed failure.
+#[test]
+fn resume_pane_with_permit_drives_the_paused_reader_to_suppress_the_paused_chunk_and_matches_the_raw_stream_reference()
+ {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::HiddenByVisibility,
+        owner: Some(owned_tx.clone()),
+    }));
+    let pane = MuxPane::new_test(20, cols, rows, target.clone());
+    let output_capture = pane.output_capture.clone();
+
+    // Baseline read (number 1) establishing pre-existing screen content,
+    // mirroring `mux::ipc::pty_spawn::tests`'s own on-demand-snapshot
+    // convention: seed the ring/shadow directly without driving it
+    // through the reader, so the chunk under test becomes number 2.
+    let baseline: &[u8] = b"line1\r\nline2\r\nline3\r\n";
+    output_capture.capture(|| {
+        pane.shadow_parser.lock().unwrap().process(baseline);
+        pane.scrollback.lock().unwrap().write(baseline);
+    });
+
+    let paused_chunk = b"\x1b[1;1H\x1b[L".to_vec();
+    let continuation_chunk = b"more output after resume\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let handle = spawn_reader_thread(
+        &pane,
+        vec![paused_chunk.clone(), continuation_chunk.clone()],
+    );
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the paused chunk");
+
+    // Reserve a slot on S and drive the PRODUCTION resume path while the
+    // reader is paused.
+    let permit = owned_tx
+        .try_reserve()
+        .expect("S has capacity for the resume permit");
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        received.push(c);
+    }
+
+    assert!(
+        !received.iter().any(|c| c.data == paused_chunk),
+        "the paused chunk's raw bytes must never reach S after the \
+         snapshot"
+    );
+    assert_eq!(
+        received[0].kind,
+        ChunkKind::Snapshot,
+        "S must hold the snapshot first"
+    );
+    assert_eq!(
+        received[1].data, continuation_chunk,
+        "the next (unsuppressed) reader chunk must follow the snapshot"
+    );
+    assert!(received[2].data.is_empty(), "EOF chunk must follow");
+    assert_eq!(received.len(), 3, "nothing else must have been delivered");
+
+    // Reference equality: feed a fresh term_core [snapshot replay, then
+    // every later delivered byte] and compare against a fresh reference
+    // fed the whole raw stream once.
+    use term_core::terminal_core::{MODE_ORIGIN, TerminalCore};
+    let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&received[0].data);
+    let replay_segments: Vec<term_core::terminal_core::ReplaySegment> = segments
+        .iter()
+        .map(|s| term_core::terminal_core::ReplaySegment {
+            offset: s.offset,
+            cols: s.cols,
+            rows: s.rows,
+        })
+        .collect();
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(content, &replay_segments);
+    client.process_pty_data_fully(&continuation_chunk);
+
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(baseline);
+    reference.process_pty_data_fully(&paused_chunk);
+    reference.process_pty_data_fully(&continuation_chunk);
+
+    for r in 0..rows {
+        assert_eq!(
+            client.get_line_text(r).trim_end(),
+            reference.get_line_text(r).trim_end(),
+            "row {r} mismatch"
+        );
+    }
+    assert_eq!(
+        client.get_scroll_region_top(),
+        reference.get_scroll_region_top()
+    );
+    assert_eq!(
+        client.get_scroll_region_bottom(),
+        reference.get_scroll_region_bottom()
+    );
+    assert_eq!(
+        client.get_mode(MODE_ORIGIN),
+        reference.get_mode(MODE_ORIGIN)
+    );
+    assert_eq!(client.get_cursor_row(), reference.get_cursor_row());
+    assert_eq!(client.get_cursor_col(), reference.get_cursor_col());
+}
+
 /// D3'''' (round-7 rework, review round-6 finding `46c29c2c65970d26`):
 /// settles the reachability question the round-6 reviewers disagreed
 /// on — does an oversize resume failure freeze the pane permanently

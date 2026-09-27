@@ -1338,6 +1338,401 @@ async fn handle_request_pane_snapshot_evicts_oldest_distinct_pane_per_spec_sanct
     );
 }
 
+// ── mux-snapshot-output-boundary task0003: reader-level tests driving
+// the PRODUCTION `handle_request_pane_snapshot` while the PTY reader
+// thread is paused at P2 (TS-6) ────────────────────────────────────────
+
+/// Test-only scripted `Read` source feeding a fixed sequence of chunks,
+/// then EOF. A file-local copy of
+/// `mux::ipc::pty_spawn::tests::ScriptedReader` (that one is private to
+/// its own module).
+struct ScriptedReader {
+    chunks: std::collections::VecDeque<Vec<u8>>,
+}
+
+impl ScriptedReader {
+    fn new(chunks: Vec<Vec<u8>>) -> Self {
+        Self {
+            chunks: chunks.into_iter().collect(),
+        }
+    }
+}
+
+impl std::io::Read for ScriptedReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.chunks.pop_front() {
+            Some(chunk) => {
+                let n = chunk.len();
+                buf[..n].copy_from_slice(&chunk);
+                Ok(n)
+            }
+            None => Ok(0),
+        }
+    }
+}
+
+/// Spawn the PRODUCTION `pty_reader_loop` against the pane already
+/// registered at (`sid`, `wid`, `pane_id`) inside `mgr`, using its
+/// ALREADY-SET `output_target` and shared state (mirrors
+/// `mux::ipc::pty_spawn::register_pane_and_start_reader`'s own clone
+/// dance) rather than installing a fresh channel — needed so a
+/// concurrently-driven production handler
+/// (`handle_request_pane_snapshot`) and this reader observe exactly one
+/// pane's capture/boundary state.
+fn spawn_reader_for_registered_pane(
+    mgr: &SessionManager,
+    sid: u32,
+    wid: u32,
+    pane_id: u32,
+    chunks: Vec<Vec<u8>>,
+) -> std::thread::JoinHandle<()> {
+    let pane = get_pane(mgr, sid, wid, pane_id);
+    let output_target = pane.output_target.clone();
+    let shadow_parser = pane.shadow_parser.clone();
+    let cwd = pane.cwd.clone();
+    let title = pane.title.clone();
+    let title_sender = pane.title_sender.clone();
+    let notification_sender = pane.notification_sender.clone();
+    let agent_status_report_sender = pane.agent_status_report_sender.clone();
+    let raw_passthrough = pane.raw_passthrough.clone();
+    let passthrough_scanner = pane.passthrough_scanner.clone();
+    let scrollback = pane.scrollback.clone();
+    let dims = pane.dims.clone();
+    let output_capture = pane.output_capture.clone();
+    std::thread::spawn(move || {
+        crate::mux::ipc::pty_spawn::pty_reader_loop(
+            pane_id,
+            Box::new(ScriptedReader::new(chunks)),
+            output_target,
+            shadow_parser,
+            cwd,
+            title,
+            title_sender,
+            notification_sender,
+            agent_status_report_sender,
+            raw_passthrough,
+            passthrough_scanner,
+            scrollback,
+            dims,
+            Arc::new(StdMutex::new(None)),
+            output_capture,
+        )
+    })
+}
+
+/// AC-3 (FR5; TS-6, size rejection): with the reader paused at P2 on a
+/// `Connected(S)` pane whose on-demand snapshot exceeds the single-frame
+/// limit, `handle_request_pane_snapshot` enqueues no snapshot and
+/// records no boundary for S. After release, S's channel receives the
+/// paused chunk's exact bytes, then the following chunk, then the empty
+/// EOF chunk.
+#[tokio::test]
+async fn handle_request_pane_snapshot_paused_reader_oversize_snapshot_never_suppresses_the_paused_chunk()
+ {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let pane_id = 1u32;
+
+    let (sid, wid, output_capture) = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        add_pane(&mut m, sid, wid, pane_id, target);
+        let pane_ref = get_pane(&m, sid, wid, pane_id);
+        // Same fixture shape as
+        // `mux::session::pane::tests::test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit`:
+        // a scrollback ring large enough that its encoded snapshot exceeds
+        // `MAX_SNAPSHOT_FRAME_PAYLOAD`.
+        let oversize_capacity = mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD + 1024 * 1024;
+        *pane_ref.scrollback.lock().unwrap() =
+            crate::mux::scrollback_buffer::ScrollbackRingBuffer::new(oversize_capacity);
+        pane_ref
+            .scrollback
+            .lock()
+            .unwrap()
+            .write(&vec![b'x'; oversize_capacity]);
+        let output_capture = pane_ref.output_capture.clone();
+        (sid, wid, output_capture)
+    };
+
+    let paused_chunk = b"paused-line\r\n".to_vec();
+    let continuation_chunk = b"continuation-line\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let handle = {
+        let m = mgr.lock().await;
+        spawn_reader_for_registered_pane(
+            &m,
+            sid,
+            wid,
+            pane_id,
+            vec![paused_chunk.clone(), continuation_chunk.clone()],
+        )
+    };
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the paused chunk");
+
+    let req = MuxMessage {
+        msg_type: MessageType::RequestPaneSnapshot,
+        pane_id,
+        payload: Vec::new(),
+    };
+    let mut deferred = DeferredOutputQueue::new();
+    handle_request_pane_snapshot(&req, sid, &mgr, &owned_tx, &mut deferred)
+        .await
+        .expect("handler itself must not error even though the snapshot is refused");
+
+    assert!(
+        deferred.is_empty(),
+        "an oversize snapshot must be refused before it ever reaches \
+         enqueue, never deferred"
+    );
+    assert!(
+        !output_capture.is_boundary_covered(&owned_tx, 1),
+        "no boundary for S may be recorded when the snapshot is refused \
+         for size"
+    );
+
+    release_tx.send(()).unwrap();
+    handle.join().expect("reader thread must not panic");
+
+    let mut received = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(
+        received.len(),
+        3,
+        "the paused chunk, the continuation chunk, and EOF: {:?}",
+        received
+            .iter()
+            .map(|c| (c.data.len(), c.kind))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        received[0].data, paused_chunk,
+        "the paused chunk's exact bytes must be delivered, unsuppressed"
+    );
+    assert_eq!(
+        received[0].kind,
+        crate::mux::session::pane::ChunkKind::PtyOutput
+    );
+    assert_eq!(received[1].data, continuation_chunk);
+    assert!(received[2].data.is_empty(), "EOF chunk must follow");
+    assert!(
+        !received
+            .iter()
+            .any(|c| c.kind == crate::mux::session::pane::ChunkKind::Snapshot),
+        "no snapshot must ever reach S"
+    );
+}
+
+/// AC-4 (FR5; TS-6, eviction): the paused pane's deferred on-demand
+/// snapshot is evicted from the `DeferredOutputQueue` — by distinct-pane
+/// backlog pressure from other panes sharing the same full channel S —
+/// before it ever enters S's channel. No boundary for S ever takes
+/// effect for the evicted pane; once the reader is released and S is
+/// drained, S's channel carries the paused chunk's exact bytes (never
+/// suppressed) followed by the empty EOF chunk. The evicted snapshot is
+/// never delivered, even once the surviving backlog is flushed.
+#[tokio::test]
+async fn handle_request_pane_snapshot_paused_reader_evicted_deferred_snapshot_never_suppresses_or_delivers()
+ {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let max_deferred = crate::mux::session::pane::MAX_DEFERRED_ITEMS;
+    let (owned_tx, rx) = mpsc::channel::<PtyOutputChunk>(2);
+
+    let paused_pane_id: u32 = 1;
+    let other_pane_ids: Vec<u32> = (2..=(max_deferred as u32 + 1)).collect();
+
+    let (sid, wid, output_capture) = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        add_pane(&mut m, sid, wid, paused_pane_id, target);
+        for &other_id in &other_pane_ids {
+            let other_target: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+            add_pane(&mut m, sid, wid, other_id, other_target);
+        }
+        let output_capture = get_pane(&m, sid, wid, paused_pane_id)
+            .output_capture
+            .clone();
+        (sid, wid, output_capture)
+    };
+
+    // Fill S to capacity (2) so every RequestPaneSnapshot below defers.
+    owned_tx
+        .send(PtyOutputChunk::pty_output(9999, b"filler-1".to_vec()))
+        .await
+        .unwrap();
+    owned_tx
+        .send(PtyOutputChunk::pty_output(9999, b"filler-2".to_vec()))
+        .await
+        .unwrap();
+    assert!(
+        owned_tx
+            .try_send(PtyOutputChunk::pty_output(9999, b"never".to_vec()))
+            .is_err(),
+        "test prerequisite: channel must be at capacity"
+    );
+
+    let paused_chunk = b"paused-line\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let handle = {
+        let m = mgr.lock().await;
+        spawn_reader_for_registered_pane(&m, sid, wid, paused_pane_id, vec![paused_chunk.clone()])
+    };
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the paused chunk");
+
+    let mut deferred = DeferredOutputQueue::new();
+    // Defer pane P's own on-demand snapshot first — it becomes the
+    // OLDEST distinct-pane entry.
+    let req_p = MuxMessage {
+        msg_type: MessageType::RequestPaneSnapshot,
+        pane_id: paused_pane_id,
+        payload: Vec::new(),
+    };
+    handle_request_pane_snapshot(&req_p, sid, &mgr, &owned_tx, &mut deferred)
+        .await
+        .expect("handler itself must not error");
+    assert_eq!(deferred.len(), 1);
+
+    // Defer `max_deferred` MORE distinct panes' requests — the LAST one
+    // evicts P's entry (P is the oldest distinct-pane chunk).
+    for &other_id in &other_pane_ids {
+        let req = MuxMessage {
+            msg_type: MessageType::RequestPaneSnapshot,
+            pane_id: other_id,
+            payload: Vec::new(),
+        };
+        handle_request_pane_snapshot(&req, sid, &mgr, &owned_tx, &mut deferred)
+            .await
+            .expect("handler itself must not error");
+    }
+    assert_eq!(
+        deferred.len(),
+        max_deferred,
+        "queue must never grow past the documented cap"
+    );
+    assert!(
+        !output_capture.is_boundary_covered(&owned_tx, 1),
+        "no boundary for S may take effect for the evicted pane's snapshot"
+    );
+
+    // Release the paused reader and drain S concurrently, since its
+    // post-release insertion hits the still-full channel and waits for a
+    // slot through the existing reserved-slot path.
+    release_tx.send(()).unwrap();
+
+    let received: Arc<StdMutex<Vec<PtyOutputChunk>>> = Arc::new(StdMutex::new(Vec::new()));
+    let received_for_drain = received.clone();
+    let drain = tokio::spawn(async move {
+        let mut rx = rx;
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await {
+                Ok(Some(chunk)) => {
+                    let is_eof = chunk.data.is_empty() && chunk.pane_id == paused_pane_id;
+                    received_for_drain.lock().unwrap().push(chunk);
+                    if is_eof {
+                        return rx;
+                    }
+                }
+                Ok(None) => return rx,
+                Err(_) => panic!("timed out waiting to drain S"),
+            }
+        }
+    });
+
+    let join_result = tokio::task::spawn_blocking(move || handle.join()).await;
+    join_result
+        .expect("spawn_blocking failed")
+        .expect("reader thread must not panic");
+    let mut rx = drain.await.expect("drain task failed");
+
+    let non_filler: Vec<PtyOutputChunk> = {
+        let guard = received.lock().unwrap();
+        guard
+            .iter()
+            .filter(|c| c.pane_id == paused_pane_id)
+            .map(|c| PtyOutputChunk {
+                pane_id: c.pane_id,
+                data: c.data.clone(),
+                kind: c.kind,
+            })
+            .collect()
+    };
+    assert_eq!(
+        non_filler.len(),
+        2,
+        "S must carry exactly the paused chunk's bytes and the EOF chunk \
+         for pane {paused_pane_id}"
+    );
+    assert_eq!(
+        non_filler[0].data, paused_chunk,
+        "the paused chunk must be delivered UNSUPPRESSED (never covered \
+         by a boundary)"
+    );
+    assert_eq!(
+        non_filler[0].kind,
+        crate::mux::session::pane::ChunkKind::PtyOutput
+    );
+    assert!(non_filler[1].data.is_empty(), "EOF chunk must follow");
+    assert!(
+        received
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|c| !(c.pane_id == paused_pane_id
+                && c.kind == crate::mux::session::pane::ChunkKind::Snapshot)),
+        "the evicted snapshot must never reach S"
+    );
+
+    // Flush the surviving deferred entries and confirm the evicted
+    // pane's snapshot is STILL never delivered, even once queue pressure
+    // clears. S's capacity (2) is smaller than the surviving backlog
+    // (`max_deferred`), so alternate flush + drain rounds until the
+    // queue empties (`flush_deferred_output` stops at the first item
+    // that still can't be sent, per its own FIFO-preserving contract).
+    let visible_state = Arc::new(AtomicBool::new(true));
+    let mut flushed = Vec::new();
+    for _ in 0..=max_deferred {
+        flush_deferred_output(&mut deferred, &owned_tx, &mgr, sid, &visible_state).await;
+        while let Ok(chunk) = rx.try_recv() {
+            flushed.push(chunk);
+        }
+        if deferred.is_empty() {
+            break;
+        }
+    }
+    assert!(
+        deferred.is_empty(),
+        "the surviving backlog must fully flush"
+    );
+    assert!(
+        !flushed.iter().any(|c| c.pane_id == paused_pane_id),
+        "the evicted pane's snapshot must never be delivered, even after \
+         the surviving backlog is flushed"
+    );
+    let delivered_pane_ids: std::collections::BTreeSet<u32> =
+        flushed.iter().map(|c| c.pane_id).collect();
+    assert_eq!(
+        delivered_pane_ids,
+        other_pane_ids.iter().copied().collect(),
+        "exactly the surviving distinct panes must be delivered"
+    );
+}
+
 /// AC-2: a SECOND `RequestPaneSnapshot` for a pane whose FIRST reply is
 /// still queued (channel stays full both times) coalesces — the queue
 /// never grows to two entries for the same pane — proven end-to-end
