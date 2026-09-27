@@ -45,6 +45,24 @@ mod dump_block;
 #[cfg(test)]
 mod wrap_restore_tests;
 
+/// Resolve a connection's reported scrollback capacity into the probe
+/// capacity the wrap-restore probe runs at (mux-probe-scrollback-capacity,
+/// D1/D2). `None` (unreported — old GUI/bridge, or no report received yet)
+/// resolves to the legacy [`dump_block::PROBE_SCROLLBACK_LINES`] cap. A
+/// reported value resolves to `min(reported, cap)` — an explicit 0 is a
+/// legal, distinct resolution from "unreported" (D2, A-2).
+///
+/// Pure and allocates nothing. The cap is enforced again, independently,
+/// inside the probe itself (TM-1) — this function is the recommended path
+/// but not the only thing standing between a caller and an oversized
+/// scratch terminal.
+pub(in crate::mux) fn resolve_probe_capacity(reported: Option<u32>) -> u32 {
+    match reported {
+        Some(r) => r.min(dump_block::PROBE_SCROLLBACK_LINES),
+        None => dump_block::PROBE_SCROLLBACK_LINES,
+    }
+}
+
 /// The clear-and-home prefix every snapshot starts with:
 /// `ESC[3J ESC[H ESC[2J`. `ESC[3J` (ED 3) clears the client's existing
 /// scrollback so an on-demand snapshot REPLACES the client's history instead
@@ -353,6 +371,7 @@ pub(in crate::mux) fn build_snapshot_bytes_for_ring(
     alt_screen: bool,
     ring_wrapped: bool,
     current_dims: (u16, u16),
+    probe_capacity: u32,
 ) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
     let (payload, segments) = build_snapshot_bytes(
         scrollback,
@@ -368,6 +387,7 @@ pub(in crate::mux) fn build_snapshot_bytes_for_ring(
         alt_screen,
         ring_wrapped,
         current_dims,
+        probe_capacity,
     )
 }
 
@@ -388,6 +408,7 @@ pub(in crate::mux) fn build_resume_snapshot_bytes_for_ring(
     alt_screen: bool,
     ring_wrapped: bool,
     current_dims: (u16, u16),
+    probe_capacity: u32,
 ) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
     let (payload, segments) = build_resume_snapshot_bytes(
         scrollback,
@@ -403,6 +424,7 @@ pub(in crate::mux) fn build_resume_snapshot_bytes_for_ring(
         alt_screen,
         ring_wrapped,
         current_dims,
+        probe_capacity,
     )
 }
 
@@ -417,11 +439,18 @@ fn append_wrapped_dump_block_if_applicable(
     alt_screen: bool,
     ring_wrapped: bool,
     current_dims: (u16, u16),
+    probe_capacity: u32,
 ) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
     if !ring_wrapped || alt_screen || screen.is_empty() {
         return (payload, segments);
     }
-    match dump_block::compose_wrapped_dump_block(&payload, &segments, screen, current_dims) {
+    match dump_block::compose_wrapped_dump_block(
+        &payload,
+        &segments,
+        screen,
+        current_dims,
+        probe_capacity,
+    ) {
         Some(block) => {
             let dump_start = payload.len();
             let mut out_payload = payload;
@@ -449,6 +478,39 @@ mod tests {
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    // ── mux-probe-scrollback-capacity task0002, AC-2: resolve_probe_capacity
+    // ──────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_probe_capacity_unreported_gives_the_legacy_ten_thousand_cap() {
+        assert_eq!(resolve_probe_capacity(None), 10_000);
+    }
+
+    #[test]
+    fn resolve_probe_capacity_an_explicit_zero_is_distinct_from_unreported() {
+        assert_eq!(resolve_probe_capacity(Some(0)), 0);
+    }
+
+    #[test]
+    fn resolve_probe_capacity_a_reported_value_below_the_cap_passes_through() {
+        assert_eq!(resolve_probe_capacity(Some(50)), 50);
+    }
+
+    #[test]
+    fn resolve_probe_capacity_a_reported_value_exactly_at_the_cap_passes_through() {
+        assert_eq!(resolve_probe_capacity(Some(10_000)), 10_000);
+    }
+
+    #[test]
+    fn resolve_probe_capacity_a_reported_value_one_above_the_cap_clamps_to_the_cap() {
+        assert_eq!(resolve_probe_capacity(Some(10_001)), 10_000);
+    }
+
+    #[test]
+    fn resolve_probe_capacity_the_maximum_u32_clamps_to_the_cap() {
+        assert_eq!(resolve_probe_capacity(Some(u32::MAX)), 10_000);
     }
 
     /// A scrollback that contains an OSC 777 markdown viewer launch must not

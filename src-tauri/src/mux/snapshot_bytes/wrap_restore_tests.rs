@@ -64,8 +64,15 @@ fn build_snapshot_bytes_for_ring_non_wrapped_matches_the_plain_builder_exactly()
     for alt in [false, true] {
         let (plain, plain_segs) =
             build_snapshot_bytes(scrollback, &segments, screen, alt, (80, 24));
-        let (ring_aware, ring_segs) =
-            build_snapshot_bytes_for_ring(scrollback, &segments, screen, alt, false, (80, 24));
+        let (ring_aware, ring_segs) = build_snapshot_bytes_for_ring(
+            scrollback,
+            &segments,
+            screen,
+            alt,
+            false,
+            (80, 24),
+            10_000,
+        );
         assert_eq!(
             plain, ring_aware,
             "alt={alt}: non-wrapped payload must match exactly"
@@ -84,7 +91,7 @@ fn build_snapshot_bytes_for_ring_alt_screen_matches_the_plain_builder_even_when_
     let screen = b"ALT-SCREEN-DUMP";
     let (plain, plain_segs) = build_snapshot_bytes(scrollback, &segments, screen, true, (80, 24));
     let (ring_aware, ring_segs) =
-        build_snapshot_bytes_for_ring(scrollback, &segments, screen, true, true, (80, 24));
+        build_snapshot_bytes_for_ring(scrollback, &segments, screen, true, true, (80, 24), 10_000);
     assert_eq!(
         plain, ring_aware,
         "alt-screen output must stay byte-identical regardless of ring_wrapped"
@@ -107,6 +114,7 @@ fn build_resume_snapshot_bytes_for_ring_non_wrapped_matches_the_plain_builder_ex
             alt,
             false,
             (80, 24),
+            10_000,
         );
         assert_eq!(plain, ring_aware, "alt={alt}");
         assert_eq!(plain_segs, ring_segs, "alt={alt}");
@@ -120,8 +128,15 @@ fn build_resume_snapshot_bytes_for_ring_alt_screen_matches_the_plain_builder_eve
     let screen = b"ALT-SCREEN";
     let (plain, plain_segs) =
         build_resume_snapshot_bytes(scrollback, &segments, screen, true, (80, 24));
-    let (ring_aware, ring_segs) =
-        build_resume_snapshot_bytes_for_ring(scrollback, &segments, screen, true, true, (80, 24));
+    let (ring_aware, ring_segs) = build_resume_snapshot_bytes_for_ring(
+        scrollback,
+        &segments,
+        screen,
+        true,
+        true,
+        (80, 24),
+        10_000,
+    );
     assert_eq!(plain, ring_aware);
     assert_eq!(plain_segs, ring_segs);
 }
@@ -141,8 +156,15 @@ fn build_snapshot_bytes_for_ring_a_ring_at_capacity_reports_not_wrapped_and_matc
 
     let (plain, plain_segs) =
         build_snapshot_bytes(&raw, &segments, &shadow_dump, false, (cols, rows));
-    let (ring_aware, ring_segs) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+    let (ring_aware, ring_segs) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
     assert_eq!(plain, ring_aware);
     assert_eq!(plain_segs, ring_segs);
 }
@@ -167,8 +189,15 @@ fn build_snapshot_bytes_for_ring_wrapped_main_buffer_restores_the_shadow_parsers
         "attribute_write must record at least one segment"
     );
 
-    let (payload, out_segments) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
 
     assert_eq!(
         out_segments.len(),
@@ -235,8 +264,15 @@ fn build_snapshot_bytes_for_ring_uses_current_dims_even_when_it_differs_from_the
     parser.process(&stream);
     let shadow_dump = parser.screen().contents_formatted();
 
-    let (payload, out_segments) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, current_dims);
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        current_dims,
+        10_000,
+    );
     let last = *out_segments.last().unwrap();
     assert_eq!(
         (last.1, last.2),
@@ -277,8 +313,15 @@ fn build_snapshot_bytes_for_ring_restores_probe_state_after_narrowed_region_and_
         wrapped_ring_and_shadow_dump(cols, rows, 512, &stream);
     assert!(wrapped, "512B capacity must have wrapped for this stream");
 
-    let (payload, out_segments) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
 
     // Oracle: independently replay the DELEGATED (pre-dump) payload alone
     // to compute the expected probe state.
@@ -329,8 +372,15 @@ fn build_snapshot_bytes_for_ring_preserves_a_pending_application_saved_cursor() 
         wrapped_ring_and_shadow_dump(cols, rows, 256, &stream);
     assert!(wrapped, "256B capacity must have wrapped for this stream");
 
-    let (payload, out_segments) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
 
     let mut reference = TerminalCore::new(cols, rows, 0);
     reference.process_pty_data_fully(&stream);
@@ -390,8 +440,15 @@ fn build_snapshot_bytes_for_ring_never_emits_decsc_or_decrc_even_when_the_shadow
     let (raw, segments, wrapped) = ring.read_segments_with_wrap_state();
     assert!(wrapped, "64B capacity must have wrapped for this stream");
 
-    let (payload, _out_segments) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+    let (payload, _out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
 
     assert!(
         !payload.windows(2).any(|w| w == b"\x1b7"),
@@ -420,8 +477,15 @@ fn build_snapshot_bytes_for_ring_continued_output_matches_a_reference_fed_the_wh
         wrapped_ring_and_shadow_dump(cols, rows, 512, &stream);
     assert!(wrapped);
 
-    let (payload, out_segments) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
 
     let continued = b"\r\nCONTINUED-OUTPUT-LINE";
 
@@ -455,8 +519,15 @@ fn build_snapshot_bytes_for_ring_scrollback_history_matches_a_replay_truncated_a
         wrapped_ring_and_shadow_dump(cols, rows, 512, &stream);
     assert!(wrapped);
 
-    let (payload, out_segments) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
     let dump_start = out_segments.last().expect("dump segment must exist").0;
 
     let mut full = TerminalCore::new(cols, rows, 10_000);
@@ -499,8 +570,15 @@ fn build_snapshot_bytes_for_ring_degrades_to_the_delegated_output_when_the_probe
 
     let (delegated, delegated_segments) =
         build_snapshot_bytes(scrollback, &segments, screen, false, degenerate_dims);
-    let (ring_aware, ring_segments) =
-        build_snapshot_bytes_for_ring(scrollback, &segments, screen, false, true, degenerate_dims);
+    let (ring_aware, ring_segments) = build_snapshot_bytes_for_ring(
+        scrollback,
+        &segments,
+        screen,
+        false,
+        true,
+        degenerate_dims,
+        10_000,
+    );
     assert_eq!(
         ring_aware, delegated,
         "probe failure must degrade to the delegated payload"
@@ -515,7 +593,7 @@ fn build_snapshot_bytes_for_ring_degrades_when_the_shadow_dump_is_empty() {
     let (delegated, delegated_segments) =
         build_snapshot_bytes(scrollback, &segments, b"", false, (80, 24));
     let (ring_aware, ring_segments) =
-        build_snapshot_bytes_for_ring(scrollback, &segments, b"", false, true, (80, 24));
+        build_snapshot_bytes_for_ring(scrollback, &segments, b"", false, true, (80, 24), 10_000);
     assert_eq!(
         ring_aware, delegated,
         "an empty shadow dump has nothing to restore"
@@ -573,8 +651,15 @@ fn build_snapshot_bytes_for_ring_restores_a_pending_wrap_and_matches_a_reference
         wrapped_ring_and_shadow_dump(cols, rows, 512, &stream);
     assert!(wrapped, "512B capacity must have wrapped for this stream");
 
-    let (payload, out_segments) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
 
     // Oracle: independently replay the DELEGATED (pre-dump) payload alone
     // to compute the expected probe state (mirrors the AC-5(b)-style
@@ -636,8 +721,15 @@ fn build_snapshot_bytes_for_ring_restores_a_pending_wrap_inside_a_narrowed_regio
         wrapped_ring_and_shadow_dump(cols, rows, 512, &stream);
     assert!(wrapped, "512B capacity must have wrapped for this stream");
 
-    let (payload, out_segments) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
 
     let (delegated_payload, delegated_segments) =
         build_snapshot_bytes(&raw, &segments, &shadow_dump, false, (cols, rows));
@@ -696,8 +788,15 @@ fn build_snapshot_bytes_for_ring_restores_a_pending_wrap_ending_in_a_double_widt
         wrapped_ring_and_shadow_dump(cols, rows, 512, &stream);
     assert!(wrapped, "512B capacity must have wrapped for this stream");
 
-    let (payload, out_segments) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
 
     let (delegated_payload, delegated_segments) =
         build_snapshot_bytes(&raw, &segments, &shadow_dump, false, (cols, rows));
@@ -724,7 +823,310 @@ fn build_snapshot_bytes_for_ring_restores_a_pending_wrap_ending_in_a_double_widt
     assert_rows_and_cursor_match(&client, &reference, rows);
 }
 
-/// AC-4(c): a control case — the cursor sits at the last column with NO
+// ── mux-probe-scrollback-capacity task0002, AC-4/FR9: a client-reported
+// probe capacity C, combined with a grow-resize, restores continued output
+// to the row a capacity-C-only client would actually reach — through BOTH
+// client replay entry points (the synchronous `reset_and_replay_segments`
+// and the off-thread `build_from_snapshot` bypass path) ─────────────────
+
+/// Rows-only grow (same width): 80x24 for the first half of the stream,
+/// resized in lockstep on both the ring and the shadow parser to 80x40 for
+/// the second half — mirrors `dump_block.rs`'s AC-5(a) shape, but through a
+/// real [`ScrollbackRingBuffer`] + `vt100::Parser` pair so
+/// `build_snapshot_bytes_for_ring` sees a genuinely wrapped ring.
+fn fixture_rows_only_grow(
+    ring_capacity: usize,
+) -> (Vec<u8>, Vec<(usize, u16, u16)>, bool, Vec<u8>, (u16, u16)) {
+    let initial = (80u16, 24u16);
+    let grown = (80u16, 40u16);
+    let mut pre = Vec::new();
+    for i in 0..60u32 {
+        pre.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    let mut post = Vec::new();
+    for i in 60..90u32 {
+        post.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+
+    let mut ring = ScrollbackRingBuffer::new(ring_capacity);
+    let mut parser = vt100::Parser::new(initial.1, initial.0, 0);
+    ring.attribute_write(initial.0, initial.1, &pre);
+    parser.process(&pre);
+    ring.attribute_write(grown.0, grown.1, &post);
+    parser.screen_mut().set_size(grown.1, grown.0);
+    parser.process(&post);
+
+    let (raw, segments, wrapped) = ring.read_segments_with_wrap_state();
+    let shadow_dump = parser.screen().contents_formatted();
+    (raw, segments, wrapped, shadow_dump, grown)
+}
+
+/// Rows AND columns grow together in the same resize (exercises the
+/// full-reflow path, not the same-width path `fixture_rows_only_grow`
+/// exercises) — mirrors `dump_block.rs`'s AC-5(b) shape.
+fn fixture_rows_and_cols_grow(
+    ring_capacity: usize,
+) -> (Vec<u8>, Vec<(usize, u16, u16)>, bool, Vec<u8>, (u16, u16)) {
+    let initial = (80u16, 24u16);
+    let grown = (100u16, 40u16);
+    let mut pre = Vec::new();
+    for i in 0..60u32 {
+        pre.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    let mut post = Vec::new();
+    for i in 60..90u32 {
+        post.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+
+    let mut ring = ScrollbackRingBuffer::new(ring_capacity);
+    let mut parser = vt100::Parser::new(initial.1, initial.0, 0);
+    ring.attribute_write(initial.0, initial.1, &pre);
+    parser.process(&pre);
+    ring.attribute_write(grown.0, grown.1, &post);
+    parser.screen_mut().set_size(grown.1, grown.0);
+    parser.process(&post);
+
+    let (raw, segments, wrapped) = ring.read_segments_with_wrap_state();
+    let shadow_dump = parser.screen().contents_formatted();
+    (raw, segments, wrapped, shadow_dump, grown)
+}
+
+/// `current_dims` is larger than the LAST (only) segment the ring ever
+/// recorded — the grow reaches the client only through
+/// `reset_and_replay_segments`'s own trailing "resize to the caller's
+/// target" hop, never through an explicit segment (the ring was never told
+/// about the resize — the shadow parser's own live size, tracking every
+/// `MuxPane::resize`, is the only place `current_dims` comes from). Mirrors
+/// `dump_block.rs`'s AC-5(c) shape, and the same divergence
+/// `probe_replay_state_matches_the_oracle_when_current_dims_exceeds_the_last_segment`'s
+/// doc comment records (row 23 at zero probe history vs row 39 against a
+/// 10,000-line oracle).
+fn fixture_current_dims_exceeds_the_last_segment(
+    ring_capacity: usize,
+) -> (Vec<u8>, Vec<(usize, u16, u16)>, bool, Vec<u8>, (u16, u16)) {
+    let initial = (80u16, 24u16);
+    let current_dims = (80u16, 40u16);
+    let mut pre = Vec::new();
+    for i in 0..60u32 {
+        pre.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+
+    let mut ring = ScrollbackRingBuffer::new(ring_capacity);
+    ring.attribute_write(initial.0, initial.1, &pre);
+    let (raw, segments, wrapped) = ring.read_segments_with_wrap_state();
+
+    let mut parser = vt100::Parser::new(initial.1, initial.0, 0);
+    parser.process(&pre);
+    parser.screen_mut().set_size(current_dims.1, current_dims.0);
+    let shadow_dump = parser.screen().contents_formatted();
+    (raw, segments, wrapped, shadow_dump, current_dims)
+}
+
+/// Asserts `client`'s cursor row/col and the text of the row the cursor
+/// sits on (the marker row — a single-line continuation with no CR/LF
+/// leaves the cursor on the SAME row it just printed to) equal `oracle`'s
+/// — the exact pair AC-4 names ("the cursor row/col, and the row holding
+/// the marker"), not the whole screen: at a small `probe_capacity` the
+/// oracle's OWN reconstruction of the delegated (pre-dump) payload is
+/// itself an incomplete rebuild of history the ring has evicted (the very
+/// gap the dump block exists to close for the REAL client — see
+/// `build_snapshot_bytes_for_ring_wrapped_main_buffer_restores_the_shadow_parsers_visible_screen`),
+/// so full-screen equality would fail for reasons unrelated to what AC-4
+/// tests: whether the PROBED cursor state (and therefore where new output
+/// lands) tracks the client's own capacity.
+fn assert_ac4_cursor_and_marker_row_match(client: &TerminalCore, oracle: &TerminalCore) {
+    assert_eq!(
+        client.get_cursor_row(),
+        oracle.get_cursor_row(),
+        "cursor row must match the capacity-C oracle"
+    );
+    assert_eq!(
+        client.get_cursor_col(),
+        oracle.get_cursor_col(),
+        "cursor col must match the capacity-C oracle"
+    );
+    let marker_row = oracle.get_cursor_row();
+    assert_eq!(
+        client.get_line_text(marker_row).trim_end(),
+        oracle.get_line_text(marker_row).trim_end(),
+        "the marker row's text must match the capacity-C oracle"
+    );
+}
+
+/// Shared AC-4/FR9 assertion: build the wrapped-ring snapshot at
+/// `probe_capacity`, replay it through BOTH client entry points (the
+/// synchronous `reset_and_replay_segments` and the off-thread
+/// `build_from_snapshot` bypass path), feed the same continuation to each,
+/// and assert the cursor row/col plus the marker row's text match an
+/// oracle that replays the DELEGATED (pre-dump, pre-fix) payload alone —
+/// at the SAME `probe_capacity` — plus the same continuation.
+/// `probe_capacity` here plays BOTH roles the task plan's Design section
+/// describes as the same value: the probe's capacity (what the snapshot is
+/// built with) and the client's own replay capacity (what a real client of
+/// that reported capacity would replay with) — the whole point of AC-4 is
+/// that these two agree.
+fn assert_ac4_regression_case(
+    raw: &[u8],
+    segments: &[(usize, u16, u16)],
+    shadow_dump: &[u8],
+    current_dims: (u16, u16),
+    probe_capacity: u32,
+) {
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        raw,
+        segments,
+        shadow_dump,
+        false,
+        true,
+        current_dims,
+        probe_capacity,
+    );
+
+    let continuation = b"\r\nMARKER-ROW-TEXT";
+
+    // Oracle: capacity-`probe_capacity` replay of the DELEGATED (pre-dump,
+    // pre-fix) payload alone, plus the same continuation.
+    let (delegated_payload, delegated_segments) =
+        build_snapshot_bytes(raw, segments, shadow_dump, false, current_dims);
+    let mut oracle = TerminalCore::new(current_dims.0, current_dims.1, probe_capacity);
+    oracle.reset_and_replay_segments(&delegated_payload, &to_replay_segments(&delegated_segments));
+    oracle.process_pty_data_fully(continuation);
+
+    // Path 1: the synchronous `reset_and_replay_segments` entry point (what
+    // a real client's `apply_mux_message::Snapshot|SnapshotRestore` uses).
+    let mut sync_client = TerminalCore::new(current_dims.0, current_dims.1, probe_capacity);
+    sync_client.reset_and_replay_segments(&payload, &to_replay_segments(&out_segments));
+    sync_client.process_pty_data_fully(continuation);
+    assert_ac4_cursor_and_marker_row_match(&sync_client, &oracle);
+
+    // Path 2: the off-thread `build_from_snapshot` bypass path.
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let replay = TerminalCore::build_from_snapshot(
+        current_dims.0,
+        current_dims.1,
+        probe_capacity,
+        &payload,
+        &to_replay_segments(&out_segments),
+        &never,
+    )
+    .expect("off-thread build must not be cancelled");
+    let mut off_thread_client = replay.core;
+    off_thread_client.process_pty_data_fully(continuation);
+    assert_ac4_cursor_and_marker_row_match(&off_thread_client, &oracle);
+}
+
+#[test]
+fn ac4_rows_only_grow_at_capacity_zero_matches_the_capacity_zero_oracle() {
+    let (raw, segments, wrapped, shadow_dump, current_dims) = fixture_rows_only_grow(512);
+    assert!(wrapped, "test prerequisite: the ring must have wrapped");
+    assert_ac4_regression_case(&raw, &segments, &shadow_dump, current_dims, 0);
+}
+
+#[test]
+fn ac4_rows_only_grow_at_a_small_nonzero_capacity_matches_the_same_capacity_oracle() {
+    let (raw, segments, wrapped, shadow_dump, current_dims) = fixture_rows_only_grow(512);
+    assert!(wrapped, "test prerequisite: the ring must have wrapped");
+    assert_ac4_regression_case(&raw, &segments, &shadow_dump, current_dims, 5);
+}
+
+#[test]
+fn ac4_rows_and_cols_grow_at_capacity_zero_matches_the_capacity_zero_oracle() {
+    let (raw, segments, wrapped, shadow_dump, current_dims) = fixture_rows_and_cols_grow(512);
+    assert!(wrapped, "test prerequisite: the ring must have wrapped");
+    assert_ac4_regression_case(&raw, &segments, &shadow_dump, current_dims, 0);
+}
+
+#[test]
+fn ac4_rows_and_cols_grow_at_a_small_nonzero_capacity_matches_the_same_capacity_oracle() {
+    let (raw, segments, wrapped, shadow_dump, current_dims) = fixture_rows_and_cols_grow(512);
+    assert!(wrapped, "test prerequisite: the ring must have wrapped");
+    assert_ac4_regression_case(&raw, &segments, &shadow_dump, current_dims, 5);
+}
+
+/// The confirmed red case (Test Notes, per this fixture's own
+/// `dump_block.rs`-anchored divergence — see
+/// `probe_replay_state_matches_the_oracle_when_current_dims_exceeds_the_last_segment`'s
+/// doc comment): at this level (through the builder, both replay paths,
+/// and a continuation, rather than `probe_replay_state` alone) confirmed
+/// by temporarily hard-coding `10_000` in place of `probe_capacity` in
+/// `assert_ac4_regression_case`'s `build_snapshot_bytes_for_ring` call and
+/// re-running both `current_dims_exceeds_the_last_segment` cases: BOTH
+/// failed on a cursor-row mismatch against their own capacity-C oracle
+/// (capacity 0: got row 39 forced-10,000, wanted row 24; capacity 5: got
+/// row 39 forced-10,000, wanted row 29) — reverted to pass `probe_capacity`
+/// through, both pass again. The other two shapes
+/// (`fixture_rows_only_grow`, `fixture_rows_and_cols_grow`) did not diverge
+/// for either capacity with this fixed-10,000 probe (same non-divergence
+/// `dump_block.rs`'s AC-5(a)/(b) doc comments record at the
+/// `probe_replay_state` level) and are kept as same-shape regression
+/// guards, per the task plan's Test Notes fallback.
+#[test]
+fn ac4_current_dims_exceeds_the_last_segment_at_capacity_zero_matches_the_capacity_zero_oracle() {
+    let (raw, segments, wrapped, shadow_dump, current_dims) =
+        fixture_current_dims_exceeds_the_last_segment(512);
+    assert!(wrapped, "test prerequisite: the ring must have wrapped");
+    assert_ac4_regression_case(&raw, &segments, &shadow_dump, current_dims, 0);
+}
+
+#[test]
+fn ac4_current_dims_exceeds_the_last_segment_at_a_small_nonzero_capacity_matches_the_same_capacity_oracle()
+ {
+    let (raw, segments, wrapped, shadow_dump, current_dims) =
+        fixture_current_dims_exceeds_the_last_segment(512);
+    assert!(wrapped, "test prerequisite: the ring must have wrapped");
+    assert_ac4_regression_case(&raw, &segments, &shadow_dump, current_dims, 5);
+}
+
+// ── mux-probe-scrollback-capacity task0002, AC-2: a reported capacity
+// above the 10,000 cap still carries the dump block and equals the output
+// at 10,000 ────────────────────────────────────────────────────────────
+
+#[test]
+fn build_snapshot_bytes_for_ring_at_a_reported_capacity_above_the_cap_equals_the_output_at_the_cap()
+{
+    let cols = 80u16;
+    let rows = 24u16;
+    let mut stream = Vec::new();
+    for i in 0..60u32 {
+        stream.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    let (raw, segments, wrapped, shadow_dump) =
+        wrapped_ring_and_shadow_dump(cols, rows, 512, &stream);
+    assert!(wrapped, "512B capacity must have wrapped for this stream");
+
+    let resolved_above_cap = resolve_probe_capacity(Some(20_000));
+    assert_eq!(
+        resolved_above_cap, 10_000,
+        "test prerequisite: a reported capacity above the cap resolves to the cap"
+    );
+
+    let (at_resolved, segs_at_resolved) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        resolved_above_cap,
+    );
+    let (at_cap_directly, segs_at_cap_directly) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
+
+    assert_eq!(
+        at_resolved, at_cap_directly,
+        "a reported capacity above the cap must produce byte-identical output to the cap itself"
+    );
+    assert_eq!(segs_at_resolved, segs_at_cap_directly);
+}
+
+// ── AC-4(c): a control case — the cursor sits at the last column with NO
 /// pending wrap (placed there by absolute positioning, not by filling the
 /// row via printing). The client's pending-wrap flag must stay clear, and
 /// the next character OVERWRITES the last column instead of wrapping, as
@@ -745,8 +1147,15 @@ fn build_snapshot_bytes_for_ring_leaves_no_pending_wrap_when_the_cursor_was_plac
         wrapped_ring_and_shadow_dump(cols, rows, 256, &stream);
     assert!(wrapped, "256B capacity must have wrapped for this stream");
 
-    let (payload, out_segments) =
-        build_snapshot_bytes_for_ring(&raw, &segments, &shadow_dump, false, wrapped, (cols, rows));
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
 
     let (delegated_payload, delegated_segments) =
         build_snapshot_bytes(&raw, &segments, &shadow_dump, false, (cols, rows));
@@ -774,4 +1183,60 @@ fn build_snapshot_bytes_for_ring_leaves_no_pending_wrap_when_the_cursor_was_plac
     client.process_pty_data_fully(b"Y");
 
     assert_rows_and_cursor_match(&client, &reference, rows);
+}
+
+// ── mux-probe-scrollback-capacity task0002, AC-3: byte-identical golden
+// output at probe capacity 10,000 ────────────────────────────────────────
+
+/// Golden-output pin (AC-3): at probe capacity 10,000 the wrap-aware
+/// builder's output for a fixed wrapped fixture is exactly these literal
+/// bytes/segments. This feature never changes `probe_replay_state`'s replay
+/// logic, `compose_wrapped_dump_block`'s composition steps, or
+/// `build_snapshot_bytes_with_layout` — it only threads a `probe_capacity`
+/// parameter through, so the output at 10,000 (the value every pre-existing
+/// call site passed as a hardcoded literal) is unchanged from before this
+/// feature; this literal was captured directly from this fixture at HEAD of
+/// this task's own changes (`temp_print_golden`, run once with `--nocapture`
+/// and removed) and pins it against future drift.
+#[test]
+fn build_snapshot_bytes_for_ring_output_at_capacity_ten_thousand_matches_the_pinned_golden_bytes() {
+    let cols = 10u16;
+    let rows = 4u16;
+    let mut stream = Vec::new();
+    for i in 0..20u32 {
+        stream.extend_from_slice(format!("L{i}\r\n").as_bytes());
+    }
+    let (raw, segments, wrapped, shadow_dump) =
+        wrapped_ring_and_shadow_dump(cols, rows, 64, &stream);
+    assert!(wrapped, "test prerequisite: the ring must have wrapped");
+
+    let (payload, out_segments) = build_snapshot_bytes_for_ring(
+        &raw,
+        &segments,
+        &shadow_dump,
+        false,
+        wrapped,
+        (cols, rows),
+        10_000,
+    );
+
+    let golden_payload: Vec<u8> = vec![
+        27, 91, 51, 74, 27, 91, 72, 27, 91, 50, 74, 13, 10, 76, 55, 13, 10, 76, 56, 13, 10, 76, 57,
+        13, 10, 76, 49, 48, 13, 10, 76, 49, 49, 13, 10, 76, 49, 50, 13, 10, 76, 49, 51, 13, 10, 76,
+        49, 52, 13, 10, 76, 49, 53, 13, 10, 76, 49, 54, 13, 10, 76, 49, 55, 13, 10, 76, 49, 56, 13,
+        10, 76, 49, 57, 13, 10, 27, 91, 63, 49, 48, 52, 57, 108, 27, 91, 63, 54, 108, 27, 91, 114,
+        27, 91, 63, 50, 53, 104, 27, 91, 109, 27, 91, 72, 27, 91, 74, 76, 49, 55, 13, 10, 76, 49,
+        56, 13, 10, 76, 49, 57, 13, 10, 27, 91, 49, 59, 52, 114, 27, 91, 63, 54, 108, 27, 91, 52,
+        59, 49, 72, 27, 91, 48, 109,
+    ];
+    let golden_segments: Vec<(usize, u16, u16)> = vec![(0, 10, 4), (83, 10, 4)];
+
+    assert_eq!(
+        payload, golden_payload,
+        "payload drifted from the pinned golden output"
+    );
+    assert_eq!(
+        out_segments, golden_segments,
+        "segments drifted from the pinned golden output"
+    );
 }

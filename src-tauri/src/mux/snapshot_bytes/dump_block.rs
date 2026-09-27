@@ -34,12 +34,19 @@ struct ProbeState {
     wrap_pending: bool,
 }
 
-/// Scratch scrollback depth for the probe terminal (D8, task0002, review
-/// round 1). Matches `default_scrollback_lines()`
+/// Hard cap on the probe's scratch-terminal scrollback depth (D8,
+/// task0002, review round 1; mux-probe-scrollback-capacity rework —
+/// promoted from a fixed depth to a cap on the caller-supplied probe
+/// capacity). Matches `default_scrollback_lines()`
 /// (`crates/app_settings/src/settings.rs`) — the app's default client-side
 /// scrollback capacity, and the depth every probe-equality oracle in this
 /// feature's own test suite (`wrap_restore_tests.rs`, `pty_spawn/tests.rs`,
-/// this file's own tests) is built with.
+/// this file's own tests) that does not vary capacity is built with.
+///
+/// [`probe_replay_state`] clamps whatever capacity it receives to this
+/// value with `min` — no caller (including a bypass of
+/// `crate::mux::snapshot_bytes::resolve_probe_capacity`, TM-1) can make the
+/// probe build a scratch terminal deeper than this.
 ///
 /// task0001 used `0` here ("the scratch terminal's history capacity may be
 /// minimal because only mode state is read") — true only when nothing
@@ -62,16 +69,29 @@ struct ProbeState {
 /// pulls back real rows the zero-capacity probe has none of — reaching a
 /// different post-resize cursor row than the client.
 ///
-/// Why `10_000` suffices: eviction is capacity-driven and deterministic —
-/// two terminals replaying the IDENTICAL byte stream under the IDENTICAL
-/// capacity reach the IDENTICAL `scrollback_slim` state at every point in
-/// the replay, regardless of how much content exceeds that capacity (both
-/// simply cap out together, in lockstep). Matching the probe's depth to
-/// the depth this feature's own tests build their reference/client
-/// terminals with is therefore sufficient for probe-client equality on
-/// every payload this feature's test suite exercises, including a resize
-/// that grows the screen mid-replay (AC-5).
-const PROBE_SCROLLBACK_LINES: u32 = 10_000;
+/// Why matching the CLIENT's own reported capacity (up to this cap)
+/// suffices: eviction is capacity-driven and deterministic — two terminals
+/// replaying the IDENTICAL byte stream under the IDENTICAL capacity reach
+/// the IDENTICAL `scrollback_slim` state at every point in the replay,
+/// regardless of how much content exceeds that capacity (both simply cap
+/// out together, in lockstep).
+///
+/// Known limits of the cap (FR8):
+///
+/// (a) For a client-reported capacity ABOVE 10,000, the probe still runs
+///     at the cap, not the client's larger capacity — a residual
+///     cursor-row mismatch after a grow-resize can remain for that client,
+///     exactly as it did before this feature for every client.
+/// (b) In a mixed deployment (an old GUI, bridge, or daemon paired with a
+///     new one on the other side), the connection keeps working, but the
+///     fix is not guaranteed: the daemon falls back to this legacy 10,000
+///     cap whenever no capacity was reported.
+///
+/// The cap limits load amplification (how large a scratch terminal the
+/// daemon builds per snapshot) only — it does NOT change how long the
+/// daemon holds any lock while assembling a snapshot (that remains
+/// follow-up `3b5bbd839c74d67b`).
+pub(super) const PROBE_SCROLLBACK_LINES: u32 = 10_000;
 
 /// D3: replay `pre_dump_payload` in a scratch `term_core` terminal built at
 /// `current_dims`, through the SAME replay entry point
@@ -82,6 +102,12 @@ const PROBE_SCROLLBACK_LINES: u32 = 10_000;
 /// dimensions" postcondition covers D3's "apply the transition to
 /// `current_dims`" step for free — no separate resize call is needed.
 ///
+/// `probe_capacity` is the scrollback depth the probe's scratch terminal is
+/// built with — clamped to [`PROBE_SCROLLBACK_LINES`] via `min` regardless
+/// of what the caller passes (TM-1: no caller, even one bypassing
+/// `crate::mux::snapshot_bytes::resolve_probe_capacity`, can make the probe
+/// build a scratch terminal deeper than the cap).
+///
 /// Returns `None` on a `term_core` panic during replay (D6: failure
 /// containment — a hostile PTY stream must never take the daemon down) or
 /// on a degenerate `current_dims` (either axis zero, which
@@ -91,11 +117,13 @@ fn probe_replay_state(
     pre_dump_payload: &[u8],
     pre_dump_segments: &[(usize, u16, u16)],
     current_dims: (u16, u16),
+    probe_capacity: u32,
 ) -> Option<ProbeState> {
     let (cols, rows) = current_dims;
     if cols == 0 || rows == 0 {
         return None;
     }
+    let capacity = probe_capacity.min(PROBE_SCROLLBACK_LINES);
     let replay_segments: Vec<ReplaySegment> = pre_dump_segments
         .iter()
         .map(|&(offset, seg_cols, seg_rows)| ReplaySegment {
@@ -106,7 +134,7 @@ fn probe_replay_state(
         .collect();
     let payload_owned = pre_dump_payload.to_vec();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        let mut core = TerminalCore::new(cols, rows, PROBE_SCROLLBACK_LINES);
+        let mut core = TerminalCore::new(cols, rows, capacity);
         core.reset_and_replay_segments(&payload_owned, &replay_segments);
         ProbeState {
             scroll_top: core.get_scroll_region_top(),
@@ -321,6 +349,9 @@ fn reestablish_pending_wrap_bytes(
 ///    wrap when the probe reports one
 ///    ([`reestablish_pending_wrap_bytes`]), then SGR.
 ///
+/// `probe_capacity` is passed straight through to [`probe_replay_state`]
+/// (see that function's doc for the enforced cap).
+///
 /// Returns `None` when the probe fails ([`probe_replay_state`]) — the
 /// caller then falls back to the non-wrapped layout (D6).
 pub(super) fn compose_wrapped_dump_block(
@@ -328,8 +359,14 @@ pub(super) fn compose_wrapped_dump_block(
     pre_dump_segments: &[(usize, u16, u16)],
     shadow_dump: &[u8],
     current_dims: (u16, u16),
+    probe_capacity: u32,
 ) -> Option<Vec<u8>> {
-    let probe = probe_replay_state(pre_dump_payload, pre_dump_segments, current_dims)?;
+    let probe = probe_replay_state(
+        pre_dump_payload,
+        pre_dump_segments,
+        current_dims,
+        probe_capacity,
+    )?;
 
     let stripped_dump = strip_decsc_decrc(shadow_dump);
     let mut block = Vec::with_capacity(stripped_dump.len() + 128);
@@ -408,7 +445,7 @@ mod tests {
         let segments = vec![(0usize, 80u16, 24u16)];
         let current_dims = (80u16, 24u16);
 
-        let probe = probe_replay_state(&payload, &segments, current_dims)
+        let probe = probe_replay_state(&payload, &segments, current_dims, 10_000)
             .expect("probe must succeed on well-formed input");
 
         let replay_segments: Vec<ReplaySegment> = segments
@@ -446,7 +483,7 @@ mod tests {
         payload.extend_from_slice(b"\x1b[3;20r\x1b[?6h\x1b[2;5H\x1b[1;31mtail");
         let current_dims = (80u16, 24u16);
 
-        let probe = probe_replay_state(&payload, &[], current_dims)
+        let probe = probe_replay_state(&payload, &[], current_dims, 10_000)
             .expect("probe must succeed on well-formed input");
 
         let mut oracle = TerminalCore::new(current_dims.0, current_dims.1, 10_000);
@@ -469,8 +506,8 @@ mod tests {
     /// `TerminalCore::new`'s zero-dimension precondition.
     #[test]
     fn probe_replay_state_fails_closed_on_a_zero_dimension() {
-        assert!(probe_replay_state(b"anything", &[], (0, 24)).is_none());
-        assert!(probe_replay_state(b"anything", &[], (80, 0)).is_none());
+        assert!(probe_replay_state(b"anything", &[], (0, 24), 10_000).is_none());
+        assert!(probe_replay_state(b"anything", &[], (80, 0), 10_000).is_none());
     }
 
     /// `compose_wrapped_dump_block` propagates a probe failure as `None`
@@ -478,7 +515,7 @@ mod tests {
     /// than composing a block from a state it could not establish.
     #[test]
     fn compose_wrapped_dump_block_returns_none_when_the_probe_fails() {
-        assert!(compose_wrapped_dump_block(b"pre-dump", &[], b"SCREEN", (0, 24)).is_none());
+        assert!(compose_wrapped_dump_block(b"pre-dump", &[], b"SCREEN", (0, 24), 10_000).is_none());
     }
 
     // ── Composition shape ─────────────────────────────────────────────
@@ -486,7 +523,7 @@ mod tests {
     #[test]
     fn compose_wrapped_dump_block_never_contains_decsc_or_decrc() {
         let shadow_dump = b"\x1b[H\x1b[Jhello\x1b7\x1b[10;1H \x1b[K\x1b8world";
-        let block = compose_wrapped_dump_block(b"", &[], shadow_dump, (80, 24))
+        let block = compose_wrapped_dump_block(b"", &[], shadow_dump, (80, 24), 10_000)
             .expect("probe must succeed on an empty pre-dump payload");
         assert!(!block.windows(2).any(|w| w == b"\x1b7"));
         assert!(!block.windows(2).any(|w| w == b"\x1b8"));
@@ -495,7 +532,7 @@ mod tests {
     #[test]
     fn compose_wrapped_dump_block_restores_a_non_default_scroll_region_and_origin_mode() {
         let pre_dump = b"\x1b[5;20r\x1b[?6h".to_vec();
-        let block = compose_wrapped_dump_block(&pre_dump, &[], b"DUMP", (80, 24))
+        let block = compose_wrapped_dump_block(&pre_dump, &[], b"DUMP", (80, 24), 10_000)
             .expect("probe must succeed");
         // Normalize prefix always resets first.
         assert!(block.starts_with(b"\x1b[?6l\x1b[r"));
@@ -530,14 +567,14 @@ mod tests {
         shadow_dump.extend_from_slice(b"\x1b[H\x1b[J\x1b[1;1H");
         shadow_dump.extend_from_slice(&vec![b'X'; cols as usize]);
 
-        let probe = probe_replay_state(&pre_dump, &[], (cols, rows))
+        let probe = probe_replay_state(&pre_dump, &[], (cols, rows), 10_000)
             .expect("probe must succeed on well-formed input");
         assert!(
             probe.wrap_pending,
             "test prerequisite: filling the row exactly must leave a pending wrap"
         );
 
-        let block = compose_wrapped_dump_block(&pre_dump, &[], &shadow_dump, (cols, rows))
+        let block = compose_wrapped_dump_block(&pre_dump, &[], &shadow_dump, (cols, rows), 10_000)
             .expect("probe must succeed");
 
         // AC-6: the pending-wrap re-establishment bytes must never introduce
@@ -592,14 +629,14 @@ mod tests {
         let shadow_dump = b"SCREEN".to_vec();
         let current_dims = (80u16, 24u16);
 
-        let probe = probe_replay_state(&pre_dump, &[], current_dims)
+        let probe = probe_replay_state(&pre_dump, &[], current_dims, 10_000)
             .expect("probe must succeed on well-formed input");
         assert!(
             !probe.wrap_pending,
             "test prerequisite: a payload ending with a newline leaves no pending wrap"
         );
 
-        let block = compose_wrapped_dump_block(&pre_dump, &[], &shadow_dump, current_dims)
+        let block = compose_wrapped_dump_block(&pre_dump, &[], &shadow_dump, current_dims, 10_000)
             .expect("probe must succeed");
 
         let mut expected = Vec::new();
@@ -654,7 +691,7 @@ mod tests {
         let segments = vec![(0usize, 80u16, 24u16), (resize_offset, 80u16, 40u16)];
         let current_dims = (80u16, 40u16);
 
-        let probe = probe_replay_state(&payload, &segments, current_dims)
+        let probe = probe_replay_state(&payload, &segments, current_dims, 10_000)
             .expect("probe must succeed on well-formed input");
 
         let mut oracle = TerminalCore::new(current_dims.0, current_dims.1, 10_000);
@@ -689,7 +726,7 @@ mod tests {
         let segments = vec![(0usize, 80u16, 24u16), (resize_offset, 100u16, 40u16)];
         let current_dims = (100u16, 40u16);
 
-        let probe = probe_replay_state(&payload, &segments, current_dims)
+        let probe = probe_replay_state(&payload, &segments, current_dims, 10_000)
             .expect("probe must succeed on well-formed input");
 
         let mut oracle = TerminalCore::new(current_dims.0, current_dims.1, 10_000);
@@ -727,7 +764,7 @@ mod tests {
         let segments = vec![(0usize, 80u16, 24u16)];
         let current_dims = (80u16, 40u16);
 
-        let probe = probe_replay_state(&payload, &segments, current_dims)
+        let probe = probe_replay_state(&payload, &segments, current_dims, 10_000)
             .expect("probe must succeed on well-formed input");
 
         let mut oracle = TerminalCore::new(current_dims.0, current_dims.1, 10_000);
@@ -742,5 +779,119 @@ mod tests {
         assert_eq!(probe.bg, oracle.get_cursor_bg());
         assert_eq!(probe.flags, oracle.get_cursor_flags());
         assert_eq!(probe.wrap_pending, oracle.get_wrap_pending());
+    }
+
+    // ── mux-probe-scrollback-capacity task0002, AC-1: the probe run at
+    // capacity C matches an oracle built at that SAME capacity C, for C in
+    // {0, a small non-zero value, 10,000}, across all three grow shapes ──
+
+    /// Shared AC-1 assertion: run the probe at `capacity` and compare
+    /// against an oracle built at the SAME `capacity` (unlike the D8 tests
+    /// above, which always compare against a 10,000-line oracle regardless
+    /// of what the probe itself runs at).
+    fn assert_probe_matches_oracle_at_capacity(
+        payload: &[u8],
+        segments: &[(usize, u16, u16)],
+        current_dims: (u16, u16),
+        capacity: u32,
+    ) {
+        let probe = probe_replay_state(payload, segments, current_dims, capacity)
+            .expect("probe must succeed on well-formed input");
+
+        let mut oracle = TerminalCore::new(current_dims.0, current_dims.1, capacity);
+        oracle.reset_and_replay_segments(payload, &to_replay_segments_d8(segments));
+
+        assert_eq!(probe.scroll_top, oracle.get_scroll_region_top());
+        assert_eq!(probe.scroll_bottom, oracle.get_scroll_region_bottom());
+        assert_eq!(probe.origin_mode, oracle.get_mode(MODE_ORIGIN));
+        assert_eq!(probe.cursor_row, oracle.get_cursor_row());
+        assert_eq!(probe.cursor_col, oracle.get_cursor_col());
+        assert_eq!(probe.fg, oracle.get_cursor_fg());
+        assert_eq!(probe.bg, oracle.get_cursor_bg());
+        assert_eq!(probe.flags, oracle.get_cursor_flags());
+        assert_eq!(probe.wrap_pending, oracle.get_wrap_pending());
+    }
+
+    #[test]
+    fn probe_replay_state_matches_the_oracle_at_capacity_zero_across_a_rows_only_grow_resize() {
+        let mut payload = Vec::new();
+        for i in 0..60u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        let resize_offset = payload.len();
+        for i in 60..90u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        let segments = vec![(0usize, 80u16, 24u16), (resize_offset, 80u16, 40u16)];
+        let current_dims = (80u16, 40u16);
+
+        for capacity in [0u32, 5u32, 10_000u32] {
+            assert_probe_matches_oracle_at_capacity(&payload, &segments, current_dims, capacity);
+        }
+    }
+
+    #[test]
+    fn probe_replay_state_matches_the_oracle_at_capacity_zero_across_a_rows_and_columns_grow_resize()
+     {
+        let mut payload = Vec::new();
+        for i in 0..60u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        let resize_offset = payload.len();
+        for i in 60..90u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        let segments = vec![(0usize, 80u16, 24u16), (resize_offset, 100u16, 40u16)];
+        let current_dims = (100u16, 40u16);
+
+        for capacity in [0u32, 5u32, 10_000u32] {
+            assert_probe_matches_oracle_at_capacity(&payload, &segments, current_dims, capacity);
+        }
+    }
+
+    #[test]
+    fn probe_replay_state_matches_the_oracle_across_capacities_when_current_dims_exceeds_the_last_segment()
+     {
+        let mut payload = Vec::new();
+        for i in 0..60u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        let segments = vec![(0usize, 80u16, 24u16)];
+        let current_dims = (80u16, 40u16);
+
+        for capacity in [0u32, 5u32, 10_000u32] {
+            assert_probe_matches_oracle_at_capacity(&payload, &segments, current_dims, capacity);
+        }
+    }
+
+    // ── mux-probe-scrollback-capacity task0002, AC-2/TM-1: the probe never
+    // builds a scratch terminal deeper than the cap, no matter what capacity
+    // it is passed — bypassing `resolve_probe_capacity` entirely ──────────
+
+    /// `probe_replay_state` independently re-clamps via `min` (TM-1): a
+    /// capacity far above the cap (`u32::MAX`, simulating a caller that
+    /// bypasses `crate::mux::snapshot_bytes::resolve_probe_capacity`
+    /// entirely) must produce byte-for-byte the SAME probed state as
+    /// passing the cap directly.
+    #[test]
+    fn probe_replay_state_clamps_a_capacity_far_above_the_cap_to_the_cap_itself() {
+        let mut payload = Vec::new();
+        for i in 0..60u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        let resize_offset = payload.len();
+        for i in 60..90u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        let segments = vec![(0usize, 80u16, 24u16), (resize_offset, 80u16, 40u16)];
+        let current_dims = (80u16, 40u16);
+
+        let probe_at_cap =
+            probe_replay_state(&payload, &segments, current_dims, PROBE_SCROLLBACK_LINES)
+                .expect("probe must succeed on well-formed input");
+        let probe_far_above_cap = probe_replay_state(&payload, &segments, current_dims, u32::MAX)
+            .expect("probe must succeed on well-formed input");
+
+        assert_eq!(probe_at_cap, probe_far_above_cap);
     }
 }
