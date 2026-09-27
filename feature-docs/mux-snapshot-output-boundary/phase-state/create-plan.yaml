@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-snapshot-output-boundary
 phase: create-plan
-status: dispatching
+status: applying_patch
 generation: 1
 base_revision: a52f174673284e33932dac14d45b278677aa5fe4
 last_input_digest: sha256:ec57ca9395c9790c1eaa620a0e6fb210f5feb3871abdaafcd10abe6faec24c53
-active_request_id: create-plan-run-0003
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -18,9 +18,9 @@ worker_runs:
   input_digest: sha256:a88b8e7d8427217593758baf3d7e714bb5862fd7bd2ba3513dc13b5d51a28e19
   output_digest: sha256:4793d9751cd1e18649176aa02d2caefeae38cd6cc5f0105a19885c184bb9f8b6
 - request_id: create-plan-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:ec57ca9395c9790c1eaa620a0e6fb210f5feb3871abdaafcd10abe6faec24c53
-  output_digest: null
+  output_digest: sha256:456dfdbe15e452b9c2b359bd051f968eed25e0d6a6ec2e043090139684b5ebb2
 artifacts:
 - path: feature-docs/mux-snapshot-output-boundary/IMPLEMENTATION.md
   sha256: sha256:d764aa8e341ff5d5e407aba572fd32576d9bdb1ac7cfb9a072c2c564bf08fbf3
@@ -32,19 +32,18 @@ artifacts:
   sha256: sha256:d0f3a31245648e5d93950f432cbd512605e519768b1fbf67b2f4c26e03049fd2
   produced_by: create-plan-run-0002
 - path: feature-docs/mux-snapshot-output-boundary/tasks/task0001.md
-  sha256: sha256:ca2212a017893013321585b731f41f011dbd0054ee29ebdcc44108e6aa0e4d63
-  produced_by: create-plan-run-0002
+  sha256: sha256:03dd29e80ffb17853f7e40c0aeb7ac4e2fb1cd44f451087bd31acb4849ee248a
+  produced_by: create-plan-run-0003
 patches:
 - patch_id: create-plan-p0002
   status: rejected
   base_input_digest: sha256:a88b8e7d8427217593758baf3d7e714bb5862fd7bd2ba3513dc13b5d51a28e19
   base_workflow_blob: f5c4b4970bbeae1959a3480a7a422373d7a2b2d1
+- patch_id: create-plan-p0003
+  status: validated
+  base_input_digest: sha256:ec57ca9395c9790c1eaa620a0e6fb210f5feb3871abdaafcd10abe6faec24c53
+  base_workflow_blob: f5c4b4970bbeae1959a3480a7a422373d7a2b2d1
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
-last_error:
-  kind: validation_failed
-  request_id: create-plan-run-0002
-  note: 'validate-worker-output.py: task-plan-files (Files bullets contain multiple
-    backtick-quoted tokens) and task-plan-files-mismatch. Re-dispatched as run-0003
-    for formatting fix.'
+last_error: null
