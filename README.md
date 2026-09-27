@@ -55,7 +55,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Agent-facing API: `emterm mux read` / `emterm mux send` / `emterm mux wait` let one pane read, write to, and wait on another pane's state
   - OSC title propagation: daemon updates window names from shell OSC 0/2 sequences even while GUI is detached
   - Pane exit while detached is reaped correctly; daemon auto-shutdown fires when the last session empties
-  - Correct main-buffer snapshot restore: daemon screen dump omitted for main-buffer panes; client replays scrollback bytes directly (eliminates progress-bar corruption after `apt install` and similar commands)
+  - Correct main-buffer snapshot restore: daemon screen dump omitted for main-buffer panes whose scrollback ring has not wrapped; client replays scrollback bytes directly (eliminates progress-bar corruption after `apt install` and similar commands). Once the ring has wrapped, the daemon appends its own screen dump after the scrollback replay so lines written only once (e.g. `top`'s column header) survive a tab switch, reattach, or visibility resume.
   - Resize-interleaved output replays correctly on window/tab switch: the daemon records pane-resize markers in scrollback so each replayed segment is reconstructed at the terminal dimensions it was produced at
   - Fast window switching (tens of milliseconds), even for panes with large accumulated scrollback
   - Switching windows or typing in other panes stays responsive even while one pane is producing very high-volume output
