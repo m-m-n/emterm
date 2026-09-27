@@ -16,7 +16,10 @@ in both the GUI build and the CLI-only build (`--no-default-features`).
 | `emterm markdown <file>` | Emit Markdown display sequence to stdout |
 | `emterm json <file>` | Emit JSON display sequence to stdout |
 | `emterm yaml <file>` | Emit YAML display sequence to stdout |
+| `emterm html <file>` | Emit HTML display sequence to stdout |
 | `emterm image <file> [--protocol kitty\|sixel]` | Emit image display sequence to stdout |
+| `emterm agent-status <idle\|working\|blocked\|done\|clear> [--name <s>]` | Report or clear this pane's agent status |
+| `emterm mux …` | mux daemon / bridge / `read` / `send` / `wait` (dispatched to `src-tauri/src/mux/cli/`) |
 
 Dispatch lives in `src-tauri/src/main.rs`; the subcommand implementations are in
 `src-tauri/src/cli/`.

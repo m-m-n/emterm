@@ -23,10 +23,11 @@ directory name.
 The `gui` feature (default-on) toggles the windowed terminal stack:
 
 - **`gui` on** — full binary: winit + wgpu + egui terminal, wry child WebViews,
-  mux/tabs/PTY, term_core/term_images/mux_ipc, font stack (swash/zeno/fontdb),
+  tabs/PTY, term_images, font stack (swash/zeno/fontdb),
   bell/notifications/clipboard/SVG icon
-- **`gui` off** (`--no-default-features`) — CLI only: just the `markdown` /
-  `json` / `yaml` / `image` subcommands dispatched from `cli/`. The CLI deb
+- **`gui` off** (`--no-default-features`) — CLI + mux: the `markdown` /
+  `json` / `yaml` / `html` / `image` / `agent-status` subcommands from `cli/`
+  plus the mux daemon / bridge / CLI (`emterm mux …`). The CLI deb
   (`emterm-cli`) ships this build and depends only on libc6
 
 When you add a module that uses GUI-only crates (winit, wgpu, wry, swash, etc.)
