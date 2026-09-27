@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: 50329c188eeb4237cedd324949278e654517f7f4
 last_input_digest: sha256:5c259c4498d0a81ce4e063ef13c2a3dd779cd31ca33efb0253d4ee9ea8102f39
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -115,10 +115,16 @@ worker_runs:
   input_digest: sha256:f9fd896de177a9061675640229f3ae1d1718885be0c8bdd0d0c61f4eba5c84f9
   output_digest: sha256:97c973b74caff6d7a7fd3dfe00b74073bf0ee81412b4e23163902134172545a5
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:5c259c4498d0a81ce4e063ef13c2a3dd779cd31ca33efb0253d4ee9ea8102f39
   output_digest: null
-artifacts: []
+artifacts:
+- path: feature-docs/mux-probe-scrollback-capacity/REQUIREMENTS.md
+  sha256: sha256:c7d792183156f8df63a02b7ba0891a3a19ebb4723cd1a6aec03673dc94f16c44
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-probe-scrollback-capacity/SPEC.md
+  sha256: sha256:122c6fab0666b33d20ef2028b12e704e8a63e63398095fbc43c6849d985379c5
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
