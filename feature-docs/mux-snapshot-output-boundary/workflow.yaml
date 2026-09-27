@@ -98,33 +98,17 @@ workflow:
   status: completed
   completed_at_commit: f7f9308c10e36bda78a0a85e090335ca18be2e52
 - id: verify
-  status: in_progress
-  result: fail
-  failed_items:
-  - id: TS-1
-    category: spec
-    note: 可視 reattach（collect_reattach_data）を reader 一時停止下で駆動するテストが無い
-  - id: TS-2
-    category: spec
-    note: HiddenByVisibility の pane で reader 一時停止下に resume_pane_with_permit を走らせるテストが無い
-  - id: TS-6
-    category: spec
-    note: サイズ超過で snapshot が拒否されるケース、deferred snapshot が追い出されるケースで in-flight チャンクが届くことのテストが無い
-  - id: TS-7
-    category: spec
-    note: OSC 9 が抑止チャンクと次の非抑止チャンクにまたがるケース、後続 Detached 期間で継ぎ合わせ通知が出ないことのテストが無い
-  - id: TS-9
-    category: spec
-    note: reader レベルの DA1・複数問い合わせの順序・TS-1（reattach）条件のテストが無く、ビルダー単体テストのみ
-  - id: TS-10
-    category: spec
-    note: 境界をまたぐシーケンス (a)(b)(c) を TS-1 条件で term_core 参照一致まで確かめるテストが無く、ビルダー単体テストのみ
-  - id: TS-11
-    category: spec
-    note: 宛先 A の境界記録後に B が reattach で引き継ぐ reader 経由のテストが無く、境界記録の単体テストのみ
-  - id: TS-16
-    category: performance
-    note: reattach.rs collect_reattach_data が output_target ロック内で encode_snapshot_segments（O(snapshot)、最大約 2 MiB）を実行しており NFR3 に反する。snapshot の二重エンコードも生じる
+  status: completed
+  completed_at_commit: 4760d4378f3658255dda5bc627b7683d93cd8630
+  result: pass
+  round: 2
+  failed_items: []
+  summary: |
+    build (--no-default-features check) exit 0; test (--lib) 3727 passed / 0 failed / 3 ignored.
+    Round-1 failures TS-1/2/6/7/9/10/11 now each map to a named reader-level test; TS-16 fixed
+    (collect_reattach_data decides deliverability via encoded_snapshot_segments_len outside the
+    output_target lock). TS-13: byte-shape tests have no removed lines. No excluded requirements.
+    Manual MT-1..MT-4 not run (need release build + daemon restart).
 - id: retrospect
   status: pending
 tasks:
