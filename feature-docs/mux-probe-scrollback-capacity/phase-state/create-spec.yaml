@@ -4,8 +4,8 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: 50329c188eeb4237cedd324949278e654517f7f4
-last_input_digest: sha256:f9fd896de177a9061675640229f3ae1d1718885be0c8bdd0d0c61f4eba5c84f9
-active_request_id: create-spec-run-0002
+last_input_digest: sha256:5c259c4498d0a81ce4e063ef13c2a3dd779cd31ca33efb0253d4ee9ea8102f39
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -111,8 +111,12 @@ worker_runs:
   input_digest: sha256:1affdd6a3633edfac8d6e55b8a6d970791a24390cac9188cfe4b162d5ffd0b4d
   output_digest: sha256:bae6e6bdcb145d71fc1e5e7cbd0eaba37db1ee9d0ccb1d5da10aa74812039589
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:f9fd896de177a9061675640229f3ae1d1718885be0c8bdd0d0c61f4eba5c84f9
+  output_digest: sha256:97c973b74caff6d7a7fd3dfe00b74073bf0ee81412b4e23163902134172545a5
+- request_id: create-spec-run-0003
+  status: dispatched
+  input_digest: sha256:5c259c4498d0a81ce4e063ef13c2a3dd779cd31ca33efb0253d4ee9ea8102f39
   output_digest: null
 artifacts: []
 patches: []
@@ -150,3 +154,52 @@ resolved_input_cache:
   - feature-docs/mux-snapshot-ring-wrap-restore/IMPLEMENTATION.md
   - feature-docs/mux-snapshot-ring-wrap-restore/reviews/round2.yaml
 last_error: null
+assumptions:
+- id: A-1
+  statement: 'Fix approach pass_client_capacity: the replaying tab''s own capacity is sent to the daemon
+    through a new additive control message, and the probe runs at that capacity. The alternative approaches
+    were not chosen: client-side restore would need a snapshot-shape change the ticket forbids, and a
+    documented limit only cannot meet DoD item 1.'
+  source: answer fix-approach (create-spec-q0001, Codex consultation)
+  reversible: true
+- id: A-2
+  statement: 'Protocol compatibility avoid_bump_preferred: only a new message type is added, and PROTOCOL_VERSION
+    stays 3. Unreported maps to the legacy 10,000, kept separate from an explicit 0. Mixed old/new combinations
+    keep working without a guaranteed fix. No response is required from the peer.'
+  source: answer protocol-compat (create-spec-q0001)
+  reversible: true
+- id: A-3
+  statement: 'Large capacities cap_with_fallback, refined: the u32 is validated before allocation, probe_capacity
+    = min(reported, 10,000), and above the cap the probe runs at 10,000 with the dump kept. The fix is
+    guaranteed for 0..=10,000. Above 10,000 the residual mismatch is a documented limit, and lock-hold
+    time is left to follow-up 3b5bbd839c74d67b.'
+  source: answer large-capacity-cost (create-spec-q0001)
+  reversible: true
+- id: A-4
+  statement: 'The design step is skipped: there is no UI or visual change.'
+  source: answer design-step (create-spec-q0001, batch decision table decide_autonomously)
+  reversible: true
+- id: A-5
+  statement: A tab's scrollback capacity is fixed when its TerminalCore is constructed. TerminalCore has
+    scrollback_capacity() and no setter, and the off-thread replay builds its replacement core at the
+    same capacity. So one report per attach, plus a re-send on bridge reconnect, is enough, and a later
+    settings change affects only new tabs.
+  source: 'code: crates/term_core/src/terminal_core.rs:402, src-tauri/src/tabs/replay.rs:303-325'
+  reversible: true
+- id: A-6
+  statement: A malformed capacity payload (not exactly one u32) is ignored without changing the connection's
+    value and without closing the connection. This follows from the answered 'validated before any allocation'
+    rule.
+  source: derived from answer large-capacity-cost
+  reversible: true
+- id: A-7
+  statement: 'Constraint from the ticket: the snapshot byte shape is not changed, because of the known
+    apt progress-bar residue issue.'
+  source: task_description 制約・前提
+  reversible: true
+- id: A-8
+  statement: 'Out of scope: the probe''s scratch core always uses the default scroll_region_scrollback_enabled
+    = true, while the client seeds that flag from settings (settings/mod.rs:148). That is a separate possible
+    probe/client divergence and is not addressed by this capacity-only fix.'
+  source: 'code: dump_block.rs:109, settings/mod.rs:142-148'
+  reversible: true
