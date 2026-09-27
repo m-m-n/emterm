@@ -1,5 +1,6 @@
 use super::*;
 use mux_ipc::protocol::AttachMsg;
+use mux_ipc::protocol::ClientScrollbackCapacityPayload;
 #[cfg(unix)]
 use mux_ipc::protocol::WelcomeMsg;
 
@@ -561,6 +562,32 @@ fn capture_if_attach_captures_attach_and_only_attach() {
     assert_eq!(capture_if_attach(&other, &other_body), None);
 }
 
+/// AC-6 (mux-probe-scrollback-capacity task0001): only a
+/// `ClientScrollbackCapacity` report is captured for a later resend;
+/// every other message type — including `Attach` — is not. Mirrors
+/// `capture_if_attach_captures_attach_and_only_attach`.
+#[test]
+fn capture_if_capacity_captures_capacity_and_only_capacity() {
+    let capacity = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: ClientScrollbackCapacityPayload { lines: 42 }.to_payload(),
+    };
+    let capacity_body = capacity.to_frame_body();
+    assert_eq!(
+        capture_if_capacity(&capacity, &capacity_body),
+        Some(capacity_body.clone())
+    );
+
+    let other = MuxMessage::pty_input(1, vec![0x41]);
+    let other_body = other.to_frame_body();
+    assert_eq!(capture_if_capacity(&other, &other_body), None);
+
+    let attach = MuxMessage::control(MessageType::Attach, 0, &AttachMsg { session_id: 5 });
+    let attach_body = attach.to_frame_body();
+    assert_eq!(capture_if_capacity(&attach, &attach_body), None);
+}
+
 /// AC-3 / AC-7: the connection-ended decision is exactly the observed
 /// announcement flag — never sticky across calls (`forward_loop`
 /// creates a fresh flag every invocation, so a reconnected connection
@@ -612,9 +639,30 @@ fn accept_and_handshake_blocking(
     stream
 }
 
+/// AC-7: confirms nothing further arrives on `stream` within a short
+/// bounded wait — used to prove a "resend only X" case really sent
+/// nothing else, not merely that the checked read happened to come
+/// first.
+#[cfg(unix)]
+fn assert_no_more_frames_blocking(stream: &mut std::os::unix::net::UnixStream) {
+    use std::io::Read as _;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+        .expect("set read timeout");
+    let mut probe = [0u8; 1];
+    match stream.read(&mut probe) {
+        Ok(0) => {}
+        Ok(_) => panic!("unexpected extra byte arrived after the expected frame(s)"),
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(e) => panic!("unexpected read error while checking for extra frames: {e}"),
+    }
+}
+
 /// AC-2 / AC-4: `reconnect_and_reattach` completes a second handshake
 /// against the stand-in daemon and then resends the previously
-/// captured `Attach` frame verbatim.
+/// captured `Attach` frame verbatim. AC-7 (mux-probe-scrollback-capacity
+/// task0001): with no stored capacity, it receives only the Attach, as
+/// today.
 #[cfg(unix)]
 #[tokio::test]
 async fn reconnect_and_reattach_resends_the_last_attach_after_reconnecting() {
@@ -625,6 +673,7 @@ async fn reconnect_and_reattach_resends_the_last_attach_after_reconnecting() {
 
     let attach = MuxMessage::control(MessageType::Attach, 0, &AttachMsg { session_id: 7 });
     let attach_body = attach.to_frame_body();
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(Some(attach_body.clone())));
 
     let bind_path = sock_path.clone();
@@ -633,10 +682,12 @@ async fn reconnect_and_reattach_resends_the_last_attach_after_reconnecting() {
         let mut stream = accept_and_handshake_blocking(&listener);
         // The very next frame after the reconnect handshake must be
         // the resent Attach request (AC-4), not anything else.
-        read_frame_blocking(&mut stream)
+        let resent = read_frame_blocking(&mut stream);
+        assert_no_more_frames_blocking(&mut stream);
+        resent
     });
 
-    let result = reconnect_and_reattach(&sock_path, &last_attach).await;
+    let result = reconnect_and_reattach(&sock_path, &last_capacity, &last_attach).await;
     assert!(
         result.is_some(),
         "reconnect_and_reattach should succeed against a live stand-in daemon"
@@ -646,6 +697,99 @@ async fn reconnect_and_reattach_resends_the_last_attach_after_reconnecting() {
     assert_eq!(resent.msg_type, MessageType::Attach);
     let decoded: AttachMsg = resent.decode_payload().expect("Attach payload");
     assert_eq!(decoded.session_id, 7);
+}
+
+/// AC-7 (mux-probe-scrollback-capacity task0001): with both a stored
+/// capacity and a stored Attach, the first two frames the stand-in
+/// daemon receives after the reconnect handshake are the capacity frame,
+/// then the Attach frame, in that order.
+#[cfg(unix)]
+#[tokio::test]
+async fn reconnect_and_reattach_resends_capacity_then_attach_after_reconnecting() {
+    use std::os::unix::net::UnixListener;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock_path = dir.path().join("reconnect-capacity-then-attach.sock");
+
+    let capacity = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: ClientScrollbackCapacityPayload { lines: 123 }.to_payload(),
+    };
+    let capacity_body = capacity.to_frame_body();
+    let attach = MuxMessage::control(MessageType::Attach, 0, &AttachMsg { session_id: 9 });
+    let attach_body = attach.to_frame_body();
+
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> =
+        Arc::new(Mutex::new(Some(capacity_body.clone())));
+    let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(Some(attach_body.clone())));
+
+    let bind_path = sock_path.clone();
+    let daemon = std::thread::spawn(move || {
+        let listener = UnixListener::bind(&bind_path).expect("bind stand-in daemon socket");
+        let mut stream = accept_and_handshake_blocking(&listener);
+        let first = read_frame_blocking(&mut stream);
+        let second = read_frame_blocking(&mut stream);
+        assert_no_more_frames_blocking(&mut stream);
+        (first, second)
+    });
+
+    let result = reconnect_and_reattach(&sock_path, &last_capacity, &last_attach).await;
+    assert!(
+        result.is_some(),
+        "reconnect_and_reattach should succeed against a live stand-in daemon"
+    );
+
+    let (first, second) = daemon.join().expect("stand-in daemon thread panicked");
+    assert_eq!(first.msg_type, MessageType::ClientScrollbackCapacity);
+    let decoded_capacity =
+        ClientScrollbackCapacityPayload::from_payload(&first.payload).expect("capacity payload");
+    assert_eq!(decoded_capacity.lines, 123);
+    assert_eq!(second.msg_type, MessageType::Attach);
+    let decoded_attach: AttachMsg = second.decode_payload().expect("Attach payload");
+    assert_eq!(decoded_attach.session_id, 9);
+}
+
+/// AC-7 (mux-probe-scrollback-capacity task0001): with a stored capacity
+/// and no stored Attach, reconnect resends only the capacity frame.
+#[cfg(unix)]
+#[tokio::test]
+async fn reconnect_and_reattach_resends_only_capacity_when_no_attach_stored() {
+    use std::os::unix::net::UnixListener;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock_path = dir.path().join("reconnect-capacity-only.sock");
+
+    let capacity = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: ClientScrollbackCapacityPayload { lines: 321 }.to_payload(),
+    };
+    let capacity_body = capacity.to_frame_body();
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> =
+        Arc::new(Mutex::new(Some(capacity_body.clone())));
+    let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+
+    let bind_path = sock_path.clone();
+    let daemon = std::thread::spawn(move || {
+        let listener = UnixListener::bind(&bind_path).expect("bind stand-in daemon socket");
+        let mut stream = accept_and_handshake_blocking(&listener);
+        let only = read_frame_blocking(&mut stream);
+        assert_no_more_frames_blocking(&mut stream);
+        only
+    });
+
+    let result = reconnect_and_reattach(&sock_path, &last_capacity, &last_attach).await;
+    assert!(
+        result.is_some(),
+        "reconnect_and_reattach should succeed against a live stand-in daemon"
+    );
+
+    let only = daemon.join().expect("stand-in daemon thread panicked");
+    assert_eq!(only.msg_type, MessageType::ClientScrollbackCapacity);
+    let decoded =
+        ClientScrollbackCapacityPayload::from_payload(&only.payload).expect("capacity payload");
+    assert_eq!(decoded.lines, 321);
 }
 
 /// AC-5: with nothing ever listening on `sock_path`, every attempt
@@ -738,6 +882,7 @@ async fn forward_loop_persistent_stdin_handle_delivers_bytes_queued_across_recon
     let (mut stdin, mut stdin_probe) = tokio::io::duplex(4096);
     let mut parser = StdinApcParser::new();
     let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
 
     // Connection #1's "daemon" side is closed immediately, before
@@ -752,6 +897,7 @@ async fn forward_loop_persistent_stdin_handle_delivers_bytes_queued_across_recon
         &mut r1,
         &mut w1,
         &transport,
+        &last_capacity,
         &last_attach,
         &mut stdin,
         &mut parser,
@@ -797,6 +943,7 @@ async fn forward_loop_persistent_stdin_handle_delivers_bytes_queued_across_recon
         &mut r2,
         &mut w2,
         &transport,
+        &last_capacity,
         &last_attach,
         &mut stdin,
         &mut parser,
@@ -1107,6 +1254,7 @@ async fn forward_loop_keeps_stdin_to_daemon_progressing_while_stdout_sink_is_blo
     let (mut stdin, mut stdin_writer) = tokio::io::duplex(4096);
     let mut parser = StdinApcParser::new();
     let transport = Arc::new(AtomicU8::new(Transport::Apc as u8));
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
 
     let gate = Arc::new(Gate::new());
@@ -1120,6 +1268,7 @@ async fn forward_loop_keeps_stdin_to_daemon_progressing_while_stdout_sink_is_blo
         &mut sock_reader,
         &mut sock_writer,
         &transport,
+        &last_capacity,
         &last_attach,
         &mut stdin,
         &mut parser,
@@ -1215,6 +1364,7 @@ async fn forward_loop_ends_normal_on_stdout_sink_write_error() {
     let (sock, mut daemon_side) = tokio::io::duplex(65536);
     let (mut sock_reader, mut sock_writer) = tokio::io::split(sock);
     let transport = Arc::new(AtomicU8::new(Transport::Apc as u8));
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let (mut stdin, _stdin_writer) = tokio::io::duplex(64);
     let mut parser = StdinApcParser::new();
@@ -1241,6 +1391,7 @@ async fn forward_loop_ends_normal_on_stdout_sink_write_error() {
             &mut sock_reader,
             &mut sock_writer,
             &transport,
+            &last_capacity,
             &last_attach,
             &mut stdin,
             &mut parser,
@@ -1264,5 +1415,172 @@ async fn forward_loop_ends_normal_on_stdout_sink_write_error() {
     assert!(
         written.lock().expect("written mutex poisoned").is_empty(),
         "the failed write must not be recorded as delivered"
+    );
+}
+
+// ---- mux-probe-scrollback-capacity task0001: capture / forward the
+// ClientScrollbackCapacity report on the stdin -> daemon path ----
+
+/// AC-6: the bridge forwards a `ClientScrollbackCapacity` report to the
+/// daemon socket unchanged (byte-identical frame body) and stores its
+/// frame body as the latest capacity. Fed in EMUX plaintext form so the
+/// bridge parser's plaintext path is exercised too (Test Notes).
+#[tokio::test]
+async fn forward_loop_forwards_and_captures_capacity_frame_unchanged() {
+    use tokio::io::AsyncReadExt as _;
+    use tokio::io::AsyncWriteExt as _;
+
+    let (mut stdin, mut stdin_writer) = tokio::io::duplex(4096);
+    let mut parser = StdinApcParser::new();
+    let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+
+    let (sock, mut daemon_side) = tokio::io::duplex(4096);
+    let (mut sock_reader, mut sock_writer) = tokio::io::split(sock);
+
+    let capacity = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: ClientScrollbackCapacityPayload { lines: 7 }.to_payload(),
+    };
+    let expected_body = capacity.to_frame_body();
+
+    stdin_writer
+        .write_all(capacity.to_plaintext().as_bytes())
+        .await
+        .expect("write capacity plaintext");
+    stdin_writer
+        .flush()
+        .await
+        .expect("flush capacity plaintext");
+    // EOF once the buffered bytes are drained, so `forward_loop` ends
+    // right after the frame is forwarded.
+    drop(stdin_writer);
+
+    let daemon_task = tokio::spawn(async move {
+        let mut len_buf = [0u8; 4];
+        daemon_side
+            .read_exact(&mut len_buf)
+            .await
+            .expect("read forwarded frame length");
+        let frame_len = u32::from_be_bytes(len_buf) as usize;
+        let mut frame_buf = vec![0u8; frame_len];
+        daemon_side
+            .read_exact(&mut frame_buf)
+            .await
+            .expect("read forwarded frame body");
+        frame_buf
+    });
+
+    let ended = forward_loop(
+        &mut sock_reader,
+        &mut sock_writer,
+        &transport,
+        &last_capacity,
+        &last_attach,
+        &mut stdin,
+        &mut parser,
+    )
+    .await;
+    assert_eq!(ended, ConnectionEnded::Normal);
+
+    let forwarded_body = daemon_task.await.expect("daemon task panicked");
+    assert_eq!(
+        forwarded_body, expected_body,
+        "the daemon socket receives the capacity frame body unchanged"
+    );
+    assert_eq!(
+        last_capacity
+            .lock()
+            .expect("last_capacity mutex poisoned")
+            .clone(),
+        Some(expected_body),
+        "the bridge stores the latest capacity frame body"
+    );
+}
+
+/// AC-6: a later capacity report replaces the stored one, and a
+/// non-capacity message forwarded in between leaves the stored capacity
+/// unchanged. Attach capture behaves as before (unaffected by this
+/// storage).
+#[tokio::test]
+async fn forward_loop_capacity_capture_replaces_and_is_unaffected_by_other_messages() {
+    use tokio::io::AsyncReadExt as _;
+    use tokio::io::AsyncWriteExt as _;
+
+    let (mut stdin, mut stdin_writer) = tokio::io::duplex(4096);
+    let mut parser = StdinApcParser::new();
+    let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+
+    let (sock, mut daemon_side) = tokio::io::duplex(4096);
+    let (mut sock_reader, mut sock_writer) = tokio::io::split(sock);
+
+    let first = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: ClientScrollbackCapacityPayload { lines: 5 }.to_payload(),
+    };
+    let second = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: ClientScrollbackCapacityPayload { lines: 9000 }.to_payload(),
+    };
+    let unrelated = MuxMessage::pty_input(1, vec![0x41]);
+    let second_body = second.to_frame_body();
+
+    for msg in [&first, &second, &unrelated] {
+        stdin_writer
+            .write_all(msg.to_apc().as_bytes())
+            .await
+            .expect("write frame");
+    }
+    stdin_writer.flush().await.expect("flush");
+    drop(stdin_writer);
+
+    let daemon_task = tokio::spawn(async move {
+        let mut received = Vec::new();
+        for _ in 0..3 {
+            let mut len_buf = [0u8; 4];
+            daemon_side
+                .read_exact(&mut len_buf)
+                .await
+                .expect("read forwarded frame length");
+            let frame_len = u32::from_be_bytes(len_buf) as usize;
+            let mut frame_buf = vec![0u8; frame_len];
+            daemon_side
+                .read_exact(&mut frame_buf)
+                .await
+                .expect("read forwarded frame body");
+            received.push(frame_buf);
+        }
+        received
+    });
+
+    let ended = forward_loop(
+        &mut sock_reader,
+        &mut sock_writer,
+        &transport,
+        &last_capacity,
+        &last_attach,
+        &mut stdin,
+        &mut parser,
+    )
+    .await;
+    assert_eq!(ended, ConnectionEnded::Normal);
+
+    let received = daemon_task.await.expect("daemon task panicked");
+    assert_eq!(received.len(), 3, "all three frames forwarded unchanged");
+
+    assert_eq!(
+        last_capacity
+            .lock()
+            .expect("last_capacity mutex poisoned")
+            .clone(),
+        Some(second_body),
+        "the later capacity report replaces the stored one; the trailing \
+         non-capacity message does not disturb it"
     );
 }

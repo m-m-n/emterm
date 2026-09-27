@@ -1,0 +1,151 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - protocol::tests::test_client_scrollback_capacity_message_type
+      - protocol::tests::test_client_scrollback_capacity_does_not_disturb_existing_discriminants
+      - protocol::tests::test_client_scrollback_capacity_round_trips_through_frame_body
+      - protocol::tests::test_client_scrollback_capacity_round_trips_through_apc
+      - protocol::tests::test_client_scrollback_capacity_round_trips_through_osc
+      - protocol::tests::test_client_scrollback_capacity_round_trips_through_plaintext
+    red_confirmed: true
+    red_reason: >-
+      Compile-level red, actually observed: `git stash push --
+      crates/mux_ipc/src/protocol.rs` (keeping protocol/tests.rs's new
+      tests) then `cargo test --manifest-path crates/mux_ipc/Cargo.toml
+      --lib --no-run` failed with 23 errors -- "no variant ...
+      ClientScrollbackCapacity found for enum protocol::MessageType" and
+      "cannot find type ClientScrollbackCapacityPayload in this scope" --
+      because none of these tests could compile without the enum variant
+      and payload struct this task adds. Stash popped immediately after to
+      restore the implementation; the suite was green again afterward
+      (confirmed by the reported final_failures run).
+  AC-2:
+    tests:
+      - protocol::tests::test_client_scrollback_capacity_payload_decodes_exact_4_byte_values
+      - protocol::tests::test_client_scrollback_capacity_payload_rejects_wrong_length
+      - protocol::tests::test_client_scrollback_capacity_payload_encoder_emits_exactly_4_bytes
+    red_confirmed: true
+    red_reason: >-
+      Same observed compile-level red as AC-1 (same stash/run): these
+      tests reference `ClientScrollbackCapacityPayload`, which did not
+      exist before this task's edit to protocol.rs, and failed to compile
+      in the same `cargo test --no-run` run described there.
+  AC-3:
+    tests:
+      - protocol::tests::test_message_type_round_trip
+      - protocol::tests::test_agent_api_message_type_round_trip
+      - protocol::tests::test_upgrade_message_type_round_trip
+      - protocol::tests::test_from_frame_body_returns_none_for_byte_adjacent_to_new_upgrade_types
+      - mux::ipc::codec::tests::test_codec_discards_byte_adjacent_to_client_scrollback_capacity
+    red_confirmed: false
+    red_reason: >-
+      These five tests assert that byte 0x28 is unmapped and is discarded
+      by the codec. That assertion was ALREADY true before this task:
+      pre-task, 0x27 (not 0x28) was the first unmapped byte, which means
+      0x28 was unmapped both before and after this task's addition of the
+      0x27 discriminant -- moving the four existing boundary assertions
+      from 0x27 to 0x28 is a bookkeeping update to keep the boundary
+      accurate, not a behavior change these five tests detect, so they
+      never went red. The part of AC-3 that genuinely IS red-first --
+      "from_u8(0x27) now returns the new variant, where it previously
+      returned None" -- is the same fact
+      `protocol::tests::test_client_scrollback_capacity_message_type`
+      (listed under AC-1) asserts and was empirically observed red for
+      (see AC-1's red_reason).
+  AC-4:
+    tests:
+      - tabs::tests::mux_link::client_scrollback_capacity_is_first_control_frame_at_capacity_zero
+      - tabs::tests::mux_link::client_scrollback_capacity_is_first_control_frame_at_small_nondefault_capacity
+    red_confirmed: true
+    red_reason: >-
+      Compile-level red, actually observed: `git stash push --
+      src-tauri/src/tabs/mux_link.rs src-tauri/src/tabs/input.rs
+      src-tauri/src/tabs/mod.rs` (keeping the new tests in
+      tabs/tests/mux_link.rs) then `cargo test --manifest-path
+      src-tauri/Cargo.toml --lib
+      tabs::tests::mux_link::client_scrollback_capacity -- --test-threads=1`
+      failed with 5 errors -- "no method named `test_control_frames` found
+      for struct `tabs::Tab`" -- because the test-only accessor and the
+      `send_client_scrollback_capacity` call this task adds did not exist.
+      Stash popped immediately after; the suite was green again afterward.
+  AC-5:
+    tests:
+      - tabs::tests::mux_link::client_scrollback_capacity_precedes_create_window_on_fresh_start
+      - tabs::tests::mux_link::client_scrollback_capacity_not_resent_on_duplicate_welcome
+    red_confirmed: true
+    red_reason: >-
+      Same observed compile-level red as AC-4 (same stash/run): both
+      tests call `tab.test_control_frames()`, the accessor that did not
+      exist before this task's tabs/mod.rs edit, and failed to compile in
+      the same run described there.
+  AC-6:
+    tests:
+      - mux::bridge::tests::capture_if_capacity_captures_capacity_and_only_capacity
+      - mux::bridge::tests::forward_loop_forwards_and_captures_capacity_frame_unchanged
+      - mux::bridge::tests::forward_loop_capacity_capture_replaces_and_is_unaffected_by_other_messages
+    red_confirmed: true
+    red_reason: >-
+      Compile-level red, actually observed: `git stash push --
+      src-tauri/src/mux/bridge/forward.rs src-tauri/src/mux/bridge/mod.rs`
+      (keeping the new tests in bridge/tests.rs) then `cargo test
+      --manifest-path src-tauri/Cargo.toml --lib mux::bridge --no-run`
+      failed with 30 errors -- "cannot find function `capture_if_capacity`
+      in this scope" and "this function takes 6 arguments but 7 arguments
+      were supplied" against `forward_loop` -- because `capture_if_capacity`
+      and the `last_capacity` parameter this task adds did not exist.
+      Stash popped immediately after; the suite was green again afterward.
+      "Attach capture behaves as before" (part of this AC's text) is not a
+      new red-first fact -- it is the pre-existing
+      `capture_if_attach_captures_attach_and_only_attach` test, left
+      unmodified, which was green in the Step 4a baseline and stayed green
+      throughout.
+  AC-7:
+    tests:
+      - mux::bridge::tests::reconnect_and_reattach_resends_capacity_then_attach_after_reconnecting
+      - mux::bridge::tests::reconnect_and_reattach_resends_the_last_attach_after_reconnecting
+      - mux::bridge::tests::reconnect_and_reattach_resends_only_capacity_when_no_attach_stored
+    red_confirmed: true
+    red_reason: >-
+      Same observed compile-level red as AC-6 (same stash/run): all three
+      tests call `reconnect_and_reattach(&sock_path, &last_capacity,
+      &last_attach)`, the 3-argument form this task adds (previously 2
+      arguments), and failed to compile in the same run described there.
+      `reconnect_and_reattach_resends_the_last_attach_after_reconnecting`
+      is the pre-existing Attach-only-resend test, updated only for the
+      new parameter and a `assert_no_more_frames_blocking` check that
+      nothing else was resent; its own resend-only-Attach behavior was
+      already covered pre-task and stays green.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No existing or new test covers this criterion directly (searched
+      src-tauri/src and crates for `no_default_features` / "cargo fmt" /
+      "cargo_fmt" test references: no hits). Verified by running the
+      project's own build/test commands, not a single check that can be
+      forced red: the default-feature lib suite
+      (3677/3677, up from the 3667/3667 Step 4a baseline), the mux_ipc
+      crate suite (117/117, up from 108/108), and the CLI-only
+      `--no-default-features` lib suite (1113/1113, up from 1107/1107) are
+      all green; `CARGO_TARGET_DIR=src-tauri/target cargo check
+      --manifest-path src-tauri/Cargo.toml --no-default-features` compiles
+      cleanly; every new/changed `log::warn!` in forward.rs is at warn
+      level (no new debug/info diagnostic was added); and `cargo fmt
+      --manifest-path src-tauri/Cargo.toml -- --check` limited to exactly
+      the 10 files this task touches reports no diff (after one
+      `cargo fmt` pass on bridge/tests.rs to fix 3 lines rustfmt
+      reformatted).
+notes: >-
+  Windows-only edits (mux-probe-scrollback-capacity task0001 Design
+  "Bridge" / Test Notes): `bridge_main_loop_windows` in
+  src-tauri/src/mux/bridge/mod.rs gained exactly one mechanical change --
+  a `last_capacity` slot creation and its pass-through into `forward_loop`
+  -- to keep the function signature identical across platforms. No other
+  `cfg(windows)` code was touched. This is not compiled by any command in
+  project_commands (the `rust_windows` cargo-xwin check is listed in
+  workflow.yaml but not among the ones this report's build/test evidence
+  above exercises), so its Windows compilation is unverified by this
+  report, matching IMPLEMENTATION.md's own Open Questions note.
