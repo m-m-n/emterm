@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-snapshot-output-boundary
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 1c18416b763589d7efc2edbbd1776441fe6dd845
 last_input_digest: sha256:35b8f25b53a71c4266a20338a56f3e8eb8a672d3808ee9e0e303cb74813b0ab4
