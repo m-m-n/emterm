@@ -207,7 +207,8 @@ tasks:
     - NFR1
     - NFR2
     - NFR3
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-snapshot-output-boundary/task0002
     notes: null
     provenance:
       source: verify
@@ -238,7 +239,8 @@ tasks:
     - FR3
     - FR5
     - FR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-snapshot-output-boundary/task0003
     notes: null
     provenance:
       source: verify
