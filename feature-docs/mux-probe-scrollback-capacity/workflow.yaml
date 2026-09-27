@@ -108,9 +108,16 @@ workflow:
   status: completed
   completed_at_commit: 9e9c1cc339a5f4188b9107855dce69454a199c1b
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  result: pass
   failed_items: []
+  summary: |
+    Build: GUI cargo check, CLI-only cargo check, mux_ipc cargo check, Windows xwin check (--lib --tests) all exit 0.
+    Test: GUI lib 3704 passed / 0 failed / 3 ignored; CLI-only lib 1140 passed / 0 failed / 2 ignored; mux_ipc lib 117 passed / 0 failed.
+    Format: cargo fmt --check reports no difference.
+    TS-1..TS-7, TS-10: pass (automated). TS-9, TS-11, TS-12: pass (inspection).
+    TS-8 (manual repro on a release build): not executed in the batch run; left for the human evaluator.
+  completed_at_commit: 7994b7456e380b27eff18831db1ab8519ea03124
 - id: retrospect
   status: pending
 tasks:
