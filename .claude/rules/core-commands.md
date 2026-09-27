@@ -7,8 +7,7 @@ project root — see `core-build-location.md` for why, and for the
 ## Setup
 
 ```bash
-bun install
-make setup   # rustup target add x86_64-pc-windows-msvc + cargo install cargo-xwin
+make setup   # fetch-fonts + rustup target add x86_64-pc-windows-msvc + cargo install cargo-xwin + bun install
 ```
 
 ## Running and building

@@ -25,7 +25,7 @@ the new binary somewhere else means your fix won't be visible to them.
 
 | Purpose                      | Target dir               | Run command (from project root)                                                                                                                                                       |
 | ---------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Quick check / unit tests     | `src-tauri/target`       | `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml`<br>`CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --bin emterm` |
+| Quick check / unit tests     | `src-tauri/target`       | `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml`<br>`CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml` |
 | Release binary the user runs | `src-tauri/target-host`  | `CARGO_TARGET_DIR=src-tauri/target-host cargo build --release --manifest-path src-tauri/Cargo.toml`                                                                                   |
 | Windows cross-build          | `src-tauri/target-win`   | `CARGO_TARGET_DIR=src-tauri/target-win cargo xwin build --release --target x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml`                                               |
 
