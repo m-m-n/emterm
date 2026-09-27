@@ -95,7 +95,8 @@ workflow:
   completed_at_commit: b3f8733b6cc1aac91692286ee989bb8c5fa7c207
   base_commit: 7a1e81eb07a6735d9c7598211c32d95f7b6b6518
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: f7f9308c10e36bda78a0a85e090335ca18be2e52
 - id: verify
   status: pending
   result: null
@@ -155,8 +156,16 @@ tasks:
     notes: null
     branch: em-workflow/mux-snapshot-output-boundary/task0001
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive
