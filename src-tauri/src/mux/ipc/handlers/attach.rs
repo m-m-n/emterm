@@ -324,10 +324,19 @@ pub(in crate::mux::ipc) async fn flush_deferred_output(
 ) {
     while let Some(item) = deferred_output.pop_front() {
         match item {
-            DeferredOutputItem::Chunk(chunk) => match pane_output_tx.try_send(chunk) {
-                Ok(()) => {}
+            DeferredOutputItem::Chunk(chunk, commit) => match pane_output_tx.try_send(chunk) {
+                Ok(()) => {
+                    // mux-snapshot-output-boundary task0001 (D5): this exact
+                    // chunk reached the channel, so its deferred boundary
+                    // commit (if any) takes effect now.
+                    if let Some(commit) = commit {
+                        commit
+                            .output_capture
+                            .record_boundary(pane_output_tx, commit.boundary);
+                    }
+                }
                 Err(mpsc::error::TrySendError::Full(chunk)) => {
-                    deferred_output.requeue_front(DeferredOutputItem::Chunk(chunk));
+                    deferred_output.requeue_front(DeferredOutputItem::Chunk(chunk, commit));
                     break;
                 }
                 Err(mpsc::error::TrySendError::Closed(chunk)) => {
@@ -410,8 +419,17 @@ pub(in crate::mux::ipc) async fn apply_fair_permit_to_front_deferred_item(
         return;
     };
     match item {
-        DeferredOutputItem::Chunk(chunk) => {
+        DeferredOutputItem::Chunk(chunk, commit) => {
             let _ = permit.send(chunk);
+            // mux-snapshot-output-boundary task0001 (D5): applying a fair
+            // permit always succeeds (see this function's doc), so the
+            // commit always takes effect here — no `Full` branch to lose it
+            // to.
+            if let Some(commit) = commit {
+                commit
+                    .output_capture
+                    .record_boundary(pane_output_tx, commit.boundary);
+            }
         }
         DeferredOutputItem::VisibilityResume(pane_id) => {
             if !visible_state.load(Ordering::Acquire) {

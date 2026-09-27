@@ -322,7 +322,10 @@ async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, s
 /// Every other arm below either does not touch `pane_output_tx` at all, or
 /// only clones it for storage (`Attach`, `CreateWindow` — the actual PTY
 /// output send for those happens later, off this task, on the pane's
-/// reader thread via `blocking_send`, which blocks that native OS thread
+/// reader thread: `try_send` on the ordinary data path, falling back to a
+/// blocking `reserve_owned()` wait only when that finds the channel full
+/// (mux-snapshot-output-boundary task0001 D4), or a plain `blocking_send`
+/// on the EOF branch — every one of these blocks that native OS thread
 /// only, not this connection task).
 ///
 /// **Correction (mux-window-switch-output-hang task0004 rework, review
