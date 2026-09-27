@@ -1633,6 +1633,258 @@ fn split_osc9_across_two_suppressed_chunks_never_fires_more_than_once() {
     assert!(received[1].data.is_empty(), "EOF chunk must follow");
 }
 
+/// mux-snapshot-output-boundary task0003 (TS-7): AC-5/AC-6 — an OSC 9
+/// split across a PRODUCTION on-demand snapshot boundary (not the
+/// test-only stand-in `split_osc9_across_two_suppressed_chunks_never_fires_more_than_once`
+/// above uses). The introducer + partial body land in the chunk the
+/// reader is paused on at P2; the PRODUCTION
+/// `handle_request_pane_snapshot` delivers the snapshot to S while
+/// paused, covering exactly that chunk; the completing chunk (numbered
+/// above the recorded boundary) is delivered unsuppressed.
+///
+/// AC-5: the daemon's notification channel receives at most one
+/// notification for the split OSC 9; the bytes delivered to S after the
+/// snapshot contain the OSC 9 exactly once as a complete sequence when
+/// concatenated; the total of daemon-side notifications plus complete
+/// OSC 9 sequences delivered to S is exactly one.
+///
+/// AC-6: after that sequence, the pane is switched to `Detached` and fed
+/// a bare terminator with no introducer (fires nothing), then a
+/// SEPARATE complete OSC 9 (fires exactly once, with its own body).
+#[tokio::test]
+async fn split_osc9_across_a_production_on_demand_snapshot_boundary_fires_at_most_once_and_never_stitches_into_a_later_detached_period()
+ {
+    let pane_id: PaneId = 40;
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let output_target: SharedOutputTarget =
+        Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+
+    let pane = MuxPane::new_test(pane_id, 80, 24, output_target.clone());
+    let (notif_tx, mut notif_rx) = mpsc::channel(8);
+    *pane.notification_sender.lock().unwrap() = Some(notif_tx);
+
+    // Field clones for the reader thread(s) below — mirrors
+    // `register_pane_and_start_reader`'s own clone dance — taken BEFORE
+    // `pane` is moved into the manager, so both the production handler
+    // and the reader observe exactly this one pane's shared state.
+    let shadow_parser = pane.shadow_parser.clone();
+    let cwd = pane.cwd.clone();
+    let title = pane.title.clone();
+    let title_sender = pane.title_sender.clone();
+    let notification_sender = pane.notification_sender.clone();
+    let agent_status_report_sender = pane.agent_status_report_sender.clone();
+    let raw_passthrough = pane.raw_passthrough.clone();
+    let passthrough_scanner = pane.passthrough_scanner.clone();
+    let scrollback = pane.scrollback.clone();
+    let dims = pane.dims.clone();
+    let output_capture = pane.output_capture.clone();
+
+    let mgr = Arc::new(tokio::sync::Mutex::new(SessionManager::new()));
+    let session_id = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        m.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+        sid
+    };
+
+    // chunk_a: OSC 9 introducer + partial body, no terminator.
+    let chunk_a = b"\x1b]9;spl".to_vec();
+    // chunk_b: rest of the body + terminator.
+    let chunk_b = b"it-notice\x07".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let handle = std::thread::spawn({
+        let output_target = output_target.clone();
+        let shadow_parser = shadow_parser.clone();
+        let cwd = cwd.clone();
+        let title = title.clone();
+        let title_sender = title_sender.clone();
+        let notification_sender = notification_sender.clone();
+        let agent_status_report_sender = agent_status_report_sender.clone();
+        let raw_passthrough = raw_passthrough.clone();
+        let passthrough_scanner = passthrough_scanner.clone();
+        let scrollback = scrollback.clone();
+        let dims = dims.clone();
+        let output_capture = output_capture.clone();
+        let chunks = vec![chunk_a.clone(), chunk_b.clone()];
+        move || {
+            pty_reader_loop(
+                pane_id,
+                Box::new(ScriptedReader::new(chunks)),
+                output_target,
+                shadow_parser,
+                cwd,
+                title,
+                title_sender,
+                notification_sender,
+                agent_status_report_sender,
+                raw_passthrough,
+                passthrough_scanner,
+                scrollback,
+                dims,
+                Arc::new(StdMutex::new(None)),
+                output_capture,
+            );
+        }
+    });
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on chunk_a");
+
+    // Drive the PRODUCTION on-demand snapshot path while paused.
+    let req = mux_ipc::protocol::MuxMessage {
+        msg_type: mux_ipc::protocol::MessageType::RequestPaneSnapshot,
+        pane_id,
+        payload: Vec::new(),
+    };
+    let mut deferred = crate::mux::session::pane::DeferredOutputQueue::new();
+    crate::mux::ipc::handlers::handle_request_pane_snapshot(
+        &req,
+        session_id,
+        &mgr,
+        &owned_tx,
+        &mut deferred,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+    assert!(
+        deferred.is_empty(),
+        "the channel has room; the snapshot must be enqueued immediately, \
+         not deferred"
+    );
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(
+        received.len(),
+        4,
+        "snapshot, chunk_a's replacement, chunk_b, EOF: {:?}",
+        received
+            .iter()
+            .map(|c| (c.data.len(), c.kind))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        received[0].kind,
+        crate::mux::session::pane::ChunkKind::Snapshot,
+        "S must receive the production snapshot first"
+    );
+    assert_eq!(
+        received[1].kind,
+        crate::mux::session::pane::ChunkKind::PtyOutput
+    );
+    assert_eq!(
+        received[2].kind,
+        crate::mux::session::pane::ChunkKind::PtyOutput
+    );
+    assert!(received[3].data.is_empty(), "EOF chunk must follow");
+
+    let mut after_snapshot = Vec::new();
+    after_snapshot.extend_from_slice(&received[1].data);
+    after_snapshot.extend_from_slice(&received[2].data);
+
+    let complete_osc9 = b"\x1b]9;split-notice\x07";
+    let occurrences = after_snapshot
+        .windows(complete_osc9.len())
+        .filter(|w| *w == complete_osc9)
+        .count();
+    assert_eq!(
+        occurrences,
+        1,
+        "the bytes delivered to S after the snapshot must contain the \
+         OSC 9 exactly once as a complete sequence: {:?}",
+        String::from_utf8_lossy(&after_snapshot)
+    );
+
+    let mut notifications_before_detach = Vec::new();
+    while let Ok((pid, msg)) = notif_rx.try_recv() {
+        assert_eq!(pid, pane_id);
+        notifications_before_detach.push(msg);
+    }
+    assert!(
+        notifications_before_detach.len() <= 1,
+        "at most one notification for the split OSC 9: {notifications_before_detach:?}"
+    );
+    assert_eq!(
+        notifications_before_detach.len() + occurrences,
+        1,
+        "the total of daemon-side notifications plus complete OSC 9 \
+         sequences delivered to S must be exactly one"
+    );
+
+    // AC-6: switch to Detached, then feed a bare terminator (no
+    // introducer) followed by a SEPARATE complete OSC 9.
+    *output_target.lock().unwrap() = PaneOutputTarget::Detached {
+        reason: DetachReason::NetworkDetach,
+        owner: None,
+    };
+
+    let terminator_only = b"\x07".to_vec();
+    let second_osc9 = b"\x1b]9;second-notice\x07".to_vec();
+
+    let handle2 = std::thread::spawn({
+        let output_target = output_target.clone();
+        let shadow_parser = shadow_parser.clone();
+        let cwd = cwd.clone();
+        let title = title.clone();
+        let title_sender = title_sender.clone();
+        let notification_sender = notification_sender.clone();
+        let agent_status_report_sender = agent_status_report_sender.clone();
+        let raw_passthrough = raw_passthrough.clone();
+        let passthrough_scanner = passthrough_scanner.clone();
+        let scrollback = scrollback.clone();
+        let dims = dims.clone();
+        let output_capture = output_capture.clone();
+        let chunks = vec![terminator_only, second_osc9];
+        move || {
+            pty_reader_loop(
+                pane_id,
+                Box::new(ScriptedReader::new(chunks)),
+                output_target,
+                shadow_parser,
+                cwd,
+                title,
+                title_sender,
+                notification_sender,
+                agent_status_report_sender,
+                raw_passthrough,
+                passthrough_scanner,
+                scrollback,
+                dims,
+                Arc::new(StdMutex::new(None)),
+                output_capture,
+            );
+        }
+    });
+    handle2.join().unwrap();
+
+    let mut notifications_after_detach = Vec::new();
+    while let Ok((pid, msg)) = notif_rx.try_recv() {
+        assert_eq!(pid, pane_id);
+        notifications_after_detach.push(msg);
+    }
+    assert_eq!(
+        notifications_after_detach.len(),
+        1,
+        "a bare terminator must fire nothing, and the SEPARATE complete \
+         OSC 9 fed in the same Detached period must fire exactly once: \
+         {notifications_after_detach:?}"
+    );
+    assert_eq!(notifications_after_detach[0], "second-notice");
+}
+
 /// AC-5, "Other side effects": title, agent-status report, OSC 133 marks
 /// and OSC 7 cwd detection all run BEFORE the reader's forward decision
 /// (unconditionally, per the reader flow's step 3), so a suppressed
