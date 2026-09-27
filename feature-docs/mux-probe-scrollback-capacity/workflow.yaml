@@ -142,9 +142,9 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mux-probe-scrollback-capacity/task0001
   task0002:
     title: Daemon per-connection capacity drives the wrap-restore probe
     plan: tasks/task0002.md
@@ -185,9 +185,9 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mux-probe-scrollback-capacity/task0002
 review:
   status: pending
   rounds_completed: 0
