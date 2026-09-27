@@ -443,6 +443,18 @@ impl Tab {
                         // Welcome and cleared again on Detach, so it doubles
                         // as the per-attach guard without a new field.
                         let first_welcome = self.mux_session_name.is_none();
+                        // mux-probe-scrollback-capacity task0001 FR2: on
+                        // the first accepted Welcome of this attach, report
+                        // this tab's own core scrollback capacity as the
+                        // FIRST control frame — before Attach, before the
+                        // Resize pane-seeding frames and
+                        // request_pane_snapshot, and (fresh-start) before
+                        // CreateWindow. A duplicate Welcome in the same
+                        // attach sends no further capacity message; the
+                        // `first_welcome` guard already covers it.
+                        if first_welcome {
+                            self.send_client_scrollback_capacity();
+                        }
                         // Keep the existing session-name extraction intact
                         // (F3): the status bar badge reads it.
                         self.mux_session_name = Some(session.name.clone());
@@ -960,6 +972,32 @@ impl Tab {
             0,
             &AttachMsg { session_id },
         ))
+    }
+
+    /// Report this tab's own `TerminalCore` scrollback capacity to the
+    /// daemon (mux-probe-scrollback-capacity task0001 FR2, SPEC A-5). Sent
+    /// once per attach, as the first control frame the Welcome handler
+    /// emits (see [`Self::handle_welcome`]'s `first_welcome` guard) — before
+    /// [`Self::send_attach`], the Resize pane-seeding frames,
+    /// [`Self::request_pane_snapshot`], and (fresh-start) `CreateWindow`.
+    ///
+    /// The value is this tab's own core's capacity, read as-is when the
+    /// message is sent: the tab never reads the global setting and never
+    /// clamps or substitutes the value — resolution (the daemon-side cap)
+    /// is entirely a daemon concern (IMPLEMENTATION.md D1). `pane_id` is 0
+    /// (IMPLEMENTATION.md Shared Components). Sent through the ordinary
+    /// control path, so its wire transport matches every other control
+    /// message (APC on Linux, EMUX plaintext on Windows).
+    ///
+    /// Fire-and-forget; returns `false` when the tab has no live PTY.
+    pub fn send_client_scrollback_capacity(&self) -> bool {
+        use mux_ipc::protocol::{ClientScrollbackCapacityPayload, MessageType, MuxMessage};
+        let lines = self.core.lock().scrollback_capacity();
+        self.send_control(&MuxMessage {
+            msg_type: MessageType::ClientScrollbackCapacity,
+            pane_id: 0,
+            payload: ClientScrollbackCapacityPayload { lines }.to_payload(),
+        })
     }
 }
 

@@ -241,6 +241,23 @@ pub(crate) struct ResizeFrameRecord {
     pub(crate) rows: u16,
 }
 
+/// Test-only: one recorded control frame emission via [`Tab::send_control`]
+/// (mux-probe-scrollback-capacity task0001, AC-4/AC-5): a control frame's
+/// type, pane id and payload, in emission order. Distinct from
+/// `outbound_write_log`, which other tests already depend on for its
+/// current (payload-only, both `write` and `send_control`) meaning — this
+/// is a fuller per-`send_control`-call record for ordering/value
+/// assertions the payload-only log can't answer (e.g. "was the capacity
+/// frame the first control frame sent"). Strictly `cfg(test)` so the
+/// production build carries no observer.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ControlFrameRecord {
+    pub(crate) msg_type: MessageType,
+    pub(crate) pane_id: u32,
+    pub(crate) payload: Vec<u8>,
+}
+
 pub struct Tab {
     /// Creation-ordered stable identity. Unlike the positional index in
     /// `App::tabs`, this survives tab close / drag-reorder, so per-tab
@@ -518,6 +535,13 @@ pub struct Tab {
     /// observer.
     #[cfg(test)]
     outbound_write_log: Mutex<Vec<Vec<u8>>>,
+    /// Test-only (mux-probe-scrollback-capacity task0001): every control
+    /// frame's type, pane id and payload, recorded by [`Self::send_control`]
+    /// in emission order — see [`ControlFrameRecord`]'s doc. `Mutex`
+    /// because `send_control` takes `&self`. Strictly `cfg(test)` so the
+    /// production build carries no observer.
+    #[cfg(test)]
+    control_frame_log: Mutex<Vec<ControlFrameRecord>>,
 }
 
 impl Tab {
@@ -789,6 +813,8 @@ impl Tab {
             resize_frame_log: Vec::new(),
             #[cfg(test)]
             outbound_write_log: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            control_frame_log: Mutex::new(Vec::new()),
         }
     }
 
@@ -1157,6 +1183,14 @@ impl Tab {
     #[cfg(test)]
     pub(crate) fn test_outbound_writes(&self) -> Vec<Vec<u8>> {
         self.outbound_write_log.lock().clone()
+    }
+
+    /// Test-only (mux-probe-scrollback-capacity task0001): every control
+    /// frame [`Self::send_control`] has emitted so far, in emission order
+    /// — see [`ControlFrameRecord`]'s doc.
+    #[cfg(test)]
+    pub(crate) fn test_control_frames(&self) -> Vec<ControlFrameRecord> {
+        self.control_frame_log.lock().clone()
     }
 
     /// Test-only: the whole displayed grid (all rows) as one string, for

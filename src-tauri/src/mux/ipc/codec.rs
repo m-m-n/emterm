@@ -179,6 +179,31 @@ mod tests {
         assert_eq!(decoded.payload, vec![0xEE]);
     }
 
+    /// AC-3 (mux-probe-scrollback-capacity task0001): a raw frame carrying
+    /// the byte immediately after the new `ClientScrollbackCapacity`
+    /// discriminant (0x28, still unassigned) is discarded like any other
+    /// unrecognized message type — decode continues with the next valid
+    /// frame, mirroring `test_codec_unknown_frame_is_discarded_not_fatal`.
+    #[test]
+    fn test_codec_discards_byte_adjacent_to_client_scrollback_capacity() {
+        let mut codec = MuxCodec::new();
+        let mut buf = BytesMut::new();
+
+        let body: Vec<u8> = vec![0x28, 0x00, 0x00, 0x00, 0x00];
+        buf.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        buf.extend_from_slice(&body);
+
+        // Then a valid PtyOutput frame immediately after.
+        codec
+            .encode(MuxMessage::pty_output(4, vec![0xFA]), &mut buf)
+            .unwrap();
+
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(decoded.msg_type, MessageType::PtyOutput);
+        assert_eq!(decoded.pane_id, 4);
+        assert_eq!(decoded.payload, vec![0xFA]);
+    }
+
     #[test]
     fn test_codec_short_frame_is_discarded_not_fatal() {
         let mut codec = MuxCodec::new();
