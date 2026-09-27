@@ -90,7 +90,8 @@ workflow:
   completed_at_commit: fcc9a7a169143af31c3525f4ab2233efe820911e
   base_commit: 7b563b7f46653a201f7694f33748265633bf6e7c
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 4fce8151d803d117a1a5e60770b6e5db3d9da887
 - id: verify
   status: pending
   result: null
@@ -114,8 +115,11 @@ tasks:
     status: merged
     branch: em-workflow/notify-queue-worker-gone/task0001
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, performance, architecture, spec]
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
