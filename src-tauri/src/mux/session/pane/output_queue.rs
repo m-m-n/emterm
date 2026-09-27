@@ -560,23 +560,35 @@ impl Default for DeferredOutputQueue {
 /// IMPLEMENTATION.md D3 "On-demand, immediate") is `Some((output_capture,
 /// boundary))` for an on-demand snapshot chunk that must suppress every
 /// pending PTY chunk up to `boundary` once IT is the one actually delivered
-/// to `tx`. On the fast (`try_send` succeeds) path the boundary is recorded
-/// immediately, in this same call. On the slow (deferred) path the record is
-/// carried on the queued item instead ([`DeferredBoundaryCommit`]) and only
-/// takes effect if this exact chunk is later flushed successfully.
+/// to `tx`. The boundary exclusion is held ([`OutputCapture::hold_boundary`])
+/// across the `try_send` call itself and the record that follows it on the
+/// fast path, so the reader's own check-then-insert (`output_target` ->
+/// `hold_boundary`) can never interleave between this insertion and its
+/// record (FR11). On the slow (deferred) path the record is carried on the
+/// queued item instead ([`DeferredBoundaryCommit`]) and only takes effect if
+/// this exact chunk is later flushed successfully; on `Full`/`Closed` no
+/// record is made here.
 pub fn enqueue_pane_output_chunk(
     tx: &mpsc::Sender<PtyOutputChunk>,
     chunk: PtyOutputChunk,
     deferred: &mut DeferredOutputQueue,
     boundary_commit: Option<(Arc<OutputCapture>, u64)>,
 ) {
+    let held_capture = boundary_commit
+        .as_ref()
+        .map(|(output_capture, _)| Arc::clone(output_capture));
+    let mut guard = held_capture
+        .as_ref()
+        .map(|output_capture| output_capture.hold_boundary());
+
     match tx.try_send(chunk) {
         Ok(()) => {
-            if let Some((output_capture, boundary)) = boundary_commit {
-                output_capture.record_boundary(tx, boundary);
+            if let (Some((_, boundary)), Some(guard)) = (&boundary_commit, guard.as_mut()) {
+                guard.record(tx, *boundary);
             }
         }
         Err(mpsc::error::TrySendError::Full(chunk)) => {
+            drop(guard.take());
             log::warn!(
                 "pane {} output channel full ({} capacity); deferring enqueue \
                  (kind={:?}) to the connection's own deferred queue so this \
@@ -593,6 +605,7 @@ pub fn enqueue_pane_output_chunk(
             deferred.defer_chunk(chunk, commit);
         }
         Err(mpsc::error::TrySendError::Closed(chunk)) => {
+            drop(guard.take());
             log::warn!(
                 "pane {} output channel closed; dropping chunk (kind={:?})",
                 chunk.pane_id,
