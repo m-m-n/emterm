@@ -142,7 +142,7 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-probe-scrollback-capacity/task0001
   task0002:
