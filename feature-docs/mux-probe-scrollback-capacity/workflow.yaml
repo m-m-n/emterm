@@ -1,0 +1,221 @@
+schema_version: 1
+feature: mux-probe-scrollback-capacity
+created: '2026-09-27'
+base_branch: main
+goal: |
+  # mux: リング一周後の復元プローブの履歴容量（10,000 行固定）がクライアントの scrollback 設定と一致しない
+
+  Notion: https://www.notion.so/3e43509ec8ee811894cde69cbdecb22b
+
+
+  ## 現象 (必須)
+  リング一周後の snapshot 復元で、ユーザー設定 `scrollback_lines` が既定値以外（特に小さい値や 0）のとき、payload の途中で画面が広がるリサイズがあると、プローブ端末とクライアントのカーソル位置がずれる。合成側の絶対 CUP により、継続出力が別の行に書かれる。
+  ## 再現手順 (必須)
+  1. `scrollback_lines` を小さい値（0 を含む）に設定する
+  2. mux の pane でリングが一周するまで出力し、その途中で画面を広げるリサイズを行う
+  3. その pane の snapshot 復元（タブ切替 / reattach）を行い、続けて出力させる
+  4. 継続出力が本来と異なる行に書かれる
+  ## 期待する挙動 (必須)
+  クライアントの scrollback 設定に関係なく、復元後の継続出力が本来の行に書かれる。
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある（小さいクライアント容量（0 を含む）と、画面を広げるリサイズ区間を組み合わせ、継続出力の位置が一致することを確認する）
+  - [ ] クライアントの scrollback 容量をデーモンへ渡してプローブに使う、または復元状態の計算を容量が分かるクライアント側で行う（最低限、既知の制限として文書化する）
+  ## 該当箇所 (任意)
+  - `src-tauri/src/mux/snapshot_bytes/dump_block.rs:109` 付近の `PROBE_SCROLLBACK_LINES`（10,000 行固定）
+  - `src-tauri/src/tabs/replay.rs:303-325`、`TerminalCore::build_from_snapshot`（クライアントは自分の scrollback_capacity で再生用の端末を作る）
+  - 検出元: mux-snapshot-ring-wrap-restore（Notion タスク <mention-page url="https://app.notion.com/p/3e23509ec8ee81dbb1c4dbf69d8c26bc"/> ）の review round 2、medium 指摘（stable_id `4f8c52aa920ad351`、comprehensive）。round 1 の `831dbe5c0ce653d8`（履歴 0 のプローブ）の残り
+  ## 実害・発生条件 (任意)
+  - `scrollback_lines` が既定以外で、リング一周済みの pane にリサイズ区間があるとき
+  - 全テストが両側 10,000 行で作っているため検出できていない
+  ## 制約・前提 (任意)
+  apt 進捗バー残骸の既知課題に関わるため、snapshot のバイト列の形は変えない。
+parent_branch: em-workflow/mux-probe-scrollback-capacity/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.15
+      '2': 0.85
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.0
+      '2': 0.92
+      '3': 0.08
+  at: '2026-09-27T20:41:19+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/md3.rs
+  components:
+    rust:
+      language: rust
+      build_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
+      format_command: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      e2e_test_command: ''
+    rust_cli_only:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib -- --test-threads=1
+      format_command: ''
+      e2e_test_command: ''
+    mux_ipc:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/mux_ipc/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/mux_ipc/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: cae4b0b085aabbb424d98a1922b2e33dcdc85e74
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'Daemon, bridge, and protocol-internal fix with no UI or visual change (create-spec.design-step: decide_autonomously -> skip).'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: 7a1e81eb07a6735d9c7598211c32d95f7b6b6518
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Additive client-capacity control message
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: GUI reports the tab's own capacity
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Bridge forwards and re-sends the capacity
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Per-connection capacity in the daemon
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: Probe capacity reaches all four snapshot assembly sites
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Cap above 10,000 keeps the dump
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: Snapshot byte shape unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: Known limits documented
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR9:
+    title: Regression test for small capacities with a grow-resize
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Protocol compatibility
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: Bounded probe cost
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Platforms and feature gates
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Diagnostics
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: Formatting scope
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
