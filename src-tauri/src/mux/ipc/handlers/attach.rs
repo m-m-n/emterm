@@ -324,31 +324,41 @@ pub(in crate::mux::ipc) async fn flush_deferred_output(
 ) {
     while let Some(item) = deferred_output.pop_front() {
         match item {
-            DeferredOutputItem::Chunk(chunk, commit) => match pane_output_tx.try_send(chunk) {
-                Ok(()) => {
-                    // mux-snapshot-output-boundary task0001 (D5): this exact
-                    // chunk reached the channel, so its deferred boundary
-                    // commit (if any) takes effect now.
-                    if let Some(commit) = commit {
-                        commit
-                            .output_capture
-                            .record_boundary(pane_output_tx, commit.boundary);
+            DeferredOutputItem::Chunk(chunk, commit) => {
+                // mux-snapshot-output-boundary task0001 (D5) / review round
+                // finding 76bfecbfe01cfdeb: hold the boundary exclusion
+                // across the try_send AND the record that follows it, so a
+                // reader-thread insertion can never interleave between this
+                // chunk actually landing on the channel and its boundary
+                // taking effect (mirrors `enqueue_pane_output_chunk`'s fast
+                // path).
+                let held_capture = commit.as_ref().map(|c| Arc::clone(&c.output_capture));
+                let mut guard = held_capture
+                    .as_ref()
+                    .map(|output_capture| output_capture.hold_boundary());
+                match pane_output_tx.try_send(chunk) {
+                    Ok(()) => {
+                        if let (Some(commit), Some(guard)) = (&commit, guard.as_mut()) {
+                            guard.record(pane_output_tx, commit.boundary);
+                        }
+                    }
+                    Err(mpsc::error::TrySendError::Full(chunk)) => {
+                        drop(guard.take());
+                        deferred_output.requeue_front(DeferredOutputItem::Chunk(chunk, commit));
+                        break;
+                    }
+                    Err(mpsc::error::TrySendError::Closed(chunk)) => {
+                        drop(guard.take());
+                        log::warn!(
+                            "flush_deferred_output: pane_output_tx closed; dropping deferred \
+                             chunk for pane {} and the rest of the backlog",
+                            chunk.pane_id
+                        );
+                        deferred_output.clear();
+                        return;
                     }
                 }
-                Err(mpsc::error::TrySendError::Full(chunk)) => {
-                    deferred_output.requeue_front(DeferredOutputItem::Chunk(chunk, commit));
-                    break;
-                }
-                Err(mpsc::error::TrySendError::Closed(chunk)) => {
-                    log::warn!(
-                        "flush_deferred_output: pane_output_tx closed; dropping deferred \
-                         chunk for pane {} and the rest of the backlog",
-                        chunk.pane_id
-                    );
-                    deferred_output.clear();
-                    return;
-                }
-            },
+            }
             DeferredOutputItem::VisibilityResume(pane_id) => {
                 if !visible_state.load(Ordering::Acquire) {
                     // Pane was hidden again since this resume was deferred
@@ -420,15 +430,22 @@ pub(in crate::mux::ipc) async fn apply_fair_permit_to_front_deferred_item(
     };
     match item {
         DeferredOutputItem::Chunk(chunk, commit) => {
-            let _ = permit.send(chunk);
-            // mux-snapshot-output-boundary task0001 (D5): applying a fair
-            // permit always succeeds (see this function's doc), so the
+            // mux-snapshot-output-boundary task0001 (D5) / review round
+            // finding 76bfecbfe01cfdeb: hold the boundary exclusion across
+            // the send AND the record that follows it, so a reader-thread
+            // insertion can never interleave between this chunk actually
+            // landing on the channel and its boundary taking effect
+            // (mirrors `enqueue_pane_output_chunk`'s fast path). Applying a
+            // fair permit always succeeds (see this function's doc), so the
             // commit always takes effect here — no `Full` branch to lose it
             // to.
-            if let Some(commit) = commit {
-                commit
-                    .output_capture
-                    .record_boundary(pane_output_tx, commit.boundary);
+            let held_capture = commit.as_ref().map(|c| Arc::clone(&c.output_capture));
+            let mut guard = held_capture
+                .as_ref()
+                .map(|output_capture| output_capture.hold_boundary());
+            let _ = permit.send(chunk);
+            if let (Some(commit), Some(guard)) = (&commit, guard.as_mut()) {
+                guard.record(pane_output_tx, commit.boundary);
             }
         }
         DeferredOutputItem::VisibilityResume(pane_id) => {
