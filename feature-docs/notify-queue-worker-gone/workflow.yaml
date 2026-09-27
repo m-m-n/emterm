@@ -1,0 +1,180 @@
+schema_version: 1
+feature: notify-queue-worker-gone
+created: '2026-09-27'
+base_branch: main
+goal: |
+  # 通知キューの try_submit が Disconnected を「キュー飽和」と誤報告し、以降の通知を無言で捨て続ける
+
+  Notion: https://www.notion.so/3db3509ec8ee811abfd6c23374fa0289
+
+  ## 現象 (必須)
+  通知ワーカースレッドが死んだ（Receiver が drop された）あと、`NotifyQueue::try_submit` が `LOG_NOTIFY_QUEUE_SATURATED`（キュー飽和）の warn を 1 度だけ出し、以降の通知はプロセス終了まで記録されずにすべて捨てられる。warn の内容もワーカー消失ではなく「キュー飽和」と誤っている。
+  ## 再現手順 (必須)
+  1. `notify_worker` 内部で panic を起こし、ワーカーの Receiver を drop させる
+  2. OSC 9 などで通知を複数回送る
+  3. 最初の 1 回だけ「キュー飽和」の warn が出て、以降の通知は何も記録されずに捨てられる
+  ## 期待する挙動 (必須)
+  ワーカー消失はキュー飽和と区別して報告される。キュー飽和のエピソード抑止がワーカー消失に適用されない。
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある（`SubmitOutcome::WorkerGone` 相当のバリアントを追加し、キューを構築 → receiver を drop → `try_submit` を呼ぶ単体テストを D-Bus なしで行う）
+  - [ ] `try_submit` のエラーアームを `TrySendError::Full` と `TrySendError::Disconnected` に分割する
+  - [ ] `Full` は現行のエピソード arming を維持する
+  - [ ] `Disconnected` は専用の定数（例: `LOG_NOTIFY_WORKER_DEAD`）で `log::error!` を出し、エピソード再 arm が触らない別フラグで抑止する
+  - [ ] `cargo test --lib` が通る
+  ## 該当箇所 (任意)
+  - `src-tauri/src/callbacks.rs:273`：`self.tx.try_send(...)` を単一の `Err(_)` アームで受けている
+  - `armed` が `true` に戻るのは `try_send` 成功時だけ
+  - 検出元: `em-workflow/notification-worker-thread/integration`（PR: [https://github.com/m-m-n/emterm/pull/68](https://github.com/m-m-n/emterm/pull/68) ）の review round1、finding `83dd237ffa3f8306`（severity medium / category comprehensive / confidence 60）。記録: `feature-docs/notification-worker-thread/reviews/round1.yaml`
+  ## 実害・発生条件 (任意)
+  `Disconnected` に到達する唯一の経路は `notify_worker` 内部の panic。`get_capabilities()` と `Notification::show()` のエラー経路はどちらも処理済みなので notify-rust 自身からの panic が必要で、発生確率は低い。ただし起きると帰結は恒久的。
+  ## スコープ外 (任意)
+  - ワーカー panic 後の自動再起動（別途検討）
+  - 通知の発火条件・rate limit の変更
+  ## 制約・前提 (任意)
+  - 本 finding は PR #68（main 未マージ）に対するレビューで検出された。着手時点の main の状態を確認すること。
+  - `NotificationSink` トレイト境界を変えないこと。
+parent_branch: em-workflow/notify-queue-worker-gone/integration
+tier: reduced
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.76
+      '2': 0.24
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.9
+      '2': 0.1
+      '3': 0.0
+  at: '2026-09-27T18:16:07+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - design step
+  - IMPLEMENTATION.md (unless multiple tasks declare the same file)
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - src-tauri/src/render/theme.rs
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - SPEC.md
+  status: completed
+  completed_at_commit: faa69edfe666bf18bdbf4a7ce2d28665d6c10d64
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 変更は src-tauri/src/callbacks.rs とそのテストに閉じた Rust 内部のロジック修正で、UI・画面・見た目の変更を含まない（reduced tier でも design は削減対象）
+- id: create-plan
+  artifacts:
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: 7b563b7f46653a201f7694f33748265633bf6e7c
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: try_submit のエラーアーム分割
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Full の挙動を維持する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: ワーカー消失専用のログ定数
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: ワーカー消失報告用の独立した抑止フラグ
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: SubmitOutcome にワーカー消失バリアントを追加する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: 再発を検出する単体テスト
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: NotificationSink トレイト境界を変えない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: 投入経路はブロックしない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: ログ記録でのリダクション
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: プラットフォーム
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
