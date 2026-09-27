@@ -208,3 +208,26 @@ notes: >-
   build-and-doc audits with no meaningful prior-implementation red to
   observe, and are marked `red_confirmed: false` accordingly with the
   verification method stated instead.
+
+
+  Post-adoption re-run (Step 6 conflict cycle 1): `merge-task.sh` reported a
+  conflict in `crates/mux_ipc/src/protocol.rs` / `protocol/tests.rs` against
+  `em-workflow/mux-probe-scrollback-capacity/integration` (task0001, already
+  merged, had independently added the byte-identical `ClientScrollbackCapacity`
+  wire message and `ClientScrollbackCapacityPayload` this task also added).
+  Per the parent-side-adoption protocol: merged the parent into this branch,
+  adopted the parent's side verbatim for both conflicted files (`git
+  checkout --theirs`, then confirmed byte-identical via `diff` against the
+  parent's blobs), and re-ran the full suite fresh (this refreshes
+  baseline_failures/final_failures per the protocol, superseding the
+  pre-adoption 3694/3667 counts above). Default-feature lib suite: 3704
+  passed / 0 failed / 3 ignored (the +10 over the pre-adoption 3694 is
+  task0001's own tests, now inherited). CLI-only check: clean. mux_ipc crate
+  suite: 117 passed / 0 failed (task0001 added 9 of its own). No
+  re-implementation was needed beyond the file-level adoption — the two
+  sides' payload struct and enum discriminant were structurally identical,
+  and every one of this task's own call sites (dispatch.rs's
+  `ClientScrollbackCapacityPayload::from_payload`/construction) compiled and
+  passed unchanged against the adopted parent file. `baseline_failures` and
+  `final_failures` both remain `[]` after this refresh (no new failures were
+  introduced or inherited).
