@@ -231,11 +231,12 @@ pub(super) async fn collect_reattach_data(
                     // counterpart, which appends a dump block sourced from
                     // the shadow parser when `ring_wrapped` is true.
                     //
-                    // Built here (rather than after the swap below) so its
-                    // encoded size can drive the D3 "conservative bound
-                    // first" boundary decision immediately below, and reused
-                    // as-is for `data.push` at the end of this arm — no
-                    // second assembly pass.
+                    // Built here (rather than after the swap below) so it is
+                    // reused as-is for `data.push` at the end of this arm —
+                    // no second assembly pass. Its exact encoded length
+                    // (computed arithmetically just below, never by encoding
+                    // it) drives the D3 "conservative bound first" boundary
+                    // decision.
                     let (combined, combined_segments) = build_snapshot_bytes_for_ring(
                         &scrollback_data,
                         &scrollback_segments,
@@ -243,6 +244,24 @@ pub(super) async fn collect_reattach_data(
                         is_alternate_screen,
                         ring_wrapped,
                         current_dims,
+                    );
+
+                    // mux-snapshot-output-boundary task0002 (AC-1/AC-2,
+                    // TS-16): the deliverability decision runs here, OFF
+                    // the pane's `output_target` lock, from the EXACT
+                    // encoded length `encode_snapshot_segments` would
+                    // produce — via the pure, arithmetic
+                    // `encoded_snapshot_segments_len` (no allocation, no
+                    // copy of the up-to-~2 MiB snapshot). The previous
+                    // version called `encode_snapshot_segments` itself
+                    // while holding `output_target`, which is exactly the
+                    // O(snapshot) work the NFR3 lock-scope convention
+                    // forbids there.
+                    let deliverable = mux_ipc::protocol::fits_single_snapshot_frame(
+                        crate::mux::session::pane::encoded_snapshot_segments_len(
+                            &combined,
+                            &combined_segments,
+                        ),
                     );
 
                     let mut target = pane.output_target.lock().unwrap();
@@ -254,20 +273,27 @@ pub(super) async fn collect_reattach_data(
                     // ONLY when this snapshot will actually be delivered.
                     // `send_reattach_data` (downstream, no access to
                     // `output_capture`) independently re-checks the same
-                    // single-frame size policy at send time and skips this
-                    // pane's history when it does not fit (D6''') — were the
-                    // boundary recorded regardless, a skipped snapshot would
-                    // still suppress every PTY chunk it claims to cover,
-                    // silently losing output the client never actually
-                    // received (contradicting FR3). This duplicates (rather
-                    // than shares) `send_reattach_data`'s check because the
-                    // two functions do not share a snapshot-carrying type
-                    // with room for a boundary number.
-                    let encoded = crate::mux::session::pane::encode_snapshot_segments(
-                        &combined,
-                        &combined_segments,
-                    );
-                    if mux_ipc::protocol::fits_single_snapshot_frame(encoded.len()) {
+                    // single-frame size policy at send time — by actually
+                    // encoding the snapshot there, the one place that still
+                    // does — and skips this pane's history when it does not
+                    // fit (D6''') — were the boundary recorded regardless, a
+                    // skipped snapshot would still suppress every PTY chunk
+                    // it claims to cover, silently losing output the client
+                    // never actually received (contradicting FR3). This
+                    // duplicates (rather than shares) `send_reattach_data`'s
+                    // check because the two functions do not share a
+                    // snapshot-carrying type with room for a boundary
+                    // number — but the two checks are now provably EQUAL
+                    // (task0002 AC-1 pins `encoded_snapshot_segments_len`
+                    // against the real encoder's output length for every
+                    // input shape), so this decision and
+                    // `send_reattach_data`'s always agree on every pane (D9,
+                    // FR5, FR3). This `output_target` section now contains
+                    // only this previous-target read (for the log line
+                    // below), the conditional boundary record, and the swap
+                    // to `Connected` — no assembly, no encoding, no size
+                    // check beyond the plain boolean computed above.
+                    if deliverable {
                         pane.output_capture
                             .record_boundary(pane_output_tx, boundary);
                     }

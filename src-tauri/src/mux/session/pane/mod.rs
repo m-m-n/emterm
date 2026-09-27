@@ -45,6 +45,22 @@ pub(in crate::mux) fn encode_snapshot_segments(
     mux_ipc::protocol::encode_snapshot_payload(&dim_segments, bytes)
 }
 
+/// Length counterpart of [`encode_snapshot_segments`]
+/// (mux-snapshot-output-boundary task0002, AC-1/AC-2): the exact byte length
+/// `encode_snapshot_segments` would produce for the same `(bytes, segments)`,
+/// computed arithmetically via
+/// `mux_ipc::protocol::encoded_snapshot_payload_len` — no allocation, no
+/// copy. Lets a caller (`mux::ipc::reattach::collect_reattach_data`) decide
+/// [`mux_ipc::protocol::fits_single_snapshot_frame`] for an already-assembled
+/// snapshot BEFORE taking the pane's `output_target` lock, instead of
+/// encoding the snapshot itself to find out (NFR3).
+pub(in crate::mux) fn encoded_snapshot_segments_len(
+    bytes: &[u8],
+    segments: &[(usize, u16, u16)],
+) -> usize {
+    mux_ipc::protocol::encoded_snapshot_payload_len(segments.len(), bytes.len())
+}
+
 /// A pane's child-process reference (task plan task0007, IMPLEMENTATION.md
 /// D6): either an owned PTY-library child handle (a freshly spawned pane,
 /// task0001 SPEC FR2) or a bare process id (a pane restored from a handoff,

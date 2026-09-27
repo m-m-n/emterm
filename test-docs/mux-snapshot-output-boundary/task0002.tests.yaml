@@ -1,0 +1,148 @@
+task_id: task0002
+baseline_failures: []          # 3712 passed, 0 failed, 3 ignored (src-tauri --lib); 108 passed, 0 failed (mux_ipc), captured before any edit
+final_failures: []             # 3723 passed, 0 failed, 3 ignored (src-tauri --lib); 113 passed, 0 failed (mux_ipc), re-run after implementation + fmt
+acceptance_tests:
+  AC-1:
+    tests:
+      - protocol::tests::encoded_snapshot_payload_len_matches_encoder_no_segments_empty_bytes
+      - protocol::tests::encoded_snapshot_payload_len_matches_encoder_no_segments_non_empty_bytes
+      - protocol::tests::encoded_snapshot_payload_len_matches_encoder_one_segment
+      - protocol::tests::encoded_snapshot_payload_len_matches_encoder_many_segments
+      - protocol::tests::encoded_snapshot_payload_len_matches_encoder_at_and_above_the_frame_limit
+    red_confirmed: true
+    red_reason: >-
+      Confirmed via targeted mutation: temporarily changed
+      `encoded_snapshot_payload_len`'s formula to omit the `+ 4` segment-count
+      field (so it under-counted the header by 4 bytes for every input
+      shape). Reran all five new tests; all five failed (each asserting
+      equality against `encode_snapshot_payload(...).len()`, now off by 4).
+      Reverted immediately after confirming; the five tests, the crate's
+      existing 108 pre-task0002 tests, and the full `cargo test
+      --manifest-path crates/mux_ipc/Cargo.toml` run all passed green
+      afterward.
+  AC-2:
+    tests:
+      - mux::ipc::reattach::tests::collect_reattach_data_records_boundary_and_send_reattach_data_admits_snapshot_restore_for_a_deliverable_pane
+      - mux::ipc::pty_spawn::tests::collect_reattach_data_records_no_boundary_for_an_oversize_pane_and_the_reader_forwards_normally
+    red_confirmed: true
+    red_reason: >-
+      This AC has two parts: a functional part (record the boundary iff
+      deliverable) and a structural/lock-scope part (no
+      `encode_snapshot_segments`/`encode_snapshot_payload` call anywhere in
+      `collect_reattach_data`, and the `output_target` critical section
+      contains only the previous-target read, the conditional boundary
+      record, and the swap to `Connected`). The functional part is
+      red-confirmed by two independent mutations of
+      `src-tauri/src/mux/ipc/reattach.rs`'s `if deliverable { record_boundary
+      }` line, each reverted immediately after confirming: (1) `if false &&
+      deliverable` (never record) made the Deliverable-pane test fail
+      (`send_reattach_data` no longer admitted a `SnapshotRestore`, since no
+      boundary meant the paused chunk was delivered raw instead of
+      suppressed); (2) `if true` (always record, ignoring `deliverable`)
+      made the Oversize-pane test fail at its
+      `!output_capture.is_boundary_covered(&new_tx, 0)` assertion (boundary
+      wrongly recorded for a pane whose snapshot cannot be delivered in one
+      frame). Full suite reconfirmed green (3723 passed, 0 failed, 3
+      ignored) after each revert. The structural/lock-scope part (no encode
+      call under the lock; the lock's contents reduced to exactly three
+      statements) has no executable check distinct from these same two
+      tests passing — it was verified by direct diff review of
+      `collect_reattach_data` (the removed `encode_snapshot_segments` call
+      and narrowed `output_target` block are visible in the task's git diff)
+      rather than by a dedicated red-then-green test, and is listed under
+      `unconfirmed_reds` in the report for that reason.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::visible_reattach_through_collect_reattach_data_suppresses_the_paused_insert_line_chunk_and_matches_the_reference
+    red_confirmed: true
+    red_reason: >-
+      Confirmed via the task-plan-mandated sensitivity check: temporarily
+      changed `reattach.rs`'s `if deliverable { record_boundary(...) }` to
+      `if false && deliverable { ... }` (the boundary is never recorded for
+      any pane). Reran this test; it failed (the paused `CSI L` insert-line
+      chunk reached the new destination raw, unsuppressed, instead of being
+      replaced/withheld, so the client-view-vs-reference comparison
+      diverged). Reverted immediately after confirming; full suite
+      reconfirmed green (3723 passed, 0 failed, 3 ignored) after the revert.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_device_queries_once_in_order_and_never_from_inside_a_dcs_payload
+      - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_an_alt_screen_color_query_but_not_one_that_reached_the_ring
+      - mux::ipc::pty_spawn::tests::on_demand_snapshot_redelivers_device_queries_once_in_order_and_never_from_inside_a_dcs_payload
+      - mux::ipc::pty_spawn::tests::on_demand_snapshot_redelivers_an_alt_screen_color_query_but_not_one_that_reached_the_ring
+    red_confirmed: true
+    red_reason: >-
+      The two `visible_reattach_*` tests were confirmed via the same
+      sensitivity-check mutation described under AC-3 (`if false &&
+      deliverable`): both failed (device queries were delivered raw inside
+      the unsuppressed chunk instead of being extracted and re-delivered
+      once as the tail; the color-query test additionally lost its
+      not-redelivered-when-in-ring assertion once no boundary was ever
+      recorded to make the second chunk suppressed at all). The two
+      `on_demand_snapshot_*` tests exercise `handle_request_pane_snapshot`
+      (a different function, not `collect_reattach_data`) and are therefore
+      NOT affected by the `reattach.rs` mutation used for the other two;
+      they were not independently red-confirmed via a reversible mutation
+      of `handle_request_pane_snapshot`'s own boundary-recording call this
+      session — their correctness rests on the same, already-shipped (task0001)
+      `enqueue_pane_output_chunk(..., Some((output_capture, boundary)))`
+      atomic record-and-insert path, which task0002 does not modify. Full
+      suite reconfirmed green after each revert of the `reattach.rs`
+      mutation.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_a_cut_csi_tail_and_the_client_view_matches_the_reference
+      - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_a_cut_utf8_tail_with_no_replacement_character_in_any_row
+      - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_a_pending_rich_content_candidate_and_the_client_view_matches_the_reference
+    red_confirmed: true
+    red_reason: >-
+      All three confirmed via the same sensitivity-check mutation described
+      under AC-3 (`if false && deliverable` in `reattach.rs`), each reverted
+      immediately after confirming: the cut-CSI and cut-UTF-8 tests failed
+      because their client-view-vs-reference row comparison diverged once
+      the paused chunk was delivered raw instead of through the
+      suppression/tail-replacement path. The pending-rich-content test
+      required a fixture fix mid-session before it was genuinely sensitive:
+      its original fixture made `paused_chunk` consist ENTIRELY of the
+      unterminated OSC 9999 introducer, so the suppressed-tail replacement
+      and an unsuppressed raw forward produced byte-identical output and
+      the test passed even with the mutation applied (a false negative,
+      caught by this very sensitivity check). Fixed by prepending a plain
+      ring-written prefix (`already-visible-text`) to `paused_chunk` and
+      asserting the re-delivered tail equals only the introducer, not the
+      prefix — an unsuppressed forward would resend the prefix too, which
+      now makes the two paths observably diverge. Re-ran the sensitivity
+      check after the fix: the corrected test failed under the mutation as
+      required. Full suite reconfirmed green after the final revert.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::destination_takeover_through_collect_reattach_data_binds_suppression_to_the_new_sender_not_the_old
+    red_confirmed: true
+    red_reason: >-
+      Confirmed via the same sensitivity-check mutation described under
+      AC-3 (`if false && deliverable` in `reattach.rs`): failed because
+      destination B's boundary was never recorded, so chunks numbered above
+      B's captured boundary were forwarded to B unsuppressed instead of
+      going through the suppression/tail path bound to B's own sender.
+      Reverted immediately after confirming; full suite reconfirmed green.
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      This criterion is "all existing tests pass unmodified AND both
+      commands exit 0" — a build/full-suite-level check, not a single named
+      test. Genuine failures of this check were observed and fixed during
+      the session before reaching the current clean state: the AC-5
+      pending-rich-content test's fixture defect described above (caught by
+      the sensitivity check, not by this run) and several intermediate
+      compile/format issues resolved via `cargo fmt` on the touched files
+      only. In the current state, `cargo test --manifest-path
+      src-tauri/Cargo.toml --lib` (3723 passed, 0 failed, 3 ignored),
+      `cargo test --manifest-path crates/mux_ipc/Cargo.toml` (113 passed, 0
+      failed), and `cargo check --manifest-path src-tauri/Cargo.toml
+      --no-default-features` all exit 0. No pre-existing test in
+      `reattach/tests.rs`, `pane/tests.rs`, `pty_spawn/tests.rs`, or
+      `crates/mux_ipc/src/protocol/tests.rs` was modified or removed by
+      this task (only new tests were appended) — confirmed both by `git
+      diff` showing no `-` lines removing an existing `#[test]`/
+      `#[tokio::test]` function, and by the full suite's 0 failures.

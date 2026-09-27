@@ -3768,6 +3768,889 @@ fn test_url_decode_multibyte_utf8() {
     );
 }
 
+// ── mux-snapshot-output-boundary task0002: reader-level reattach tests
+//    (AC-2 "Oversize pane" reader case, AC-3 through AC-6) ────────────────
+//
+// These drive the PRODUCTION `collect_reattach_data` /
+// `handle_request_pane_snapshot` against a pane registered in a real
+// `SessionManager`, with the reader's handles cloned from that SAME pane —
+// so the snapshot path observes exactly the state the reader writes (task
+// plan Design section "Reader-level reattach harness").
+
+use crate::mux::session::manager::SessionManager;
+use tokio::sync::{Mutex, oneshot};
+
+/// Register `pane` in a fresh `SessionManager` session/window and start its
+/// reader thread against `chunks`, mirroring [`spawn_reader_with_chunks`]
+/// but with the pane owned by a session so `collect_reattach_data` /
+/// `handle_request_pane_snapshot` can be driven against it directly.
+/// `pane`'s `output_target` is used exactly as given by the caller
+/// (`Detached` for the visible-reattach scenarios below, `Connected` for
+/// the on-demand ones) — this does not change `spawn_reader_with_chunks`'s
+/// own behavior.
+async fn spawn_reader_with_chunks_in_session(
+    pane: MuxPane,
+    chunks: Vec<Vec<u8>>,
+) -> (Arc<Mutex<SessionManager>>, u32, std::thread::JoinHandle<()>) {
+    let pane_id = pane.id;
+    let output_target = pane.output_target.clone();
+    let shadow_parser = pane.shadow_parser.clone();
+    let cwd = pane.cwd.clone();
+    let title = pane.title.clone();
+    let title_sender = pane.title_sender.clone();
+    let notification_sender = pane.notification_sender.clone();
+    let agent_status_report_sender = pane.agent_status_report_sender.clone();
+    let raw_passthrough = pane.raw_passthrough.clone();
+    let passthrough_scanner = pane.passthrough_scanner.clone();
+    let scrollback = pane.scrollback.clone();
+    let dims = pane.dims.clone();
+    let output_capture = pane.output_capture.clone();
+
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let session_id = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        m.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+        sid
+    };
+
+    let handle = std::thread::spawn(move || {
+        pty_reader_loop(
+            pane_id,
+            Box::new(ScriptedReader::new(chunks)),
+            output_target,
+            shadow_parser,
+            cwd,
+            title,
+            title_sender,
+            notification_sender,
+            agent_status_report_sender,
+            raw_passthrough,
+            passthrough_scanner,
+            scrollback,
+            dims,
+            Arc::new(StdMutex::new(None)),
+            output_capture,
+        );
+    });
+
+    (mgr, session_id, handle)
+}
+
+/// AC-2 (FR3, FR5, NFR2, NFR3; TS-16), "Oversize pane": for a pane whose
+/// assembled snapshot exceeds the single-frame limit, a visible reattach
+/// through the production `collect_reattach_data` records NO boundary for
+/// the new destination, and — with the reader paused at P2 during the
+/// reattach — the paused chunk reaches the new destination's channel
+/// normally after release (the swap to `Connected` still happens; nothing
+/// suppresses the chunk because nothing was recorded for it).
+#[tokio::test]
+async fn collect_reattach_data_records_no_boundary_for_an_oversize_pane_and_the_reader_forwards_normally()
+ {
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::NetworkDetach,
+        owner: None,
+    }));
+    let pane = MuxPane::new_test(20, 80, 24, output_target);
+    // Oversize the pane's ring directly (mirrors the existing oversize
+    // resume-path fixtures in `mux::session::pane::tests`): a
+    // capacity-and-content-matched ring whose read alone exceeds
+    // `MAX_SNAPSHOT_FRAME_PAYLOAD`.
+    let oversize_capacity = mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD + 1024 * 1024;
+    *pane.scrollback.lock().unwrap() =
+        crate::mux::scrollback_buffer::ScrollbackRingBuffer::new(oversize_capacity);
+    pane.scrollback
+        .lock()
+        .unwrap()
+        .write(&vec![b'x'; oversize_capacity]);
+
+    let output_capture = pane.output_capture.clone();
+    let paused_chunk = b"plain output text after the oversize reattach".to_vec();
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+
+    let (mgr, session_id, handle) =
+        spawn_reader_with_chunks_in_session(pane, vec![paused_chunk.clone()]).await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2");
+
+    let (new_tx, mut new_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let data = crate::mux::ipc::reattach::collect_reattach_data(
+        &mgr, session_id, &new_tx, &title_tx, kick_tx, true,
+    )
+    .await;
+    assert_eq!(data.len(), 1);
+
+    assert!(
+        !output_capture.is_boundary_covered(&new_tx, 0),
+        "an oversize pane's reattach must record no boundary for the new \
+         destination"
+    );
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = new_rx.try_recv() {
+        received.push(c);
+    }
+    assert!(
+        received.iter().any(|c| c.data == paused_chunk),
+        "with no boundary recorded, the reader must forward the paused \
+         chunk normally to the new destination after the swap to Connected"
+    );
+}
+
+/// AC-3 (FR1, FR2, FR3; TS-1): with the reader paused at P2 on a chunk
+/// containing an insert-line sequence (`CSI L`) on a Detached pane, a
+/// visible reattach through the production `collect_reattach_data`
+/// followed by release leaves the new destination's channel without that
+/// chunk's raw bytes (the double-application fix). The client view
+/// (returned snapshot, then every later channel chunk) matches the
+/// raw-stream reference.
+#[tokio::test]
+async fn visible_reattach_through_collect_reattach_data_suppresses_the_paused_insert_line_chunk_and_matches_the_reference()
+ {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::NetworkDetach,
+        owner: None,
+    }));
+    let pane = MuxPane::new_test(21, cols, rows, output_target);
+    let output_capture = pane.output_capture.clone();
+
+    let baseline: &[u8] = b"line1\r\nline2\r\nline3\r\n";
+    // Seed the baseline the SAME way the reader would (through the capture
+    // step), so the paused chunk becomes capture step #2, matching a
+    // realistic "some output already happened before this reattach"
+    // scenario.
+    output_capture.capture(|| {
+        pane.shadow_parser.lock().unwrap().process(baseline);
+        pane.scrollback.lock().unwrap().write(baseline);
+    });
+
+    let paused_chunk = b"\x1b[1;1H\x1b[L".to_vec(); // move to top-left, insert a line
+    let continuation_chunk = b"more output after resume\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) = spawn_reader_with_chunks_in_session(
+        pane,
+        vec![paused_chunk.clone(), continuation_chunk.clone()],
+    )
+    .await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the paused chunk");
+
+    let (new_tx, mut new_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let data = crate::mux::ipc::reattach::collect_reattach_data(
+        &mgr, session_id, &new_tx, &title_tx, kick_tx, true,
+    )
+    .await;
+    assert_eq!(data.len(), 1);
+    let (_pane_id, snapshot_payload, snapshot_segments) = data.into_iter().next().unwrap();
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = new_rx.try_recv() {
+        received.push(c);
+    }
+    assert!(
+        !received.iter().any(|c| c.data == paused_chunk),
+        "the paused insert-line chunk's raw bytes must never reach the new \
+         destination after the reattach snapshot (TS-1 double-application \
+         fix)"
+    );
+    assert_eq!(
+        received[0].data, continuation_chunk,
+        "the next (unsuppressed) chunk must follow directly — the \
+         suppressed chunk carried no query and no tail"
+    );
+    assert!(received[1].data.is_empty(), "EOF chunk must follow");
+    assert_eq!(received.len(), 2, "nothing else must have been delivered");
+
+    use term_core::terminal_core::TerminalCore;
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(&snapshot_payload, &to_replay_segments(&snapshot_segments));
+    client.process_pty_data_fully(&continuation_chunk);
+
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(baseline);
+    reference.process_pty_data_fully(&paused_chunk);
+    reference.process_pty_data_fully(&continuation_chunk);
+
+    for r in 0..rows {
+        assert_eq!(
+            client.get_line_text(r).trim_end(),
+            reference.get_line_text(r).trim_end(),
+            "row {r} mismatch"
+        );
+    }
+    assert_eq!(client.get_cursor_row(), reference.get_cursor_row());
+    assert_eq!(client.get_cursor_col(), reference.get_cursor_col());
+}
+
+/// AC-4 (FR9; TS-9), reader level, visible-reattach path (production
+/// `collect_reattach_data`): "Device queries" + "String payloads" bullets.
+/// A suppressed chunk containing a cursor-position query (`CSI 6n`) and a
+/// primary device-attributes query (`CSI c`), plus a DCS string whose body
+/// contains query-shaped bytes, delivers ONLY the two real queries, in
+/// order, exactly once, after the reattach and before the next reader
+/// chunk — the DCS payload's embedded query-shaped bytes are never
+/// extracted (TM-1).
+#[tokio::test]
+async fn visible_reattach_redelivers_device_queries_once_in_order_and_never_from_inside_a_dcs_payload()
+ {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::NetworkDetach,
+        owner: None,
+    }));
+    let pane = MuxPane::new_test(50, cols, rows, output_target);
+    let output_capture = pane.output_capture.clone();
+
+    let mut paused_chunk = Vec::new();
+    paused_chunk.extend_from_slice(b"before");
+    paused_chunk.extend_from_slice(b"\x1b[6n");
+    paused_chunk.extend_from_slice(b"middle");
+    paused_chunk.extend_from_slice(b"\x1b[c");
+    // DCS string whose payload contains query-shaped bytes — must never be
+    // extracted as a query (TM-1).
+    paused_chunk.extend_from_slice(b"\x1bPq\x1b[6n\x1b\\");
+    paused_chunk.extend_from_slice(b"after\r\n");
+    let continuation_chunk = b"final line\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) = spawn_reader_with_chunks_in_session(
+        pane,
+        vec![paused_chunk.clone(), continuation_chunk.clone()],
+    )
+    .await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2");
+
+    let (new_tx, mut new_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let _data = crate::mux::ipc::reattach::collect_reattach_data(
+        &mgr, session_id, &new_tx, &title_tx, kick_tx, true,
+    )
+    .await;
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = new_rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(
+        received[0].data, b"\x1b[6n\x1b[c",
+        "both real device queries, in order, and NOTHING from inside the \
+         DCS payload"
+    );
+    assert_eq!(received[1].data, continuation_chunk);
+    assert!(received[2].data.is_empty());
+    assert_eq!(received.len(), 3, "nothing else must have been delivered");
+}
+
+/// AC-4 (FR9; TS-9), reader level, visible-reattach path: "Alternate-screen
+/// color query" bullet. A color query inside an alternate-screen span of a
+/// suppressed chunk is re-delivered exactly once; a color query in the same
+/// kind of chunk that reached the ring (main-buffer) is NOT re-delivered.
+#[tokio::test]
+async fn visible_reattach_redelivers_an_alt_screen_color_query_but_not_one_that_reached_the_ring() {
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::NetworkDetach,
+        owner: None,
+    }));
+    let pane = MuxPane::new_test(51, 80, 24, output_target);
+    let output_capture = pane.output_capture.clone();
+
+    // Chunk 1: enters the alternate screen and issues a color query there —
+    // never written toward the ring (alt-screen has no scrollback).
+    let mut alt_chunk = Vec::new();
+    alt_chunk.extend_from_slice(b"\x1b[?1049h");
+    alt_chunk.extend_from_slice(b"\x1b]11;?\x07");
+    // Chunk 2: leaves the alternate screen, then issues the SAME color
+    // query in the main buffer — this one IS written toward the ring.
+    let mut main_chunk = Vec::new();
+    main_chunk.extend_from_slice(b"\x1b[?1049l");
+    main_chunk.extend_from_slice(b"\x1b]11;?\x07");
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) =
+        spawn_reader_with_chunks_in_session(pane, vec![alt_chunk.clone(), main_chunk.clone()])
+            .await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the alt-screen chunk");
+
+    let (new_tx, mut new_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx1, _kick_rx1) = oneshot::channel::<()>();
+    let _data1 = crate::mux::ipc::reattach::collect_reattach_data(
+        &mgr, session_id, &new_tx, &title_tx, kick_tx1, true,
+    )
+    .await;
+    release_tx.send(()).unwrap();
+
+    // P2 disarms itself after one hit; re-arm for the main-buffer chunk and
+    // reattach the SAME destination a second time (mirrors a second
+    // window-switch back to the still-attached client).
+    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
+    arrived_rx_2
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the main-buffer chunk");
+    let (kick_tx2, _kick_rx2) = oneshot::channel::<()>();
+    let _data2 = crate::mux::ipc::reattach::collect_reattach_data(
+        &mgr, session_id, &new_tx, &title_tx, kick_tx2, true,
+    )
+    .await;
+    release_tx_2.send(()).unwrap();
+
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = new_rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(
+        received[0].data, b"\x1b]11;?\x07",
+        "the alt-screen color query must be re-delivered exactly once"
+    );
+    assert!(
+        received[1].data.is_empty(),
+        "the main-buffer color query already reached the ring via the \
+         snapshot, so nothing must be sent for that chunk beyond EOF"
+    );
+    assert_eq!(received.len(), 2);
+}
+
+/// AC-4 (FR9; TS-9), reader level, on-demand path (production
+/// `handle_request_pane_snapshot`): the on-demand counterpart of
+/// `visible_reattach_redelivers_device_queries_once_in_order_and_never_from_inside_a_dcs_payload`.
+#[tokio::test]
+async fn on_demand_snapshot_redelivers_device_queries_once_in_order_and_never_from_inside_a_dcs_payload()
+ {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    let pane_id: PaneId = 52;
+    let (requester_tx, mut requester_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(
+        requester_tx.clone(),
+    )));
+    let pane = MuxPane::new_test(pane_id, cols, rows, output_target);
+    let output_capture = pane.output_capture.clone();
+
+    let mut paused_chunk = Vec::new();
+    paused_chunk.extend_from_slice(b"before");
+    paused_chunk.extend_from_slice(b"\x1b[6n");
+    paused_chunk.extend_from_slice(b"middle");
+    paused_chunk.extend_from_slice(b"\x1b[c");
+    paused_chunk.extend_from_slice(b"\x1bPq\x1b[6n\x1b\\");
+    paused_chunk.extend_from_slice(b"after\r\n");
+    let continuation_chunk = b"final line\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) = spawn_reader_with_chunks_in_session(
+        pane,
+        vec![paused_chunk.clone(), continuation_chunk.clone()],
+    )
+    .await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2");
+
+    let req = mux_ipc::protocol::MuxMessage {
+        msg_type: mux_ipc::protocol::MessageType::RequestPaneSnapshot,
+        pane_id,
+        payload: Vec::new(),
+    };
+    let mut deferred = crate::mux::session::pane::DeferredOutputQueue::new();
+    crate::mux::ipc::handlers::handle_request_pane_snapshot(
+        &req,
+        session_id,
+        &mgr,
+        &requester_tx,
+        &mut deferred,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = requester_rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(
+        received[0].kind,
+        crate::mux::session::pane::ChunkKind::Snapshot,
+        "the on-demand snapshot itself must arrive first"
+    );
+    assert_eq!(
+        received[1].data, b"\x1b[6n\x1b[c",
+        "both real device queries, in order, and NOTHING from inside the \
+         DCS payload"
+    );
+    assert_eq!(received[2].data, continuation_chunk);
+    assert!(received[3].data.is_empty());
+    assert_eq!(received.len(), 4, "nothing else must have been delivered");
+}
+
+/// AC-4 (FR9; TS-9), reader level, on-demand path: the on-demand
+/// counterpart of
+/// `visible_reattach_redelivers_an_alt_screen_color_query_but_not_one_that_reached_the_ring`.
+#[tokio::test]
+async fn on_demand_snapshot_redelivers_an_alt_screen_color_query_but_not_one_that_reached_the_ring()
+{
+    let pane_id: PaneId = 53;
+    let (requester_tx, mut requester_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(
+        requester_tx.clone(),
+    )));
+    let pane = MuxPane::new_test(pane_id, 80, 24, output_target);
+    let output_capture = pane.output_capture.clone();
+
+    let mut alt_chunk = Vec::new();
+    alt_chunk.extend_from_slice(b"\x1b[?1049h");
+    alt_chunk.extend_from_slice(b"\x1b]11;?\x07");
+    let mut main_chunk = Vec::new();
+    main_chunk.extend_from_slice(b"\x1b[?1049l");
+    main_chunk.extend_from_slice(b"\x1b]11;?\x07");
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) =
+        spawn_reader_with_chunks_in_session(pane, vec![alt_chunk.clone(), main_chunk.clone()])
+            .await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the alt-screen chunk");
+    let mut deferred = crate::mux::session::pane::DeferredOutputQueue::new();
+    let req = mux_ipc::protocol::MuxMessage {
+        msg_type: mux_ipc::protocol::MessageType::RequestPaneSnapshot,
+        pane_id,
+        payload: Vec::new(),
+    };
+    crate::mux::ipc::handlers::handle_request_pane_snapshot(
+        &req,
+        session_id,
+        &mgr,
+        &requester_tx,
+        &mut deferred,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+    release_tx.send(()).unwrap();
+
+    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
+    arrived_rx_2
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the main-buffer chunk");
+    crate::mux::ipc::handlers::handle_request_pane_snapshot(
+        &req,
+        session_id,
+        &mgr,
+        &requester_tx,
+        &mut deferred,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+    release_tx_2.send(()).unwrap();
+
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = requester_rx.try_recv() {
+        received.push(c);
+    }
+    let snapshots: Vec<&PtyOutputChunk> = received
+        .iter()
+        .filter(|c| c.kind == crate::mux::session::pane::ChunkKind::Snapshot)
+        .collect();
+    assert_eq!(snapshots.len(), 2, "one snapshot per on-demand request");
+
+    let non_snapshot: Vec<&PtyOutputChunk> = received
+        .iter()
+        .filter(|c| c.kind != crate::mux::session::pane::ChunkKind::Snapshot)
+        .collect();
+    assert_eq!(
+        non_snapshot[0].data, b"\x1b]11;?\x07",
+        "the alt-screen color query must be re-delivered exactly once"
+    );
+    assert!(
+        non_snapshot[1].data.is_empty(),
+        "the main-buffer color query already reached the ring, so nothing \
+         must be sent for that chunk beyond EOF"
+    );
+    assert_eq!(non_snapshot.len(), 2);
+}
+
+/// AC-5 (FR10; TS-10), "Cut CSI": under the AC-3 conditions (Detached pane,
+/// visible reattach through the production `collect_reattach_data` with
+/// the reader paused at P2), a suppressed chunk ending in a cut CSI has its
+/// continuation in the next (unsuppressed) chunk. The client view matches
+/// the raw-stream reference.
+#[tokio::test]
+async fn visible_reattach_redelivers_a_cut_csi_tail_and_the_client_view_matches_the_reference() {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::NetworkDetach,
+        owner: None,
+    }));
+    let pane = MuxPane::new_test(60, cols, rows, output_target);
+    let output_capture = pane.output_capture.clone();
+
+    let paused_chunk = b"plain text\x1b[3".to_vec();
+    let continuation_chunk = b"2m colored text\x1b[0m\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) = spawn_reader_with_chunks_in_session(
+        pane,
+        vec![paused_chunk.clone(), continuation_chunk.clone()],
+    )
+    .await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2");
+
+    let (new_tx, mut new_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let data = crate::mux::ipc::reattach::collect_reattach_data(
+        &mgr, session_id, &new_tx, &title_tx, kick_tx, true,
+    )
+    .await;
+    let (_pane_id, snapshot_payload, snapshot_segments) = data.into_iter().next().unwrap();
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = new_rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(
+        received[0].data, b"\x1b[3",
+        "the cut CSI tail must be re-delivered verbatim"
+    );
+    assert_eq!(received[1].data, continuation_chunk);
+    assert!(received[2].data.is_empty());
+    assert_eq!(received.len(), 3);
+
+    use term_core::terminal_core::TerminalCore;
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(&snapshot_payload, &to_replay_segments(&snapshot_segments));
+    client.process_pty_data_fully(&received[0].data);
+    client.process_pty_data_fully(&continuation_chunk);
+
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(&paused_chunk);
+    reference.process_pty_data_fully(&continuation_chunk);
+
+    for r in 0..rows {
+        assert_eq!(
+            client.get_line_text(r).trim_end(),
+            reference.get_line_text(r).trim_end(),
+            "row {r} mismatch"
+        );
+    }
+    assert_eq!(client.get_cursor_row(), reference.get_cursor_row());
+    assert_eq!(client.get_cursor_col(), reference.get_cursor_col());
+}
+
+/// AC-5 (FR10; TS-10), "Cut UTF-8 character": same shape as the cut-CSI
+/// test above, for a multi-byte UTF-8 character split across the
+/// suppressed chunk boundary. No U+FFFD replacement character may appear
+/// in any visible row.
+#[tokio::test]
+async fn visible_reattach_redelivers_a_cut_utf8_tail_with_no_replacement_character_in_any_row() {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::NetworkDetach,
+        owner: None,
+    }));
+    let pane = MuxPane::new_test(61, cols, rows, output_target);
+    let output_capture = pane.output_capture.clone();
+
+    let mut paused_chunk = b"plain".to_vec();
+    paused_chunk.extend_from_slice(&[0xe4, 0xb8]); // first two bytes of "中" (E4 B8 AD)
+    let mut continuation_chunk = vec![0xad];
+    continuation_chunk.extend_from_slice(b" more\r\n");
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) = spawn_reader_with_chunks_in_session(
+        pane,
+        vec![paused_chunk.clone(), continuation_chunk.clone()],
+    )
+    .await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2");
+
+    let (new_tx, mut new_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let data = crate::mux::ipc::reattach::collect_reattach_data(
+        &mgr, session_id, &new_tx, &title_tx, kick_tx, true,
+    )
+    .await;
+    let (_pane_id, snapshot_payload, snapshot_segments) = data.into_iter().next().unwrap();
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = new_rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(received[0].data, vec![0xe4, 0xb8]);
+    assert_eq!(received[1].data, continuation_chunk);
+    assert!(received[2].data.is_empty());
+    assert_eq!(received.len(), 3);
+
+    use term_core::terminal_core::TerminalCore;
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(&snapshot_payload, &to_replay_segments(&snapshot_segments));
+    client.process_pty_data_fully(&received[0].data);
+    client.process_pty_data_fully(&continuation_chunk);
+
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(&paused_chunk);
+    reference.process_pty_data_fully(&continuation_chunk);
+
+    for r in 0..rows {
+        let client_line = client.get_line_text(r);
+        assert!(
+            !client_line.contains('\u{FFFD}'),
+            "row {r} contains a stray replacement character: {client_line:?}"
+        );
+        assert_eq!(
+            client_line.trim_end(),
+            reference.get_line_text(r).trim_end(),
+            "row {r} mismatch"
+        );
+    }
+}
+
+/// AC-5 (FR10; TS-10), "Pending rich-content candidate": the scrollback
+/// write filter holds an unterminated OSC 9999 `emterm-md` introducer as a
+/// pending run (D8); its continuation arrives in the next (unsuppressed)
+/// chunk. No continuation byte or U+FFFD character may appear in any
+/// visible row.
+#[tokio::test]
+async fn visible_reattach_redelivers_a_pending_rich_content_candidate_and_the_client_view_matches_the_reference()
+ {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::NetworkDetach,
+        owner: None,
+    }));
+    let pane = MuxPane::new_test(62, cols, rows, output_target);
+    let output_capture = pane.output_capture.clone();
+
+    // A plain-text prefix that DOES reach the ring/snapshot, followed by
+    // the unterminated candidate the write filter holds back as `pending`
+    // (D8) — the prefix is what makes this test SENSITIVE to suppression
+    // being disabled: an unsuppressed forward would deliver the whole raw
+    // chunk (prefix included), whereas the FR9/FR10 replacement for a
+    // suppressed chunk re-delivers ONLY the pending run, since the prefix
+    // already reached the client via the snapshot.
+    let prefix = b"already-visible-text".to_vec();
+    let pending_introducer = b"\x1b]9999;emterm-md;partial-payload".to_vec();
+    let mut paused_chunk = prefix.clone();
+    paused_chunk.extend_from_slice(&pending_introducer);
+    let continuation_chunk = b";more-payload\x07after text\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) = spawn_reader_with_chunks_in_session(
+        pane,
+        vec![paused_chunk.clone(), continuation_chunk.clone()],
+    )
+    .await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2");
+
+    let (new_tx, mut new_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let data = crate::mux::ipc::reattach::collect_reattach_data(
+        &mgr, session_id, &new_tx, &title_tx, kick_tx, true,
+    )
+    .await;
+    let (_pane_id, snapshot_payload, snapshot_segments) = data.into_iter().next().unwrap();
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = new_rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(
+        received[0].data, pending_introducer,
+        "the tail must re-deliver ONLY the pending run (the unterminated \
+         introducer) — the already-ring-written prefix must not be resent"
+    );
+    assert_eq!(received[1].data, continuation_chunk);
+    assert!(received[2].data.is_empty());
+    assert_eq!(received.len(), 3);
+
+    use term_core::terminal_core::TerminalCore;
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(&snapshot_payload, &to_replay_segments(&snapshot_segments));
+    client.process_pty_data_fully(&received[0].data);
+    client.process_pty_data_fully(&continuation_chunk);
+
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(&paused_chunk);
+    reference.process_pty_data_fully(&continuation_chunk);
+
+    for r in 0..rows {
+        let client_line = client.get_line_text(r);
+        assert!(
+            !client_line.contains('\u{FFFD}'),
+            "row {r} contains a stray replacement character: {client_line:?}"
+        );
+        assert_eq!(
+            client_line.trim_end(),
+            reference.get_line_text(r).trim_end(),
+            "row {r} mismatch"
+        );
+    }
+}
+
+/// AC-6 (FR11; TS-11): destination A holds a boundary for the pane ABOVE
+/// the numbers of the chunks that follow (a stand-in for A having already
+/// received a snapshot). Destination B then takes the pane over through
+/// the production `collect_reattach_data(visible = true)` while the reader
+/// is paused at P2. After release: every chunk numbered above B's own
+/// captured boundary reaches B's channel — none suppressed by A's
+/// (unrelated, larger) entry — B's client view matches the raw-stream
+/// reference, and A's channel receives no chunk produced after the
+/// takeover.
+#[tokio::test]
+async fn destination_takeover_through_collect_reattach_data_binds_suppression_to_the_new_sender_not_the_old()
+ {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    let (a_tx, mut a_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let output_target: SharedOutputTarget =
+        Arc::new(StdMutex::new(PaneOutputTarget::Connected(a_tx.clone())));
+    let pane = MuxPane::new_test(70, cols, rows, output_target);
+    let output_capture = pane.output_capture.clone();
+
+    // AC-6 Test Notes: A's boundary can be put in place with the existing
+    // boundary-record operation directly, standing in for A having
+    // received an earlier snapshot — deliberately far ABOVE the numbers
+    // the two chunks below will get, so a broken (non-per-sender) lookup
+    // would wrongly suppress everything for B too.
+    output_capture.record_boundary(&a_tx, 1_000);
+
+    let takeover_chunk = b"line during takeover\r\n".to_vec();
+    let after_takeover_chunk = b"line after takeover, must reach B\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) = spawn_reader_with_chunks_in_session(
+        pane,
+        vec![takeover_chunk.clone(), after_takeover_chunk.clone()],
+    )
+    .await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the takeover chunk");
+
+    let (b_tx, mut b_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let data = crate::mux::ipc::reattach::collect_reattach_data(
+        &mgr, session_id, &b_tx, &title_tx, kick_tx, true,
+    )
+    .await;
+    assert_eq!(data.len(), 1);
+    let (_pane_id, snapshot_payload, snapshot_segments) = data.into_iter().next().unwrap();
+
+    assert!(
+        output_capture.is_boundary_covered(&b_tx, 0),
+        "B's takeover must record its own boundary entry"
+    );
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received_b = Vec::new();
+    while let Ok(c) = b_rx.try_recv() {
+        received_b.push(c);
+    }
+    assert!(
+        !received_b.iter().any(|c| c.data == takeover_chunk),
+        "the takeover chunk itself must be suppressed for B (covered by \
+         B's own just-recorded boundary)"
+    );
+    assert!(
+        received_b.iter().any(|c| c.data == after_takeover_chunk),
+        "a chunk numbered ABOVE B's boundary must reach B normally — never \
+         suppressed by A's unrelated (larger, but different-sender) entry"
+    );
+
+    let mut received_a = Vec::new();
+    while let Ok(c) = a_rx.try_recv() {
+        received_a.push(c);
+    }
+    assert!(
+        received_a.is_empty(),
+        "A's channel must receive nothing produced after the takeover"
+    );
+
+    use term_core::terminal_core::TerminalCore;
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(&snapshot_payload, &to_replay_segments(&snapshot_segments));
+    client.process_pty_data_fully(&after_takeover_chunk);
+
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(&takeover_chunk);
+    reference.process_pty_data_fully(&after_takeover_chunk);
+
+    for r in 0..rows {
+        assert_eq!(
+            client.get_line_text(r).trim_end(),
+            reference.get_line_text(r).trim_end(),
+            "row {r} mismatch"
+        );
+    }
+}
+
 // ── End-to-end child reap (task0001 AC-1/AC-7; TS-7, TS-8, TS-9) ──────
 //
 // Uses the real spawn path (`spawn_pty`), builds a `MuxPane` directly
