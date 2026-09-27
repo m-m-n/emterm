@@ -8,18 +8,103 @@ last_input_digest: sha256:1affdd6a3633edfac8d6e55b8a6d970791a24390cac9188cfe4b16
 active_request_id: null
 packets:
   create-spec-q0001:
-    status: issued
+    status: answered
     issued_at: '2026-09-27T20:55:00+09:00'
     questions:
     - question_id: fix-approach
-      status: issued
+      status: answered
     - question_id: protocol-compat
-      status: issued
+      status: answered
     - question_id: large-capacity-cost
-      status: issued
+      status: answered
     - question_id: design-step
-      status: issued
-answers: {}
+      status: answered
+answers:
+  fix-approach:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-27T21:08:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - pass_client_capacity
+    freeform: 'Codex turn 1 CHOICE pass_client_capacity: probe uses fixed capacity (dump_block.rs:109)
+      while the client replays at the tab''s real capacity (replay.rs:303); reflow.rs:95 cursor math depends
+      on retained history, so capacities must match. Keep the snapshot structure on the normal path and
+      pass only the capacity via an additional control message.'
+    normalized_answer: 'Pass the replaying GUI tab''s own scrollback capacity (core.scrollback_capacity(),
+      not the latest global setting) to the daemon through a new additive control message sent over the
+      existing send_control -> tab PTY -> (SSH) -> bridge -> daemon path (Windows: EMUX;<base64>). The
+      GUI sends it after the first Welcome and before Attach / CreateWindow / snapshot requests; the bridge
+      stores it and re-sends it before the re-sent Attach on auto-reconnect. The daemon keeps it as a
+      per-connection value (not session-wide, not persisted on the pane) and passes it to all four snapshot
+      assembly sites (reattach.rs:103, :273, output_target.rs:270, :432) including deferred resumes. The
+      probe builds its scratch terminal at that capacity.'
+    resolution_note: 'gate: create-spec.requirement-clarification; policy action codex_consultation (batch-policies.yaml);
+      codex_consulted: true; harness: codex; turns: 2 (question settled in turn 1); Codex CHOICE pass_client_capacity
+      mapped by the orchestrator to option pass_client_capacity. Options not chosen: client_side_restore
+      (needs a dump-block marker, i.e. a snapshot shape change the ticket forbids), document_known_limit
+      (cannot meet DoD item 1). Opus escalation: not run. Recorded as an assumption per record_as_assumption:
+      true.'
+  protocol-compat:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-27T21:08:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - avoid_bump_preferred
+    freeform: 'Codex turn 1 CHOICE avoid_bump_preferred: an unknown MessageType is decoded to None by
+      from_frame_body and codec.rs:37 drops the frame and keeps reading (test at codec.rs:128; commit
+      c7ee6582). An additive message therefore needs no version bump. Old bridges also drop unknown messages
+      (stdin_parser.rs:98, :118), so keeping the connection alive and having the fix applied must be distinguished.'
+    normalized_answer: Keep every existing message encoding and PROTOCOL_VERSION = 3; add a new message
+      type only. When no capacity was reported (old GUI / old bridge, system-origin paths), the daemon
+      uses the legacy 10,000 lines, distinct from a valid reported 0. Mixed old/new combinations keep
+      working but the capacity fix is not guaranteed there; no response from the peer is required, so
+      an old peer never stalls the connection.
+    resolution_note: 'gate: create-spec.requirement-clarification; policy action codex_consultation; codex_consulted:
+      true; harness: codex; turns: 2 (settled in turn 1); Codex CHOICE avoid_bump_preferred mapped to
+      option avoid_bump_preferred. Options not chosen: allow_bump (breaks old/new pairing, forces legacy
+      recovery), forbid_bump (no need to forbid; bump is avoidable). Opus escalation: not run. Recorded
+      as an assumption.'
+  large-capacity-cost:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-27T21:08:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - cap_with_fallback
+    freeform: 'Codex turn 1 CHOICE cap_with_fallback (cap 10,000, over-cap -> skip dump). Orchestrator
+      challenged in turn 2 (skipping the dump regresses header restore for users with scrollback_lines
+      > 10,000, which settings do not bound). Codex turn 2 CHOICE cap_with_fallback, revised: cap 10,000
+      and above the cap probe at 10,000 and keep the dump. Memory is not bounded by min(capacity, payload
+      lines): blank rows still allocate cols cells (terminal_core.rs:294, ring_buffer.rs:160) and multi-line
+      scroll sequences multiply rows (csi_dispatch.rs:84); 100k rows x 4096 cols ~ 3 GiB. No measurement
+      supports a higher cap.'
+    normalized_answer: The daemon validates the reported capacity (fixed-size u32) before any allocation
+      and uses probe_capacity = min(reported, 10_000). Unreported -> 10,000; an explicit 0 -> 0. Above
+      the cap the probe runs at 10,000 and the dump is kept (today's behaviour); the dump is never dropped
+      merely because the cap was exceeded, and the GUI's own capacity is not changed. The fix is guaranteed
+      for capacities 0..=10,000; above 10,000 the residual post-grow-resize row mismatch is documented
+      as a known limit. The cap bounds load amplification only; it does not address lock-hold time (follow-up
+      3b5bbd839c74d67b).
+    resolution_note: 'gate: create-spec.requirement-clarification; policy action codex_consultation; codex_consulted:
+      true; harness: codex; turns: 2; converged in turn 2 after the orchestrator raised the regression
+      concern. Codex CHOICE cap_with_fallback mapped by the orchestrator to option cap_with_fallback,
+      with the fallback refined to ''probe clamped at the cap, dump kept'' (not ''drop the dump''). Option
+      not chosen: no_cap_followup (a client-reported capacity is untrusted and would let probe memory/time
+      under global locks grow unbounded). Opus escalation: not run. Recorded as an assumption.'
+  design-step:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-27T21:08:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: 'Accept requirements-analyst''s design_step_recommendation: skip (no UI or visual
+      change).'
+    resolution_note: 'gate: create-spec.design-step; resolved by references/batch-policies.yaml (action:
+      select, option_id: decide_autonomously); codex_consulted: false.'
 worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
