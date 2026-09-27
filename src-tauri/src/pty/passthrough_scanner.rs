@@ -234,6 +234,22 @@ impl PassthroughScanner {
         self.partial.clear();
         self.state = State::Idle;
     }
+
+    /// Discard any incomplete in-progress sequence (mux-snapshot-output-boundary
+    /// task0001, FR6/FR8): called once, right after `process`, when the
+    /// chunk just fed to this scanner was a SUPPRESSED chunk (its bytes
+    /// never reached the client). The scanner is otherwise only ever fed
+    /// while the pane is `Detached`, where every chunk's bytes eventually
+    /// do reach the client via the resume/reattach snapshot; a suppressed
+    /// chunk breaks that invariant — its tail is never delivered — so any
+    /// candidate sequence left in flight after it must not be allowed to
+    /// keep accumulating across the gap. Left un-discarded, a later,
+    /// unrelated Detached period could wrongly treat old suppressed-chunk
+    /// bytes as the start of a sequence that a much later chunk appears to
+    /// terminate. A no-op when no sequence is in flight.
+    pub fn discard_partial(&mut self) {
+        self.reset_partial();
+    }
 }
 
 impl Default for PassthroughScanner {
