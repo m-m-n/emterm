@@ -2,77 +2,44 @@ schema_version: 1
 feature: mux-snapshot-output-boundary
 created: '2026-09-27'
 base_branch: main
-goal: '# mux: snapshot 取得が PTY reader の更新境界の外で行われ、取り込んだ出力チャンクが二重適用されうる
-
+goal: |
+  # mux: snapshot 取得が PTY reader の更新境界の外で行われ、取り込んだ出力チャンクが二重適用されうる
 
   Notion: https://www.notion.so/3e43509ec8ee81b082e0c9d4d6b6ff05 (種別: バグ)
 
-
   ## 現象 (必須)
-
   mux の snapshot 組み立てが PTY reader の「shadow parser 更新 → リング書き込み → output_target 経由の転送」の途中に割り込めるため、出力チャンクが二重に適用される。
-
   - (a) snapshot に含まれたチャンクが Connected 後にもう一度転送される（この feature 以前から存在）
-
-  - (b) リングには無いが shadow ダンプには含まれるチャンクが生じうる。復元されるカーソル・スクロール領域はそのチャンク以前の状態、画面はチャンク以後の状態になり、`ESC[L`
-  のようなチャンクが二重に適用される
-
+  - (b) リングには無いが shadow ダンプには含まれるチャンクが生じうる。復元されるカーソル・スクロール領域はそのチャンク以前の状態、画面はチャンク以後の状態になり、`ESC[L` のようなチャンクが二重に適用される
   結果として一時的な表示崩れが起きる。
 
-
   ## 再現手順 (必須)
-
   1. mux の pane に出力を流し続ける
-
   2. PTY reader が shadow parser を更新してから転送するまでの間に、その pane の snapshot 取得（タブ切替 / reattach）が走る
-
   3. snapshot に含まれたチャンクが接続後にもう一度適用され、表示が崩れる
 
-
   ## 期待する挙動 (必須)
-
   snapshot に取り込まれた出力チャンクは、接続後に再転送されない。
 
-
   ## 完了の定義 (必須)
-
   - [ ] 再現手順で現象が起きない
-
   - [ ] 再発を検出するテストがある（reader を shadow 更新と転送の間で止める並行処理テストで、二重適用が起きないことを確認する）
-
-  - [ ] リング・shadow parser の更新と snapshot の取得が、同じ出力境界で区切られている（例: pane ごとの出力連番を付け、snapshot
-  が取り込んだ最後の番号以下のチャンクを reader が転送しない。または更新と転送を 1 つのクリティカルセクションで行う）
-
+  - [ ] リング・shadow parser の更新と snapshot の取得が、同じ出力境界で区切られている（例: pane ごとの出力連番を付け、snapshot が取り込んだ最後の番号以下のチャンクを reader が転送しない。または更新と転送を 1 つのクリティカルセクションで行う）
 
   ## 該当箇所 (任意)
-
-  - `src-tauri/src/mux/ipc/pty_spawn/mod.rs`：shadow parser への流し込み（~352 行）、リング書き込み（~423
-  行）、output_target を取っての転送（~501 行）
-
-  - `src-tauri/src/mux/session/pane/output_target.rs:407` 付近の `resume_pane_with_permit`：output_target
-  を保持するが、リング → shadow parser の順で読むため reader の途中状態を排除できない
-
+  - `src-tauri/src/mux/ipc/pty_spawn/mod.rs`：shadow parser への流し込み（~352 行）、リング書き込み（~423 行）、output_target を取っての転送（~501 行）
+  - `src-tauri/src/mux/session/pane/output_target.rs:407` 付近の `resume_pane_with_permit`：output_target を保持するが、リング → shadow parser の順で読むため reader の途中状態を排除できない
   - `collect_reattach_data`：output_target を取る前に両方を読む
-
   - 検出元: mux-snapshot-ring-wrap-restore の review round 2、medium 指摘（stable_id `d80313b063a88627`、comprehensive）
 
-
   ## 実害・発生条件 (任意)
-
   窓は 1 チャンク。次の再描画で直る一時的な表示崩れ。評価役は high から medium へ下げた。
 
-
   ## スコープ外 (任意)
-
-  リング一周後のプローブ再生のロック外移動は別タスク「mux: リング一周後の snapshot プローブ再生（最大 2 MiB）が output_target
-  ロック内・tokio ワーカー上で走る」で扱う。
-
+  リング一周後のプローブ再生のロック外移動は別タスク「mux: リング一周後の snapshot プローブ再生（最大 2 MiB）が output_target ロック内・tokio ワーカー上で走る」で扱う。
 
   ## 制約・前提 (任意)
-
   apt 進捗バー残骸の既知課題に関わるため、snapshot のバイト列の形は変えない。
-
-  '
 parent_branch: em-workflow/mux-snapshot-output-boundary/integration
 tier: full
 tier_decision:
@@ -99,10 +66,8 @@ project:
   components:
     src-tauri:
       language: rust
-      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
-        src-tauri/Cargo.toml --no-default-features
-      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
-        --lib
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
       format_command: ''
       e2e_test_command: ''
 workflow:
@@ -138,8 +103,7 @@ workflow:
   status: pending
 tasks:
   task0001:
-    title: 'Pane output boundary: sequence capture, sender-bound suppression, ordered
-      delivery'
+    title: 'Pane output boundary: sequence capture, sender-bound suppression, ordered delivery'
     plan: tasks/task0001.md
     files:
     - src-tauri/src/mux/session/pane/output_capture.rs
