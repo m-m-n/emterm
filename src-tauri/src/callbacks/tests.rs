@@ -1538,6 +1538,110 @@ mod worker_thread {
             "drop() exceeded the generous CI-safe shutdown bound: {elapsed:?}"
         );
     }
+
+    // notify-queue-worker-gone task0001, AC-1 (SPEC TS1): once the
+    // receiving side is gone, the very first `try_submit` reports the
+    // worker-gone outcome that carries the error record — never a
+    // saturation variant, even though the queue is otherwise empty.
+    #[test]
+    fn first_submit_after_receiver_drop_reports_worker_gone() {
+        let (queue, rx) = NotifyQueue::new(NOTIFY_QUEUE_CAPACITY);
+        drop(rx);
+        assert_eq!(
+            queue.try_submit("t", "b"),
+            SubmitOutcome::WorkerGoneReported
+        );
+    }
+
+    // notify-queue-worker-gone task0001, AC-2 (SPEC TS2): the worker-gone
+    // error record fires at most once per queue — the first post-drop call
+    // reports it, every later call on the same queue reports
+    // `WorkerGoneAlreadyReported`, and none of them regresses to a
+    // saturation variant.
+    #[test]
+    fn repeated_submits_after_receiver_drop_report_worker_gone_once() {
+        let (queue, rx) = NotifyQueue::new(NOTIFY_QUEUE_CAPACITY);
+        drop(rx);
+        assert_eq!(
+            queue.try_submit("first", "b"),
+            SubmitOutcome::WorkerGoneReported
+        );
+        for i in 0..5 {
+            assert_eq!(
+                queue.try_submit(&format!("later{i}"), "b"),
+                SubmitOutcome::WorkerGoneAlreadyReported
+            );
+        }
+    }
+
+    // notify-queue-worker-gone task0001, AC-3 (SPEC TS3): the saturation
+    // flag being disarmed by a prior `DroppedEpisodeStart` does not
+    // suppress the worker-gone report — dropping the receiver afterward
+    // still yields a fresh `WorkerGoneReported` on the next call, because
+    // the two flags are independent.
+    #[test]
+    fn worker_gone_report_survives_a_disarmed_saturation_episode() {
+        let (queue, rx) = NotifyQueue::new(NOTIFY_QUEUE_CAPACITY);
+        for i in 0..NOTIFY_QUEUE_CAPACITY {
+            assert_eq!(
+                queue.try_submit(&format!("t{i}"), "b"),
+                SubmitOutcome::Submitted
+            );
+        }
+        assert_eq!(
+            queue.try_submit("overflow", "b"),
+            SubmitOutcome::DroppedEpisodeStart,
+            "precondition: the saturation flag must be disarmed before dropping the receiver"
+        );
+        drop(rx);
+        assert_eq!(
+            queue.try_submit("after-drop", "b"),
+            SubmitOutcome::WorkerGoneReported
+        );
+    }
+
+    // notify-queue-worker-gone task0001, AC-4 (SPEC TS4): many threads
+    // racing to submit against an already-disconnected queue still
+    // produce exactly one `WorkerGoneReported`, because the check-and-set
+    // on the worker-gone flag is a single atomic swap.
+    #[test]
+    fn concurrent_submits_after_receiver_drop_produce_exactly_one_worker_gone_report() {
+        let (queue, rx) = NotifyQueue::new(NOTIFY_QUEUE_CAPACITY);
+        drop(rx);
+
+        let queue = Arc::new(queue);
+        let threads: Vec<_> = (0..16)
+            .map(|i| {
+                let queue = queue.clone();
+                std::thread::spawn(move || queue.try_submit(&format!("racer{i}"), "b"))
+            })
+            .collect();
+        let outcomes: Vec<SubmitOutcome> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+
+        let reported_count = outcomes
+            .iter()
+            .filter(|o| **o == SubmitOutcome::WorkerGoneReported)
+            .count();
+        assert_eq!(
+            reported_count, 1,
+            "expected exactly one worker-gone report, got {reported_count}: {outcomes:?}"
+        );
+        assert!(
+            outcomes.iter().all(|o| matches!(
+                o,
+                SubmitOutcome::WorkerGoneReported | SubmitOutcome::WorkerGoneAlreadyReported
+            )),
+            "every outcome after a receiver drop must be a worker-gone variant: {outcomes:?}"
+        );
+    }
+
+    // notify-queue-worker-gone task0001, AC-5: the worker-gone log
+    // constant is public and its text is distinct from the saturation
+    // constant's text.
+    #[test]
+    fn worker_dead_log_constant_text_differs_from_saturation_constant() {
+        assert_ne!(LOG_NOTIFY_WORKER_DEAD, LOG_NOTIFY_QUEUE_SATURATED);
+    }
 }
 
 // ── notify-escape-test-production-path task0001: notify_worker

@@ -27,7 +27,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::Mutex;
 use term_core::callbacks::TerminalCallbacks;
 
@@ -100,6 +100,12 @@ pub const LOG_NOTIFY_RATE_LIMIT: &str = "LOG_NOTIFY_RATE_LIMIT";
 /// saturation episode when the outgoing notification queue is full and a
 /// submission is dropped. See [`NotifyQueue::try_submit`].
 pub const LOG_NOTIFY_QUEUE_SATURATED: &str = "LOG_NOTIFY_QUEUE_SATURATED";
+/// notify-queue-worker-gone task0001 (FR3): emitted at error level, at
+/// most once per [`NotifyQueue`], when the notification worker thread's
+/// receiving side has been dropped and a submission was lost as a result.
+/// Independent of [`LOG_NOTIFY_QUEUE_SATURATED`]'s saturation-episode
+/// suppression — see [`NotifyQueue::try_submit`].
+pub const LOG_NOTIFY_WORKER_DEAD: &str = "LOG_NOTIFY_WORKER_DEAD";
 /// capability-query-failure-warn task0001: emitted once per failure
 /// transition (first failure, changed error text, or a failure after a
 /// success) when the unix notification worker's capability query fails.
@@ -239,6 +245,14 @@ enum SubmitOutcome {
     /// The queue was full but a warning already fired earlier in the
     /// same saturation episode (D1) — no warning fired.
     DroppedAlreadyWarned,
+    /// notify-queue-worker-gone task0001: the receiving side is gone, the
+    /// notification was dropped, and this call emitted the worker-gone
+    /// error record ([`LOG_NOTIFY_WORKER_DEAD`]).
+    WorkerGoneReported,
+    /// notify-queue-worker-gone task0001: the receiving side is gone, the
+    /// notification was dropped, and no record was emitted because an
+    /// earlier call on the same queue already emitted it.
+    WorkerGoneAlreadyReported,
 }
 
 /// Bounded, non-blocking submission side of the notification queue
@@ -253,6 +267,14 @@ struct NotifyQueue {
     /// exactly one warning per episode — the check and the clear must be
     /// indivisible (task0001.md Design).
     armed: AtomicBool,
+    /// notify-queue-worker-gone task0001 (FR4): independent worker-gone
+    /// suppression flag. `false` means "not yet reported"; checked-and-set
+    /// atomically via `AtomicBool::swap` so concurrent producers that all
+    /// observe the receiving side gone at the same instant still produce
+    /// exactly one worker-gone error record per queue. Never read or
+    /// written by the accepted or saturation branches, and never cleared
+    /// once set — it does not participate in `armed`'s re-arm.
+    worker_gone_reported: AtomicBool,
 }
 
 impl NotifyQueue {
@@ -262,22 +284,26 @@ impl NotifyQueue {
             Self {
                 tx,
                 armed: AtomicBool::new(true),
+                worker_gone_reported: AtomicBool::new(false),
             },
             rx,
         )
     }
 
     /// Submission path (投入経路): build the owned pair from the
-    /// borrowed inputs and try to enqueue it without blocking. Neither
-    /// branch performs anything that could block on the external
-    /// notification daemon (Design step 4).
+    /// borrowed inputs and try to enqueue it without blocking. No branch
+    /// performs anything that could block on the external notification
+    /// daemon (Design step 4). The three `try_send` outcomes — accepted,
+    /// full (receiver alive), disconnected (receiver dropped) — are each
+    /// handled by their own branch; no catch-all error branch remains
+    /// (FR1).
     fn try_submit(&self, title: &str, body: &str) -> SubmitOutcome {
         match self.tx.try_send((title.to_string(), body.to_string())) {
             Ok(()) => {
                 self.armed.store(true, Ordering::SeqCst);
                 SubmitOutcome::Submitted
             }
-            Err(_) => {
+            Err(TrySendError::Full(_)) => {
                 // Atomic check-and-disarm: only the producer that
                 // observes `true` here fires the warning, however many
                 // producers race to drop at the same instant (D1).
@@ -289,6 +315,21 @@ impl NotifyQueue {
                     SubmitOutcome::DroppedEpisodeStart
                 } else {
                     SubmitOutcome::DroppedAlreadyWarned
+                }
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                // Atomic check-and-set, independent of `armed`: only the
+                // producer that observes `false` ("not yet reported")
+                // here emits the error record, however many producers
+                // race to reach this branch at the same instant (FR4).
+                if self.worker_gone_reported.swap(true, Ordering::SeqCst) {
+                    SubmitOutcome::WorkerGoneAlreadyReported
+                } else {
+                    log::error!(
+                        "{LOG_NOTIFY_WORKER_DEAD}: {}",
+                        redact_notification(title, body)
+                    );
+                    SubmitOutcome::WorkerGoneReported
                 }
             }
         }
