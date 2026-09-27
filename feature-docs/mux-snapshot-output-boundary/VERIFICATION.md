@@ -1,7 +1,7 @@
 # Verification Document: mux-snapshot-output-boundary
 
 ## Overview
-**Feature**: mux-snapshot-output-boundary / **SPEC.md**: `feature-docs/mux-snapshot-output-boundary/SPEC.md` / **IMPLEMENTATION.md**: `feature-docs/mux-snapshot-output-boundary/IMPLEMENTATION.md`
+**Feature**: mux-snapshot-output-boundary / **SPEC.md**: `feature-docs/mux-snapshot-output-boundary/SPEC.md` / **IMPLEMENTATION.md**: `feature-docs/mux-snapshot-output-boundary/IMPLEMENTATION.md` / **THREAT-MODEL.md**: `feature-docs/mux-snapshot-output-boundary/THREAT-MODEL.md`
 
 Run every command from the repository root (the integration worktree root during verify). Do not `cd` into `src-tauri/`.
 
@@ -11,8 +11,8 @@ Run every command from the repository root (the integration worktree root during
 
 ## Test Verification
 - Command: `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib`
-- Expected: exit code 0; every test named for TS-1 to TS-12 below exists and passes.
-- Coverage target: not measured (the project has no coverage tooling). Instead, each TS-n below must map to at least one named test.
+- Expected: exit code 0; every test named for TS-1 to TS-12 and for TM-1 to TM-4 below exists and passes.
+- Coverage target: not measured (the project has no coverage tooling). Instead, each TS-n and TM-n below must map to at least one named test.
 - Known flakiness unrelated to this feature: the `tabs.rs` replay tests can fail nondeterministically when run in parallel, and the `tmux_sockets` discover test fails rarely under parallel runs. If one of these alone fails, re-run it with a single test thread before treating the run as failed. New tests added by this feature must pass under the default parallel runner.
 
 ### Test Scenarios from SPEC.md
@@ -26,7 +26,7 @@ Run every command from the repository root (the integration worktree root during
 | TS-6 | No over-suppression. New chunks and EOF follow a snapshot. Separately, a snapshot is rejected for size, and a deferred snapshot is evicted. | Every post-boundary chunk and the EOF empty chunk are delivered. With no snapshot delivered, the in-flight chunk is delivered too. | Integration (in-crate) |
 | TS-7 | OSC 9 in a suppressed chunk (TS-3 conditions). The OSC 9 is complete in one case and split across the suppressed chunk and the next chunk in another. A later Detached period follows. | Complete case: exactly one notification reaches the notification channel, and the destination does not receive the chunk. Split case: no double fire. A later Detached output does not produce a stitched notification. | Integration (in-crate) |
 | TS-8 | Side effects of a suppressed chunk (TS-3 conditions). The chunk contains an OSC 2 title, an OSC 777 agent-status report, an OSC 133 mark and an OSC 7 cwd. | Title sender, agent-status sender and pane cwd show the same results as for an unsuppressed chunk. | Integration (in-crate) |
-| TS-9 | Terminal queries in a suppressed chunk (TS-1 and TS-3 conditions). The chunk contains a cursor-position query and a primary device-attributes query. The alternate-screen color-query variant is also covered. | On the destination channel, each query arrives exactly once, after the snapshot and before the next reader chunk, in the original order. Queries remaining in the snapshot bytes are not re-delivered. | Integration (in-crate) |
+| TS-9 | Terminal queries in a suppressed chunk (TS-1 and TS-3 conditions). The chunk contains a cursor-position query and a primary device-attributes query. The alternate-screen color-query variant is covered, and so is a variant with query-shaped bytes inside an OSC or DCS string payload. | On the destination channel, each query arrives exactly once, after the snapshot and before the next reader chunk, in the original order. Queries remaining in the snapshot bytes are not re-delivered. Query-shaped bytes inside a string payload are not extracted. | Integration (in-crate) |
 | TS-10 | Boundary-spanning sequences (TS-1 conditions). The suppressed chunk ends with (a) a cut CSI, (b) a cut UTF-8 character, or (c) the start of a rich-content candidate the write filter holds as pending. The continuation is in the next chunk. | `term_core` fed with the snapshot plus later delivered bytes equals the raw-stream reference. No continuation bytes and no replacement character are displayed. | Integration (in-crate) |
 | TS-11 | Sender binding. A boundary is recorded for destination A. Destination B takes the pane over via reattach. | Forwarding to B is never suppressed by A's boundary, and no chunk above any boundary is missing on any destination. | Integration (in-crate) |
 | TS-12 | Lock order. The reader streams continuously while resize and all four snapshot paths run repeatedly from other threads and tasks. | Finishes within the test timeout (no deadlock). The existing EOF G1 regression test still passes. | Integration (in-crate, stress) |
@@ -47,7 +47,7 @@ Run every command from the repository root (the integration worktree root during
 | SC-1 | All functional requirements are implemented and tested | Functional Requirements Coverage table below; every TS-n has a passing test or a completed review item |
 | SC-2 | All test scenarios pass | Test Verification command, TS-1 to TS-12 |
 | SC-3 | NFR1 to NFR5 are met | TS-13, TS-14, TS-16, TS-17, and TS-12 |
-| SC-4 | Security requirements are met | Performance / Security Verification below |
+| SC-4 | Security requirements are met | Performance / Security Verification below (TM-1 to TM-4) |
 | SC-5 | FR7 comments do not contradict the new guarantee | TS-15 |
 | SC-6 | Code review completed | review phase status in workflow.yaml |
 
@@ -102,8 +102,10 @@ These need a release build and a restarted mux daemon; they are judged by eye.
 ## Performance / Security Verification (if applicable)
 - NFR3: TS-16. No work is added inside `output_target` sections on tokio workers beyond the O(1) boundary record and the capture exclusion around reads already done there.
 - NFR4: TS-17. The reader's unsuppressed-chunk cost is limited to a counter and a comparison.
-- Security (SPEC): the authorization check in `handle_request_pane_snapshot` is unchanged. The existing handler authorization tests pass unmodified, and a diff review confirms it.
-- Security (SPEC): replacement bytes (FR9, FR10) go only to the destination that received the snapshot. Covered by TS-9 and TS-11, which assert the payload appears only on that destination's channel.
+- TM-1: the replacement builder recognizes queries only where the client parser would, never inside string payloads or the re-delivered tail. Each raw query reaches the client at most once. Checked by TS-9 (string-payload variant) and the builder unit tests for query-shaped bytes inside OSC, DCS and APC payloads.
+- TM-2: the replacement is bounded, built in one forward pass, and never sent empty. Checked by the builder unit tests (empty result sends nothing, size bound, maximal adversarial chunk within a fixed time bound), by TS-10, and by the TS-17 audit.
+- TM-3: the on-demand snapshot authorization check stays ahead of the captured read, and replacement bytes go only to the snapshot's destination. Checked by the existing handler authorization tests passing unmodified, the new unauthorized-request test (no boundary recorded, nothing enqueued), and TS-11.
+- TM-4: the boundary record prunes closed senders on every record, so it holds entries only for live senders. Checked by the boundary-record unit test in which several senders close and a new record leaves only live entries.
 
 ## Verification Summary
 | Category | Items | Automated | E2E | Manual |
@@ -112,5 +114,6 @@ These need a release build and a restarted mux daemon; they are judged by eye.
 | Concurrency tests (TS-1 to TS-5, TS-12) | 6 | 6 | 0 | 0 |
 | Suppression scope and side effects (TS-6 to TS-11) | 6 | 6 | 0 | 0 |
 | Regression and configuration (TS-13, TS-14) | 2 | 2 | 0 | 0 |
+| Security mitigations (TM-1 to TM-4) | 4 | 4 | 0 | 0 |
 | Review audits (TS-15 to TS-17) | 3 | 0 | 0 | 3 |
 | Manual runtime checks (MT-1 to MT-4) | 4 | 0 | 0 | 4 |

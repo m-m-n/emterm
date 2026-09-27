@@ -2,7 +2,7 @@
 
 ## Overview
 
-Give every mux pane a per-pane output sequence number and a per-pane capture exclusion so that shadow-parser updates, scrollback-ring writes and snapshot reads are cut at one output boundary, and record each delivered snapshot's boundary against its destination sender so the PTY reader never delivers an already-captured chunk to that destination after the snapshot (SPEC FR1-FR11, NFR1-NFR5).
+Give every mux pane a per-pane output sequence number and a per-pane capture exclusion so that shadow-parser updates, scrollback-ring writes and snapshot reads are cut at one output boundary, and record each delivered snapshot's boundary against its destination sender so the PTY reader never delivers an already-captured chunk to that destination after the snapshot (SPEC FR1-FR11, NFR1-NFR5). Threats and mitigations TM-1 to TM-4 are in THREAT-MODEL.md.
 
 ## Task Decomposition
 
@@ -30,9 +30,9 @@ The dependency direction does not change: `mux::ipc` depends on `mux::session`, 
 | Component | Responsibility | Contract (pre/postcondition) | Used by tasks |
 |-----------|----------------|------------------------------|---------------|
 | Output capture state (per pane; suggested field `MuxPane::output_capture`) | Holds the capture exclusion (捕捉の排他) and the last assigned output sequence number. | Starts at "nothing captured" when a pane is constructed. This covers panes restored by hot-upgrade: they count from the start again (ASM-3). While the exclusion is held, the reader assigns exactly one new number to each non-empty read, and that number is the last-captured value once the reader's shadow update and ring write finish. A snapshot reader holding it reads ring contents, shadow-parser state and the last-captured number that describe the same set of chunks. The reader's updates, `MuxPane::resize` and the four snapshot reads take the ring and shadow-parser locks only inside it, and never nest those two locks with each other. Read-only consumers that are not snapshot paths need not take it. | task0001 |
-| Suppression boundary record (per pane) | Records, for each destination sender, the highest sequence number covered by a snapshot delivered to that sender. It has its own small exclusion, the boundary exclusion. | Recording for a sender keeps the maximum of the old and new values; it never lowers them. Recording for one sender never removes or lowers another sender's entry. A chunk is covered for a sender only if an entry for that same channel holds a value at or above the chunk's number. Entries for closed senders may be pruned. Every read and write happens under the boundary exclusion. | task0001 |
+| Suppression boundary record (per pane) | Records, for each destination sender, the highest sequence number covered by a snapshot delivered to that sender. It has its own small exclusion, the boundary exclusion. | Recording for a sender keeps the maximum of the old and new values; it never lowers them. Recording for one sender never removes or lowers another live sender's entry. A chunk is covered for a sender only if an entry for that same channel holds a value at or above the chunk's number. Every record operation prunes the entries of closed senders, so the record holds entries only for live senders (THREAT-MODEL TM-4). Every read and write happens under the boundary exclusion. | task0001 |
 | Deferred boundary commit (daemon-internal, never serialized) | Travels with an on-demand snapshot that had to be deferred because the channel was full. | Committed exactly once, when that snapshot actually enters the channel, under the boundary exclusion and in the same step as the insertion. Discarded without effect if the snapshot is coalesced away, evicted, or dropped on a closed channel. Existing chunk constructors and the existing `DeferredOutputItem::Chunk` variant shape stay usable unchanged. | task0001 |
-| Replacement payload for a suppressed chunk | Bytes sent in place of a suppressed chunk (terminal queries for FR9, then the incomplete trailing sequence for FR10). | Sent as an ordinary `PtyOutput` chunk to the suppressed chunk's destination, after the snapshot and before the reader's next chunk. Never sent when empty, because an empty `PtyOutput` chunk means PTY exit. Never itself subject to suppression. | task0001 |
+| Replacement payload for a suppressed chunk | Bytes sent in place of a suppressed chunk (terminal queries for FR9, then the incomplete trailing sequence for FR10). | Sent as an ordinary `PtyOutput` chunk to the suppressed chunk's destination, after the snapshot and before the reader's next chunk. Never sent when empty, because an empty `PtyOutput` chunk means PTY exit. Never itself subject to suppression. Bounded in size (D8) and built in one forward pass over untrusted bytes (THREAT-MODEL TM-2). | task0001 |
 
 ## Conventions
 
@@ -49,6 +49,7 @@ The dependency direction does not change: `mux::ipc` depends on `mux::session`, 
   - The only additions inside existing `output_target` sections are taking the capture exclusion around reads that already happen there (`resume_pane_with_permit`, `evaluate_output_target`), plus an O(1) boundary record.
 - **Reader normal-path cost (NFR4)**: for a chunk that is not suppressed, the added work is limited to one counter increment, one comparison and two uncontended exclusion acquisitions. The FR6/FR9/FR10 work runs only for suppressed chunks.
 - **Wire and bytes (NFR1)**: sequence numbers, boundaries and commit tokens are daemon-internal. Snapshot byte layout, the `mux_ipc` wire format and `Snapshot`/`SnapshotRestore` frames stay unchanged.
+- **Authorization (SPEC Security)**: the on-demand snapshot path keeps its existing session authorization check ahead of every captured read and every boundary record (THREAT-MODEL TM-3).
 - **Platform (NFR5)**: no platform-specific API; Linux and Windows share one code path.
 - **Test-only hooks**: reader pause points exist only in test builds (`cfg(test)`) and cost nothing otherwise.
 - **Logging**: anomalies use `warn` or higher (release builds keep only `warn`+). Never log payload bytes.
@@ -90,6 +91,7 @@ The deferred snapshot carries a deferred boundary commit. Evicted or coalesced-a
 - **FR9 re-delivery set**:
   - Every complete CSI device query matched by the snapshot strip predicate. The same predicate is reused as the single source of truth, and these queries never survive into a snapshot.
   - Every complete OSC 4/10/11/12 color query located in the chunk's bytes that were not written toward the ring (alternate-screen spans), since only those are absent from the snapshot.
+- **Recognition rule**: a query counts only where the client parser would start a control sequence. It never counts inside the payload of an OSC, DCS, APC, SOS or PM string, nor inside the tail re-delivered for FR10 (THREAT-MODEL TM-1).
 - **Color queries that reached the ring** stay in the snapshot and are not re-delivered, following FR9's wording.
 
 ### D8: FR10 method and upper bound (resolves the SPEC's open item on FR10)
@@ -103,6 +105,7 @@ The deferred snapshot carries a deferred boundary commit. Evicted or coalesced-a
 
 ### D9: Cases that record no boundary (FR5)
 - On-demand size rejection.
+- On-demand authorization rejection.
 - `resume_pane_with_permit` returning `NoChange`.
 - `evaluate_output_target` returning `Unchanged`.
 - Hidden reattach.
