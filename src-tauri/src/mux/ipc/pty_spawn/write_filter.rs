@@ -199,6 +199,17 @@ impl ScrollbackWriteFilter {
     pub(in crate::mux) fn pending_len(&self) -> usize {
         self.pending.len()
     }
+
+    /// The bytes currently held in `pending` — an unterminated strip-target
+    /// run this filter has not yet been able to classify (mux-snapshot-output-boundary
+    /// task0001, FR10 "T" tail). Read-only: `pending` is still owned and
+    /// mutated only by [`Self::feed`]. Used by
+    /// `mux::ipc::pty_spawn::suppressed_output`'s replacement-payload builder
+    /// to re-deliver this filter's own held-back tail when a suppressed
+    /// chunk's incomplete trailing run coincides with it.
+    pub(in crate::mux) fn pending(&self) -> &[u8] {
+        &self.pending
+    }
 }
 
 /// Find the position of the first unterminated strip-target introducer in

@@ -7,13 +7,13 @@ use tokio::sync::mpsc;
 
 use super::outbound::ReplySink;
 use super::pty_spawn::{register_pane_and_start_reader, spawn_pty};
-use super::reattach::build_shadow_parser_snapshot_for_ring;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatusReportSender, DeferredOutputQueue, NotificationSender, PaneId, PtyOutputChunk,
-    SharedPaneExitSender, SharedScrollback, SharedShadowParser, TitleChangeSender,
-    encode_snapshot_segments,
+    SharedOutputCapture, SharedPaneExitSender, SharedScrollback, SharedShadowParser,
+    TitleChangeSender, encode_snapshot_segments, lock_shadow_parser,
 };
+use crate::mux::snapshot_bytes::build_snapshot_bytes_for_ring;
 use mux_ipc::protocol::{
     CreateWindowPayload, ErrorMsg, MessageType, MoveWindowMsg, MuxMessage, RenameWindowMsg,
     ResizeMsg,
@@ -438,16 +438,23 @@ pub(super) async fn handle_resize(msg: MuxMessage, session_manager: &Arc<Mutex<S
 /// after. The `merge_consecutive_chunks` step is `kind`-aware, so the
 /// snapshot frame is never folded into adjacent PTY chunks.
 ///
-/// A narrow race window remains: the reader takes `shadow_parser.lock()`,
-/// applies bytes, releases the lock, and *then* enqueues the chunk onto
-/// `pane_output_tx`. If this handler runs between the reader's lock release
-/// and its enqueue, we can end up with `[snapshot, reader_chunk]` in the
-/// channel — duplicating that chunk's effect over the snapshot. In practice
-/// the gap is ~µs and dominated by absolute-positioned ANSI (which is
-/// idempotent), and the snapshot's leading `\x1b[H\x1b[2J` provides a
-/// recovery point, so the observable drift is minimal. Absolute ordering is
-/// *not* guaranteed; callers that need it must use a different mechanism
-/// (e.g. a reader-side snapshot-request barrier).
+/// The race window this used to leave open is now closed
+/// (mux-snapshot-output-boundary task0001, FR2/FR11): the reader's shadow
+/// update + ring write and this handler's `captured_read` below both run
+/// under the pane's capture exclusion, and this handler records the
+/// resulting output-sequence number as this destination's suppression
+/// boundary in the SAME step as the snapshot's own channel insertion
+/// (`enqueue_pane_output_chunk`, under the boundary exclusion). Whichever
+/// of "the reader's own enqueue of that chunk" or "this handler's boundary
+/// record + enqueue" reaches the channel first, the destination can never
+/// see `[snapshot, that chunk's raw bytes]`: if this handler wins, the
+/// reader's later forward decision finds the chunk covered and runs the
+/// FR9/FR10 replacement pipeline instead of a raw delivery; if the reader
+/// wins, the chunk was already delivered before the snapshot even started
+/// assembling, so ordering is `[chunk, snapshot]` with nothing duplicated.
+/// A caller that needs the snapshot to reflect a specific in-flight chunk's
+/// state deterministically still needs its own barrier — this only
+/// guarantees the chunk is never repeated after the snapshot.
 ///
 /// Main/alt snapshot split: the reply payload is composed by
 /// `build_shadow_parser_snapshot`, which funnels through
@@ -477,7 +484,7 @@ pub(super) async fn handle_request_pane_snapshot(
     // read another session's terminal history by guessing pane ids — the reply
     // now carries scrollback, which commonly holds secrets / commands / file
     // contents (this also closes the pre-existing screen-only exposure).
-    let resolved: Option<(SharedShadowParser, SharedScrollback)> = {
+    let resolved: Option<(SharedShadowParser, SharedScrollback, SharedOutputCapture)> = {
         let mgr = session_manager.lock().await;
         match mgr.find_pane(pane_id) {
             None => {
@@ -497,11 +504,17 @@ pub(super) async fn handle_request_pane_snapshot(
                 .get_session(sid)
                 .and_then(|s| s.windows.get(&wid))
                 .and_then(|w| w.panes.get(&pane_id))
-                .map(|p| (p.shadow_parser.clone(), p.scrollback.clone())),
+                .map(|p| {
+                    (
+                        p.shadow_parser.clone(),
+                        p.scrollback.clone(),
+                        p.output_capture.clone(),
+                    )
+                }),
         }
     };
 
-    let Some((shadow_parser, scrollback)) = resolved else {
+    let Some((shadow_parser, scrollback, output_capture)) = resolved else {
         return Ok(());
     };
 
@@ -510,27 +523,68 @@ pub(super) async fn handle_request_pane_snapshot(
     // snapshot). The client's segment-driven replay rebuilds history from it
     // (task0004 round-4 rework D1').
     //
+    // mux-snapshot-output-boundary task0001 (IMPLEMENTATION.md D3
+    // "On-demand, immediate" / FR11): the ring read AND the shadow-parser
+    // read run together under the pane's capture exclusion
+    // (`OutputCapture::captured_read`), ordering this read against the PTY
+    // reader's own capture step and yielding the exact output-sequence
+    // number this snapshot's content corresponds to (`boundary`) — the
+    // number later recorded as this destination's suppression boundary once
+    // (and only once) this snapshot chunk actually reaches the channel
+    // (`enqueue_pane_output_chunk`, `boundary_commit`).
+    //
     // INVARIANT (FR3 guard-rail): the scrollback lock is held ONLY for the
-    // `read_segments` copy. The owned `Vec`s are returned out of this scope
-    // so the guard is provably dropped at the closing brace — before
-    // snapshot assembly, logging, and the channel send below. This is a
-    // copy-only critical section: the O(n) copy is unavoidable, but the
-    // lock must never span assembly/log/send. Keep the copy inside this
-    // block when refactoring.
-    let (scrollback_data, scrollback_segments, ring_wrapped): (
-        Vec<u8>,
-        Vec<(usize, u16, u16)>,
-        bool,
-    ) = {
-        let guard = scrollback.lock().unwrap();
-        guard.read_segments_with_wrap_state()
-        // guard dropped here, at scope end, before any assembly/log/send.
-    };
-    let (snapshot, snapshot_segments) = build_shadow_parser_snapshot_for_ring(
-        &shadow_parser,
+    // `read_segments` copy, inside this same exclusion. The owned `Vec`s are
+    // returned out of this scope so both the scrollback guard and the
+    // capture exclusion are provably released before snapshot assembly,
+    // logging, and the channel send below — assembly is pure and must not
+    // run inside either lock. Keep the copy inside this block when
+    // refactoring.
+    let (
+        (scrollback_data, scrollback_segments, ring_wrapped, screen_data, alt_screen, current_dims),
+        boundary,
+    ): (
+        (
+            Vec<u8>,
+            Vec<(usize, u16, u16)>,
+            bool,
+            Vec<u8>,
+            bool,
+            (u16, u16),
+        ),
+        u64,
+    ) = output_capture.captured_read(|| {
+        let (scrollback_data, scrollback_segments, ring_wrapped) = {
+            let guard = scrollback.lock().unwrap();
+            guard.read_segments_with_wrap_state()
+            // guard dropped here, at scope end, before any assembly/log/send.
+        };
+        let (screen_data, alt_screen, current_dims) = {
+            let parser = lock_shadow_parser(&shadow_parser);
+            let screen = parser.screen();
+            let (rows, cols) = screen.size();
+            (
+                screen.contents_formatted(),
+                screen.alternate_screen(),
+                (cols, rows),
+            )
+        };
+        (
+            scrollback_data,
+            scrollback_segments,
+            ring_wrapped,
+            screen_data,
+            alt_screen,
+            current_dims,
+        )
+    });
+    let (snapshot, snapshot_segments) = build_snapshot_bytes_for_ring(
         &scrollback_data,
         &scrollback_segments,
+        &screen_data,
+        alt_screen,
         ring_wrapped,
+        current_dims,
     );
     let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
     // Promoted from debug -> warn so release builds (which drop debug/info)
@@ -595,10 +649,21 @@ pub(super) async fn handle_request_pane_snapshot(
     // thread) is NOT structurally guaranteed — see `DeferredOutputQueue`'s
     // doc for the precise, narrowed claim (AC-2/F4/F5). A closed channel
     // (client gone) is logged and dropped there, same as before.
+    //
+    // mux-snapshot-output-boundary task0001 (D3 "On-demand, immediate"):
+    // `boundary` (captured together with the ring/shadow read above) rides
+    // along as this chunk's suppression-boundary commit. It is recorded
+    // against `pane_output_tx` the moment this chunk actually reaches the
+    // channel — immediately on the `try_send` fast path, or later, on the
+    // deferred-flush path, only if this exact chunk is the one flushed
+    // (never for a chunk it lost a coalesce to). This is what lets the PTY
+    // reader suppress every already-captured chunk this snapshot already
+    // covers, instead of re-delivering it a second time after the snapshot.
     crate::mux::session::pane::enqueue_pane_output_chunk(
         pane_output_tx,
         PtyOutputChunk::snapshot(pane_id, encoded_snapshot),
         deferred_output,
+        Some((output_capture, boundary)),
     );
 
     // SPEC FR4/FR5 (task0003 AC-5): the on-demand snapshot just enqueued had
