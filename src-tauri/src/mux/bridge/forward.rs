@@ -21,7 +21,7 @@ use super::term_mode::restore_stdin_global;
 use super::term_mode::restore_stdin_windows_global;
 use super::{
     ConnectionEnded, DaemonFrameEffect, TRANSPORT_UNDETECTED, Transport, capture_if_attach,
-    conclude_connection, decide_daemon_frame_effect,
+    capture_if_capacity, conclude_connection, decide_daemon_frame_effect,
 };
 
 // ---- stdout writer: the only place forwarded frames reach stdout ----
@@ -185,6 +185,7 @@ pub(in crate::mux::bridge) async fn forward_loop<R, W, I>(
     sock_reader: &mut R,
     sock_writer: &mut W,
     transport: &Arc<AtomicU8>,
+    last_capacity: &Arc<Mutex<Option<Vec<u8>>>>,
     last_attach: &Arc<Mutex<Option<Vec<u8>>>>,
     stdin: &mut I,
     parser: &mut StdinApcParser,
@@ -198,6 +199,7 @@ where
         sock_reader,
         sock_writer,
         transport,
+        last_capacity,
         last_attach,
         stdin,
         parser,
@@ -225,6 +227,7 @@ pub(in crate::mux::bridge) async fn forward_loop_inner<R, W, I, S, F>(
     sock_reader: &mut R,
     sock_writer: &mut W,
     transport: &Arc<AtomicU8>,
+    last_capacity: &Arc<Mutex<Option<Vec<u8>>>>,
     last_attach: &Arc<Mutex<Option<Vec<u8>>>>,
     stdin: &mut I,
     parser: &mut StdinApcParser,
@@ -246,6 +249,7 @@ where
     let announced = Arc::new(AtomicBool::new(false));
     let announced_for_stdout = Arc::clone(&announced);
     let transport_for_stdin = Arc::clone(transport);
+    let last_capacity_for_stdin = Arc::clone(last_capacity);
     let last_attach_for_stdin = Arc::clone(last_attach);
 
     // The only place forwarded frames reach stdout (invariant 1): a
@@ -287,6 +291,11 @@ where
                             t
                         );
                         let body = msg.to_frame_body();
+                        if let Some(captured) = capture_if_capacity(&msg, &body) {
+                            *last_capacity_for_stdin
+                                .lock()
+                                .expect("last_capacity mutex poisoned") = Some(captured);
+                        }
                         if let Some(captured) = capture_if_attach(&msg, &body) {
                             *last_attach_for_stdin
                                 .lock()
@@ -565,27 +574,48 @@ async fn resend_frame<W: tokio::io::AsyncWrite + Unpin>(
     writer.flush().await
 }
 
-/// Reconnects with backoff and, on success, resends the last-known `Attach`
-/// frame so the daemon re-attaches the bridge to the same session it was
-/// attached to before the drop, letting the daemon's existing reattach
-/// machinery repaint the panes (AC-4). Returns the new connection, or
-/// `None` once the reconnect window is exhausted (AC-5).
+/// Reconnects with backoff and, on success, resends the last-known
+/// `ClientScrollbackCapacity` report (if any) followed by the last-known
+/// `Attach` frame (if any), so the daemon re-attaches the bridge to the
+/// same session it was attached to before the drop, letting the daemon's
+/// existing reattach machinery repaint the panes (AC-4). The capacity
+/// resend comes FIRST (mux-probe-scrollback-capacity task0001 AC-7) so a
+/// resumed daemon connection sees the reporting tab's capacity before it
+/// sees the Attach that triggers its reply traffic. A failed capacity
+/// resend is logged at warn and does not stop the Attach attempt. Returns
+/// the new connection, or `None` once the reconnect window is exhausted
+/// (AC-5).
 #[cfg(unix)]
 pub(in crate::mux::bridge) async fn reconnect_and_reattach(
     sock_path: &std::path::Path,
+    last_capacity: &Arc<Mutex<Option<Vec<u8>>>>,
     last_attach: &Arc<Mutex<Option<Vec<u8>>>>,
 ) -> Option<UnixStream> {
     let stream = reconnect_with_backoff(sock_path).await?;
+    let capacity_body = last_capacity
+        .lock()
+        .expect("last_capacity mutex poisoned")
+        .clone();
     let attach_body = last_attach
         .lock()
         .expect("last_attach mutex poisoned")
         .clone();
-    let Some(body) = attach_body else {
+    if capacity_body.is_none() && attach_body.is_none() {
         return Some(stream);
-    };
+    }
     let (reader, mut writer) = tokio::io::split(stream);
-    if let Err(e) = resend_frame(&mut writer, &body).await {
-        log::warn!("mux bridge: failed to resend Attach after reconnect: {}", e);
+    if let Some(body) = &capacity_body {
+        if let Err(e) = resend_frame(&mut writer, body).await {
+            log::warn!(
+                "mux bridge: failed to resend capacity after reconnect: {}",
+                e
+            );
+        }
+    }
+    if let Some(body) = &attach_body {
+        if let Err(e) = resend_frame(&mut writer, body).await {
+            log::warn!("mux bridge: failed to resend Attach after reconnect: {}", e);
+        }
     }
     Some(reader.unsplit(writer))
 }
