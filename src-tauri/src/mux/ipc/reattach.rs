@@ -76,40 +76,6 @@ pub(super) fn build_shadow_parser_snapshot(
     )
 }
 
-/// Wrap-aware counterpart of [`build_shadow_parser_snapshot`]
-/// (mux-snapshot-ring-wrap-restore task0001, D2). Used by the on-demand
-/// `RequestPaneSnapshot` path (`mux::ipc::handlers::handle_request_pane_snapshot`),
-/// which reads the scrollback ring's wrap state via
-/// `ScrollbackRingBuffer::read_segments_with_wrap_state` and passes it
-/// through as `ring_wrapped`. Same shadow-parser locking and dims capture as
-/// `build_shadow_parser_snapshot`; only the trailing builder call differs
-/// (`build_snapshot_bytes_for_ring` instead of `build_snapshot_bytes`).
-pub(super) fn build_shadow_parser_snapshot_for_ring(
-    shadow_parser: &SharedShadowParser,
-    scrollback: &[u8],
-    scrollback_segments: &[(usize, u16, u16)],
-    ring_wrapped: bool,
-) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
-    let (screen_data, alt_screen, current_dims) = {
-        let parser = lock_shadow_parser(shadow_parser);
-        let screen = parser.screen();
-        let (rows, cols) = screen.size();
-        (
-            screen.contents_formatted(),
-            screen.alternate_screen(),
-            (cols, rows),
-        )
-    };
-    build_snapshot_bytes_for_ring(
-        scrollback,
-        scrollback_segments,
-        &screen_data,
-        alt_screen,
-        ring_wrapped,
-        current_dims,
-    )
-}
-
 /// Collect reattach data for panes in the given session.
 ///
 /// When `visible == true`, drains buffered output from detached panes and
@@ -213,27 +179,98 @@ pub(super) async fn collect_reattach_data(
                     // tracks every `MuxPane::resize` call, so it is the
                     // pane's dims AT THE MOMENT this snapshot is assembled
                     // — what `screen_data` was actually produced at.
-                    let (screen_data, is_alternate_screen, current_dims) = {
-                        let parser = lock_shadow_parser(&pane.shadow_parser);
-                        let screen = parser.screen();
-                        let (rows, cols) = screen.size();
+                    // mux-snapshot-output-boundary task0001 (IMPLEMENTATION.md
+                    // D3 "Visible reattach" / FR11): the shadow-parser read
+                    // AND the scrollback read run together under the pane's
+                    // capture exclusion (`OutputCapture::captured_read`),
+                    // ordering this read against the PTY reader's own
+                    // capture step and yielding the output-sequence number
+                    // (`boundary`) this snapshot's content corresponds to.
+                    let (
                         (
-                            screen.contents_formatted(),
-                            screen.alternate_screen(),
-                            (cols, rows),
+                            screen_data,
+                            is_alternate_screen,
+                            current_dims,
+                            scrollback_data,
+                            scrollback_segments,
+                            ring_wrapped,
+                        ),
+                        boundary,
+                    ) = pane.output_capture.captured_read(|| {
+                        let (screen_data, is_alternate_screen, current_dims) = {
+                            let parser = lock_shadow_parser(&pane.shadow_parser);
+                            let screen = parser.screen();
+                            let (rows, cols) = screen.size();
+                            (
+                                screen.contents_formatted(),
+                                screen.alternate_screen(),
+                                (cols, rows),
+                            )
+                        };
+                        let (scrollback_data, scrollback_segments, ring_wrapped) = pane
+                            .scrollback
+                            .lock()
+                            .unwrap()
+                            .read_segments_with_wrap_state();
+                        (
+                            screen_data,
+                            is_alternate_screen,
+                            current_dims,
+                            scrollback_data,
+                            scrollback_segments,
+                            ring_wrapped,
                         )
-                    };
-                    let (scrollback_data, scrollback_segments, ring_wrapped) = pane
-                        .scrollback
-                        .lock()
-                        .unwrap()
-                        .read_segments_with_wrap_state();
+                    });
+
+                    // Shared layout: ESC[3J ESC[H ESC[2J + scrollback (rich
+                    // content stripped) + screen + alt-mode. Wrap-aware
+                    // (mux-snapshot-ring-wrap-restore task0001, D2): a
+                    // wrapped main-buffer pane's ring has evicted bytes the
+                    // plain builder needs to reconstruct the visible
+                    // viewport, so this routes through the wrap-aware
+                    // counterpart, which appends a dump block sourced from
+                    // the shadow parser when `ring_wrapped` is true.
+                    //
+                    // Built here (rather than after the swap below) so its
+                    // encoded size can drive the D3 "conservative bound
+                    // first" boundary decision immediately below, and reused
+                    // as-is for `data.push` at the end of this arm — no
+                    // second assembly pass.
+                    let (combined, combined_segments) = build_snapshot_bytes_for_ring(
+                        &scrollback_data,
+                        &scrollback_segments,
+                        &screen_data,
+                        is_alternate_screen,
+                        ring_wrapped,
+                        current_dims,
+                    );
 
                     let mut target = pane.output_target.lock().unwrap();
                     let target_was = match &*target {
                         PaneOutputTarget::Connected(_) => "Connected",
                         PaneOutputTarget::Detached { .. } => "Detached",
                     };
+                    // D3 "conservative bound first": record the boundary
+                    // ONLY when this snapshot will actually be delivered.
+                    // `send_reattach_data` (downstream, no access to
+                    // `output_capture`) independently re-checks the same
+                    // single-frame size policy at send time and skips this
+                    // pane's history when it does not fit (D6''') — were the
+                    // boundary recorded regardless, a skipped snapshot would
+                    // still suppress every PTY chunk it claims to cover,
+                    // silently losing output the client never actually
+                    // received (contradicting FR3). This duplicates (rather
+                    // than shares) `send_reattach_data`'s check because the
+                    // two functions do not share a snapshot-carrying type
+                    // with room for a boundary number.
+                    let encoded = crate::mux::session::pane::encode_snapshot_segments(
+                        &combined,
+                        &combined_segments,
+                    );
+                    if mux_ipc::protocol::fits_single_snapshot_frame(encoded.len()) {
+                        pane.output_capture
+                            .record_boundary(pane_output_tx, boundary);
+                    }
                     *target = PaneOutputTarget::Connected(pane_output_tx.clone());
                     drop(target);
 
@@ -260,23 +297,6 @@ pub(super) async fn collect_reattach_data(
                         8 + scrollback_data.len() + screen_data.len(),
                         is_alternate_screen,
                         pane.exited
-                    );
-
-                    // Shared layout: ESC[3J ESC[H ESC[2J + scrollback (rich
-                    // content stripped) + screen + alt-mode. Wrap-aware
-                    // (mux-snapshot-ring-wrap-restore task0001, D2): a
-                    // wrapped main-buffer pane's ring has evicted bytes the
-                    // plain builder needs to reconstruct the visible
-                    // viewport, so this routes through the wrap-aware
-                    // counterpart, which appends a dump block sourced from
-                    // the shadow parser when `ring_wrapped` is true.
-                    let (combined, combined_segments) = build_snapshot_bytes_for_ring(
-                        &scrollback_data,
-                        &scrollback_segments,
-                        &screen_data,
-                        is_alternate_screen,
-                        ring_wrapped,
-                        current_dims,
                     );
 
                     data.push((pane.id, combined, combined_segments));

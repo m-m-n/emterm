@@ -2,9 +2,12 @@
 //! and the deferred-output queue that absorbs bursts while a pane is
 //! detached or backpressured.
 
+use std::sync::Arc;
+
 use tokio::sync::mpsc;
 
 use super::handles::PaneId;
+use super::output_capture::OutputCapture;
 
 /// Discriminator on `PtyOutputChunk` distinguishing live PTY bytes from a
 /// `RequestPaneSnapshot` reply payload routed through the same per-pane
@@ -101,6 +104,29 @@ pub const PTY_CHANNEL_CAPACITY: usize = 256;
 /// case a low multiple of that rather than an open-ended backlog.
 pub const MAX_DEFERRED_ITEMS: usize = 8;
 
+/// A boundary record to apply, atomically with insertion into the
+/// destination channel, when the on-demand snapshot chunk it travels with
+/// actually enters that channel (mux-snapshot-output-boundary task0001,
+/// IMPLEMENTATION.md D5 / "Deferred boundary commit").
+///
+/// Committed exactly once — under `output_capture`'s boundary exclusion, in
+/// the same step as the chunk's insertion — the moment
+/// [`super::super::output_capture::OutputCapture::hold_boundary`]'s
+/// `record` runs at flush time. Discarded WITHOUT EFFECT if the chunk
+/// carrying it is ever coalesced away (superseded by a newer chunk for the
+/// same pane), evicted (distinct-pane capacity pressure), or dropped on a
+/// closed channel — in every one of those cases the snapshot itself never
+/// reached the client, so recording a boundary against it would suppress a
+/// live chunk the client never actually got a replacement for.
+///
+/// `output_capture` is the specific PANE's capture state (cloned at defer
+/// time, before any possible pane destruction) — never a connection-wide
+/// value — since the boundary record is per pane, not per connection.
+pub struct DeferredBoundaryCommit {
+    pub output_capture: Arc<OutputCapture>,
+    pub boundary: u64,
+}
+
 /// One item held in the connection-owned [`DeferredOutputQueue`] while
 /// `pane_output_tx` is momentarily full.
 pub enum DeferredOutputItem {
@@ -108,7 +134,13 @@ pub enum DeferredOutputItem {
     /// could not be `try_send`'d immediately. Retried verbatim on the next
     /// flush — its content does not depend on when it is actually
     /// delivered, only that it lands before anything deferred after it.
-    Chunk(PtyOutputChunk),
+    ///
+    /// The optional [`DeferredBoundaryCommit`] (mux-snapshot-output-boundary
+    /// task0001) travels with the chunk it was deferred alongside; a
+    /// coalescing replacement (see `defer_chunk`) or an eviction discards
+    /// whichever commit was attached to the entry it replaces/removes,
+    /// never applying it.
+    Chunk(PtyOutputChunk, Option<DeferredBoundaryCommit>),
     /// A visibility-resume attempt for this pane that could not get a
     /// permit immediately. Deliberately NOT a pre-built chunk: the resume
     /// snapshot must reflect the pane's (and the connection's
@@ -123,11 +155,12 @@ impl std::fmt::Debug for DeferredOutputItem {
     /// item never dumps a `Chunk`'s raw payload bytes — only its size.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DeferredOutputItem::Chunk(c) => f
+            DeferredOutputItem::Chunk(c, commit) => f
                 .debug_struct("Chunk")
                 .field("pane_id", &c.pane_id)
                 .field("kind", &c.kind)
                 .field("bytes", &c.data.len())
+                .field("has_boundary_commit", &commit.is_some())
                 .finish(),
             DeferredOutputItem::VisibilityResume(pane_id) => {
                 f.debug_tuple("VisibilityResume").field(pane_id).finish()
@@ -298,13 +331,20 @@ impl DeferredOutputQueue {
     /// round 5 high findings `4043ee676f69ca15` / `1c8d86389ab4bf40`,
     /// reverting task0005's drop-instead-of-queue fix — see the insertion
     /// site below for why that fix's premise did not hold).
-    pub fn defer_chunk(&mut self, chunk: PtyOutputChunk) {
+    ///
+    /// `commit` (mux-snapshot-output-boundary task0001, IMPLEMENTATION.md
+    /// D5) is an optional deferred boundary commit riding along with
+    /// `chunk`: it takes effect (the boundary is recorded) only when this
+    /// exact chunk actually reaches the channel from
+    /// [`flush_deferred_output`](crate::mux::ipc::handlers::flush_deferred_output).
+    /// Coalescing, capacity eviction, and dropping this item for any other
+    /// reason all discard `commit` along with the superseded chunk — it is
+    /// never carried over to a different chunk.
+    pub fn defer_chunk(&mut self, chunk: PtyOutputChunk, commit: Option<DeferredBoundaryCommit>) {
         let pane_id = chunk.pane_id;
-        if let Some(pos) = self
-            .items
-            .iter()
-            .position(|item| matches!(item, DeferredOutputItem::Chunk(c) if c.pane_id == pane_id))
-        {
+        if let Some(pos) = self.items.iter().position(
+            |item| matches!(item, DeferredOutputItem::Chunk(c, _) if c.pane_id == pane_id),
+        ) {
             // AC-5 fix (mux-window-switch-output-hang task0004 rework,
             // review round 3 finding `0830abe1c16ad0fb`): assign the new
             // content IN PLACE at the SAME queue position rather than
@@ -328,7 +368,7 @@ impl DeferredOutputQueue {
                 pane_id,
                 pos,
             );
-            self.items[pos] = DeferredOutputItem::Chunk(chunk);
+            self.items[pos] = DeferredOutputItem::Chunk(chunk, commit);
             return;
         }
 
@@ -377,13 +417,13 @@ impl DeferredOutputQueue {
         let chunk_count = self
             .items
             .iter()
-            .filter(|item| matches!(item, DeferredOutputItem::Chunk(_)))
+            .filter(|item| matches!(item, DeferredOutputItem::Chunk(_, _)))
             .count();
         if chunk_count >= MAX_DEFERRED_ITEMS {
             if let Some(oldest) = self
                 .items
                 .iter()
-                .position(|item| matches!(item, DeferredOutputItem::Chunk(_)))
+                .position(|item| matches!(item, DeferredOutputItem::Chunk(_, _)))
             {
                 let dropped = self.items.remove(oldest);
                 log::warn!(
@@ -410,11 +450,12 @@ impl DeferredOutputQueue {
                 pane_id,
             );
             self.items
-                .insert(resume_pos, DeferredOutputItem::Chunk(chunk));
+                .insert(resume_pos, DeferredOutputItem::Chunk(chunk, commit));
             return;
         }
 
-        self.items.push_back(DeferredOutputItem::Chunk(chunk));
+        self.items
+            .push_back(DeferredOutputItem::Chunk(chunk, commit));
     }
 
     /// Defer a visibility-resume attempt for `pane_id` (see
@@ -514,13 +555,27 @@ impl Default for DeferredOutputQueue {
 /// unhandled error path relative to the pre-existing
 /// `if let Err(e) = ... send(...).await { log::warn!(...) }` handling this
 /// replaces.
+///
+/// `boundary_commit` (mux-snapshot-output-boundary task0001,
+/// IMPLEMENTATION.md D3 "On-demand, immediate") is `Some((output_capture,
+/// boundary))` for an on-demand snapshot chunk that must suppress every
+/// pending PTY chunk up to `boundary` once IT is the one actually delivered
+/// to `tx`. On the fast (`try_send` succeeds) path the boundary is recorded
+/// immediately, in this same call. On the slow (deferred) path the record is
+/// carried on the queued item instead ([`DeferredBoundaryCommit`]) and only
+/// takes effect if this exact chunk is later flushed successfully.
 pub fn enqueue_pane_output_chunk(
     tx: &mpsc::Sender<PtyOutputChunk>,
     chunk: PtyOutputChunk,
     deferred: &mut DeferredOutputQueue,
+    boundary_commit: Option<(Arc<OutputCapture>, u64)>,
 ) {
     match tx.try_send(chunk) {
-        Ok(()) => {}
+        Ok(()) => {
+            if let Some((output_capture, boundary)) = boundary_commit {
+                output_capture.record_boundary(tx, boundary);
+            }
+        }
         Err(mpsc::error::TrySendError::Full(chunk)) => {
             log::warn!(
                 "pane {} output channel full ({} capacity); deferring enqueue \
@@ -531,7 +586,11 @@ pub fn enqueue_pane_output_chunk(
                 PTY_CHANNEL_CAPACITY,
                 chunk.kind,
             );
-            deferred.defer_chunk(chunk);
+            let commit = boundary_commit.map(|(output_capture, boundary)| DeferredBoundaryCommit {
+                output_capture,
+                boundary,
+            });
+            deferred.defer_chunk(chunk, commit);
         }
         Err(mpsc::error::TrySendError::Closed(chunk)) => {
             log::warn!(
