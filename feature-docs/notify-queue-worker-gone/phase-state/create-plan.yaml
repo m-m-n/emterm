@@ -1,0 +1,21 @@
+schema_version: 1
+feature: notify-queue-worker-gone
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 13dd3a21bcdf6d4cb4a0aeebb41178e950a9b8de
+last_input_digest: sha256:6f566cc4c1b14aa6dbcdedcd0659d1f21bf8af509c52059f90846100e100e310
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:6f566cc4c1b14aa6dbcdedcd0659d1f21bf8af509c52059f90846100e100e310
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
