@@ -651,9 +651,18 @@ pub(in crate::mux) fn pty_reader_loop(
                                         &live_spans,
                                     );
                                 } else {
+                                    // Keep output_target and the boundary
+                                    // guard held until after permit.send:
+                                    // permit.send does not block (the slot
+                                    // was already reserved), so holding the
+                                    // guards here does not violate the
+                                    // blocking_send discipline (NFR2), and it
+                                    // prevents a concurrent snapshot from
+                                    // being inserted between the is_covered
+                                    // check and the send.
+                                    let _ = permit.send(chunk);
                                     drop(boundary);
                                     drop(target);
-                                    let _ = permit.send(chunk);
                                 }
                             }
                             Err(_closed) => {
