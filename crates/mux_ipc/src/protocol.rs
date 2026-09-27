@@ -489,6 +489,14 @@ pub enum MessageType {
     /// Same empty-payload, pane-id-zero wire shape as `Upgrade` /
     /// `Shutdown`.
     Upgrading = 0x26,
+    /// Client -> daemon: report the reporting tab's own scrollback
+    /// capacity (mux-probe-scrollback-capacity, IMPLEMENTATION.md Shared
+    /// Components). `pane_id` is 0. Payload is
+    /// [`ClientScrollbackCapacityPayload`]. The daemon never replies. An
+    /// older daemon that does not recognise this discriminant discards the
+    /// frame through the existing unknown-type path in
+    /// [`MuxMessage::from_frame_body`] rather than erroring.
+    ClientScrollbackCapacity = 0x27,
 }
 
 impl MessageType {
@@ -530,6 +538,7 @@ impl MessageType {
             0x24 => Some(Self::AgentApiError),
             0x25 => Some(Self::Upgrade),
             0x26 => Some(Self::Upgrading),
+            0x27 => Some(Self::ClientScrollbackCapacity),
             _ => None,
         }
     }
@@ -672,6 +681,34 @@ impl SetVisibilityPayload {
 
     pub fn to_payload(self) -> Vec<u8> {
         vec![if self.visible { 0x01 } else { 0x00 }]
+    }
+}
+
+/// `ClientScrollbackCapacity` payload: the reporting tab's own
+/// `TerminalCore` scrollback capacity, sent as-is (0 and values above
+/// 10,000 are legal — the sender never clamps or substitutes; the daemon
+/// owns resolution).
+///
+/// Carried as a raw 4-byte little-endian payload (NOT bincode), in the
+/// same style as [`SetVisibilityPayload`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientScrollbackCapacityPayload {
+    pub lines: u32,
+}
+
+impl ClientScrollbackCapacityPayload {
+    /// Decodes `payload` only when it is exactly 4 bytes (little-endian);
+    /// any other length yields `None`. Never panics; allocates nothing.
+    pub fn from_payload(payload: &[u8]) -> Option<Self> {
+        let bytes: [u8; 4] = payload.try_into().ok()?;
+        Some(Self {
+            lines: u32::from_le_bytes(bytes),
+        })
+    }
+
+    /// Encodes as exactly 4 little-endian bytes.
+    pub fn to_payload(self) -> Vec<u8> {
+        self.lines.to_le_bytes().to_vec()
     }
 }
 

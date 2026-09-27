@@ -24,13 +24,14 @@ fn test_message_type_round_trip() {
     // for full per-discriminant coverage. 0x25..=0x26 (previously
     // unused) now hold the mux-daemon-hot-upgrade task0001 `Upgrade` /
     // `Upgrading` additions; see
-    // `test_upgrade_message_type_round_trip`. The unused-space boundary
-    // this assertion pins moves to 0x27.
+    // `test_upgrade_message_type_round_trip`. 0x27 now holds the
+    // mux-probe-scrollback-capacity `ClientScrollbackCapacity` addition;
+    // the unused-space boundary this assertion pins moves to 0x28.
     assert_eq!(
         MessageType::from_u8(0x1D),
         Some(MessageType::AgentStatusUpdate)
     );
-    assert!(MessageType::from_u8(0x27).is_none());
+    assert!(MessageType::from_u8(0x28).is_none());
     assert!(MessageType::from_u8(0xff).is_none());
 }
 
@@ -761,8 +762,9 @@ fn test_welcome_with_windows_roundtrip() {
 /// AC-3: `from_u8` maps every new discriminant. The space right after
 /// this extended range is occupied by the mux-daemon-hot-upgrade
 /// task0001 `Upgrade` / `Upgrading` additions (see
-/// `test_upgrade_message_type_round_trip`), so the still-unmapped
-/// boundary this test pins moves to 0x27.
+/// `test_upgrade_message_type_round_trip`) and the
+/// mux-probe-scrollback-capacity `ClientScrollbackCapacity` addition, so
+/// the still-unmapped boundary this test pins moves to 0x28.
 #[test]
 fn test_agent_api_message_type_round_trip() {
     for i in 0x1Du8..=0x24u8 {
@@ -792,7 +794,7 @@ fn test_agent_api_message_type_round_trip() {
         Some(MessageType::WaitAgentStateResult)
     );
     assert_eq!(MessageType::from_u8(0x24), Some(MessageType::AgentApiError));
-    assert!(MessageType::from_u8(0x27).is_none());
+    assert!(MessageType::from_u8(0x28).is_none());
 }
 
 /// AC-1 / AC-3: APC round trip for every new discriminant, mirroring
@@ -1111,7 +1113,7 @@ fn test_upgrade_message_type_round_trip() {
     }
     assert_eq!(MessageType::from_u8(0x25), Some(MessageType::Upgrade));
     assert_eq!(MessageType::from_u8(0x26), Some(MessageType::Upgrading));
-    assert!(MessageType::from_u8(0x27).is_none());
+    assert!(MessageType::from_u8(0x28).is_none());
 }
 
 /// AC-3: neither new discriminant collides with any existing value the
@@ -1177,8 +1179,8 @@ fn test_apc_round_trip_upgrade_message_types() {
 /// the byte immediately adjacent to the new `Upgrading` discriminant.
 #[test]
 fn test_from_frame_body_returns_none_for_byte_adjacent_to_new_upgrade_types() {
-    assert!(MessageType::from_u8(0x27).is_none());
-    let mut body = vec![0x27u8];
+    assert!(MessageType::from_u8(0x28).is_none());
+    let mut body = vec![0x28u8];
     body.extend_from_slice(&0u32.to_le_bytes());
     assert!(MuxMessage::from_frame_body(&body).is_none());
 }
