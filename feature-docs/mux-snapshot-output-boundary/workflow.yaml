@@ -207,7 +207,7 @@ tasks:
     - NFR1
     - NFR2
     - NFR3
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-snapshot-output-boundary/task0002
     notes: null
     provenance:
