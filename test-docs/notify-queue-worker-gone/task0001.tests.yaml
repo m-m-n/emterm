@@ -1,0 +1,34 @@
+task_id: task0001
+baseline_failures: []          # cargo test --lib (before any edit): 3662 passed; 0 failed; 3 ignored
+final_failures: []             # cargo test --lib (after implementation): 3667 passed; 0 failed; 3 ignored
+acceptance_tests:
+  AC-1:
+    tests: [callbacks::tests::worker_thread::first_submit_after_receiver_drop_reports_worker_gone]
+    red_confirmed: true
+    red_reason: "cargo test --lib worker_thread failed to compile: E0599 no variant `WorkerGoneReported` found for enum `callbacks::SubmitOutcome` (the variant did not exist yet)"
+  AC-2:
+    tests: [callbacks::tests::worker_thread::repeated_submits_after_receiver_drop_report_worker_gone_once]
+    red_confirmed: true
+    red_reason: "cargo test --lib worker_thread failed to compile: E0599 no variant `WorkerGoneReported`/`WorkerGoneAlreadyReported` found for enum `callbacks::SubmitOutcome`"
+  AC-3:
+    tests: [callbacks::tests::worker_thread::worker_gone_report_survives_a_disarmed_saturation_episode]
+    red_confirmed: true
+    red_reason: "cargo test --lib worker_thread failed to compile: E0599 no variant `WorkerGoneReported` found for enum `callbacks::SubmitOutcome`"
+  AC-4:
+    tests: [callbacks::tests::worker_thread::concurrent_submits_after_receiver_drop_produce_exactly_one_worker_gone_report]
+    red_confirmed: true
+    red_reason: "cargo test --lib worker_thread failed to compile: E0599 no variant `WorkerGoneReported`/`WorkerGoneAlreadyReported` found for enum `callbacks::SubmitOutcome`"
+  AC-5:
+    tests: [callbacks::tests::worker_thread::worker_dead_log_constant_text_differs_from_saturation_constant]
+    red_confirmed: true
+    red_reason: "cargo test --lib worker_thread failed to compile: E0425 cannot find value `LOG_NOTIFY_WORKER_DEAD` in this scope (the constant did not exist yet)"
+  AC-6:
+    tests: [callbacks::tests::worker_thread::queue_drops_the_ninth_submission_without_blocking_when_receiver_is_idle,
+            callbacks::tests::worker_thread::saturation_episode_warns_exactly_once_then_rearms_after_a_successful_submission,
+            callbacks::tests::worker_thread::concurrent_saturated_drops_produce_exactly_one_episode_start_warning]
+    red_confirmed: false
+    red_reason: "these three tests already existed and already passed in the 4a baseline, unmodified by this task; the criterion is that they keep passing unmodified, which is a non-regression check, not a state that can be made to fail first"
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: "the verifiable outcome is `cargo test --lib` passing with the AC-1..AC-5 tests present in the non-platform-gated worker_thread module using neither NotifyRustSink nor notify-rust/D-Bus; before implementation the full --lib run failed to compile (E0599/E0425, see AC-1..AC-5), so the run-level check was observed red; the placement/no-platform-gate/no-NotifyRustSink structural parts are not independently executable and are confirmed by inspection of callbacks/tests.rs (worker_thread module, no cfg(unix)/cfg(windows), no NotifyRustSink/notify_rust reference)"
