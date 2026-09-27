@@ -1332,14 +1332,17 @@ The daemon routes `RequestPaneSnapshot` replies through `MessageType::Snapshot` 
 
 #### Mux Snapshot Main-Buffer Screen Omission
 
-On mux pane snapshot restore, the daemon vt100 `contents_formatted()` screen dump is omitted from the snapshot bytes when the pane is on the main buffer. The client's `term_core` reconstructs the main-buffer viewport by replaying scrollback bytes alone.
+On mux pane snapshot restore, the daemon vt100 `contents_formatted()` screen dump is omitted from the snapshot bytes when the pane is on the main buffer and its per-pane scrollback ring has not wrapped (no evicted bytes). The client's `term_core` reconstructs the main-buffer viewport by replaying scrollback bytes alone. When the ring has wrapped, the daemon appends the shadow parser's screen dump after the scrollback replay, so lines written only once (e.g. `top`'s column header) survive a tab switch, reattach, or visibility resume.
 
 **Key Functionality:**
-- Main-buffer snapshot layout: `SNAPSHOT_CLEAR_HOME` + stripped scrollback + `ESC[?1049l` (no screen dump)
+- Main-buffer snapshot layout (ring not wrapped): `SNAPSHOT_CLEAR_HOME` + stripped scrollback + `ESC[?1049l` (no screen dump)
+- Main-buffer snapshot layout (ring wrapped): the same layout followed by a dump block — the shadow parser's screen drawn under a normalized scroll region and origin mode, then the scroll region, origin mode, cursor position (including a pending wrap), and SGR state restored to what the preceding scrollback replay established
 - Alt-screen snapshot layout: `SNAPSHOT_CLEAR_HOME` + stripped scrollback + screen dump + `ESC[?1049h` (unchanged)
 - Eliminates progress-bar corruption (e.g. apt progress glyphs bleeding into wrong rows) after same-tab click, cross-tab switch, window switch, or reattach
 - Alt-screen TUIs (vim, htop, less, man) continue to restore cleanly via the screen dump path
-- Rationale: main-buffer scrollback contains the full PTY byte history including DECSTBM region toggles; alt-screen output is not written to scrollback, so the daemon vt100 dump is the only restoration source for TUIs
+- Rationale: main-buffer scrollback contains the full PTY byte history including DECSTBM region toggles; alt-screen output is not written to scrollback, so the daemon vt100 dump is the only restoration source for TUIs. Once the ring has wrapped, the evicted scrollback bytes can no longer supply a once-written line, so the shadow parser's dump supplies it instead.
+- If the dump-block probe fails, or the screen is empty, the snapshot falls back to the non-wrapped layout
+- The GUI tab reports its own `term_core` scrollback capacity to the daemon; the daemon's replay-state probe runs at `min(reported capacity, 10,000)` (10,000 when unreported), so the restored cursor position and state stay correct regardless of the client's `scrollback_lines` setting
 
 ---
 
@@ -1706,6 +1709,8 @@ The `gui` feature (default-on) toggles the windowed terminal stack:
 | Quick check / unit tests | `src-tauri/target` |
 | Release binary (Linux host) | `src-tauri/target-host` |
 | Windows cross-build | `src-tauri/target-win` |
+
+The GUI build (`build.rs`) auto-fetches any missing bundled font via `scripts/fetch-fonts.sh` (e.g. in a freshly created `git worktree add` checkout) before stopping the build. Setting `EMTERM_SKIP_FONT_FETCH=1` disables the automatic fetch; a missing font then stops the build with the same actionable message.
 
 ### Testing
 
