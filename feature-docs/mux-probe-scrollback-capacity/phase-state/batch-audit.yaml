@@ -1,0 +1,24 @@
+schema_version: 1
+feature: mux-probe-scrollback-capacity
+records:
+- question_id: create-plan.windows-verification
+  packet_id: null
+  answered_at: '2026-09-27T21:40:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - add_windows_xwin_check
+  freeform: 'Codex CHOICE B: task0001 adds capacity storage to the cfg(windows) bridge
+    loop (tasks/task0001.md:82; bridge/mod.rs:150,174), which no workflow.yaml command
+    compiles. Reconnect is cfg(unix) only (bridge/forward.rs:573); tabs sending uses
+    the shared encoder (tabs/input.rs:108).'
+  normalized_answer: Add component rust_windows with build_command 'CARGO_TARGET_DIR=src-tauri/target-win
+    cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+    --lib --tests' (already in the approved command list). A cargo-xwin / MSVC sysroot
+    provisioning failure is recorded as 'Windows compile check not completed', distinct
+    from a code failure.
+  resolution_note: 'gate: create-plan orchestrator judgment on the planner''s open
+    point (no gate_id; Windows cfg(windows) paths not compile-verified); options:
+    A accept risk as planned (review-only check), B add the approved xwin check as
+    a verify component; choice: B; codex_consulted: true (1 turn); Opus escalation:
+    not run.'
