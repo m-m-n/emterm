@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-snapshot-output-boundary
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 1c18416b763589d7efc2edbbd1776441fe6dd845
+last_input_digest: "sha256:65cdd338c2f30a1e4d5dd8558ef62ecedf400618290e292235faa45353ebf63c"
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: "sha256:65cdd338c2f30a1e4d5dd8558ef62ecedf400618290e292235faa45353ebf63c"
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
