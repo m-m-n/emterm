@@ -1,0 +1,21 @@
+schema_version: 1
+feature: notify-queue-worker-gone
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 07ee845bf3be965914c365c49038dffe1304e91c
+last_input_digest: "sha256:e2956ce36ff36abfe2469a51792587da1c4f68040ff2f8ba620ad8d8e7f2e22c"
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: "sha256:e2956ce36ff36abfe2469a51792587da1c4f68040ff2f8ba620ad8d8e7f2e22c"
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
