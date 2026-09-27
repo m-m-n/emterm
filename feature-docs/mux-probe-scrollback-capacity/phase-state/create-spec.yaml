@@ -1,14 +1,18 @@
 schema_version: 1
 feature: mux-probe-scrollback-capacity
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
 base_revision: 50329c188eeb4237cedd324949278e654517f7f4
-last_input_digest: null
-active_request_id: null
+last_input_digest: sha256:1affdd6a3633edfac8d6e55b8a6d970791a24390cac9188cfe4b162d5ffd0b4d
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:1affdd6a3633edfac8d6e55b8a6d970791a24390cac9188cfe4b162d5ffd0b4d
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
