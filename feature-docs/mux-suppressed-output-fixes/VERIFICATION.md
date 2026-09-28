@@ -3,7 +3,7 @@
 ## Overview
 **Feature**: mux-suppressed-output-fixes / **SPEC.md**: `feature-docs/mux-suppressed-output-fixes/SPEC.md` / **IMPLEMENTATION.md**: `feature-docs/mux-suppressed-output-fixes/IMPLEMENTATION.md`
 
-This document covers the integrated verification run by the verify phase. Task-level acceptance criteria live in `tasks/task0001.md` through `tasks/task0005.md`.
+This document covers the integrated verification run by the verify phase. Task-level acceptance criteria live in `tasks/task0001.md` through `tasks/task0006.md`.
 
 ## Build Verification
 - Command: `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features`
@@ -37,6 +37,7 @@ This document covers the integrated verification run by the verify phase. Task-l
 | TS-18 | NFR4 (planner-added): TM-1 fabrication-negative corpus and TM-3 destination check | Nothing is extracted where the client parser starts no sequence; the replacement goes only to the covering snapshot's destination | Unit + Integration |
 | TS-19 | NFR5 (planner-added): TM-2 hostile input and the pending cap | Linear scan without panic; no empty PtyOutput; the 512 KiB pending cap and overflow flush are unchanged | Unit + Integration |
 | TS-20 | NFR6 (planner-added): CLI-only build and platform neutrality | The Build Verification command passes; no production code is platform-specific; new tests use scripted readers | Build + Review |
+| TS-21 | FR13 (rework-added, verify TS-15): every regression-test name on the D7 registry list, and every name DECISIONS.md cites, is checked against the test functions defined under src-tauri/src | The structural existence test passes on the integration head; its lookup reports a deliberately undefined name as missing | Unit |
 
 ## Code Quality Verification
 - Format: none configured (`format_command` is empty). Only the touched files are formatted, never the whole crate.
@@ -53,7 +54,7 @@ This document covers the integrated verification run by the verify phase. Task-l
 | AC-4 | Viewer launches arrive exactly once, never duplicated; inline images are not delivered | TS-8 |
 | AC-5 | After a visibility resume, screen mode and content equal the shadow parser's; the apt progress-bar display is unchanged | TS-9, TS-10 |
 | AC-6 | EvalResult::ResumeWithSnapshot does not exist; on the real resume path the snapshot arrives before the replacement | TS-12, plus a source search for the variant name returning nothing |
-| AC-7 | All 18 stable_ids are recorded with verdict, rationale and regression tests; round1.yaml unchanged | TS-15 |
+| AC-7 | All 18 stable_ids are recorded with verdict, rationale and regression tests; round1.yaml unchanged | TS-15, TS-21 |
 | AC-8 | Existing tests pass unmodified, except the listed behavior-changing ones | Test Verification command, plus a diff of existing test bodies against the base commit, checked against the lists in each task's completion report. Expected list (SPEC.md): the suppressed_output.rs tests for a bare trailing ESC, an embedded-ESC abort, and the pending cases; the two pty_spawn/tests.rs DCS-query tests; the snapshot_bytes.rs resume-layout test; the pane/tests.rs ResumeWithSnapshot tests (deleted or ported). |
 | AC-9 | Both approved commands pass | Build Verification and Test Verification commands |
 
@@ -67,18 +68,18 @@ This document covers the integrated verification run by the verify phase. Task-l
 | FR5 | task0002 | TS-5 |
 | FR6 | task0001 | TS-6, TS-7 |
 | FR7 | task0001 | TS-8 |
-| FR8 | task0003 | TS-9, TS-10 |
+| FR8 | task0003, task0006 | TS-9, TS-10 |
 | FR9 | task0001 | TS-11 |
 | FR10 | task0004 | TS-12 |
 | FR11 | task0005 | TS-13 |
 | FR12 | task0005 | TS-14 |
-| FR13 | task0005 | TS-15 |
+| FR13 | task0005, task0006 | TS-15, TS-21 |
 | NFR1 | task0001, task0003 | TS-16 |
 | NFR2 | task0001, task0004, task0005 | TS-14 |
 | NFR3 | task0001 | TS-17 |
 | NFR4 | task0001 | TS-18 |
 | NFR5 | task0001, task0002 | TS-19 |
-| NFR6 | task0001, task0002, task0003, task0004, task0005 | TS-20 |
+| NFR6 | task0001, task0002, task0003, task0004, task0005, task0006 | TS-20 |
 
 ## Manual Testing (E2E Not Possible)
 - [ ] M-1 (FR8): In a real mux session, run a full-screen TUI on the alternate screen (e.g. less). Hide and show its pane: it comes back on the alternate screen with its content. Then exit the TUI while its pane is hidden and show the pane again: it comes back on the main screen with the shell history.
@@ -97,7 +98,7 @@ This document covers the integrated verification run by the verify phase. Task-l
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build Verification | 1 | 1 | 0 | 0 |
-| Test Scenarios (TS-1 to TS-20) | 20 | 19 | 0 | 1 |
+| Test Scenarios (TS-1 to TS-21) | 21 | 20 | 0 | 1 |
 | Success Criteria (AC-1 to AC-9) | 9 | 8 | 0 | 1 |
 | Manual Testing (M-1 to M-4) | 4 | 0 | 0 | 4 |
 | Performance / Security (NFR3, NFR5, TM-1, TM-2, TM-3) | 5 | 5 | 0 | 0 |

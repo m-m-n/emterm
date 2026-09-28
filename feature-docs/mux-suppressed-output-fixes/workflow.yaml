@@ -95,14 +95,14 @@ workflow:
   status: completed
   completed_at_commit: 75dcbce231a8873a5f235b8544be4adfdf723dce
 - id: implement
-  status: completed
+  status: pending
   base_commit: 390d9eff0b40d930db2d50f3d40e028c8d7c9b1f
   completed_at_commit: 61ab207a54552966148fe1d4b286137e963df2df
 - id: review
-  status: completed
+  status: pending
   completed_at_commit: fc181089f0f2af202c491167b70e0f6c8569b8ed
 - id: verify
-  status: failed
+  status: pending
   result: fail
   failed_items:
   - id: TS-9
@@ -228,6 +228,34 @@ tasks:
     status: merged
     branch: em-workflow/mux-suppressed-output-fixes/task0005
     notes: null
+  task0006:
+    title: Restore the FR8 resume regression tests and align DECISIONS.md with the code
+    plan: tasks/task0006.md
+    files:
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - feature-docs/mux-suppressed-output-fixes/DECISIONS.md
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/session/pane/output_target.rs
+    skills:
+    - backend-impl
+    domains:
+    - api-contract
+    - concurrency
+    complexity: high
+    requirements:
+    - FR8
+    - FR13
+    - NFR6
+    status: pending
+    branch: null
+    notes: null
+    provenance:
+      origin_kind: verify
+      origin_ids:
+      - TS-9
+      - TS-10
+      - TS-15
 review:
   status: completed
   plan:
@@ -321,6 +349,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0003
+    - task0006
     tests:
     - TS-9
     - TS-10
@@ -367,8 +396,10 @@ requirements:
     excluded_reason: null
     tasks:
     - task0005
+    - task0006
     tests:
     - TS-15
+    - TS-21
   NFR1:
     title: 互換性（ワイヤ形式と snapshot の形）
     status: ok
@@ -429,6 +460,7 @@ requirements:
     - task0003
     - task0004
     - task0005
+    - task0006
     tests:
     - TS-20
 batch:
