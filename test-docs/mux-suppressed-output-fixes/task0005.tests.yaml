@@ -1,0 +1,83 @@
+task_id: task0005
+baseline_failures: []          # 4a: cargo test --lib -> 3727 passed; 0 failed; 3 ignored
+final_failures: []             # re-run after implementation -> 3734 passed; 0 failed; 3 ignored
+acceptance_tests:
+  AC-1:
+    tests: [mux::ipc::pty_spawn::tests::split_osc9_across_two_suppressed_chunks_never_fires_more_than_once]
+    red_confirmed: false
+    red_reason: >-
+      This is an existing test whose pause-preparation ORDER was corrected
+      (arm chunk_b's P2 pause before releasing chunk_a), per the task
+      plan's explicit "No new test" instruction for FR11. The pre-fix bug
+      is a rare timing race (the reader occasionally outruns the test's
+      re-arm and blows past P2 on chunk_b before it is re-armed, failing
+      the 5s recv_timeout) that cannot be reliably reproduced on demand
+      without adding an artificial delay to production code, which is out
+      of this task's scope (out-of-scope: "Fixing product behavior"). The
+      test passed both before and after the reorder in this run; no
+      deterministic red was observed for this criterion.
+  AC-2:
+    tests: [mux::ipc::pty_spawn::tests::snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock]
+    red_confirmed: true
+    red_reason: >-
+      Temporarily neutered the resume_pane_with_permit success counter in
+      the new test (`if false { resume_successes.fetch_add(...) }` instead
+      of the real `matches!(outcome, ResumeOutcome::Resumed)` check) and
+      ran the test alone: it failed with "resume_pane_with_permit must
+      have delivered at least once" (assertion panic at the corresponding
+      line). Reverted the neutering; the test passed again and was
+      re-verified green 20 consecutive runs plus in the full suite (twice:
+      default features and --no-default-features).
+  AC-3:
+    tests: [mux::ipc::pty_spawn::tests::decisions_md_marks_fr12_already_addressed_stable_ids_as_addressed]
+    red_confirmed: true
+    red_reason: >-
+      Temporarily edited DECISIONS.md's 692921cdd030612d row, changing its
+      verdict cell from 対応済み to 対応不要, and ran this test alone: it
+      failed with "stable_id 692921cdd030612d's row must be verdict
+      対応済み: <row text>". Restored DECISIONS.md from a saved copy
+      (byte-identical diff confirmed) and re-ran green.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::decisions_md_lists_every_d7_stable_id_exactly_once_except_the_split_row
+      - mux::ipc::pty_spawn::tests::decisions_md_every_row_has_a_verdict_and_nonempty_rationale_and_tests
+      - mux::ipc::pty_spawn::tests::decisions_md_splits_9e6a468b3a45ceeb_into_addressed_viewer_launch_and_unaddressed_inline_image
+      - mux::ipc::pty_spawn::tests::decisions_md_carries_the_known_gap_register
+      - mux::ipc::pty_spawn::tests::decisions_md_contains_every_d7_registry_test_name
+    red_confirmed: true
+    red_reason: >-
+      decisions_md_lists_every_d7_stable_id_exactly_once_except_the_split_row
+      genuinely failed on its first run against the real DECISIONS.md: "expected
+      19 table rows" got 18. Root cause was a bug in the test's own row
+      parser, not in DECISIONS.md — the header-exclusion filter used a
+      substring match on the literal text "stable_id" to skip the header
+      row, but the c8aa5052b1a02acd row's own rationale prose legitimately
+      contains that same substring ("同一 stable_id で2件の指摘がある"),
+      so the filter silently dropped that data row too. Fixed the parser
+      to exclude the header by an exact match on its first cell instead of
+      a substring search, then re-ran: all 5 tests in this group passed
+      green, and stayed green in the full suite and under
+      --no-default-features.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified via `git diff -- feature-docs/mux-snapshot-output-boundary/reviews/round1.yaml`
+      producing no output (checked immediately before and after every
+      edit in this task). This is a git-history fact about what changed
+      in this task's commits, not document content an executable test
+      reading the file could observe as a pre-existing failure — the file
+      was never written to at any point, so there is no red/green cycle
+      to demonstrate.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Outcome-named build/test gate, not a criterion with an observable
+      pre-implementation failure: both commands already passed at the 4a
+      baseline (cargo test --lib: 3727 passed/0 failed/3 ignored; cargo
+      check --no-default-features: clean). Re-run after implementation:
+      cargo test --lib -> 3734 passed/0 failed/3 ignored (the 7 new tests
+      added by this task, no regressions); cargo check
+      --no-default-features -> clean; additionally verified the new tests
+      also compile and pass under `cargo test --no-default-features --lib`.

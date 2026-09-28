@@ -1857,11 +1857,18 @@ fn split_osc9_across_two_suppressed_chunks_never_fires_more_than_once() {
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("the reader must reach P2 on chunk_a");
     output_capture.record_boundary(&tx, 2);
+
+    // FR11: arm the P2 pause for chunk_b BEFORE releasing chunk_a. P2
+    // disarms itself after one hit (per PauseHook::hit doc), so it must be
+    // re-armed for chunk_b — but arming it only after the release let the
+    // reader race ahead and blow past P2 on chunk_b before this test ever
+    // re-armed it, occasionally failing the 5s recv_timeout below. Arming
+    // while the reader is still paused on chunk_a is safe: `PauseHook::hit`
+    // takes its armed state (`Option::take`) before it blocks on release,
+    // so re-arming here only affects the NEXT hit.
+    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
     release_tx.send(()).unwrap();
 
-    // P2 disarms itself after one hit (per PauseHook::hit doc); re-arm
-    // for chunk_b.
-    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
     arrived_rx_2
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("the reader must reach P2 on chunk_b");
@@ -2399,6 +2406,587 @@ fn stress_reader_with_concurrent_resize_and_snapshot_paths_completes_within_budg
         "stress test exceeded its time budget: {:?}",
         start.elapsed()
     );
+}
+
+/// A `MasterPty` double whose `resize` always succeeds and does nothing
+/// else. Stands in for a real OS PTY so
+/// `snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock`
+/// below can drive `MuxPane::resize` — FR12/TS-14's design constraint is
+/// "no real PTY, no platform-specific process control" — without opening
+/// one. Cross-platform: only the two `#[cfg(unix)]`-only trait methods are
+/// gated, unlike `pane::tests::FailingResizeMaster`, which is gated
+/// entirely and so is unix-only.
+struct AlwaysResizableMaster;
+
+impl portable_pty::MasterPty for AlwaysResizableMaster {
+    fn resize(&self, _size: portable_pty::PtySize) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+    fn get_size(&self) -> Result<portable_pty::PtySize, anyhow::Error> {
+        Ok(portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+    }
+    fn try_clone_reader(&self) -> Result<Box<dyn std::io::Read + Send>, anyhow::Error> {
+        Err(anyhow::anyhow!("not supported in test double"))
+    }
+    fn take_writer(&self) -> Result<Box<dyn std::io::Write + Send>, anyhow::Error> {
+        Err(anyhow::anyhow!("not supported in test double"))
+    }
+    #[cfg(unix)]
+    fn process_group_leader(&self) -> Option<libc::pid_t> {
+        None
+    }
+    #[cfg(unix)]
+    fn as_raw_fd(&self) -> Option<std::os::unix::io::RawFd> {
+        None
+    }
+}
+
+/// AC-2 (FR12, NFR2; TS-14), stable_id `aca2b1d612ab97e0`: the three
+/// PRODUCTION snapshot paths — `collect_reattach_data` (visible reattach),
+/// `handle_request_pane_snapshot` (on-demand) and `resume_pane_with_permit`
+/// (visibility resume, reached via `evaluate_output_target`'s hide step) —
+/// run concurrently with the reader and a resize loop against the SAME
+/// pane and the SAME destination channel (standing in for one client
+/// connection, drained continuously so backpressure never stalls anything).
+///
+/// Unlike the older stand-in stress test above (which exercises
+/// `captured_read` + `record_boundary` directly and needs a real PTY only
+/// so `MuxPane::resize` has something to call), this test drives the real
+/// production entry points end to end and needs no real PTY at all: the
+/// resize loop runs against [`AlwaysResizableMaster`], a `MasterPty` double
+/// that always succeeds — satisfying the design's "no real PTY, no
+/// platform-specific process control" constraint, so this test runs
+/// identically on Linux and Windows.
+///
+/// Bounded by iteration count on every concurrent loop; the whole test is
+/// ALSO bounded by a wall-clock budget via bounded polling (never a bare
+/// `.join()`/`.await`), so a deadlock regression fails this ONE test with a
+/// clear message instead of hanging the suite. Deterministic in outcome,
+/// not in interleaving (Test Notes): this asserts only completion (no
+/// deadlock), no panic, that every `Snapshot`-kind chunk observed decodes,
+/// and that each of the three production paths delivered successfully at
+/// least once — never a specific interleaving order.
+#[tokio::test]
+async fn snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock() {
+    let start = std::time::Instant::now();
+    let budget = std::time::Duration::from_secs(30);
+
+    let pane_id: PaneId = 90;
+    let (dest_tx, dest_rx) = mpsc::channel::<PtyOutputChunk>(64);
+    let output_target: SharedOutputTarget =
+        Arc::new(StdMutex::new(PaneOutputTarget::Connected(dest_tx.clone())));
+
+    let pane = MuxPane::new(
+        pane_id,
+        80,
+        24,
+        output_target,
+        Box::new(std::io::sink()),
+        Box::new(AlwaysResizableMaster),
+        None,
+    );
+
+    // Field clones for the reader thread, taken BEFORE `pane` moves into
+    // the manager — mirrors `spawn_reader_with_chunks_in_session`'s own
+    // clone dance, so both the production handlers (via the manager) and
+    // the reader observe exactly this one pane's shared state.
+    let output_target_for_reader = pane.output_target.clone();
+    let shadow_parser = pane.shadow_parser.clone();
+    let cwd = pane.cwd.clone();
+    let title = pane.title.clone();
+    let title_sender = pane.title_sender.clone();
+    let notification_sender = pane.notification_sender.clone();
+    let agent_status_report_sender = pane.agent_status_report_sender.clone();
+    let raw_passthrough = pane.raw_passthrough.clone();
+    let passthrough_scanner = pane.passthrough_scanner.clone();
+    let scrollback = pane.scrollback.clone();
+    let dims = pane.dims.clone();
+    let output_capture = pane.output_capture.clone();
+
+    let mgr = Arc::new(tokio::sync::Mutex::new(SessionManager::new()));
+    let (session_id, window_id) = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        m.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+        (sid, wid)
+    };
+
+    // A long, bounded stream: plain lines with occasional CSI device
+    // queries (design's "text lines with occasional CSI device queries").
+    let mut chunks = Vec::new();
+    for i in 0..1000u32 {
+        if i % 7 == 0 {
+            chunks.push(b"\x1b[6n".to_vec());
+        } else {
+            chunks.push(format!("line {i}\r\n").into_bytes());
+        }
+    }
+
+    let reader_handle = std::thread::spawn(move || {
+        pty_reader_loop(
+            pane_id,
+            Box::new(ScriptedReader::new(chunks)),
+            output_target_for_reader,
+            shadow_parser,
+            cwd,
+            title,
+            title_sender,
+            notification_sender,
+            agent_status_report_sender,
+            raw_passthrough,
+            passthrough_scanner,
+            scrollback,
+            dims,
+            Arc::new(StdMutex::new(None)),
+            output_capture,
+        );
+    });
+
+    // One destination channel, standing in for one client connection,
+    // drained continuously so backpressure never stalls the reader or any
+    // of the concurrent snapshot paths below (mirrors the older stress
+    // test's stand-in drain).
+    let received: Arc<StdMutex<Vec<PtyOutputChunk>>> = Arc::new(StdMutex::new(Vec::new()));
+    let drain_received = received.clone();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let drain_stop = stop.clone();
+    let mut rx = dest_rx;
+    let drain_handle = std::thread::spawn(move || {
+        loop {
+            match rx.try_recv() {
+                Ok(chunk) => drain_received.lock().unwrap().push(chunk),
+                Err(mpsc::error::TryRecvError::Disconnected) => break,
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    if drain_stop.load(std::sync::atomic::Ordering::SeqCst) {
+                        while let Ok(chunk) = rx.try_recv() {
+                            drain_received.lock().unwrap().push(chunk);
+                        }
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        }
+    });
+
+    let reattach_successes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let snapshot_successes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let resume_successes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    // Loop 1: visible reattach through the PRODUCTION
+    // `collect_reattach_data`, targeting the SAME destination.
+    let reattach_handle = {
+        let mgr = mgr.clone();
+        let dest_tx = dest_tx.clone();
+        let reattach_successes = reattach_successes.clone();
+        tokio::spawn(async move {
+            for _ in 0..50 {
+                let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+                let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+                let data = crate::mux::ipc::reattach::collect_reattach_data(
+                    &mgr, session_id, &dest_tx, &title_tx, kick_tx, true,
+                )
+                .await;
+                if data.len() == 1 {
+                    reattach_successes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        })
+    };
+
+    // Loop 2: the PRODUCTION on-demand snapshot handler, targeting the
+    // SAME destination.
+    let snapshot_handle = {
+        let mgr = mgr.clone();
+        let dest_tx = dest_tx.clone();
+        let snapshot_successes = snapshot_successes.clone();
+        tokio::spawn(async move {
+            for _ in 0..50 {
+                let req = mux_ipc::protocol::MuxMessage {
+                    msg_type: mux_ipc::protocol::MessageType::RequestPaneSnapshot,
+                    pane_id,
+                    payload: Vec::new(),
+                };
+                let mut deferred = crate::mux::session::pane::DeferredOutputQueue::new();
+                let outcome = crate::mux::ipc::handlers::handle_request_pane_snapshot(
+                    &req,
+                    session_id,
+                    &mgr,
+                    &dest_tx,
+                    &mut deferred,
+                )
+                .await;
+                if outcome.is_ok() && deferred.is_empty() {
+                    snapshot_successes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        })
+    };
+
+    // Loop 3: hide via the PRODUCTION `evaluate_output_target`, then
+    // resume via the PRODUCTION `resume_pane_with_permit` with a reserved
+    // permit — both against the SAME destination. The permit is reserved
+    // BEFORE either call, so nothing here holds `output_target` while
+    // waiting on the channel (NFR2).
+    let hide_resume_handle = {
+        let mgr = mgr.clone();
+        let dest_tx = dest_tx.clone();
+        let resume_successes = resume_successes.clone();
+        tokio::spawn(async move {
+            for _ in 0..50 {
+                let permit = match dest_tx.reserve().await {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                let m = mgr.lock().await;
+                let pane_ref = m
+                    .get_session(session_id)
+                    .unwrap()
+                    .windows
+                    .get(&window_id)
+                    .unwrap()
+                    .panes
+                    .get(&pane_id)
+                    .unwrap();
+                let _ = crate::mux::session::pane::evaluate_output_target(
+                    pane_ref, false, false, &dest_tx,
+                );
+                let outcome = crate::mux::session::pane::resume_pane_with_permit(
+                    pane_ref,
+                    &dest_tx,
+                    crate::mux::session::pane::AnyPermit::Borrowed(permit),
+                );
+                drop(m);
+                if matches!(outcome, crate::mux::session::pane::ResumeOutcome::Resumed) {
+                    resume_successes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        })
+    };
+
+    // Loop 4: the pane resize, alternating between two sizes — pure
+    // contention against the same manager/pane locks, no real PTY (see
+    // `AlwaysResizableMaster`), no platform-specific process control.
+    let resize_handle = {
+        let mgr = mgr.clone();
+        tokio::spawn(async move {
+            for i in 0..50u32 {
+                let (cols, rows) = if i % 2 == 0 { (100, 30) } else { (80, 24) };
+                let mut m = mgr.lock().await;
+                if let Some(session) = m.get_session_mut(session_id) {
+                    if let Some(window) = session.windows.get_mut(&window_id) {
+                        if let Some(pane) = window.panes.get_mut(&pane_id) {
+                            let _ = pane.resize(cols, rows);
+                        }
+                    }
+                }
+            }
+        })
+    };
+
+    loop {
+        if reader_handle.is_finished()
+            && reattach_handle.is_finished()
+            && snapshot_handle.is_finished()
+            && hide_resume_handle.is_finished()
+            && resize_handle.is_finished()
+        {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            break;
+        }
+        if start.elapsed() > budget {
+            panic!(
+                "concurrent snapshot-paths threads did not finish within the \
+                 {budget:?} budget — possible deadlock (reader={} reattach={} \
+                 snapshot={} hide_resume={} resize={})",
+                reader_handle.is_finished(),
+                reattach_handle.is_finished(),
+                snapshot_handle.is_finished(),
+                hide_resume_handle.is_finished(),
+                resize_handle.is_finished(),
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    reader_handle.join().expect("reader thread must not panic");
+    reattach_handle.await.expect("reattach task must not panic");
+    snapshot_handle.await.expect("snapshot task must not panic");
+    hide_resume_handle
+        .await
+        .expect("hide/resume task must not panic");
+    resize_handle.await.expect("resize task must not panic");
+
+    while !drain_handle.is_finished() {
+        if start.elapsed() > budget {
+            panic!("the stand-in drain thread did not notice the stop signal in time");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    drain_handle.join().expect("drain thread must not panic");
+
+    assert!(
+        start.elapsed() < budget,
+        "concurrent snapshot-paths test exceeded its time budget: {:?}",
+        start.elapsed()
+    );
+
+    // Every Snapshot-kind chunk observed must decode as a structured
+    // payload (never Malformed — this daemon always encodes via
+    // `encode_snapshot_segments`, which always emits the magic prefix).
+    let received = received.lock().unwrap();
+    let mut snapshot_chunk_count = 0usize;
+    for chunk in received.iter() {
+        if chunk.kind == crate::mux::session::pane::ChunkKind::Snapshot {
+            snapshot_chunk_count += 1;
+            let decoded = mux_ipc::protocol::decode_snapshot_payload_typed(&chunk.data);
+            assert!(
+                matches!(
+                    decoded,
+                    mux_ipc::protocol::DecodedSnapshotPayload::Structured { .. }
+                ),
+                "every Snapshot-kind chunk received must decode as a \
+                 structured payload"
+            );
+        }
+    }
+    assert!(
+        snapshot_chunk_count > 0,
+        "at least one Snapshot-kind chunk must have been observed across \
+         the concurrent runs"
+    );
+
+    // Each of the three PRODUCTION snapshot paths must have completed at
+    // least one successful delivery.
+    assert!(
+        reattach_successes.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "collect_reattach_data must have delivered at least once"
+    );
+    assert!(
+        snapshot_successes.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "handle_request_pane_snapshot must have delivered at least once"
+    );
+    assert!(
+        resume_successes.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "resume_pane_with_permit must have delivered at least once"
+    );
+}
+
+// ── FR13 (task0005): DECISIONS.md document-contract checks. These read
+// the checked-in `feature-docs/mux-suppressed-output-fixes/DECISIONS.md`
+// at compile time so AC-3/AC-4's content requirements are covered by an
+// executable check rather than by inspection alone. `feature-docs/
+// mux-suppressed-output-fixes/**` is one of this feature's own declared
+// paths, so embedding it here is reading within the feature's own scope.
+
+const DECISIONS_MD: &str =
+    include_str!("../../../../../feature-docs/mux-suppressed-output-fixes/DECISIONS.md");
+
+/// The 17 stable_ids the DECISIONS.md table must list as exactly one row
+/// each. `9e6a468b3a45ceeb` is deliberately excluded — it has its own
+/// two-row assertion below.
+const SINGLY_LISTED_STABLE_IDS: [&str; 17] = [
+    "19209420de72b144",
+    "61d33252f22b6fd2",
+    "8d069c589dc21784",
+    "66d05376ff960d53",
+    "001161ab9fa3c20b",
+    "c8aa5052b1a02acd",
+    "66170217dc5057ce",
+    "3bc1e21fdd8702ef",
+    "30ee5a7036a7fc6e",
+    "830f950f39e499fa",
+    "9a548939524b405a",
+    "29ff65b6c01032dc",
+    "39267160fcf1bb2a",
+    "692921cdd030612d",
+    "9a7dc7697c6af992",
+    "5988c2406aa06a7b",
+    "aca2b1d612ab97e0",
+];
+
+/// Every `(stable_id cell, full row line)` pair from DECISIONS.md's
+/// judgement table — lines starting with `| ` that are neither the header
+/// nor the `|---|` separator row. Scoped to the TABLE's first column
+/// (rather than a whole-document substring search) so a stable_id
+/// mentioned in another row's prose (e.g. "692921cdd030612d と同一箇所")
+/// for cross-reference purposes is never mistaken for a second row.
+fn decisions_md_rows() -> Vec<(String, &'static str)> {
+    DECISIONS_MD
+        .lines()
+        .filter(|l| l.starts_with("| ") && !l.contains("---"))
+        .map(|l| {
+            let cell = l
+                .trim_start_matches('|')
+                .split('|')
+                .next()
+                .unwrap()
+                .trim()
+                .to_string();
+            (cell, l)
+        })
+        // Exclude the header row by an EXACT match on its first cell
+        // ("stable_id") rather than a substring search over the whole
+        // line — a data row's own rationale prose may legitimately use
+        // the word "stable_id" (e.g. "同一 stable_id で2件の指摘がある"),
+        // and a substring filter would wrongly drop that row too.
+        .filter(|(cell, _)| cell != "stable_id")
+        .collect()
+}
+
+/// AC-4: all 18 stable_ids from the IMPLEMENTATION.md D7 registry are
+/// listed, and only those, each exactly once — except `9e6a468b3a45ceeb`,
+/// which has one row per target (viewer launch, inline image), so exactly
+/// twice. 17 + 2 = 19 rows total.
+#[test]
+fn decisions_md_lists_every_d7_stable_id_exactly_once_except_the_split_row() {
+    let rows = decisions_md_rows();
+    assert_eq!(rows.len(), 19, "expected 19 table rows: {rows:?}");
+    for id in SINGLY_LISTED_STABLE_IDS {
+        let count = rows.iter().filter(|(cell, _)| cell == id).count();
+        assert_eq!(
+            count, 1,
+            "stable_id {id} must appear as exactly one row: {rows:?}"
+        );
+    }
+    let split_count = rows
+        .iter()
+        .filter(|(cell, _)| cell.starts_with("9e6a468b3a45ceeb"))
+        .count();
+    assert_eq!(
+        split_count, 2,
+        "9e6a468b3a45ceeb must have exactly two rows: {rows:?}"
+    );
+}
+
+/// AC-4: every row has a verdict of 対応済み or 対応不要, and a non-empty
+/// rationale + regression-test cell (the table has 5 columns: stable_id,
+/// requirement, verdict, rationale, regression tests).
+#[test]
+fn decisions_md_every_row_has_a_verdict_and_nonempty_rationale_and_tests() {
+    for (cell, line) in decisions_md_rows() {
+        let cols: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
+        assert_eq!(
+            cols.len(),
+            5,
+            "row for {cell} must have 5 columns (stable_id, requirement, \
+             verdict, rationale, regression tests): {line}"
+        );
+        let verdict = cols[2];
+        assert!(
+            verdict.starts_with("対応済み") || verdict.starts_with("対応不要"),
+            "row for {cell} must have a verdict of 対応済み or 対応不要: {verdict}"
+        );
+        assert!(
+            !cols[3].is_empty(),
+            "row for {cell} must have a non-empty rationale"
+        );
+        assert!(
+            !cols[4].is_empty(),
+            "row for {cell} must have a non-empty regression-tests cell"
+        );
+    }
+}
+
+/// AC-3: the three FR12 "already addressed" stable_ids are recorded as
+/// 対応済み (never 対応不要).
+#[test]
+fn decisions_md_marks_fr12_already_addressed_stable_ids_as_addressed() {
+    let rows = decisions_md_rows();
+    for id in ["692921cdd030612d", "9a7dc7697c6af992", "5988c2406aa06a7b"] {
+        let (_, line) = rows
+            .iter()
+            .find(|(cell, _)| cell == id)
+            .unwrap_or_else(|| panic!("no DECISIONS.md row found for stable_id {id}"));
+        assert!(
+            line.contains("対応済み"),
+            "stable_id {id}'s row must be verdict 対応済み: {line}"
+        );
+    }
+}
+
+/// AC-4: `9e6a468b3a45ceeb` records the target-specific verdicts the task
+/// plan requires as two DISTINCT rows — viewer launch is 対応済み, inline
+/// image is 対応不要.
+#[test]
+fn decisions_md_splits_9e6a468b3a45ceeb_into_addressed_viewer_launch_and_unaddressed_inline_image()
+{
+    let rows: Vec<(String, &str)> = decisions_md_rows()
+        .into_iter()
+        .filter(|(cell, _)| cell.starts_with("9e6a468b3a45ceeb"))
+        .collect();
+    assert_eq!(rows.len(), 2, "expected exactly two rows: {rows:?}");
+    assert!(
+        rows.iter()
+            .any(|(_, l)| l.contains("ビューア起動") && l.contains("対応済み")),
+        "the viewer-launch row must be 対応済み: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|(_, l)| l.contains("インライン画像") && l.contains("対応不要")),
+        "the inline-image row must be 対応不要: {rows:?}"
+    );
+}
+
+/// AC-4: the known-gap register (IMPLEMENTATION.md D6) is carried —
+/// inline images, the N-byte retained-window gap, and the OSC-number u16
+/// overflow are all named.
+#[test]
+fn decisions_md_carries_the_known_gap_register() {
+    for needle in ["Kitty APC", "SIXEL DCS", "256 バイト", "u16"] {
+        assert!(
+            DECISIONS_MD.contains(needle),
+            "DECISIONS.md's known-gap register must mention {needle:?}"
+        );
+    }
+}
+
+/// AC-4: every regression-test name from the IMPLEMENTATION.md D7 registry
+/// is cited somewhere in DECISIONS.md — a transcription check that would
+/// catch a dropped or misspelled test name.
+#[test]
+fn decisions_md_contains_every_d7_registry_test_name() {
+    let d7_test_names = [
+        "suppressed_alt_osc_color_query_split_inside_st_is_delivered_once",
+        "write_filter_holds_string_ending_in_trailing_esc_until_completed",
+        "replacement_never_extracts_a_query_consumed_as_charset_designator",
+        "replacement_matches_client_reference_for_transition_corpus",
+        "color_query_predicate_matches_client_osc_number_and_theme_rules",
+        "incomplete_csi_tail_is_resent_without_executed_c0_controls",
+        "pending_does_not_drop_alt_region_queries_viewer_launches_or_own_tail",
+        "viewer_launch_in_suppressed_chunk_is_delivered_exactly_once",
+        "write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail",
+        "suppressed_chunk_after_aborted_strings_does_not_resend_delivered_query_or_text",
+        "query_split_across_reads_is_answered_once_at_every_split_position",
+        "utf8_split_across_reads_never_prints_a_replacement_character",
+        "consecutive_suppressed_chunks_leave_next_forwarded_chunk_intact",
+        "inline_images_in_suppressed_chunk_are_not_delivered",
+        "visibility_resume_restores_alt_screen_mode_and_content",
+        "visibility_resume_after_hidden_alt_exit_shows_main_screen",
+        "visibility_resume_keeps_main_pane_progress_bar_layout",
+        "suppressed_queries_arrive_after_snapshot_in_order_once_each",
+        "evaluate_output_target_never_resumes_a_detached_pane",
+        "production_visible_resume_delivers_snapshot_before_replacement_and_next_chunk",
+        "split_osc9_across_two_suppressed_chunks_never_fires_more_than_once",
+        "snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock",
+    ];
+    for name in d7_test_names {
+        assert!(
+            DECISIONS_MD.contains(name),
+            "DECISIONS.md must cite the D7 registry test name {name:?}"
+        );
+    }
 }
 
 // ── task0004 round-4 rework (D1'): dimensions travel as structural
