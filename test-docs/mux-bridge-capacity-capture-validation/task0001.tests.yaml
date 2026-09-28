@@ -1,0 +1,29 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [mux::bridge::tests::capture_if_capacity_rejects_length_invalid_capacity_payloads]
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: a 0-byte capacity payload must not be captured\n  left: Some([39, 0, 0, 0, 0])\n right: None (pre-fix capture_if_capacity captured any ClientScrollbackCapacity payload regardless of length)"
+  AC-2:
+    tests: [mux::bridge::tests::capture_if_capacity_captures_capacity_and_only_capacity]
+    red_confirmed: false
+    red_reason: "a dedicated new module is out of scope, but the existing capture_if_capacity_captures_capacity_and_only_capacity test detects that non-capacity messages (PtyInput, Attach) are never captured; this task did not change that branch of capture_if_capacity, so no red state occurred for this change"
+  AC-3:
+    tests: [mux::bridge::tests::forward_loop_length_invalid_capacity_with_no_prior_valid_leaves_retained_capacity_empty]
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: with no prior valid report, the retained capacity stays empty\n  left: Some([39, 0, 0, 0, 0, 0, 0, 0])\n right: None (pre-fix code stored the length-invalid frame as the retained capacity)"
+  AC-4:
+    tests: [mux::bridge::tests::forward_loop_then_reconnect_resends_last_valid_capacity_after_a_trailing_length_invalid_report]
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: the length-invalid report never displaces the last valid one (AC-4)\n  left: Some([39, 0, 0, 0, 0, 0, 0, 0])\n right: Some([39, 0, 0, 0, 0, 5, 0, 0, 0]) (pre-fix code let the trailing length-invalid report overwrite the retained valid capacity)"
+  AC-5:
+    tests: [mux::bridge::tests::forward_loop_then_reconnect_resends_last_valid_capacity_after_a_trailing_length_invalid_report]
+    red_confirmed: true
+    red_reason: "isolated re-run against the pre-fix capture_if_capacity, with the AC-4 assertion in this same test temporarily disabled so execution reached the AC-5 section: panicked at \"resent capacity payload must decode\" — the reconnect resent the retained length-invalid body (3 raw bytes), which does not decode through ClientScrollbackCapacityPayload::from_payload at all, so the lines==5 check was never reached; restored immediately after the isolated observation"
+  AC-6:
+    tests: [mux::bridge::tests, "cargo check --no-default-features"]
+    red_confirmed: false
+    red_reason: "AC-6 is a no-regression / build-still-passes criterion over pre-existing tests and a pre-existing build target, not new behavior to drive red; verified green: bridge test module 46/46 pass, full lib suite 3707/3707 pass (0 failed), CLI-only cargo check succeeds, and only the two files in Scope were modified"
+notes: "AC-4 and AC-5 share one test per the task plan's explicit permission (Test Notes: 'AC-4 and AC-5 may be one test'). Because assert_eq! aborts the test at the first failing assertion, the pre-fix run's visible failure was the AC-4 check; AC-5's own check was verified red by a separate isolated probe (mod.rs's capture_if_capacity temporarily reverted to the pre-fix version and the test's AC-4 assertion temporarily commented out) run once, observed to fail at the AC-5-specific decode step, then both files were restored to the committed fixed versions before the final test run recorded below. No other code was left changed by that probe."
