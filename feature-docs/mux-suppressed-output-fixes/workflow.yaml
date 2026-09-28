@@ -214,7 +214,7 @@ tasks:
     - FR13
     - NFR2
     - NFR6
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-suppressed-output-fixes/task0005
     notes: null
 review:
