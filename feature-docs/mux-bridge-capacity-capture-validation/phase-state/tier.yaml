@@ -1,0 +1,64 @@
+schema_version: 2
+feature: mux-bridge-capacity-capture-validation
+tier: reduced
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.0
+    confidence: 1.0
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 1.0
+      '2': 0.0
+      '3': 0.0
+  observed_at: '2026-09-28T13:20:00+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.11
+    confidence: 0.89
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.89
+      '2': 0.11
+      '3': 0.0
+  observed_at: '2026-09-28T13:27:00+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/bridge/mod.rs
+  - src-tauri/src/mux/bridge/tests.rs
+  changed_lines_approx: 100
+  new_functions_needed: 1
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 1
+  body_change_kind: new_logic
+  change_containment: single_function
+  caller_and_dependency_count: 2
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: src-tauri/src/mux/bridge/mod.rs:307 は種別のみ検証。唯一の本番呼び出しは src-tauri/src/mux/bridge/forward.rs:294、保持値の再送は同:608。既存の長さ検証は
+    crates/mux_ipc/src/protocol.rs:723。src-tauri/src/mux/bridge/tests.rs:570 に保存、同:708
+    に再接続時の再送テストがあるが、有効通知→不正長通知→再接続の検証はない。追加関数数は回帰テスト1関数を含む
+decided_at: '2026-09-28T13:20:46+09:00'
