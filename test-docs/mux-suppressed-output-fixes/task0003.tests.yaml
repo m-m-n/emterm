@@ -1,0 +1,86 @@
+task_id: task0003
+baseline_failures: []          # cargo test --lib (pre-edit, captured via stash): 3727 passed; 0 failed; 3 ignored
+final_failures: []             # cargo test --lib (post-implementation): 3732 passed; 0 failed; 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::snapshot_bytes::tests::build_resume_snapshot_bytes_alt_screen_layout_replays_onto_the_alternate_screen
+      - mux::session::pane::tests::visibility_resume_restores_alt_screen_mode_and_content
+    red_confirmed: true
+    red_reason: >-
+      Both tests were run against the pre-fix code (build_resume_snapshot_bytes
+      always passing AltToggleTiming::None / no alt-mode toggle for the resume
+      path) and observed to fail. The builder-level test panicked with
+      "AC-1/AC-3: replaying the alt-screen resume payload must leave the
+      client on the alternate screen" (assertion on client.get_mode(MODE_ALT_SCREEN)).
+      The pane/tests.rs integration test panicked with "AC-1/AC-3: after
+      applying the resume snapshot and the next chunk, the client model must
+      be on the alternate screen".
+  AC-2:
+    tests:
+      - mux::session::pane::tests::visibility_resume_after_hidden_alt_exit_shows_main_screen
+      - mux::snapshot_bytes::tests::build_resume_snapshot_bytes_main_buffer_layout_replays_onto_the_main_screen
+    red_confirmed: false
+    red_reason: >-
+      Both tests were run against the pre-fix code and PASSED unchanged: the
+      main-buffer resume branch (alt_screen == false) never emitted an
+      alt-mode toggle before or after this task (Step 1 finding (i):
+      TerminalCore::reset_and_replay_segments always resets to a ground
+      parser on the main screen, so no normalization was ever needed for
+      this branch). The behavior this criterion describes genuinely
+      pre-existed; there is no red state this task's fix produces for it.
+  AC-3:
+    tests:
+      - mux::session::pane::tests::visibility_resume_restores_alt_screen_mode_and_content
+      - mux::snapshot_bytes::tests::build_resume_snapshot_bytes_alt_screen_layout_replays_onto_the_alternate_screen
+    red_confirmed: true
+    red_reason: >-
+      Same tests and same observed pre-fix failures as AC-1 (both assert the
+      client model's alt-screen mode after replay, which is exactly what
+      AC-3's "stays on the alternate screen through hide and resume" also
+      requires) — see AC-1's red_reason for the exact panic messages.
+  AC-4:
+    tests:
+      - mux::session::pane::tests::visibility_resume_keeps_main_pane_progress_bar_layout
+    red_confirmed: false
+    red_reason: >-
+      Run against the pre-fix code and PASSED unchanged: the main-buffer
+      resume branch (alt_screen == false) is untouched by this task's fix
+      (Step 1 finding (i) means no normalization is needed on this branch),
+      so the progress-bar layout, cursor/scroll-region restore, and
+      byte-identical payload assertions all already held before this task's
+      change. There is no red state to observe for this criterion.
+  AC-5:
+    tests:
+      - mux::snapshot_bytes::tests::build_snapshot_bytes_layout_is_clear_scrollback_screen
+      - mux::snapshot_bytes::tests::build_snapshot_bytes_main_buffer_omits_screen_part
+      - mux::snapshot_bytes::wrap_restore_tests::build_snapshot_bytes_for_ring_alt_screen_matches_the_plain_builder_even_when_wrapped
+      - mux::snapshot_bytes::wrap_restore_tests::build_resume_snapshot_bytes_for_ring_alt_screen_matches_the_plain_builder_even_when_wrapped
+      - mux::session::pane::tests::test_evaluate_output_target_restores_the_shadow_parsers_header_row_for_a_wrapped_ring
+    red_confirmed: false
+    red_reason: >-
+      Non-regression criterion ("pass unmodified"), not a red-to-green one:
+      none of these existing tests were edited by this task, and all
+      continue to pass after the fix (see final_failures). There is no red
+      state to observe for a "stays unmodified" criterion; the reattach /
+      on-demand layout is asserted unchanged by build_snapshot_bytes_with_layout
+      routing reattach callers through AltToggleTiming::Trailing (the exact
+      pre-existing byte placement) while only build_resume_snapshot_bytes'
+      alt-screen branch moves to AltToggleTiming::BeforeScreen.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by the two project commands, not a test: `CARGO_TARGET_DIR=src-tauri/target
+      cargo test --manifest-path src-tauri/Cargo.toml --lib` (3732 passed; 0
+      failed; 3 ignored) and `CARGO_TARGET_DIR=src-tauri/target cargo check
+      --manifest-path src-tauri/Cargo.toml --no-default-features` (success)
+      both passed at the final implementation state. The one existing test
+      whose expectation changed is
+      mux::snapshot_bytes::tests::build_resume_snapshot_bytes_layout_main_buffer_and_alt_screen
+      (see AC-1/AC-3's tests) — its alt-screen assertions were updated from
+      "no toggle" (`SBSC`) to "toggle before screen" (`SB\x1b[?1049hSC`); its
+      main-buffer assertions are untouched. No other existing test was
+      modified. The overall build/test-suite-passes outcome was never
+      observed to fail before implementation (baseline was already 0
+      failures), so there is no red state to report for this criterion.
