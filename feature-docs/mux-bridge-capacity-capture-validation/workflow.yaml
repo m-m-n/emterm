@@ -134,7 +134,7 @@ tasks:
     - FR3
     - NFR1
     - NFR2
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-bridge-capacity-capture-validation/task0001
 review:
