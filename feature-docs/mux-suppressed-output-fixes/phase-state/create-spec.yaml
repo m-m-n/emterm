@@ -3,9 +3,9 @@ feature: mux-suppressed-output-fixes
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: 78f5242baad3a44e94e7be4807b52a4110119bc2
+base_revision: d516088a692cb01a1ff52321b0d1709c62a8a052
 last_input_digest: sha256:f1ab8e8870a78c4cba2205fdd060133e46be3d3934758aa83e183e9a7e96c0ec
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -115,19 +115,29 @@ answers:
     resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation);
       Codex (1 turn) suggested this_feature_docs which maps to the worker''s recommended
       option; reason: PR #107 の round1 は当時の記録として残す。今回の資料に stable_id ごとの判定・根拠・回帰テストとの対応を記録する'
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-28T14:05:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step skipped per analyst recommendation (no UI change)
+    resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously
+      accepted the analyst recommendation skip'
 worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:14f7b2b782cc3f336c8810afdca1d429b1005582b1f38172fa6854bfbfe8ac29
   output_digest: sha256:5b7194dc3c6663a9ad5472c42cf56954166f2caf89a2149e076623e244e1c50d
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:f1ab8e8870a78c4cba2205fdd060133e46be3d3934758aa83e183e9a7e96c0ec
-  output_digest: null
+  output_digest: sha256:a9f8775a9a8b07ba28a750b978977105ebce679a43d5abf94e3cec396442b595
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
-last_error: 'create-spec-run-0001: validation error gate_id create-spec.design-step
-  lacks option decide_autonomously'
+last_error: null
