@@ -7,7 +7,9 @@ goal: '# mux bridge が長さ不正の ClientScrollbackCapacity 本体でも再�
 
   ## 現象
 
-  mux bridge の `capture_if_capacity` はメッセージ種別だけを確認し、ClientScrollbackCapacity のフレーム本体を長さ検証なしで再接続用の保持値（`last_capacity`）に保存する。デーモン側は長さ不正のペイロードを無視して直前の有効値を使い続けるため、正しい通知の後に長さ不正の通知が届くと、bridge の保持値とデーモンが使っている値が食い違う。この状態でアップグレード通知による再接続（`reconnect_and_reattach`）が起きると不正な本体だけが再送され、新しい接続は未通知扱いで既定の 10,000 行に戻る。
+  mux bridge の `capture_if_capacity` はメッセージ種別だけを確認し、ClientScrollbackCapacity のフレーム本体を長さ検証なしで再接続用の保持値（`last_capacity`）に保存する。デーモン側は長さ不正のペイロードを無視して直前の有効値を使い続けるため、正しい通知の後に長さ不正の通知が届くと、bridge
+  の保持値とデーモンが使っている値が食い違う。この状態でアップグレード通知による再接続（`reconnect_and_reattach`）が起きると不正な本体だけが再送され、新しい接続は未通知扱いで既定の
+  10,000 行に戻る。
 
   ## 再現手順
 
@@ -27,7 +29,8 @@ goal: '# mux bridge が長さ不正の ClientScrollbackCapacity 本体でも再�
 
   - [ ] 再現手順で現象が起きない
 
-  - [ ] 再発を検出するテストがある（有効通知 → 長さ不正の通知 → 再接続の順で、有効な本体が再送されることを `src-tauri/src/mux/bridge/tests.rs` で確認する）
+  - [ ] 再発を検出するテストがある（有効通知 → 長さ不正の通知 → 再接続の順で、有効な本体が再送されることを `src-tauri/src/mux/bridge/tests.rs`
+  で確認する）
 
   ## 該当箇所
 
@@ -77,14 +80,20 @@ project:
   components:
     rust:
       language: rust
-      build_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
-      test_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
+      build_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer
+        && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check
+        --manifest-path src-tauri/Cargo.toml
+      test_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer
+        && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test
+        --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
       format_command: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       e2e_test_command: ''
     rust_cli_only:
       language: rust
-      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
-      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib -- --test-threads=1
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+        src-tauri/Cargo.toml --no-default-features
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --no-default-features --lib -- --test-threads=1
       format_command: ''
       e2e_test_command: ''
 workflow:
@@ -98,7 +107,8 @@ workflow:
   - DESIGN.md
   - design/
   status: skipped
-  skipped_reason: Internal Rust bug fix in the mux bridge with no UI or visual change (requirements-analyst recommendation; tier reduced also subtracts design).
+  skipped_reason: Internal Rust bug fix in the mux bridge with no UI or visual change
+    (requirements-analyst recommendation; tier reduced also subtracts design).
 - id: create-plan
   artifacts:
   - VERIFICATION.md
@@ -110,7 +120,7 @@ workflow:
   base_commit: 764cccd24758b0235e14e778c3e93ea557d87ecc
   completed_at_commit: 1464fe062af1706c3671aff03ebe5a1bf98c17a2
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -139,8 +149,15 @@ tasks:
     notes: null
     branch: em-workflow/mux-bridge-capacity-capture-validation/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
 requirements:
   FR1:
     title: Store only length-valid capacity bodies
