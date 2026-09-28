@@ -372,10 +372,10 @@ pub(in crate::mux) fn build_snapshot_bytes_for_ring(
 }
 
 /// Wrap-aware visibility-resume layout SSOT (mux-snapshot-ring-wrap-restore
-/// task0001, D2). Both visibility-resume sites
-/// (`mux::session::pane::output_target::resume_pane_with_permit`, the
-/// `evaluate_output_target` resume branch) route through this function
-/// instead of [`build_resume_snapshot_bytes`] directly.
+/// task0001, D2). The visibility-resume site
+/// (`mux::session::pane::output_target::resume_pane_with_permit`) routes
+/// through this function instead of [`build_resume_snapshot_bytes`]
+/// directly.
 ///
 /// Same contract as [`build_snapshot_bytes_for_ring`], relative to
 /// [`build_resume_snapshot_bytes`] instead of [`build_snapshot_bytes`] —

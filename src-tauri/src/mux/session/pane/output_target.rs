@@ -97,47 +97,19 @@ pub type SharedOutputTarget = Arc<StdMutex<PaneOutputTarget>>;
 /// Thread-safe shared reference to a pane's scrollback ring buffer.
 pub type SharedScrollback = Arc<StdMutex<ScrollbackRingBuffer>>;
 
-/// Result of `evaluate_output_target`. Carries the resume snapshot bytes
-/// when the pane transitions Detached -> Connected so the handler can
-/// enqueue them on the same channel before the next reader chunk lands.
+/// Result of `evaluate_output_target`. Only a Connected -> Detached
+/// transition is ever driven through this function; a Detached ->
+/// Connected resume is handled solely by `resume_pane_with_permit` (FR10,
+/// mux-suppressed-output-fixes task0004 — see that function's doc comment
+/// for the race-freedom this split protects).
 pub enum EvalResult {
-    /// No state change required; output_target is still correct.
+    /// No state change required; output_target is still correct. Also
+    /// returned for a would-be resume (Detached pane, owner matches, every
+    /// reason would clear): the target, its reason and its owner are left
+    /// exactly as they were, and nothing is sent or recorded.
     Unchanged,
     /// Pane was switched into Detached buffering mode.
     SwitchedToDetached,
-    /// Pane was switched (back) into Connected mode. The handler MUST send
-    /// `chunk` on the pane's output channel before any subsequent reader
-    /// chunk.
-    ///
-    /// D6''''' (round-8 rework, review round-7 finding `426db84173e6b792`):
-    /// `chunk` is a `PtyOutputChunk` already tagged `ChunkKind::Snapshot`
-    /// (via `PtyOutputChunk::snapshot`, same as the sibling
-    /// `resume_pane_with_permit` path) — NOT the default `PtyOutput` kind.
-    /// This is enforced by the TYPE, not just documented: there is no way
-    /// for a caller to extract raw bytes here and send them as a plain
-    /// `PtyOutputChunk::pty_output(...)` instead, which is what round 1
-    /// finding `20b2bed0aaf48f94` fixed for `resume_pane_with_permit` (a
-    /// `PtyOutput`-tagged send here would render the `EMSNAP2` envelope +
-    /// binary segment table literally on screen instead of being decoded —
-    /// review round-4 finding `5299d50f586b8cb8`'s failure mode). This
-    /// branch is currently unreached by any production caller (the sole
-    /// production call site, `handlers.rs`'s `evaluate_output_target(...,
-    /// false, false, ...)`, only ever drives a Connected -> Detached
-    /// transition) — kept correct for the day a caller needs the
-    /// visible-resume path through THIS function instead of
-    /// `resume_pane_with_permit`.
-    ///
-    /// mux-snapshot-output-boundary task0001 (IMPLEMENTATION.md D10): FR3
-    /// suppression (a chunk this boundary covers is never delivered to
-    /// `chunk`'s destination after it) holds regardless of which caller
-    /// drives this branch, since the boundary is recorded before this
-    /// value is even constructed. FR9/FR10 "after the snapshot" ordering
-    /// on THIS branch — re-delivering a suppressed chunk's terminal
-    /// queries / incomplete tail only after `chunk` reaches the client —
-    /// holds only when the caller honours the "MUST send `chunk` ... before
-    /// any subsequent reader chunk" contract stated above; this function
-    /// has no way to enforce that a caller actually does so.
-    ResumeWithSnapshot { chunk: PtyOutputChunk },
 }
 
 /// Outcome of `resume_pane_with_permit`. Mirrors the in-lock decision so
@@ -220,140 +192,15 @@ pub fn evaluate_output_target(
                     EvalResult::Unchanged
                 }
                 None => {
-                    // Phase C FR5 order: clear → scrollback → (alt-only, or
-                    // wrapped-ring) shadow. Routes through
-                    // `build_resume_snapshot_bytes_for_ring` so the strip +
-                    // main/alt split + wrap-restore dump-block logic stays in
-                    // lockstep with the visibility-resume SSOT
-                    // (`resume_pane_with_permit` uses the same helper).
-                    // Scrollback is read WITHOUT clearing (FR6: the buffer
-                    // lives for the lifetime of the pane), via the combined
-                    // `read_segments_with_wrap_state` so the wrap flag and
-                    // the bytes/segments always describe ONE ring state; the
-                    // helper passes the bytes through
-                    // `strip_replayable_rich_content` so the resume does not
-                    // re-spawn viewers / re-render inline images.
-                    //
-                    // NOTE: this branch is currently unreachable in
-                    // production — `handle_set_visibility` is the only
-                    // production caller of `evaluate_output_target` and it
-                    // always passes `visible == false`. Kept on the SSOT so a
-                    // future `visible == true` call site picks up the
-                    // strip / main-alt-split / wrap-restore contract for free.
-                    // D7'' (task0005 rework, review round-4 finding
-                    // `5ba2063e993baf6c`): the shadow parser's own size
-                    // tracks every `MuxPane::resize` call, so it is the
-                    // pane's dims AT THE MOMENT this snapshot is assembled
-                    // — what `screen_bytes` was actually produced at.
-                    //
-                    // mux-snapshot-output-boundary task0001 (IMPLEMENTATION.md
-                    // "Visibility resume"): the capture exclusion is taken
-                    // ONLY around these ring + shadow reads (NFR3) — it
-                    // also yields `boundary`, the output sequence number
-                    // this read set describes. Assembly, encoding and the
-                    // size check below all stay outside it.
-                    let (
-                        (
-                            buffered,
-                            buffered_segments,
-                            ring_wrapped,
-                            screen_bytes,
-                            alt_screen,
-                            current_dims,
-                        ),
-                        boundary,
-                    ) = pane.output_capture.captured_read(|| {
-                        let (buffered, buffered_segments, ring_wrapped) = pane
-                            .scrollback
-                            .lock()
-                            .unwrap()
-                            .read_segments_with_wrap_state();
-                        // mux-snapshot-ring-wrap-restore task0001 (D2): the
-                        // shadow dump is needed not only for alt-screen panes
-                        // but also for a WRAPPED main-buffer pane (the
-                        // wrap-aware builder's dump-block source). Non-wrapped
-                        // main-buffer panes still skip `contents_formatted()`
-                        // entirely — the helper would drop the slice anyway, so
-                        // this avoids both the computation and the longer
-                        // shadow-parser lock hold in the common case.
-                        let (screen_bytes, alt_screen, current_dims) = {
-                            let parser = lock_shadow_parser(&pane.shadow_parser);
-                            let alt = parser.screen().alternate_screen();
-                            let screen_bytes = if alt || ring_wrapped {
-                                parser.screen().contents_formatted()
-                            } else {
-                                Vec::new()
-                            };
-                            let (rows, cols) = parser.screen().size();
-                            (screen_bytes, alt, (cols, rows))
-                        };
-                        (
-                            buffered,
-                            buffered_segments,
-                            ring_wrapped,
-                            screen_bytes,
-                            alt_screen,
-                            current_dims,
-                        )
-                    });
-                    {
-                        // raw_passthrough is drained + cleared (so it does
-                        // not leak across detach cycles) but NOT concatenated
-                        // — replaying captured image / Markdown OSC sequences
-                        // would re-spawn viewers / re-render inline images.
-                        let mut buf = pane.raw_passthrough.lock().unwrap();
-                        let _ = buf.read_all();
-                        buf.clear();
-                    }
-                    let (snapshot, snapshot_segments) = build_resume_snapshot_bytes_for_ring(
-                        &buffered,
-                        &buffered_segments,
-                        &screen_bytes,
-                        alt_screen,
-                        ring_wrapped,
-                        current_dims,
-                    );
-                    let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
-                    // D6''' (round-6 rework, review round-5 finding
-                    // `89b58cd82d7aa713`): this producer used to enqueue
-                    // unconditionally after only LOGGING an oversize
-                    // snapshot — the connection codec then rejects any
-                    // frame over `MAX_SNAPSHOT_FRAME_PAYLOAD` and the
-                    // connection loop ends, so "visible in the log" was not
-                    // actually a safe degradation. Enforce the size policy
-                    // FOR REAL here: on oversize, fail recoverably by
-                    // leaving the pane Detached (never transition to
-                    // Connected, never hand back a doomed-to-be-rejected
-                    // frame) rather than changing replay semantics by
-                    // sending something the codec will tear the connection
-                    // down over.
-                    if !mux_ipc::protocol::fits_single_snapshot_frame(encoded_snapshot.len()) {
-                        log::error!(
-                            "visibility-resume: pane {} snapshot {}B exceeds the \
-                             single-frame limit ({}B); staying detached rather \
-                             than enqueuing a frame the codec would reject",
-                            pane.id,
-                            encoded_snapshot.len(),
-                            mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD
-                        );
-                        return EvalResult::Unchanged;
-                    }
-                    // D3 (IMPLEMENTATION.md): record (S, B) before the swap
-                    // to Connected and before the snapshot is returned —
-                    // any chunk numbered <= boundary that later reaches
-                    // this same sender is therefore either superseded by
-                    // this snapshot or suppressed by the reader (FR11).
-                    pane.output_capture.record_boundary(owned_tx, boundary);
-                    *target = PaneOutputTarget::Connected(owned_tx.clone());
-                    // D6''''' (round-8 rework, review round-7 finding
-                    // `426db84173e6b792`): tag as `ChunkKind::Snapshot`
-                    // right here — mirroring `resume_pane_with_permit`'s own
-                    // `PtyOutputChunk::snapshot(...)` call (round-1 finding
-                    // `20b2bed0aaf48f94`) — so the caller has no way to send
-                    // this as a plain `PtyOutput` chunk.
-                    EvalResult::ResumeWithSnapshot {
-                        chunk: PtyOutputChunk::snapshot(pane.id, encoded_snapshot),
-                    }
+                    // FR10 (mux-suppressed-output-fixes task0004): a
+                    // would-be resume (owner matches, every reason would
+                    // clear) is a no-op here — the target, its reason and
+                    // its owner are left exactly as they were, and nothing
+                    // is sent or recorded. Only `resume_pane_with_permit`
+                    // performs a Detached -> Connected transition; see its
+                    // doc comment for the race-freedom (FR9) this split
+                    // makes possible.
+                    EvalResult::Unchanged
                 }
             }
         }
@@ -517,9 +364,7 @@ pub fn resume_pane_with_permit(
             );
             let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
             // D6''' (round-6 rework, review round-5 finding
-            // `89b58cd82d7aa713`): see the parallel check in
-            // `evaluate_output_target`'s `ResumeWithSnapshot` branch above —
-            // same shared policy. On oversize, drop the reserved `permit`
+            // `89b58cd82d7aa713`): on oversize, drop the reserved `permit`
             // WITHOUT sending (releasing its slot) and return `NoChange`
             // instead of `Resumed` — the pane stays Detached (fail
             // recoverably) rather than being handed a frame the codec will
