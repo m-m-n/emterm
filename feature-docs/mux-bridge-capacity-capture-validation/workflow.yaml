@@ -1,0 +1,227 @@
+schema_version: 1
+feature: mux-bridge-capacity-capture-validation
+created: '2026-09-28'
+base_branch: main
+goal: '# mux bridge が長さ不正の ClientScrollbackCapacity 本体でも再接続用の保持値を上書きする
+
+
+  ## 現象
+
+  mux bridge の `capture_if_capacity` はメッセージ種別だけを確認し、ClientScrollbackCapacity のフレーム本体を長さ検証なしで再接続用の保持値（`last_capacity`）に保存する。デーモン側は長さ不正のペイロードを無視して直前の有効値を使い続けるため、正しい通知の後に長さ不正の通知が届くと、bridge
+  の保持値とデーモンが使っている値が食い違う。この状態でアップグレード通知による再接続（`reconnect_and_reattach`）が起きると不正な本体だけが再送され、新しい接続は未通知扱いで既定の
+  10,000 行に戻る。
+
+  ## 再現手順
+
+  1. bridge 経由で mux に接続し、正しい 4 バイトの ClientScrollbackCapacity（例: 0 や 5）を送る
+
+  2. 続けて長さ不正（4 バイト以外）の ClientScrollbackCapacity を送る
+
+  3. デーモンのアップグレード通知で bridge を再接続させる
+
+  4. 再接続後の接続のプローブ容量が既定の 10,000 に戻っている
+
+  ## 期待する挙動
+
+  再接続後も、直前に受け付けた有効な容量が再送される。
+
+  ## 完了の定義
+
+  - [ ] 再現手順で現象が起きない
+
+  - [ ] 再発を検出するテストがある（有効通知 → 長さ不正の通知 → 再接続の順で、有効な本体が再送されることを `src-tauri/src/mux/bridge/tests.rs`
+  で確認する）
+
+  ## 該当箇所
+
+  - `src-tauri/src/mux/bridge/forward.rs:294` 付近
+
+  - `src-tauri/src/mux/bridge/mod.rs` の `capture_if_capacity`
+
+  - 修正案: `ClientScrollbackCapacityPayload::from_payload(&msg.payload).is_some()` のときだけ保持値を更新する。フレームの転送自体は今のまま残す
+
+  - 検出元: mux-probe-scrollback-capacity の review round 1
+
+  ## 実害・発生条件
+
+  - ツリー内の唯一の送信元 `send_client_scrollback_capacity` は常にちょうど 4 バイトを送るため、改ざんされた送信元か想定外の送信元がある場合に限って起きる
+
+  - 起きた場合の影響は、再接続後にリング一周後の復元でカーソル行がずれる旧来の動作に戻ること
+
+
+  Notion task: https://www.notion.so/3e83509ec8ee8156a62eeb6e20fa1237
+
+  '
+parent_branch: em-workflow/mux-bridge-capacity-capture-validation/integration
+tier: reduced
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 1.0
+      '2': 0.0
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.89
+      '2': 0.11
+      '3': 0.0
+  at: '2026-09-28T13:20:46+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - design step
+  - IMPLEMENTATION.md (only when no two tasks declare the same file)
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    rust:
+      language: rust
+      build_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer
+        && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check
+        --manifest-path src-tauri/Cargo.toml
+      test_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer
+        && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test
+        --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
+      format_command: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      e2e_test_command: ''
+    rust_cli_only:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+        src-tauri/Cargo.toml --no-default-features
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --no-default-features --lib -- --test-threads=1
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - SPEC.md
+  status: completed
+  completed_at_commit: b4b899aa38ebd266adb25d8082494106c5d920d3
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: Internal Rust bug fix in the mux bridge with no UI or visual change
+    (requirements-analyst recommendation; tier reduced also subtracts design).
+- id: create-plan
+  artifacts:
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: 24e91d7ca6f68bc4fe07862e385f6c760b8d4c0b
+- id: implement
+  status: completed
+  base_commit: 764cccd24758b0235e14e778c3e93ea557d87ecc
+  completed_at_commit: 1464fe062af1706c3671aff03ebe5a1bf98c17a2
+- id: review
+  status: completed
+  completed_at_commit: f558ec82f557d2679908a104ee79f7369c5de740
+- id: verify
+  status: completed
+  result: pass
+  failed_items: []
+  completed_at_commit: 1ac53457095de334df332de6740eb38399745a13
+  summary: 'build (default + CLI-only) ok; lib tests 3707 passed (default) / 1143 passed (CLI-only); bridge tests 46 passed incl. TS-1..TS-3; fmt check ok; scope limited to src-tauri/src/mux/bridge/mod.rs and tests.rs'
+- id: retrospect
+  status: completed
+  completed_at_commit: e7373f18e381751c345029d3c8fbb6e183abc5d2
+tasks:
+  task0001:
+    title: Store only length-valid capacity bodies for reconnect resend
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/bridge/mod.rs
+    - src-tauri/src/mux/bridge/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: low
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - NFR1
+    - NFR2
+    status: merged
+    notes: null
+    branch: em-workflow/mux-bridge-capacity-capture-validation/task0001
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
+  perspectives:
+  - comprehensive
+  - security
+  - spec
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Store only length-valid capacity bodies
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+  FR2:
+    title: Forwarding unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+  FR3:
+    title: Value is not interpreted
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+  NFR1:
+    title: Scope
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-4
+  NFR2:
+    title: Build compatibility
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-4
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2

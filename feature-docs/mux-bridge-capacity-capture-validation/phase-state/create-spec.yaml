@@ -1,0 +1,28 @@
+schema_version: 1
+feature: mux-bridge-capacity-capture-validation
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 128f51f747ed4d1dc7f0b5e6525a66e54954968e
+last_input_digest: sha256:ab1b873ebbd3d1979de07e65c0c4cec0f82a98226e75b78a8c1fd0203760e532
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:b8c3484c9278a2809f842e93f14ecc8d3419e756253232647ddfc44efc782f68
+  output_digest: sha256:ae7babd5535e5b681c11aa3130ac865d6b76d349f018832f68421f0902dc9e87
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:ab1b873ebbd3d1979de07e65c0c4cec0f82a98226e75b78a8c1fd0203760e532
+  output_digest: null
+artifacts:
+- path: feature-docs/mux-bridge-capacity-capture-validation/SPEC.md
+  sha256: sha256:1c74dc99f094a023443aa9ab5053eab33ccec5d64403256552b6aacf9cc61779
+  produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
