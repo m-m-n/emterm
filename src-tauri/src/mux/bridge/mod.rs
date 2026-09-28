@@ -4,7 +4,8 @@
 //! and MuxMessage frames on the Unix domain socket.
 
 use mux_ipc::protocol::{
-    ClientType, HelloMsg, MAX_FRAME_LENGTH, MessageType, MuxMessage, PROTOCOL_VERSION,
+    ClientScrollbackCapacityPayload, ClientType, HelloMsg, MAX_FRAME_LENGTH, MessageType,
+    MuxMessage, PROTOCOL_VERSION,
 };
 
 use std::sync::Arc;
@@ -301,11 +302,18 @@ fn capture_if_attach(msg: &MuxMessage, body: &[u8]) -> Option<Vec<u8>> {
 
 /// Returns the raw frame body to remember for a later reconnect's
 /// re-send (mux-probe-scrollback-capacity task0001, AC-6/AC-7) when `msg`
-/// is a `ClientScrollbackCapacity` report; `None` otherwise. The bridge
-/// never interprets the value (IMPLEMENTATION.md D1) — it only stores the
-/// latest frame body verbatim, mirroring `capture_if_attach`.
+/// is a `ClientScrollbackCapacity` report AND its payload is length-valid —
+/// accepted by [`ClientScrollbackCapacityPayload::from_payload`], which
+/// requires exactly 4 bytes (mux-bridge-capacity-capture-validation
+/// task0001 AC-1). `None` for every other message type, and for a
+/// length-invalid capacity payload — so a length-invalid report never
+/// displaces a previously retained valid one. The bridge never interprets
+/// the accepted value (IMPLEMENTATION.md D1): it only stores the latest
+/// length-valid frame body verbatim, mirroring `capture_if_attach`.
 fn capture_if_capacity(msg: &MuxMessage, body: &[u8]) -> Option<Vec<u8>> {
-    if msg.msg_type == MessageType::ClientScrollbackCapacity {
+    if msg.msg_type == MessageType::ClientScrollbackCapacity
+        && ClientScrollbackCapacityPayload::from_payload(&msg.payload).is_some()
+    {
         Some(body.to_vec())
     } else {
         None
