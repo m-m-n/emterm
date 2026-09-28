@@ -207,34 +207,79 @@ impl ScrollbackWriteFilter {
     /// `mux::ipc::pty_spawn::suppressed_output`'s replacement-payload builder
     /// to re-deliver this filter's own held-back tail when a suppressed
     /// chunk's incomplete trailing run coincides with it.
+    ///
+    /// task0002 (mux-suppressed-output-fixes) postcondition: after every
+    /// [`Self::feed`] call, this is either empty, or starts at the `ESC`
+    /// that opens the single OSC/DCS/APC string — or the lone trailing
+    /// `ESC` — still INCOMPLETE (see [`find_safe_boundary`]'s doc for
+    /// incomplete vs aborted) at the end of the fed main-buffer stream, and
+    /// holds exactly that sequence's bytes: never a closed (complete or
+    /// ESC-aborted) sequence, and never any byte after one. The only
+    /// exception is right after the [`SCROLLBACK_FILTER_PENDING_CAP`]
+    /// overflow flush, when it is always empty.
     pub(in crate::mux) fn pending(&self) -> &[u8] {
         &self.pending
     }
 }
 
-/// Find the position of the first unterminated strip-target introducer in
-/// `bytes`. If every strip-target sequence in `bytes` is closed (or there
-/// are none), returns `bytes.len()` — everything is safe to emit.
+/// Find the position of the first still-INCOMPLETE strip-target introducer
+/// (or lone trailing ESC) in `bytes`. If every strip-target sequence in
+/// `bytes` is either closed or genuinely absent, returns `bytes.len()` —
+/// everything is safe to emit.
 ///
-/// Strip-target introducers we look for (matches
-/// [`strip_replayable_rich_content`]):
-/// - `ESC _ G` — Kitty APC. Terminator: `ESC \`.
-/// - `ESC P` — any DCS. Terminator: `ESC \`. (Non-SIXEL DCS bodies still ride
-///   here so an unterminated DCS is not accidentally split — the strip
-///   function will decide whether to drop it once complete.)
-/// - `ESC ]` — any OSC. Terminator: BEL (`0x07`) or `ESC \`.
+/// task0002 (mux-suppressed-output-fixes, FR1/FR2/FR5): this scan follows
+/// the SAME transition rules `term_core`'s parser applies (see
+/// `crates/term_core/src/parser/{osc,dcs,apc,escape}.rs`), so this filter's
+/// notion of "where a string is still open" agrees with the client's —
+/// see [`ScrollbackWriteFilter::pending`]'s doc for the postcondition this
+/// guarantees.
 ///
-/// Any other byte after `ESC` (`[` = CSI, standalone escape, etc.) is not a
-/// strip target and does not force a boundary.
+/// **Incomplete vs aborted.** An OSC/DCS/APC string opened by `ESC ] / ESC P
+/// / ESC _` closes in exactly one of three ways once its introducer is seen:
+/// - **Complete**: BEL (OSC only) or `ESC \` (ST, all three kinds). The scan
+///   resumes right after the terminator.
+/// - **Aborted**: `ESC` followed by any OTHER byte. The string is CLOSED
+///   there — not held — and that following byte is processed as the start of
+///   a fresh escape sequence (mirrors `term_core`'s `*_escape` handlers,
+///   which dispatch the string as `Unterminated` and re-feed the byte to
+///   `escape()`). The scan resumes AT the aborting `ESC`, not past it, so a
+///   string beginning there is recognized as its own attempt.
+/// - **Incomplete**: the buffer runs out before either of the above is seen —
+///   including an `ESC` that is the very last byte (we don't yet know if the
+///   next byte will complete it as `\\`, abort it, or start something else
+///   next time). The WHOLE string — from its own opening `ESC` — is held.
+///
+/// **Other escapes** (not OSC/DCS/APC introducers):
+/// - `ESC ESC`: the first `ESC` is superseded (mirrors `term_core`'s escape
+///   handler staying in the `Escape` state on a second `ESC`); the SECOND
+///   `ESC` is the candidate introducer, re-examined on the next loop
+///   iteration.
+/// - `ESC (` / `ESC )` (charset designation): the byte right after `(`/`)`
+///   is ALWAYS consumed as the designator — even if it is itself an `ESC` —
+///   and never re-examined as a fresh introducer (mirrors
+///   `escape_charset`'s unconditional dispatch). Three bytes are consumed as
+///   one unit when all three are present; if the chunk ends right after `(`
+///   / `)` with no designator byte yet, nothing is held for it (not an
+///   OSC/DCS/APC/lone-ESC shape the pending contract allows) and the scan
+///   simply ends.
+/// - A lone `ESC` as the very last byte: held (see "Incomplete" above) —
+///   it may still turn out to introduce a string once the next byte arrives.
+/// - Any other `ESC <byte>` (CSI `[`, two-byte dispatches like `X` / `^`,
+///   etc.): a complete, non-string escape. Not a strip target, not held —
+///   the scan just steps past both bytes.
 fn find_safe_boundary(bytes: &[u8]) -> usize {
     let n = bytes.len();
     let mut i = 0;
     while i < n {
-        if bytes[i] != 0x1b || i + 1 >= n {
+        if bytes[i] != 0x1b {
             i += 1;
             continue;
         }
         let intro_start = i;
+        if i + 1 >= n {
+            // Lone trailing ESC: incomplete, held whole (1 byte).
+            return intro_start;
+        }
         match bytes[i + 1] {
             b'_' => {
                 // APC. Only Kitty (ESC _ G) is a strip target — but even a
@@ -242,18 +287,33 @@ fn find_safe_boundary(bytes: &[u8]) -> usize {
                 // before its body is safe to emit; without one, we cannot tell
                 // where its body ends. Same tail-buffer rule either way.
                 match find_st(bytes, i + 2) {
-                    Some(end) => i = end,
-                    None => return intro_start,
+                    StringScanResult::Complete(end) => i = end,
+                    StringScanResult::Aborted(abort_pos) => i = abort_pos,
+                    StringScanResult::Incomplete => return intro_start,
                 }
             }
             b'P' => match find_st(bytes, i + 2) {
-                Some(end) => i = end,
-                None => return intro_start,
+                StringScanResult::Complete(end) => i = end,
+                StringScanResult::Aborted(abort_pos) => i = abort_pos,
+                StringScanResult::Incomplete => return intro_start,
             },
             b']' => match find_osc_end(bytes, i + 2) {
-                Some(end) => i = end,
-                None => return intro_start,
+                StringScanResult::Complete(end) => i = end,
+                StringScanResult::Aborted(abort_pos) => i = abort_pos,
+                StringScanResult::Incomplete => return intro_start,
             },
+            0x1b => {
+                // ESC ESC: the first ESC is superseded; re-evaluate starting
+                // at the second one.
+                i += 1;
+            }
+            b'(' | b')' => {
+                // Charset designation: the next byte is ALWAYS the
+                // designator, consumed unconditionally (even if it is an
+                // ESC) — never a fresh introducer. If it isn't available yet
+                // there is nothing left in this buffer to hold for it.
+                if i + 2 < n { i += 3 } else { i = n }
+            }
             _ => {
                 i += 2;
             }
@@ -262,41 +322,70 @@ fn find_safe_boundary(bytes: &[u8]) -> usize {
     n
 }
 
-/// Find the index just past an ST (`ESC \`) terminator starting at or after
-/// `from`. Returns the byte index immediately AFTER the trailing `\\`, or
-/// `None` if no ST is present. Mirrors the terminator scan in
+/// Outcome of scanning for an OSC/DCS/APC string's terminator (see
+/// [`find_st`] / [`find_osc_end`]). Named identically in spirit to
+/// `mux::ipc::pty_spawn::suppressed_output`'s own `OscScanResult` (that
+/// module scans independently — see IMPLEMENTATION.md D1 — this is not a
+/// shared type, just the same three-way distinction FR2 requires).
+enum StringScanResult {
+    /// Index just past the terminator.
+    Complete(usize),
+    /// Index of the aborting `ESC` (followed by a byte that is not `\\`) —
+    /// the string is CLOSED there, not held; the caller resumes scanning AT
+    /// this index as a fresh escape sequence.
+    Aborted(usize),
+    /// The buffer ran out before either a terminator or an abort was seen —
+    /// the caller holds the WHOLE string from its own opening `ESC`.
+    Incomplete,
+}
+
+/// Find how an ST-only string (APC / DCS) starting at `from` (the first body
+/// byte, right after the introducer) ends. Mirrors the terminator scan in
 /// [`crate::mux::scrollback_filter`] so the boundary detector and the
-/// stripper agree on what "complete" means.
-fn find_st(bytes: &[u8], from: usize) -> Option<usize> {
+/// stripper agree on what "complete" means, and `term_core`'s
+/// `apc_escape` / `dcs_escape` state handlers for the abort case.
+fn find_st(bytes: &[u8], from: usize) -> StringScanResult {
     let mut j = from;
-    while j + 1 < bytes.len() {
-        if bytes[j] == 0x1b && bytes[j + 1] == b'\\' {
-            return Some(j + 2);
+    while j < bytes.len() {
+        if bytes[j] == 0x1b {
+            if j + 1 < bytes.len() {
+                return if bytes[j + 1] == b'\\' {
+                    StringScanResult::Complete(j + 2)
+                } else {
+                    StringScanResult::Aborted(j)
+                };
+            }
+            // ESC is the last available byte: still incomplete (may yet
+            // become ST).
+            return StringScanResult::Incomplete;
         }
         j += 1;
     }
-    None
+    StringScanResult::Incomplete
 }
 
-/// Find the index just past an OSC terminator (BEL `0x07` or ST `ESC \`)
-/// starting at `from`. Returns `None` if the OSC is unterminated. A bare
-/// `ESC` that is not the start of ST aborts the scan and returns `None`
-/// (mirrors `scrollback_filter::find_osc_terminator`).
-fn find_osc_end(bytes: &[u8], from: usize) -> Option<usize> {
+/// Find how an OSC string (terminator BEL or ST) starting at `from` (the
+/// first body byte, right after `ESC ]`) ends. Mirrors `term_core`'s
+/// `osc_escape` state handler for the abort case.
+fn find_osc_end(bytes: &[u8], from: usize) -> StringScanResult {
     let mut j = from;
     while j < bytes.len() {
         if bytes[j] == 0x07 {
-            return Some(j + 1);
+            return StringScanResult::Complete(j + 1);
         }
         if bytes[j] == 0x1b {
-            if j + 1 < bytes.len() && bytes[j + 1] == b'\\' {
-                return Some(j + 2);
+            if j + 1 < bytes.len() {
+                return if bytes[j + 1] == b'\\' {
+                    StringScanResult::Complete(j + 2)
+                } else {
+                    StringScanResult::Aborted(j)
+                };
             }
-            return None;
+            return StringScanResult::Incomplete;
         }
         j += 1;
     }
-    None
+    StringScanResult::Incomplete
 }
 
 /// (pattern, is_enter) pairs for the alt-screen toggle CSI sequences.

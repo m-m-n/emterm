@@ -173,7 +173,7 @@ pub(in crate::mux) fn build_snapshot_bytes(
         scrollback_segments,
         screen,
         alt_screen,
-        true,
+        AltToggleTiming::Trailing,
         current_dims,
     )
 }
@@ -189,10 +189,24 @@ pub(in crate::mux) fn build_snapshot_bytes(
 ///   `term_core`; emitting `ESC[3J` (ED 3) here would wipe that existing
 ///   history. The reattach path does emit `ESC[3J` because it REPLACES the
 ///   client's history with the daemon's snapshot of the ring buffer.
-/// - **No trailing `ESC[?1049{h,l}` toggle.** Visibility resume preserves
-///   the current behavior of not emitting the alt-mode normalization. (If
-///   this turns out to be wrong for an alt-screen pane resumed after a
-///   visibility hide, fix it as a separate task — out of scope here.)
+/// - **The alt-mode toggle, when present, sits BEFORE `screen`, not
+///   trailing.** mux-suppressed-output-fixes task0003 (IMPLEMENTATION.md
+///   D5): the GUI's Snapshot-kind apply path always starts from
+///   `TerminalCore::reset()` — a ground parser on the main screen,
+///   whatever screen the client showed before (finding (i)) — and a
+///   buffer-switch sequence (CSI 47/1047/1049) mid-payload takes effect at
+///   the exact byte it appears, with every later payload byte drawn on the
+///   switched-to screen (finding (ii); `term_core` keeps one physical grid
+///   — see `MODE_ALT_SCREEN` — so the switch is a mode-flag flip, not a
+///   buffer copy, and whatever is drawn after it simply overwrites what was
+///   there). Given both findings, the alt-screen branch places
+///   `ESC[?1049h` between `scrollback` and `screen` so the replay is
+///   already on the alternate screen by the time `screen` (the shadow
+///   parser's dump) draws onto it, landing the client on the alternate
+///   screen with `screen`'s content visible. The main-buffer branch is
+///   untouched — no toggle at all, byte-identical to before this task —
+///   because finding (i) already guarantees the client lands on the main
+///   screen with a ground parser regardless.
 ///
 /// Layout:
 ///
@@ -201,7 +215,7 @@ pub(in crate::mux) fn build_snapshot_bytes(
 ///     ESC[H ESC[2J + strip(scrollback)
 ///
 /// alt_screen = true  (alt-screen pane):
-///     ESC[H ESC[2J + strip(scrollback) + screen
+///     ESC[H ESC[2J + strip(scrollback) + ESC[?1049h + screen
 /// ```
 pub(in crate::mux) fn build_resume_snapshot_bytes(
     scrollback: &[u8],
@@ -210,26 +224,55 @@ pub(in crate::mux) fn build_resume_snapshot_bytes(
     alt_screen: bool,
     current_dims: (u16, u16),
 ) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
+    // D5: the alt-screen resume payload needs the toggle BEFORE `screen`
+    // (so the replay is on the alternate screen when `screen` draws); the
+    // main-buffer payload needs no toggle at all (unchanged — see this
+    // function's doc).
+    let alt_toggle = if alt_screen {
+        AltToggleTiming::BeforeScreen
+    } else {
+        AltToggleTiming::None
+    };
     build_snapshot_bytes_with_layout(
         b"\x1b[H\x1b[2J",
         scrollback,
         scrollback_segments,
         screen,
         alt_screen,
-        false,
+        alt_toggle,
         current_dims,
     )
+}
+
+/// When (and where, relative to `screen`) [`build_snapshot_bytes_with_layout`]
+/// emits the `ESC[?1049{h,l}` alt-mode toggle. See that function's doc for
+/// the full contract, and [`build_resume_snapshot_bytes`]'s doc
+/// (mux-suppressed-output-fixes task0003, D5) for why the visibility-resume
+/// alt-screen layout needs `BeforeScreen` instead of `Trailing`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AltToggleTiming {
+    /// No toggle at all (visibility-resume, main-buffer pane — unchanged).
+    None,
+    /// Emitted after `screen` (or right after `scrollback` when `screen` is
+    /// empty, i.e. a main-buffer pane) — the reattach / on-demand snapshot
+    /// layout. Unchanged (NFR1).
+    Trailing,
+    /// Emitted between `scrollback` and `screen` — the visibility-resume
+    /// alt-screen layout: the client must already be on the alternate
+    /// screen by the time `screen` (the shadow parser's dump) replays onto
+    /// it.
+    BeforeScreen,
 }
 
 /// SSOT for snapshot byte assembly. Applies the shared rich-content strip
 /// (remapping `scrollback_segments` past whatever it removes) to
 /// `scrollback`, includes `screen` only when `alt_screen == true`
 /// (main-buffer panes rebuild from scrollback alone — see [`build_snapshot_bytes`]
-/// for the rationale), and emits the trailing alt-mode toggle only when
-/// `emit_alt_toggle == true`.
+/// for the rationale), and emits the alt-mode toggle — positioned per
+/// `alt_toggle` — only when `alt_toggle != AltToggleTiming::None`.
 ///
 /// Callers parameterize the clear prefix (`ESC[3J ESC[H ESC[2J` for reattach,
-/// `ESC[H ESC[2J` for visibility resume) and the toggle flag; the
+/// `ESC[H ESC[2J` for visibility resume) and the toggle timing; the
 /// strip / split logic is shared.
 ///
 /// Segment offset assembly: the FIRST returned segment (if any) always
@@ -264,7 +307,7 @@ fn build_snapshot_bytes_with_layout(
     scrollback_segments: &[(usize, u16, u16)],
     screen: &[u8],
     alt_screen: bool,
-    emit_alt_toggle: bool,
+    alt_toggle: AltToggleTiming,
     current_dims: (u16, u16),
 ) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
     // D8'' (task0005 rework, review round-4 finding `03c11d98f82dfa1c`):
@@ -286,23 +329,26 @@ fn build_snapshot_bytes_with_layout(
     let watch_offsets: Vec<usize> = scrollback_segments.iter().map(|&(off, _, _)| off).collect();
     let (scrollback, remapped_offsets) = strip_rich_content_and_remap(scrollback, &watch_offsets);
     let screen_to_include: &[u8] = if alt_screen { screen } else { &[] };
-    let alt_mode: &[u8] = if emit_alt_toggle {
-        if alt_screen {
-            b"\x1b[?1049h"
-        } else {
-            b"\x1b[?1049l"
-        }
-    } else {
+    let alt_mode: &[u8] = if alt_toggle == AltToggleTiming::None {
         &[]
+    } else if alt_screen {
+        b"\x1b[?1049h"
+    } else {
+        b"\x1b[?1049l"
     };
     let mut combined = Vec::with_capacity(
         clear_prefix.len() + scrollback.len() + screen_to_include.len() + alt_mode.len(),
     );
     combined.extend_from_slice(clear_prefix);
     combined.extend_from_slice(&scrollback);
+    if alt_toggle == AltToggleTiming::BeforeScreen {
+        combined.extend_from_slice(alt_mode);
+    }
     let screen_pos = combined.len();
     combined.extend_from_slice(screen_to_include);
-    combined.extend_from_slice(alt_mode);
+    if alt_toggle == AltToggleTiming::Trailing {
+        combined.extend_from_slice(alt_mode);
+    }
 
     // D1''''' (round-8 rework, review round-7 finding `01f91fe698ceb287`):
     // the FIRST entry only gets folded onto position 0 (covering
@@ -392,10 +438,10 @@ pub(in crate::mux) fn build_snapshot_bytes_for_ring(
 }
 
 /// Wrap-aware visibility-resume layout SSOT (mux-snapshot-ring-wrap-restore
-/// task0001, D2). Both visibility-resume sites
-/// (`mux::session::pane::output_target::resume_pane_with_permit`, the
-/// `evaluate_output_target` resume branch) route through this function
-/// instead of [`build_resume_snapshot_bytes`] directly.
+/// task0001, D2). The visibility-resume site
+/// (`mux::session::pane::output_target::resume_pane_with_permit`) routes
+/// through this function instead of [`build_resume_snapshot_bytes`]
+/// directly.
 ///
 /// Same contract as [`build_snapshot_bytes_for_ring`], relative to
 /// [`build_resume_snapshot_bytes`] instead of [`build_snapshot_bytes`] —
@@ -743,12 +789,21 @@ mod tests {
     /// `build_resume_snapshot_bytes` (visibility-resume path) shares the
     /// strip + main/alt split with `build_snapshot_bytes` but uses the
     /// shorter clear prefix `ESC[H ESC[2J` (no `ESC[3J` — the client is
-    /// already attached and carries the pane's scrollback in its `term_core`)
-    /// and emits NO trailing `ESC[?1049{h,l}` toggle. This pins both the
-    /// main-buffer and alt-screen layouts so future drift is caught.
+    /// already attached and carries the pane's scrollback in its `term_core`).
+    /// The main-buffer branch emits NO alt-mode toggle at all (unchanged);
+    /// the alt-screen branch emits `ESC[?1049h` BETWEEN `scrollback` and
+    /// `screen` (mux-suppressed-output-fixes task0003, D5 — see
+    /// `build_resume_snapshot_bytes`'s doc). This pins both the main-buffer
+    /// and alt-screen layouts so future drift is caught.
+    ///
+    /// Confirmed to fail pre-fix: before this task, the alt-screen branch
+    /// emitted no toggle at all (same as main-buffer) — the alt-screen
+    /// assertions below (`SB\x1b[?1049hSC` / a lone `\x1b[?1049h` for empty
+    /// inputs) would have failed against the old `SBSC` / no-toggle output.
     #[test]
     fn build_resume_snapshot_bytes_layout_main_buffer_and_alt_screen() {
-        // Main-buffer pane: screen slice omitted, no trailing toggle.
+        // Main-buffer pane: screen slice omitted, no toggle at all —
+        // byte-identical to before this task.
         assert_eq!(
             build_resume_snapshot_bytes(b"SB", &[], b"SC", false, (80, 24)).0,
             b"\x1b[H\x1b[2JSB",
@@ -758,16 +813,78 @@ mod tests {
             build_resume_snapshot_bytes(b"", &[], b"", false, (80, 24)).0,
             b"\x1b[H\x1b[2J",
         );
-        // Alt-screen pane: screen slice included, no trailing toggle.
+        // Alt-screen pane: the toggle sits BETWEEN scrollback and screen,
+        // not trailing — the client must already be on the alternate
+        // screen when `screen` draws.
         assert_eq!(
             build_resume_snapshot_bytes(b"SB", &[], b"SC", true, (80, 24)).0,
-            b"\x1b[H\x1b[2JSBSC",
+            b"\x1b[H\x1b[2JSB\x1b[?1049hSC",
         );
-        // Empty inputs, alt-screen: just the clear prefix.
+        // Empty inputs, alt-screen: the toggle still applies — mode
+        // correctness does not depend on `screen` having content (AC-3).
         assert_eq!(
             build_resume_snapshot_bytes(b"", &[], b"", true, (80, 24)).0,
-            b"\x1b[H\x1b[2J",
+            b"\x1b[H\x1b[2J\x1b[?1049h",
         );
+    }
+
+    /// AC-1/AC-3 (FR8; TS-9), builder level: the alternate-screen resume
+    /// layout places `ESC[?1049h` before `screen`, so replaying the whole
+    /// payload through `TerminalCore::reset_and_replay_segments` — the same
+    /// entry point the GUI's Snapshot-kind apply path uses (D5 finding (i))
+    /// — leaves the client on the alternate screen with `screen`'s content
+    /// visible, regardless of what `scrollback` (the stripped main-buffer
+    /// history) contains.
+    #[test]
+    fn build_resume_snapshot_bytes_alt_screen_layout_replays_onto_the_alternate_screen() {
+        use term_core::terminal_core::{MODE_ALT_SCREEN, TerminalCore};
+
+        let scrollback = b"before-alt-history\r\n";
+        let screen = b"\x1b[H\x1b[2J\x1b[1;1HALT-SCREEN-CONTENT";
+        let (payload, _segments) =
+            build_resume_snapshot_bytes(scrollback, &[], screen, true, (80, 24));
+
+        let mut client = TerminalCore::new(80, 24, 10_000);
+        client.reset_and_replay_segments(&payload, &[]);
+
+        assert!(
+            client.get_mode(MODE_ALT_SCREEN),
+            "AC-1/AC-3: replaying the alt-screen resume payload must leave \
+             the client on the alternate screen"
+        );
+        assert!(
+            client.get_line_text(0).contains("ALT-SCREEN-CONTENT"),
+            "the alternate screen's visible content must come from `screen`"
+        );
+    }
+
+    /// AC-2, builder level: the main-buffer resume layout never emits the
+    /// alt-mode toggle, so replaying it always leaves the client on the
+    /// main screen — independent of whatever alt-screen state the client
+    /// was in before the replay (finding (i): `reset_and_replay_segments`
+    /// always starts from a fresh, main-screen, ground-parser state).
+    #[test]
+    fn build_resume_snapshot_bytes_main_buffer_layout_replays_onto_the_main_screen() {
+        use term_core::terminal_core::{MODE_ALT_SCREEN, TerminalCore};
+
+        let scrollback = b"main-history\r\n";
+        let (payload, _segments) =
+            build_resume_snapshot_bytes(scrollback, &[], b"UNUSED-SCREEN", false, (80, 24));
+
+        // The client starts ON the alternate screen, mirroring "the client
+        // model was on the alternate screen before the apply" (AC-2).
+        let mut client = TerminalCore::new(80, 24, 10_000);
+        client.process_pty_data_fully(b"\x1b[?1049h");
+        assert!(client.get_mode(MODE_ALT_SCREEN), "test setup sanity check");
+
+        client.reset_and_replay_segments(&payload, &[]);
+
+        assert!(
+            !client.get_mode(MODE_ALT_SCREEN),
+            "AC-2: the main-buffer resume payload must leave the client on \
+             the main screen even when it started on the alternate screen"
+        );
+        assert!(client.get_line_text(0).contains("main-history"));
     }
 
     /// `build_resume_snapshot_bytes` must strip rich-content launch

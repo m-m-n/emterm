@@ -1,0 +1,165 @@
+schema_version: 1
+feature: mux-suppressed-output-fixes
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 074ac149104740b218c4c9e2969277f747e70bd1
+last_input_digest: sha256:ba5d6c59fbcb77d506cf610cbaa9ff6b40650033082517f58c4aef77a91dcc34
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-09-28T13:40:00+09:00'
+    questions:
+    - question_id: req.viewer-launch-in-suppressed-chunk
+      status: answered
+    - question_id: req.alt-screen-on-visibility-resume
+      status: answered
+    - question_id: req.cursor-position-query-order
+      status: answered
+    - question_id: req.resume-with-snapshot-branch
+      status: answered
+    - question_id: req.cross-chunk-parse-state-cost
+      status: answered
+    - question_id: req.write-filter-aborted-osc-scope
+      status: answered
+    - question_id: req.decision-record-location
+      status: answered
+    - question_id: design-step.recommendation
+      status: obsolete
+answers:
+  req.viewer-launch-in-suppressed-chunk:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-28T13:48:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - viewer_only
+    freeform: null
+    normalized_answer: 完結したビューア起動を置換出力で snapshot の後に 1 回届ける。インライン画像は既知の欠落として残す
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation);
+      Codex (1 turn) suggested viewer_only which maps to the worker''s recommended
+      option; reason: ビューア起動の欠落を直し snapshot 後に一度だけ届ける。インライン画像は既知制限を維持し、同じ stable_id
+      内で対象別に判断を記録する'
+  req.alt-screen-on-visibility-resume:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-28T13:48:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - restore_in_resume_snapshot
+    freeform: null
+    normalized_answer: 可視化復帰の snapshot に代替画面モードの復元を加える
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation);
+      Codex (1 turn) suggested restore_in_resume_snapshot which maps to the worker''s
+      recommended option; reason: 切替列が抑止されると現状の復帰 snapshot では画面モードを復元できない。前 NFR1 の限定例外とし、画面切替と
+      apt 表示の回帰テストを必須にする'
+  req.cursor-position-query-order:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-28T13:48:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - record_not_needed
+    freeform: null
+    normalized_answer: 対応不要として記録する
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation);
+      Codex (1 turn) suggested record_not_needed which maps to the worker''s recommended
+      option; reason: snapshot 適用後の位置で応答する差は前 SPEC が許容済み。問い合わせの順序と応答回数はテストする'
+  req.resume-with-snapshot-branch:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-28T13:48:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - remove_branch
+    freeform: null
+    normalized_answer: EvalResult::ResumeWithSnapshot 分岐と関連テストを削除する
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation);
+      Codex (1 turn) suggested remove_branch which maps to the worker''s recommended
+      option; reason: 本番から到達せず、snapshot 送信前に Connected へ切り替わる危険が残る。実際の復帰経路で順序保証をテストする'
+  req.cross-chunk-parse-state-cost:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-28T13:48:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - bounded_tail_copy
+    freeform: null
+    normalized_answer: 通常経路では直前チャンク末尾を上限付きでコピーするだけにし、解析は抑止チャンクのときだけ行う
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation);
+      Codex (1 turn) suggested bounded_tail_copy which maps to the worker''s recommended
+      option; reason: 上限付き末尾コピーを前 NFR4 の限定例外にする。解析開始状態と上限超過時の扱いを定義し、分割位置を変えてテストする'
+  req.write-filter-aborted-osc-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-28T13:48:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - fix_write_filter_too
+    freeform: null
+    normalized_answer: ScrollbackWriteFilter でも中断済み OSC を term_core と同じ規則で閉じたものとして扱い、保留を解く
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation);
+      Codex (1 turn) suggested fix_write_filter_too which maps to the worker''s recommended
+      option; reason: 置換側だけでは原因が残る。書き込み側も term_core の規則に揃え、末尾 ESC の分割と副作用の二重実行をテストする'
+  req.decision-record-location:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-28T13:48:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - this_feature_docs
+    freeform: null
+    normalized_answer: feature-docs/mux-suppressed-output-fixes/ に stable_id ごとの判断表を残し、round1.yaml
+      は変更しない
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation);
+      Codex (1 turn) suggested this_feature_docs which maps to the worker''s recommended
+      option; reason: PR #107 の round1 は当時の記録として残す。今回の資料に stable_id ごとの判定・根拠・回帰テストとの対応を記録する'
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-28T14:05:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step skipped per analyst recommendation (no UI change)
+    resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously
+      accepted the analyst recommendation skip'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-28T14:20:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: src-tauri/src/render/theme.rs'
+    resolution_note: 'gate: create-spec.design-system; design step skipped with 3
+      candidates, batch policy top_candidate_or_none -> project_native (top candidate
+      theme.rs)'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:14f7b2b782cc3f336c8810afdca1d429b1005582b1f38172fa6854bfbfe8ac29
+  output_digest: sha256:5b7194dc3c6663a9ad5472c42cf56954166f2caf89a2149e076623e244e1c50d
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:f1ab8e8870a78c4cba2205fdd060133e46be3d3934758aa83e183e9a7e96c0ec
+  output_digest: sha256:a9f8775a9a8b07ba28a750b978977105ebce679a43d5abf94e3cec396442b595
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:ba5d6c59fbcb77d506cf610cbaa9ff6b40650033082517f58c4aef77a91dcc34
+  output_digest: null
+artifacts:
+- path: feature-docs/mux-suppressed-output-fixes/REQUIREMENTS.md
+  sha256: sha256:e959013559c52a6b2b8db96927b3e89b7a2919a36b017481e43971908cee0ca7
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-suppressed-output-fixes/SPEC.md
+  sha256: sha256:e639a3782f45674c9ea2dd08f174d1c7068761d4d0868a956402f7ca32af433d
+  produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

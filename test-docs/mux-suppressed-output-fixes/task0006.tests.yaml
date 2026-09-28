@@ -1,0 +1,125 @@
+task_id: task0006
+baseline_failures: []          # CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib: 3777 passed; 0 failed; 3 ignored
+final_failures: []             # same command, post-implementation: 3781 passed; 0 failed; 3 ignored (+4 new tests, 0 regressions)
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::session::pane::tests::visibility_resume_after_hidden_alt_exit_shows_main_screen
+    red_confirmed: true
+    red_reason: >-
+      The test passes against the current, unmodified production code (the
+      main-buffer resume branch already reads the shadow parser's CURRENT
+      alt-screen flag at resume time, so it was already correct — no
+      production file in this task's expected_files/contingency list
+      needed a change). To confirm the test is actually sensitive to the
+      behavior AC-1 describes, `output_target.rs`'s
+      `resume_pane_with_permit` was temporarily edited (`let alt =
+      parser.screen().alternate_screen();` replaced with `let alt = true;`)
+      and the test re-run: it failed with "AC-1: after applying the resume
+      snapshot, the client model must be on the main screen". The edit was
+      then reverted byte-for-byte (confirmed via `git diff --stat
+      src-tauri/src/mux/session/pane/output_target.rs` showing no diff)
+      before any commit.
+  AC-2:
+    tests:
+      - mux::session::pane::tests::visibility_resume_keeps_main_pane_progress_bar_layout
+    red_confirmed: true
+    red_reason: >-
+      The test passes against the current, unmodified production code (the
+      main-buffer resume branch reconstructs the whole scroll-region /
+      cursor state from scrollback alone, which already worked). To confirm
+      sensitivity, `resume_pane_with_permit` was temporarily edited to pass
+      a truncated `buffered` slice (`&buffered[..buffered.len() -
+      2]`, dropping the trailing DECRC) into
+      `build_resume_snapshot_bytes_for_ring`, and the test re-run: it failed
+      with "assertion `left == right` failed: AC-2: cursor row must survive
+      the hide/resume cycle / left: 23 / right: 0". The edit was then
+      reverted byte-for-byte (confirmed via `git diff --stat` showing no
+      diff on `output_target.rs`) before any commit.
+  AC-3:
+    tests:
+      - mux::session::pane::tests::visibility_resume_restores_alt_screen_mode_and_content
+      - mux::snapshot_bytes::tests::build_resume_snapshot_bytes_main_buffer_layout_replays_onto_the_main_screen
+    red_confirmed: false
+    red_reason: >-
+      Non-regression criterion ("pass unmodified"), not a red-to-green one:
+      neither test's body was edited by this task, and both continue to
+      pass after the two AC-1/AC-2 tests were restored (see final_failures).
+      No contingency fix was needed — `src-tauri/src/mux/snapshot_bytes.rs`
+      and `src-tauri/src/mux/session/pane/output_target.rs` have zero diff
+      against the task's starting commit (confirmed via `git diff --stat`).
+      There is no red state to observe for a "stays unmodified" criterion.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source
+      - mux::ipc::pty_spawn::tests::registry_test_name_lookup_reports_a_deliberately_undefined_name_as_missing
+    red_confirmed: true
+    red_reason: >-
+      Both are genuinely new tests over genuinely new production-adjacent
+      logic (the `registry_test_name_is_defined_in_crate_source` lookup),
+      confirmed red in two steps before the real implementation existed.
+      (1) With the lookup stubbed to always return `true`,
+      `registry_test_name_lookup_reports_a_deliberately_undefined_name_as_missing`
+      failed: "the lookup must report a name that is never defined as
+      missing". (2) With the lookup stubbed to always return `false`,
+      `every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source`
+      failed: 'D7 registry test name
+      "suppressed_alt_osc_color_query_split_inside_st_is_delivered_once" is
+      not defined as a function anywhere under src-tauri/src'. The real
+      recursive-scan implementation was then written and both tests pass.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::decisions_md_contains_every_d7_registry_test_name
+      - mux::ipc::pty_spawn::tests::decisions_md_splits_9e6a468b3a45ceeb_into_addressed_viewer_launch_and_unaddressed_inline_image
+      - mux::ipc::pty_spawn::tests::decisions_md_every_row_has_a_verdict_and_nonempty_rationale_and_tests
+      - mux::ipc::pty_spawn::tests::decisions_md_carries_the_known_gap_register
+    red_confirmed: true
+    red_reason: >-
+      `decisions_md_contains_every_d7_registry_test_name` reads the checked-in
+      DECISIONS.md at compile time (`include_str!`), so its own registry
+      list (`D7_REGISTRY_TEST_NAMES`, shared with the new AC-4 structural
+      test) was extended with `viewer_launch_image_kind_is_not_redelivered_d3`
+      BEFORE the DECISIONS.md content itself was corrected. Re-running the
+      test against the OLD DECISIONS.md content at that point (via `git
+      stash push -- feature-docs/mux-suppressed-output-fixes/DECISIONS.md`,
+      then `cargo test`, then `git stash pop` to restore) produced a real
+      failure: 'DECISIONS.md must cite the D7 registry test name
+      "viewer_launch_image_kind_is_not_redelivered_d3"'. After the
+      DECISIONS.md row/known-gap-register corrections, the test passes. The
+      other three listed tests already existed and are unmodified by this
+      task; they continue to pass and corroborate the corrected rows'
+      general shape (5-column rows, addressed/unaddressed split, known-gap
+      register present) — no red state was separately sought for those,
+      since their own assertions are unchanged by this task's edits.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by inspection / diff, not a test:
+      `git diff --stat feature-docs/mux-snapshot-output-boundary/reviews/round1.yaml`
+      against the implement base commit shows no output (zero diff) — this
+      task never touched that file. There is no executable check to make
+      fail first for a "file was never touched" criterion.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by the two project commands, not a single test:
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib` (3781 passed; 0 failed; 3 ignored — up
+      from a recorded baseline of 3777 passed; 0 failed; 3 ignored, i.e.
+      +4 new tests and 0 regressions) and `CARGO_TARGET_DIR=src-tauri/target
+      cargo check --manifest-path src-tauri/Cargo.toml --no-default-features`
+      (success) both passed at the final implementation state. The only
+      existing test whose body changed is
+      `mux::ipc::pty_spawn::tests::decisions_md_contains_every_d7_registry_test_name`,
+      whose local `d7_test_names` array was moved into the shared
+      `D7_REGISTRY_TEST_NAMES` constant (one entry added,
+      `viewer_launch_image_kind_is_not_redelivered_d3`) — a
+      behavior-preserving change except for that one addition, which is
+      itself required by AC-4/AC-5. No other existing test was modified.
+      The overall build/test-suite-passes outcome was never observed to
+      fail before implementation for reasons unrelated to AC-1/AC-2/AC-4/
+      AC-5 above (baseline was already 0 failures), so there is no separate
+      red state to report for this criterion beyond what those ACs already
+      cover.

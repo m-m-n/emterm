@@ -1,0 +1,476 @@
+schema_version: 1
+feature: mux-suppressed-output-fixes
+created: '2026-09-28'
+base_branch: em-workflow/mux-snapshot-output-boundary/integration
+goal: |
+  # mux: 抑止チャンクの副作用処理（suppressed_output.rs）の未解決 medium 指摘の対応
+
+  Notion: https://www.notion.so/3e83509ec8ee81d7bffbf4e006270ffc (種別: バグ)
+
+  ## 現象 (必須)
+  mux-snapshot-output-boundary（PR https://github.com/m-m-n/emterm/pull/107 ）の review round 1 で、medium 指摘が `unresolved` のまま残っている。多くは抑止したチャンクの副作用処理（`suppressed_output.rs`）の端の条件に関するもの。
+  - 前のチャンクから続く CSI・UTF-8 の解析状態を、抑止したチャンクの走査に引き継いでいない（3bc1e21fdd8702ef）
+  - 前の読み取りから続く問い合わせを再送できない（30ee5a7036a7fc6e）
+  - 中断された OSC を抱えた pending から、応答済みの問い合わせと表示済みの文字を再送する（66170217dc5057ce）
+  - pending から求めた走査の上限が、リングに書かないチャンク後半の問い合わせまで除外する（c8aa5052b1a02acd）
+  - pending の一括再送で、完結したビューア起動を転送する（c8aa5052b1a02acd）
+  - チャンク末尾の ESC で OSC を中断扱いにし、色問い合わせの本体を失う（19209420de72b144 / 61d33252f22b6fd2）
+  - 未完了 CSI の尾部に含まれる実行済みの C0 制御文字を再送している（001161ab9fa3c20b）
+  - 問い合わせの再送位置が変わり、カーソル位置の応答が誤る（9a548939524b405a）
+  - 文字集合指定の内部から問い合わせを誤って抽出する（TM-1、8d069c589dc21784）
+  - 独自の OSC 番号判定が、共有パーサーの数値解析と一致しない可能性がある（66d05376ff960d53）
+  - ResumeWithSnapshot 分岐では、snapshot の挿入より先に置換出力が届きうる（29ff65b6c01032dc）
+  - 復帰時の出力抑制で、代替画面への切り替えが失われる（830f950f39e499fa）
+  - 抑止された画像やビューア起動命令が一度も届かない（9e6a468b3a45ceeb。仕様上は既知の欠落として明記済み）
+  - テストが次の停止点を準備する前に読み取りスレッドを再開している（39267160fcf1bb2a）
+  ## 再現手順 (必須)
+  1. mux の pane に出力を流し続ける
+  2. 上記の条件を含むチャンクの途中で snapshot 取得（タブ切替 / reattach）が走り、そのチャンクが抑止される
+  3. 問い合わせ応答・表示・モード状態が上記のとおりずれる
+  ## 期待する挙動 (必須)
+  抑止したチャンクの副作用処理が、抑止しなかった場合と同じ解析状態・同じ順序で行われる。
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  - [ ] 各 stable_id について、対応済みか・対応不要かを判断して記録する
+  ## 該当箇所 (任意)
+  - `src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs`
+  - `src-tauri/src/mux/ipc/pty_spawn/mod.rs`
+  - `src-tauri/src/mux/session/pane/output_target.rs`
+  - `src-tauri/src/mux/ipc/pty_spawn/tests.rs`
+  - 詳細: integration ブランチ `em-workflow/mux-snapshot-output-boundary/integration` の `feature-docs/mux-snapshot-output-boundary/reviews/round1.yaml`
+  - 次の 4 件は verify の rework（task0002 / task0003）で対応済みの可能性が高い。確認のうえ閉じる: 692921cdd030612d、9a7dc7697c6af992、aca2b1d612ab97e0、5988c2406aa06a7b
+  ## 実害・発生条件 (任意)
+  snapshot 取得と 1 チャンクが重なったときにだけ起きる。窓は 1 チャンク。
+parent_branch: em-workflow/mux-suppressed-output-fixes/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.01
+      '2': 0.98
+      '3': 0.01
+    description_plus_code:
+      '0': 0.0
+      '1': 0.0
+      '2': 0.99
+      '3': 0.01
+  at: '2026-09-28T13:22:11+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - src-tauri/src/render/theme.rs
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+        --no-default-features
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 074ac149104740b218c4c9e2969277f747e70bd1
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI の変更は無い。変わるのは mux デーモン内部のバイト列処理とテストだけ
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: 75dcbce231a8873a5f235b8544be4adfdf723dce
+- id: implement
+  status: completed
+  base_commit: 390d9eff0b40d930db2d50f3d40e028c8d7c9b1f
+  completed_at_commit: 6b77abdd97b4fe0f7b5ec005ead297d5fdbbb39f
+- id: review
+  status: completed
+  completed_at_commit: 0ae9fdeaabacb2da26b2116c8ec9baa691c82f05
+- id: verify
+  status: completed
+  result: pass
+  failed_items: []
+  rounds:
+  - round: 1
+    result: fail
+    failed_ids: [TS-9, TS-10, TS-15]
+  - round: 2
+    result: pass
+    note: 'build (cargo check --no-default-features) exit 0; cargo test --lib 3781 passed / 0 failed / 3 ignored. TS-9/TS-10 の回帰テストが pane/tests.rs に実在し成功、TS-15/TS-21 は DECISIONS.md の 18 stable_id 行と D7 レジストリ実在検査テストで成功。round1.yaml と crates/mux_ipc は無変更。M-1〜M-4 は手動確認（未実施）'
+  completed_at_commit: 90de43acb9f0ab2cb55a5fc3c72189a9121bd3bd
+- id: retrospect
+  status: completed
+  completed_at_commit: ad481fe8c46739ced5495ba6571ae1a27236cea5
+tasks:
+  task0001:
+    title: Client-parity replacement builder with cross-chunk start state
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+    - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+    - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/upgrade.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    - concurrency
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR6
+    - FR7
+    - FR9
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    status: merged
+    branch: em-workflow/mux-suppressed-output-fixes/task0001
+    notes: null
+  task0002:
+    title: ScrollbackWriteFilter boundary rules aligned with term_core
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR5
+    - NFR5
+    - NFR6
+    status: merged
+    branch: em-workflow/mux-suppressed-output-fixes/task0002
+    notes: null
+  task0003:
+    title: Visibility-resume snapshot restores the screen mode
+    plan: tasks/task0003.md
+    files:
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/session/pane/output_target.rs
+    skills:
+    - backend-impl
+    domains:
+    - api-contract
+    complexity: high
+    requirements:
+    - FR8
+    - NFR1
+    - NFR6
+    status: merged
+    branch: em-workflow/mux-suppressed-output-fixes/task0003
+    notes: null
+  task0004:
+    title: Remove the ResumeWithSnapshot branch
+    plan: tasks/task0004.md
+    files:
+    - src-tauri/src/mux/session/pane/output_target.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/ipc/handlers/attach.rs
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    complexity: high
+    requirements:
+    - FR10
+    - NFR2
+    - NFR6
+    status: merged
+    branch: em-workflow/mux-suppressed-output-fixes/task0004
+    notes: null
+  task0005:
+    title: 'Review-finding closure: pause ordering, concurrent snapshot paths, decision table'
+    plan: tasks/task0005.md
+    files:
+    - feature-docs/mux-suppressed-output-fixes/DECISIONS.md
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    complexity: high
+    requirements:
+    - FR11
+    - FR12
+    - FR13
+    - NFR2
+    - NFR6
+    status: merged
+    branch: em-workflow/mux-suppressed-output-fixes/task0005
+    notes: null
+  task0006:
+    title: Restore the FR8 resume regression tests and align DECISIONS.md with the code
+    plan: tasks/task0006.md
+    files:
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - feature-docs/mux-suppressed-output-fixes/DECISIONS.md
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/session/pane/output_target.rs
+    skills:
+    - backend-impl
+    domains:
+    - api-contract
+    - concurrency
+    complexity: high
+    requirements:
+    - FR8
+    - FR13
+    - NFR6
+    status: merged
+    branch: em-workflow/mux-suppressed-output-fixes/task0006
+    notes: null
+    provenance:
+      origin_kind: verify
+      origin_ids:
+      - TS-9
+      - TS-10
+      - TS-15
+review:
+  status: completed
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
+  rounds_completed: 2
+  perspectives:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: チャンク末尾の ESC で文字列を中断扱いにしない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-1
+  FR2:
+    title: 走査の遷移をクライアント（term_core）と一致させる
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+  FR3:
+    title: 未完了 CSI の尾部から C0 を除く
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+  FR4:
+    title: pending による除外を元チャンクの区間に限る
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-4
+  FR5:
+    title: 書き込みフィルタの保留規則を term_core に揃え、本当に未完了の末尾だけを再送する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0002
+    tests:
+    - TS-5
+  FR6:
+    title: チャンクをまたぐ解析状態の持ち越し（末尾の有界なコピー）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-6
+    - TS-7
+  FR7:
+    title: 抑止したチャンクのビューア起動を 1 回届ける
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+  FR8:
+    title: 可視化復帰の snapshot で画面モードを復元する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0003
+    - task0006
+    tests:
+    - TS-9
+    - TS-10
+  FR9:
+    title: カーソル位置の応答（対応不要として記録）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-11
+  FR10:
+    title: ResumeWithSnapshot 分岐を削除する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0004
+    tests:
+    - TS-12
+  FR11:
+    title: 停止点の準備順序を直す
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0005
+    tests:
+    - TS-13
+  FR12:
+    title: 対応済みの指摘を確認し、残りの 1 件に対応する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0005
+    tests:
+    - TS-14
+  FR13:
+    title: 判断の記録
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0005
+    - task0006
+    tests:
+    - TS-15
+    - TS-21
+  NFR1:
+    title: 互換性（ワイヤ形式と snapshot の形）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0003
+    tests:
+    - TS-16
+  NFR2:
+    title: ロック規律
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0004
+    - task0005
+    tests:
+    - TS-14
+  NFR3:
+    title: reader 通常経路の負荷
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-17
+  NFR4:
+    title: セキュリティ（TM-1）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-18
+  NFR5:
+    title: セキュリティ（TM-2）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-19
+  NFR6:
+    title: ビルドとプラットフォーム
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    - task0004
+    - task0005
+    - task0006
+    tests:
+    - TS-20
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 1
+    failed_id_counts:
+      TS-9: 1
+      TS-10: 1
+      TS-15: 1
+  infra_resume:
+    rounds: 0
+    cap: 2

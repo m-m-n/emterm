@@ -1,0 +1,12 @@
+schema_version: 1
+feature: mux-suppressed-output-fixes
+records:
+  - question_id: develop.integration-base-selection
+    packet_id: null
+    answered_at: "2026-09-28T13:16:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [stack_on_pr107_branch]
+    freeform: "Fork the integration branch from em-workflow/mux-snapshot-output-boundary/integration and use it as base_branch (PR stacked on PR #107)."
+    normalized_answer: "base_branch = em-workflow/mux-snapshot-output-boundary/integration; integration branch forked from 390d9eff"
+    resolution_note: "gate: Step A integration-branch start point (unlisted, no gate_id); options: A stack on PR #107 branch (chosen) / B fork from #107 but PR to main / C stop as impossible / D commit directly onto #107 branch; key points: target file suppressed_output.rs exists only on unmerged PR #107 branch, main's working tree has user's staged changes that must not be touched, A keeps PR diff limited to the fixes and satisfies push+new PR+no-merge instruction; risk: rebase/conflicts if #107 changes, GitHub auto-retarget to main only when #107 head branch is deleted; codex_consulted: true; opus_escalation: false"

@@ -1,0 +1,252 @@
+round: 1
+executed_at: '2026-09-28T15:54:37+09:00'
+scope:
+  review_mode: diff
+  base_commit: 390d9eff0b40d930db2d50f3d40e028c8d7c9b1f
+  head_commit: fc181089f0f2af202c491167b70e0f6c8569b8ed
+  changed_files:
+  - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/session/pane/output_target.rs
+  - src-tauri/src/mux/session/pane/tests.rs
+  - src-tauri/src/mux/snapshot_bytes.rs
+  - test-docs/mux-suppressed-output-fixes/task0001.tests.yaml
+  - test-docs/mux-suppressed-output-fixes/task0002.tests.yaml
+  - test-docs/mux-suppressed-output-fixes/task0003.tests.yaml
+  - test-docs/mux-suppressed-output-fixes/task0004.tests.yaml
+  - test-docs/mux-suppressed-output-fixes/task0005.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: performance#1
+  perspective: performance
+  role: primary
+  source: codex
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: architecture#1
+  perspective: architecture
+  role: primary
+  source: codex
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: spec#1
+  perspective: spec
+  role: primary
+  source: codex
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: ecc48041b65a5380
+  severity: medium
+  category: security
+  file: src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  line: 148
+  title: 保持窓の再開位置として、文字集合指定の指定文字スロットにある ESC を選び、存在しない問い合わせを作る（TM-1）
+  description: '窓が満杯（256 バイト）のとき、derive_prefix_start が判定不能として除外する ESC は 2 つだけ。offset 0 の ESC と、window[0]
+    が `(` / `)` のときの offset 1 の ESC。window[0]=ESC かつ window[1]=''('' のときは offset 2 の ESC を再開位置に選ぶ。しかし
+    window[0] の ESC が本物なら、offset 2 の ESC は FR2 (d) により指定文字として消費され、制御シーケンスを始めない。例1（security#0）: 窓 = `\x1b(\x1b]10;`
+    + 空白 249 個、次の抑止チャンク = `?\x07`。OSC 10 の問い合わせとして置換出力に入り、クライアントがテーマ色の応答を子プロセスの入力へ書く。例2（comprehensive#0
+    が同じ根本原因を独立に報告）: 窓 = `\x1b(\x1b[` + NUL 252 個、チャンク = `c`。DA 問い合わせを作り出す。NFR4 / AC-3 に反する。応答の中身は端末自身の固定状態で、攻撃者は制御できない。攻撃者は本物の問い合わせを直接出すこともできるため、影響は
+    medium にとどまる。既存テスト full_window_leading_esc_at_offset_zero_is_excluded_as_undecidable は offset 0 しか確かめていない。'
+  suggestion: i >= 2 で window[i-1] が `(` / `)` かつ window[i-2] が ESC の場合も判定不能として除外する。`ESC ( ESC ( ...`
+    の連鎖も同じ規則で順に除外され、見逃しにはなっても捏造にはならない。上の 2 つの 256 バイト境界例で、置換出力と端末の応答が空になる回帰テストを追加する。
+  sources:
+  - codex:security
+  confidence: 100
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix candidate gate covers critical/high only'
+- stable_id: dd56f3984c74cde1
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 130
+  title: 主画面の色問い合わせを置換出力から外すが、snapshot 再生では応答が捨てられるので一度も応答されない
+  description: assemble_items は、ring_written_ranges と重なる OSC 色問い合わせを除外する。理由は snapshot にバイト列が残るから、というもの。scrollback
+    の strip は CSI の装置問い合わせを除くが、OSC 4/10/11/12 は残す。一方、クライアントの snapshot 適用（tabs/replay.rs:88-105 の reset_frame_for_replay）は、reset_and_replay_segments
+    の後に `let _ = c.take_response();` で再生中の応答をすべて捨てる。このため、主画面の抑止チャンクにある `\x1b]11;?\x07` には応答が一度も返らない。背景色を問い合わせるプログラムはタイムアウトまで待つことになる。AC-3
+    が挙げる除外対象（届き済み、TM-1 の位置、打ち切られた OSC）に、snapshot に残るものは含まれていない。CSI 問い合わせはリングから除かれて領域を問わず再送されるので、OSC 色問い合わせだけが扱いの対称から外れている。
+  suggestion: 色問い合わせも CSI 問い合わせと同じく、領域を問わず置換出力に含める。再生中の応答は捨てられるので、二重応答にはならない。snapshot を reset_frame_for_replay
+    と同等の手順で適用した後に置換出力を流し、応答数が 1 になることを確かめるテストを追加する。
+  sources:
+  - codex:spec
+  confidence: 80
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix candidate gate covers critical/high only'
+- stable_id: 03ccd5c7702db8db
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  line: 793
+  title: 保持窓（256 バイト）より長い主画面のビューア起動が抑止チャンクで完結すると、snapshot にも置換出力にも入らない
+  description: 前の読み取りで始まった OSC 777 emterm markdown / OSC 9999 emterm-md が、抑止チャンクで完結する場合を考える。ScrollbackWriteFilter
+    は保留していた pending ごと完結した OSC を排出し、strip がビューア起動を除くので、リングには残らない。run_suppressed_pipeline が渡すのは feed 後の
+    pending（空）なので、build_suppressed_replacement は else 分岐で scan(window, chunk) を行う。ところが開始の ESC は 256 バイトの窓の外にあり、derive_prefix_start
+    は Ground から走査するため、完結バイトを含む OSC を認識できない。クライアント側では、snapshot 適用時の reset() で OSC の途中という解析状態が捨てられる。結果として、ビューア起動（本文を運ぶデータ
+    OSC を含む）が失われる。SPEC FR6 は、リングに書く区間の文字列は pending で扱うと定めている。既知の欠落（as-05）はリングに書かない区間に限られる。ビューアの本文 OSC
+    は 256 バイトを超えるのが普通。発生するかは境界のタイミング次第だが、該当する長さのシーケンス自体はよくある。
+  suggestion: feed 前の pending（完結直前の開始部分）も run_suppressed_pipeline に渡し、今回の読み取りで完結した pending の文字列を置換出力の組み立てに使えるようにする。256
+    バイトを超える OSC 777 を分割して完結側を主画面で抑止するテストで、ビューア起動がちょうど 1 回届くことを確かめる。
+  sources:
+  - codex:spec
+  confidence: 75
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix candidate gate covers critical/high only'
+- stable_id: a93dffe30438a693
+  severity: medium
+  category: architecture
+  file: src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  line: 490
+  title: ビューア起動の判定（OSC 番号を数値として解釈）と scrollback の除去判定（文字列一致）が食い違い、先頭ゼロのビューア起動が二重に届く
+  description: is_viewer_launch は reconstruct_osc_number_and_data で OSC 番号を 10 進で累積する。このため `0777;emterm;markdown;…`
+    や `09999;emterm-md` もビューア起動と判定し、suppressed_output.rs:138-140 で領域を問わず再送する。一方、scrollback_filter.rs:298-315
+    の is_replayable_osc_body は、`777;emterm;` / `9999;emterm-md` との文字列の前方一致しか見ない。クライアント（term_core、FR2 (g)）は先頭ゼロを無視して
+    777 / 9999 として起動する。したがって、主画面の抑止チャンクにある先頭ゼロのビューア起動は snapshot に残って再生時に起動し、置換出力でもう一度起動する。FR7 / AC-4 の、二重に届けないという要件に反する。同じ食い違いにより、先頭ゼロの起動は
+    reattach の snapshot でも除かれず、再起動する（既存の漏れ）。comprehensive#0 も同じ食い違いを suppressed_output.rs:138 で独立に報告している。
+  suggestion: scrollback_filter 側の除去判定でも reconstruct_osc_number_and_data による OSC 番号とデータの再構成を使い、ビューア起動の識別を
+    1 か所にまとめる。先頭ゼロのビューア起動について、snapshot と置換出力を合わせても起動が 1 回になることを確かめるテストを追加する。
+  sources:
+  - codex:architecture
+  confidence: 80
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix candidate gate covers critical/high only'
+- stable_id: 59b631b1fed27122
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  line: 310
+  title: 書き込みフィルタが、読み取りをまたぐ文字集合指定の状態を持ち越さない
+  description: find_safe_boundary は、feed が `\x1b(` / `\x1b)` で終わると何も保留せず、全バイトを排出する（コメントでも意図した動作と書かれている）。次の
+    feed が終端のない `\x1b]11;?…` で始まる場合を考える。クライアントは先頭の ESC を指定文字として消費し、残りを文字として表示する。一方、フィルタは OSC の開始と判定して
+    pending に保留する。その結果、リングへの書き込みが終端か 512 KiB の上限まで遅れ、後で終端が来ると、本来は文字だったバイト列が OSC として strip されうる。さらにこの pending
+    が抑止時に置換出力で再送されると、クライアントに存在しない OSC を始めさせる（TM-1 と同じ種類の問題）。FR5 はフィルタの判定を FR2 (a)〜(e) に揃えると定めているが、(d)
+    の状態が feed の境界で失われている。
+  suggestion: 指定文字待ち（ESC ( / ESC ) の直後）の 1 バイト分の状態をフィルタに持ち越し、次の feed の先頭バイトを無条件に消費する。`ESC (` の直後で分割した入力と一括の入力とで、pending
+    とリングの中身が一致することを確かめるテストを追加する。
+  sources:
+  - codex:spec
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix candidate gate covers critical/high only'
+- stable_id: f8b600bcc0ed55da
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 94
+  title: pending による除外を元チャンクの区間ではなく 1 つの切り位置で行うため、間にある代替画面区間の問い合わせを落とす
+  description: 'tail_exclusion_start は、pending に対応するリング書き込みバイト列の開始位置を元チャンクの座標で 1 点だけ返す。scan_limit 以降は丸ごと走査から外れる。pending
+    の寄与が複数のリング区間にまたがり、その間に代替画面区間（リングに書かない区間）がある場合、そこにある問い合わせやビューア起動も落ちる。例（spec#1）: 主画面で `\x1b]2;x\x1b[?1049h\x1b[6n\x1b[?1049ly`
+    を受け取ると、リング向けの抽出は `\x1b]2;xy` となって全体が pending に残る。scan_limit は 0 になり、代替画面側の CSI 6n が失われる。FR4 は、除外を
+    pending に対応する元チャンクの区間だけに限ると定めている。既存テスト pending_does_not_drop_alt_region_queries_viewer_launches_or_own_tail
+    は、pending より前にある代替画面区間しか確かめていない。未確認の前提が 1 つある: この例で切り替えシーケンス自体がリング区間に含まれるか。含まれるなら、フィルタが OSC を打ち切り、pending
+    は空になる。'
+  suggestion: 除外を pending に対応するリング区間（ring_written_ranges の該当部分）だけに限り、それ以外の区間の項目は残す。走査は 1 パスのままで、items
+    を区間で絞ればよい。同じチャンク内で主画面→代替画面→主画面と往復する回帰テストを追加する。
+  sources:
+  - codex:spec
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix candidate gate covers critical/high only'
+- stable_id: 3eccc254dd278b33
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 106
+  title: リングが一周していない主画面の snapshot に既に残っている未完了の尾部を、置換出力で再送して二重に適用する
+  description: 主画面（リング書き込み区間）で終わるチャンクの尾部が、pending で保留されない種類の場合を考える。対象は、`ESC (` / `ESC )` の指定文字待ち、UTF-8
+    の途中、CSI の途中。この尾部はリングに書かれる。リングが一周していない主画面ペインの可視化復帰 snapshot は、`ESC[H ESC[2J` + strip(リング) だけでできている（output_target.rs:331-335
+    で screen は空、snapshot_bytes.rs の main 分岐は切り替えなし）。reset_and_replay_segments の後もパーサーの状態は残るので、snapshot
+    適用後のクライアントは既に尾部の途中にいる。else 分岐はその尾部をさらに再送する。`ESC (` の場合、再送した ESC が指定文字として消費され、`(` と後続の `B` が文字として表示される（AC-2
+    違反）。UTF-8 の先頭バイトが重なる場合も置換文字が出る可能性がある（term_core の UTF-8 処理は未確認）。CSI は ESC で打ち切られるので実害はない。既存テスト cut_utf8_character_tail_is_redelivered_verbatim
+    は、リング区間内の尾部を再送することを期待値にしている。AC-2 の参照比較テスト replacement_matches_client_reference_for_transition_corpus
+    は ring_written_ranges が空（代替画面）の場合だけを扱い、snapshot を通していない。
+  suggestion: snapshot が尾部を含むか（主画面かつリングが一周していないか）を境界と一緒に記録し、置換出力の組み立てに渡す。含む場合は尾部を再送しない。別案として、snapshot
+    側で末尾の未完了シーケンスを取り除く。可視化復帰で、`ESC (` と指定文字の間や UTF-8 の途中で分割し、snapshot → 置換出力 → 後続チャンクを term_core に流した結果が生のストリームと一致することを確かめる統合テストを追加する。
+  sources:
+  - codex:spec
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix candidate gate covers critical/high only'
+evaluation:
+  round_summary: 'round 1（diff、cross_validation=true）。報告 8 件（すべて medium）を検証し、重複 2 件を統合して medium 7 件を採用した。critical/high
+    の報告は無い。TM-1（derive_prefix_start の指定文字スロット）は security#0 と comprehensive#0 が独立に報告しており、コードで確かめた。先頭ゼロのビューア起動をめぐる判定の食い違いは
+    architecture#1 と comprehensive#0 が独立に報告しており、両方の判定関数を読んで確かめた。spec#1 の 5 件のうち 2 件はコードで確かめた: snapshot
+    再生時の応答破棄（tabs/replay.rs:105）と、書き込みフィルタの指定文字状態の欠落。残り 3 件は構造としては確かめたが、未確認の前提があるため confidence を下げた（ライブスパンに切り替えシーケンスが含まれるか、再生後のパーサー状態、term_core
+    の UTF-8 処理）。reviewer 出力にプロンプト注入の試みは無かった。観点ごとの確認状況: comprehensive — corroborated。security — corroborated。performance
+    — corroborated（performance#0 は rate_limited で skip。performance#1 の空の結果は、advance_retained_window が
+    256 バイトの有界コピーであること、scan_view が 1 パスで前進し続けることを読んで確かめた。読み取りごとに 256 バイトの Vec を確保するのは、NFR3 の『コピーだけ』から少し外れるが
+    medium に満たない）。architecture — corroborated（architecture#0 は rate_limited で skip）。spec — corroborated（spec#0
+    は rate_limited で skip）。読み取り予算は 10/10 を使い切った。読んだファイル: SPEC.md, client_parity_scan.rs, suppressed_output.rs,
+    pty_spawn/mod.rs, scrollback_filter.rs, write_filter.rs, snapshot_bytes.rs, pty_spawn/tests.rs（diff
+    の grep）, tabs/replay.rs, session/pane/output_target.rs。session/pane/tests.rs と test-docs/mux-suppressed-output-fixes/*.tests.yaml
+    は読んでいない。'
+  recommended_action: auto_fix
+  action_rationale: critical/high は無い。確かめた medium 7 件は、pty_spawn 配下（client_parity_scan.rs / suppressed_output.rs
+    / write_filter.rs / mod.rs）と scrollback_filter.rs の局所的な修正と回帰テストで閉じられる。ただし eval-r1-07（snapshot に残った尾部の二重適用）は、snapshot
+    の形（主画面か、リングが一周していないか）を置換出力の組み立て側へ伝える設計判断を伴う。auto-fix で閉じない場合は rework の候補になる。
+dismissed_sites:
+- file: src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  line: 148
+  run_id: comprehensive#0
+  reason: duplicate of another finding
+- file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 138
+  run_id: comprehensive#0
+  reason: duplicate of another finding
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
