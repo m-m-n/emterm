@@ -11,8 +11,8 @@ use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatusFeedItem, AgentStatusReportSender, DetachReason, MuxPane, NotificationSender,
     PaneId, PaneOutputTarget, PtyOutputChunk, SharedAgentStatusReportSender,
-    SharedNotificationSender, SharedOutputTarget, SharedPaneExitSender, SharedScrollback,
-    SharedShadowParser, SharedTitleSender, TitleChangeSender, lock_shadow_parser,
+    SharedNotificationSender, SharedOutputCapture, SharedOutputTarget, SharedPaneExitSender,
+    SharedScrollback, SharedShadowParser, SharedTitleSender, TitleChangeSender, lock_shadow_parser,
 };
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::RawPassthroughBuffer;
@@ -21,8 +21,10 @@ use crate::pty::visibility::RawPassthroughBuffer;
 /// captured while detached or hidden). Drained into the resume snapshot.
 type SharedRawPassthrough = Arc<StdMutex<RawPassthroughBuffer>>;
 
+mod suppressed_output;
 mod write_filter;
 
+use suppressed_output::build_suppressed_replacement;
 use write_filter::*;
 
 /// Shared per-pane stateful passthrough scanner. Lives outside the buffer
@@ -193,6 +195,7 @@ pub(super) fn register_pane_and_start_reader(
     let passthrough_scanner = pane.passthrough_scanner.clone();
     let scrollback = pane.scrollback.clone();
     let pane_dims = pane.dims.clone();
+    let output_capture = pane.output_capture.clone();
     // Store initial title_tx in the swappable sender (reattach will swap in a new one)
     *title_sender.lock().unwrap() = Some(title_tx.clone());
     // The notification channel lives for the daemon lifetime; populate it once.
@@ -223,6 +226,7 @@ pub(super) fn register_pane_and_start_reader(
             scrollback,
             pane_dims,
             pane_exit_sender,
+            output_capture,
         );
     });
 
@@ -253,6 +257,7 @@ pub(in crate::mux) fn pty_reader_loop(
     scrollback: SharedScrollback,
     pane_dims: crate::mux::session::pane::SharedPaneDims,
     pane_exit_sender: SharedPaneExitSender,
+    output_capture: SharedOutputCapture,
 ) {
     let mut buf = [0u8; 65536];
     // Per-pane stateful scrollback-write filter: strips viewer-launch rich
@@ -345,88 +350,117 @@ pub(in crate::mux) fn pty_reader_loop(
                 // `ScrollbackRingBuffer::attribute_write`).
                 let (read_cols, read_rows) = pane_dims.get();
 
-                // Feed the shadow parser (OSC title + alt-screen state) FIRST,
-                // in a single lock scope, so the scrollback write below can be
-                // gated on the alt-screen state.
-                let (title_changed, alt_before, alt_after) = {
-                    let mut parser = lock_shadow_parser(&shadow_parser);
-                    // alt-screen state BEFORE this chunk; paired with the
-                    // post-process state it identifies pure main-buffer chunks.
-                    let alt_before = parser.screen().alternate_screen();
-                    // vt100 has internal panics (wide-character bookkeeping
-                    // can `unwrap` a `None`). Catch the unwind here so the
-                    // panic neither kills the reader thread nor poisons the
-                    // mutex; rebuild the parser so subsequent output
-                    // re-populates the shadow screen.
-                    let (rows, cols) = parser.screen().size();
-                    let processed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        parser.process(data);
-                    }));
-                    if processed.is_err() {
-                        *parser = crate::mux::session::pane::new_shadow_parser(rows, cols);
-                        log::error!(
-                            "pane {}: shadow parser panicked while processing {} bytes; parser reset",
-                            pane_id,
-                            data.len()
-                        );
-                    }
-                    let alt_after = parser.screen().alternate_screen();
-                    // vt100 0.16 reports OSC 0/2 titles via the Callbacks
-                    // API; the TitleSink records the latest one per chunk.
-                    let title_changed = match parser.callbacks_mut().take_title() {
-                        Some(new_title) if !new_title.is_empty() => {
-                            let mut current = last_title.lock().unwrap();
-                            if Some(new_title.as_str()) != current.as_deref() {
-                                *current = Some(new_title.clone());
-                                Some(new_title)
-                            } else {
-                                None
+                // mux-snapshot-output-boundary task0001 (IMPLEMENTATION.md
+                // "Reader flow", D1/D2): the shadow update, the P1 pause
+                // point, the main-buffer span extraction and the ring write
+                // all run as ONE step under the pane's capture exclusion,
+                // which assigns this non-empty read its output sequence
+                // number (`chunk_number`) — every snapshot path's captured
+                // read is ordered against exactly this step (FR2). A shadow
+                // panic-reset still runs inside the step and still gets a
+                // number; an alt-screen chunk that writes nothing to the
+                // ring still gets one too (AC-2) — the number tracks "a read
+                // happened", not "the ring changed". `live_spans` (this
+                // chunk's main-buffer byte ranges) is returned out of the
+                // step for the FR8 side effects below and for the FR9/FR10
+                // replacement builder if this chunk ends up suppressed.
+                let ((title_changed, live_spans), chunk_number) = output_capture.capture(|| {
+                    // Feed the shadow parser (OSC title + alt-screen state)
+                    // FIRST, in a single lock scope, so the scrollback write
+                    // below can be gated on the alt-screen state.
+                    let (title_changed, alt_before, alt_after) = {
+                        let mut parser = lock_shadow_parser(&shadow_parser);
+                        // alt-screen state BEFORE this chunk; paired with the
+                        // post-process state it identifies pure main-buffer chunks.
+                        let alt_before = parser.screen().alternate_screen();
+                        // vt100 has internal panics (wide-character bookkeeping
+                        // can `unwrap` a `None`). Catch the unwind here so the
+                        // panic neither kills the reader thread nor poisons the
+                        // mutex; rebuild the parser so subsequent output
+                        // re-populates the shadow screen.
+                        let (rows, cols) = parser.screen().size();
+                        let processed =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                parser.process(data);
+                            }));
+                        if processed.is_err() {
+                            *parser = crate::mux::session::pane::new_shadow_parser(rows, cols);
+                            log::error!(
+                                "pane {}: shadow parser panicked while processing {} bytes; parser reset",
+                                pane_id,
+                                data.len()
+                            );
+                        }
+                        let alt_after = parser.screen().alternate_screen();
+                        // vt100 0.16 reports OSC 0/2 titles via the Callbacks
+                        // API; the TitleSink records the latest one per chunk.
+                        let title_changed = match parser.callbacks_mut().take_title() {
+                            Some(new_title) if !new_title.is_empty() => {
+                                let mut current = last_title.lock().unwrap();
+                                if Some(new_title.as_str()) != current.as_deref() {
+                                    *current = Some(new_title.clone());
+                                    Some(new_title)
+                                } else {
+                                    None
+                                }
                             }
-                        }
-                        _ => None,
+                            _ => None,
+                        };
+                        (title_changed, alt_before, alt_after)
                     };
-                    (title_changed, alt_before, alt_after)
-                };
 
-                // Phase C: scrollback write, restricted to the chunk's
-                // MAIN-buffer byte spans. Like a real terminal the alternate
-                // screen has NO scrollback, so its output and the
-                // buffer-switch toggles themselves are dropped — keeping any
-                // unpaired `?1049h` out of the scrollback so the on-demand
-                // snapshot (which replays scrollback into the client) can't
-                // strand the client in alt-screen. Unlike a whole-chunk gate,
-                // this preserves main-buffer output that shares a read with a
-                // buffer switch (e.g. command output emitted right before a
-                // TUI opens). Capture still happens regardless of attach state
-                // so a later reattach can replay pre-detach history.
-                let (main_bytes, scan_alt, main_spans) =
-                    extract_main_buffer_bytes(data, alt_before);
-                let (to_write, live_spans): (&[u8], Vec<std::ops::Range<usize>>) =
-                    if scan_alt == alt_after {
-                        (&main_bytes, main_spans)
-                    } else {
-                        // The scan ended in a different buffer than the
-                        // authoritative shadow parser: a toggle straddled this
-                        // read boundary or used an unrecognized form. Fall back to
-                        // the conservative whole-chunk gate so we never emit a
-                        // partial toggle sequence into scrollback.
-                        if !alt_before && !alt_after {
-                            (data, vec![0..data.len()])
+                    // P1 (test builds only): after the shadow update, before
+                    // the ring write.
+                    #[cfg(test)]
+                    output_capture.p1.hit();
+
+                    // Phase C: scrollback write, restricted to the chunk's
+                    // MAIN-buffer byte spans. Like a real terminal the alternate
+                    // screen has NO scrollback, so its output and the
+                    // buffer-switch toggles themselves are dropped — keeping any
+                    // unpaired `?1049h` out of the scrollback so the on-demand
+                    // snapshot (which replays scrollback into the client) can't
+                    // strand the client in alt-screen. Unlike a whole-chunk gate,
+                    // this preserves main-buffer output that shares a read with a
+                    // buffer switch (e.g. command output emitted right before a
+                    // TUI opens). Capture still happens regardless of attach state
+                    // so a later reattach can replay pre-detach history.
+                    let (main_bytes, scan_alt, main_spans) =
+                        extract_main_buffer_bytes(data, alt_before);
+                    let (to_write, live_spans): (&[u8], Vec<std::ops::Range<usize>>) =
+                        if scan_alt == alt_after {
+                            (&main_bytes, main_spans)
                         } else {
-                            (&[], Vec::new())
+                            // The scan ended in a different buffer than the
+                            // authoritative shadow parser: a toggle straddled this
+                            // read boundary or used an unrecognized form. Fall back to
+                            // the conservative whole-chunk gate so we never emit a
+                            // partial toggle sequence into scrollback.
+                            if !alt_before && !alt_after {
+                                (data, vec![0..data.len()])
+                            } else {
+                                (&[], Vec::new())
+                            }
+                        };
+                    if !to_write.is_empty() {
+                        let (attribution_dims, filtered) =
+                            scrollback_filter.feed(to_write, (read_cols, read_rows));
+                        if !filtered.is_empty() {
+                            scrollback.lock().unwrap().attribute_write(
+                                attribution_dims.0,
+                                attribution_dims.1,
+                                &filtered,
+                            );
                         }
-                    };
-                if !to_write.is_empty() {
-                    let (attribution_dims, filtered) =
-                        scrollback_filter.feed(to_write, (read_cols, read_rows));
-                    if !filtered.is_empty() {
-                        scrollback.lock().unwrap().attribute_write(
-                            attribution_dims.0,
-                            attribution_dims.1,
-                            &filtered,
-                        );
                     }
-                }
+                    (title_changed, live_spans)
+                });
+
+                // P2 (test builds only): after the capture step, before this
+                // chunk's `output_target` is taken for the forward decision.
+                #[cfg(test)]
+                output_capture.p2.hit();
+
                 if let Some(new_title) = title_changed {
                     if let Some(tx) = title_sender.lock().unwrap().as_ref() {
                         let _ = tx.try_send((pane_id, new_title));
@@ -490,43 +524,63 @@ pub(in crate::mux) fn pty_reader_loop(
                     );
                 }
 
-                // Lock briefly to try non-blocking send or clone the sender.
-                // IMPORTANT: release lock before blocking_send to avoid deadlock
-                // with session_manager lock held by collect_reattach_data.
+                // Lock briefly to decide the forward destination, then
+                // release before any blocking wait — IMPORTANT: release lock
+                // before blocking on a slot reservation to avoid deadlock
+                // with the session_manager lock held by
+                // `collect_reattach_data` / `resume_pane_with_permit`.
                 //
-                // The Detached arms also feed `passthrough_scanner` so that
+                // mux-snapshot-output-boundary task0001 (D3/D4, FR3/FR11):
+                // `output_target` is taken, then the boundary exclusion
+                // nested inside it (never the capture exclusion — released
+                // above), and the covered check against S happens together
+                // with the non-blocking insertion attempt, under that same
+                // nested exclusion — the ordering invariant every
+                // boundary-recording snapshot path also honours. The
+                // Detached arm also feeds `passthrough_scanner` so that
                 // image / Markdown OSC byte runs survive a hidden / network
                 // detach window and can be replayed via the resume snapshot.
-                let send_result = {
+                let forward = {
                     let mut target = output_target.lock().unwrap();
                     match &mut *target {
                         PaneOutputTarget::Connected(tx) => {
-                            // Single allocation: data owned by PtyOutputChunk
-                            let chunk = PtyOutputChunk::pty_output(pane_id, data.to_vec());
-                            match tx.try_send(chunk) {
-                                Ok(()) => None, // sent successfully
-                                Err(mpsc::error::TrySendError::Full(chunk)) => {
-                                    // Channel full — need blocking send outside lock
-                                    Some(Ok((tx.clone(), chunk)))
-                                }
-                                Err(mpsc::error::TrySendError::Closed(_)) => {
-                                    // Channel closed — switch to detached.
-                                    // Scrollback was already captured above
-                                    // (Phase C, gated on main-buffer state);
-                                    // only the passthrough scan needs to run
-                                    // here.
-                                    capture_passthrough(
-                                        pane_id,
-                                        data,
-                                        &raw_passthrough,
-                                        &passthrough_scanner,
-                                        &notification_sender,
-                                    );
-                                    *target = PaneOutputTarget::Detached {
-                                        reason: DetachReason::NetworkDetach,
-                                        owner: None,
-                                    };
-                                    Some(Err(()))
+                            let s = tx.clone();
+                            let boundary = output_capture.hold_boundary();
+                            if boundary.is_covered(&s, chunk_number) {
+                                drop(boundary);
+                                ReaderForward::Suppressed(s)
+                            } else {
+                                let chunk = PtyOutputChunk::pty_output(pane_id, data.to_vec());
+                                match tx.try_send(chunk) {
+                                    Ok(()) => {
+                                        drop(boundary);
+                                        ReaderForward::Done
+                                    }
+                                    Err(mpsc::error::TrySendError::Full(chunk)) => {
+                                        drop(boundary);
+                                        ReaderForward::NeedsSlot(s, chunk)
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                        drop(boundary);
+                                        // Channel closed — switch to
+                                        // detached. Scrollback was already
+                                        // captured above (Phase C, gated on
+                                        // main-buffer state); only the
+                                        // passthrough scan needs to run
+                                        // here.
+                                        capture_passthrough(
+                                            pane_id,
+                                            data,
+                                            &raw_passthrough,
+                                            &passthrough_scanner,
+                                            &notification_sender,
+                                        );
+                                        *target = PaneOutputTarget::Detached {
+                                            reason: DetachReason::NetworkDetach,
+                                            owner: None,
+                                        };
+                                        ReaderForward::Done
+                                    }
                                 }
                             }
                         }
@@ -540,29 +594,103 @@ pub(in crate::mux) fn pty_reader_loop(
                                 &passthrough_scanner,
                                 &notification_sender,
                             );
-                            None
+                            ReaderForward::Done
                         }
                     }
-                }; // output_target lock released here
+                }; // output_target (and any nested boundary exclusion) released here
 
-                // Handle backpressure outside the lock to avoid deadlock
-                if let Some(Ok((tx, chunk))) = send_result {
-                    log::debug!("Pane {} backpressure: channel full, blocking", pane_id);
-                    if tx.blocking_send(chunk).is_err() {
-                        log::info!("Pane {} switching to detached buffering mode", pane_id);
-                        let mut target = output_target.lock().unwrap();
-                        // Scrollback already captured above; only passthrough.
-                        capture_passthrough(
+                match forward {
+                    ReaderForward::Done => {}
+                    ReaderForward::Suppressed(s) => {
+                        run_suppressed_pipeline(
                             pane_id,
                             data,
+                            &s,
                             &raw_passthrough,
                             &passthrough_scanner,
                             &notification_sender,
+                            &scrollback_filter,
+                            &live_spans,
                         );
-                        *target = PaneOutputTarget::Detached {
-                            reason: DetachReason::NetworkDetach,
-                            owner: None,
-                        };
+                    }
+                    ReaderForward::NeedsSlot(s, chunk) => {
+                        // D4: release everything (already released above),
+                        // then block until a slot on S is reserved — this
+                        // joins the SAME fair waiter queue
+                        // `mux::ipc::connection`'s own `reserve_owned()` arm
+                        // and `resume_pane_with_permit`'s fair-permit path
+                        // use, so this reader thread cannot be starved
+                        // indefinitely behind a `try_send`-only retry.
+                        log::debug!("Pane {} backpressure: channel full, blocking", pane_id);
+                        // P3 (test builds only): after a Full insertion
+                        // attempt, before waiting for a slot.
+                        #[cfg(test)]
+                        output_capture.p3.hit();
+                        match futures::executor::block_on(s.clone().reserve_owned()) {
+                            Ok(permit) => {
+                                // Re-take output_target, then the boundary
+                                // exclusion (D4) — S stays the destination
+                                // even if the target changed meanwhile; the
+                                // re-lock exists for mutual exclusion against
+                                // every boundary-recording snapshot path, not
+                                // to re-read the target's value.
+                                let target = output_target.lock().unwrap();
+                                let boundary = output_capture.hold_boundary();
+                                if boundary.is_covered(&s, chunk_number) {
+                                    drop(boundary);
+                                    drop(target);
+                                    drop(permit); // release the reserved slot back to S
+                                    run_suppressed_pipeline(
+                                        pane_id,
+                                        data,
+                                        &s,
+                                        &raw_passthrough,
+                                        &passthrough_scanner,
+                                        &notification_sender,
+                                        &scrollback_filter,
+                                        &live_spans,
+                                    );
+                                } else {
+                                    // Keep output_target and the boundary
+                                    // guard held until after permit.send:
+                                    // permit.send does not block (the slot
+                                    // was already reserved), so holding the
+                                    // guards here does not violate the
+                                    // blocking_send discipline (NFR2), and it
+                                    // prevents a concurrent snapshot from
+                                    // being inserted between the is_covered
+                                    // check and the send.
+                                    let _ = permit.send(chunk);
+                                    drop(boundary);
+                                    drop(target);
+                                }
+                            }
+                            Err(_closed) => {
+                                log::info!("Pane {} switching to detached buffering mode", pane_id);
+                                let mut target = output_target.lock().unwrap();
+                                // Scrollback already captured above; only passthrough.
+                                capture_passthrough(
+                                    pane_id,
+                                    data,
+                                    &raw_passthrough,
+                                    &passthrough_scanner,
+                                    &notification_sender,
+                                );
+                                // D4: switch to Detached only if the target
+                                // still points at S — a newer owner's
+                                // Connected target is left intact.
+                                let still_points_at_s = matches!(
+                                    &*target,
+                                    PaneOutputTarget::Connected(cur) if cur.same_channel(&s)
+                                );
+                                if still_points_at_s {
+                                    *target = PaneOutputTarget::Detached {
+                                        reason: DetachReason::NetworkDetach,
+                                        owner: None,
+                                    };
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -579,16 +707,105 @@ pub(in crate::mux) fn pty_reader_loop(
     }
 }
 
+/// Outcome of the reader's forward decision for one non-empty read
+/// (mux-snapshot-output-boundary task0001, D3/D4). `Done` covers both "the
+/// Detached arm ran" and "the chunk was inserted or the destination
+/// closed" — nothing further to do for this chunk either way.
+enum ReaderForward {
+    Done,
+    /// The destination's recorded boundary already covers this chunk's
+    /// number: the FR9/FR10 replacement pipeline runs for it instead of the
+    /// raw bytes.
+    Suppressed(mpsc::Sender<PtyOutputChunk>),
+    /// The channel was full on the non-blocking attempt; the reader must
+    /// release every lock and block on a slot reservation (D4) before
+    /// deciding again.
+    NeedsSlot(mpsc::Sender<PtyOutputChunk>, PtyOutputChunk),
+}
+
+/// Suppressed-chunk pipeline (mux-snapshot-output-boundary task0001, D6):
+/// runs the FR6/FR8 side-effect capture once (so a suppressed chunk's OSC 9
+/// notification / image or Markdown OSC byte run is not silently lost),
+/// discards the passthrough scanner's own in-flight state so it cannot
+/// later stitch with output from an unrelated future Detached period, then
+/// builds the FR9/FR10 replacement payload and — if it is non-empty —
+/// delivers it to `s` with the same backpressure handling an ordinary chunk
+/// gets. The replacement is never checked against the boundary (it is not
+/// itself subject to suppression) and is dropped silently if `s` is closed
+/// — the primary chunk's own send attempt already decided this reader's
+/// `output_target` fate; this is a best-effort follow-up delivery to the
+/// same fixed destination.
+#[allow(clippy::too_many_arguments)]
+fn run_suppressed_pipeline(
+    pane_id: PaneId,
+    data: &[u8],
+    s: &mpsc::Sender<PtyOutputChunk>,
+    raw_passthrough: &SharedRawPassthrough,
+    passthrough_scanner: &SharedPassthroughScanner,
+    notification_sender: &SharedNotificationSender,
+    scrollback_filter: &ScrollbackWriteFilter,
+    ring_written_ranges: &[std::ops::Range<usize>],
+) {
+    capture_passthrough(
+        pane_id,
+        data,
+        raw_passthrough,
+        passthrough_scanner,
+        notification_sender,
+    );
+    // D6 step 2: discard the scanner's own incomplete in-progress sequence
+    // — its remainder must never fire later or stitch with a later
+    // Detached period's output.
+    passthrough_scanner.lock().unwrap().discard_partial();
+
+    let replacement =
+        build_suppressed_replacement(data, ring_written_ranges, scrollback_filter.pending());
+    if replacement.is_empty() {
+        // TM-2: never turn an empty replacement into an empty `PtyOutput`
+        // chunk — the client reads that as PTY exit.
+        return;
+    }
+    let chunk = PtyOutputChunk::pty_output(pane_id, replacement);
+    match s.try_send(chunk) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(chunk)) => {
+            match futures::executor::block_on(s.clone().reserve_owned()) {
+                Ok(permit) => {
+                    let _ = permit.send(chunk);
+                }
+                Err(_closed) => {
+                    log::debug!(
+                        "pane {}: suppressed-chunk replacement dropped (destination closed \
+                         while waiting for a slot)",
+                        pane_id
+                    );
+                }
+            }
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            log::debug!(
+                "pane {}: suppressed-chunk replacement dropped (destination closed)",
+                pane_id
+            );
+        }
+    }
+}
+
 /// Run `data` through the per-pane passthrough scanner and append any
 /// completed image / Markdown OSC sequences to the per-pane raw buffer. Any
 /// recognized OSC 9 desktop-notification messages are forwarded through
 /// `notification_sender` to the daemon (which relays them to the GUI client).
 ///
-/// Called ONLY from the Detached arms of `pty_reader_loop`. On the Connected
-/// arm the scanner is never run, so an active pane's OSC 9 is handled solely
-/// by the GUI foreground WASM path — this is what prevents double-firing
-/// (FR5 / NFR5 / TS-14). Notifications are side-effect events: they are NOT
-/// added to `raw_passthrough`, so a reattach replay never re-fires them.
+/// Called from the Detached arms of `pty_reader_loop`, AND — mux-snapshot-output-boundary
+/// task0001, D6 — once for a chunk the reader suppressed on the Connected
+/// arm, via [`run_suppressed_pipeline`]. On every OTHER Connected case the
+/// scanner is still never run, so an active, non-suppressed pane's OSC 9 is
+/// handled solely by the GUI foreground WASM path — this is what prevents
+/// double-firing (FR5 / NFR5 / TS-14) outside the suppressed case, which is
+/// itself never double-fired either (FR6: at most one notification per OSC
+/// 9, even when it starts in a suppressed chunk and completes in the next
+/// one). Notifications are side-effect events: they are NOT added to
+/// `raw_passthrough`, so a reattach replay never re-fires them.
 ///
 /// Logs a single warn when the buffer drops the oldest captured bytes due to
 /// capacity overflow.

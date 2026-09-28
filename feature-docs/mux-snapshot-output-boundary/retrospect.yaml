@@ -1,0 +1,123 @@
+feature: mux-snapshot-output-boundary
+collected_at: '2026-09-28T02:20:03+09:00'
+session_ids:
+- 01a0e3e0-2273-71db-baaa-6d8193616b00
+signals:
+  review_critical_high:
+  - stable_id: ef376d6f4d430bf3
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane/output_queue.rs
+    title: スナップショットのチャネル挿入と境界記録が同じ排他区間で行われていない
+    resolution: fixed
+  - stable_id: 493534b0645e3b7d
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/pty_spawn/mod.rs
+    title: 容量待ちから復帰した reader が、境界判定の後、permit.send の前にロックを解放している
+    resolution: fixed
+  - stable_id: 76bfecbfe01cfdeb
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/handlers/attach.rs
+    title: 遅延送信ではスナップショット投入と境界記録の間に通常出力が割り込める
+    resolution: fixed
+  - stable_id: ab177521a183b3b4
+    category: spec
+    file: src-tauri/src/mux/ipc/handlers/attach.rs
+    title: 延期送信でも snapshot の挿入と境界記録を同じ排他で保護する
+    resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures:
+  - id: TS-1
+    category: spec
+    note: 可視 reattach（collect_reattach_data）を reader 一時停止下で駆動するテストが無い
+  - id: TS-2
+    category: spec
+    note: HiddenByVisibility の pane で reader 一時停止下に resume_pane_with_permit を走らせるテストが無い
+  - id: TS-6
+    category: spec
+    note: サイズ超過で snapshot が拒否されるケース、deferred snapshot が追い出されるケースで in-flight チャンクが届くことのテストが無い
+  - id: TS-7
+    category: spec
+    note: OSC 9 が抑止チャンクと次の非抑止チャンクにまたがるケース、後続 Detached 期間で継ぎ合わせ通知が出ないことのテストが無い
+  - id: TS-9
+    category: spec
+    note: reader レベルの DA1・複数問い合わせの順序・TS-1（reattach）条件のテストが無く、ビルダー単体テストのみ
+  - id: TS-10
+    category: spec
+    note: 境界をまたぐシーケンス (a)(b)(c) を TS-1 条件で term_core 参照一致まで確かめるテストが無く、ビルダー単体テストのみ
+  - id: TS-11
+    category: spec
+    note: 宛先 A の境界記録後に B が reattach で引き継ぐ reader 経由のテストが無く、境界記録の単体テストのみ
+  - id: TS-16
+    category: performance
+    note: reattach.rs collect_reattach_data が output_target ロック内で encode_snapshot_segments（O(snapshot)、最大約 2 MiB）を実行しており NFR3 に反する。snapshot の二重エンコードも生じる
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: description_plus_code の最終判定がバケット 2（新規ロジック・複数モジュールにまたがる変更）に確率 1.0 で集中し、full を採用した
+    bases:
+    - basis: description_only
+      score:
+        type: score
+        score: 1.59
+        confidence: 0.59
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.41
+          '2': 0.59
+          '3': 0.0
+      observed_at: '2026-09-27T19:52:30+09:00'
+    - basis: description_plus_code
+      score:
+        type: score
+        score: 2.0
+        confidence: 0.99
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.0
+          '2': 1.0
+          '3': 0.0
+      observed_at: '2026-09-27T19:52:30+09:00'
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+      - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+      - src-tauri/src/mux/ipc/reattach.rs
+      - src-tauri/src/mux/ipc/reattach/tests.rs
+      - src-tauri/src/mux/session/pane/output_target.rs
+      - src-tauri/src/mux/session/pane/tests.rs
+      - src-tauri/src/mux/ipc/handlers/mod.rs
+      - src-tauri/src/mux/ipc/handlers/tests.rs
+      changed_lines_approx: 350
+      new_functions_needed: 2
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules:
+      - mux::ipc::handlers
+      - mux::session::pane::output_queue
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 6
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 8
+      changes_external_contract: false
+      changes_behavior: true
+      evidence: pty_spawn/mod.rs:352・423・501ではshadow更新、リング書込み、転送を別々にロックしている。resume_pane_with_permitはoutput_target保持中にリング→shadowを読むが、collect_reattach_dataは両方を読んだ後でoutput_targetを取得する。handlers/mod.rs:441にも同種の競合が明記されている。復元・順序・送信待機の既存テストはあるが、shadow更新後にreaderを止めて二重適用を検出するテストは確認できない。同期境界と送信待機の扱いを修正する必要がある。数値は既存の同期機構とテストファイルを使う場合の概算で、ファイル変更・テスト実行はしていない
+follow_up_drafts: []
+lessons_candidates:
+- verify round 1 の失敗 8 件はすべて「reader レベルの並行テスト不足」（spec 7 件）と NFR3 違反（performance 1 件）。計画段階の受け入れ条件がビルダー単体テストで満たせる書き方になっていた
+- review round 1 で medium 19 件が unresolved のまま（triage_filing 未実行）。多くが suppressed_output.rs の走査・OSC 境界処理に集中
+- high 4 件はいずれも「snapshot 投入と境界記録を同じ排他区間で行う」系で auto-fix 済み。遅延送信・容量待ち復帰など副経路の取りこぼしが共通

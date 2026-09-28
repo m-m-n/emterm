@@ -11,6 +11,15 @@ use crate::agent_status::AgentState;
 use crate::agent_status_exit_latch::AgentStatusExitLatch;
 use crate::prompts::PromptMarkKind;
 
+use super::output_capture::OutputCapture;
+
+/// Thread-safe shared reference to a pane's [`OutputCapture`] state
+/// (mux-snapshot-output-boundary task0001): the capture exclusion, the
+/// last-captured output sequence number, and the per-sender suppression
+/// boundary record. One instance per pane, created with the pane
+/// (`OutputCapture::new`) and cloned into the reader thread.
+pub type SharedOutputCapture = Arc<OutputCapture>;
+
 /// Pane identifier.
 pub type PaneId = u32;
 

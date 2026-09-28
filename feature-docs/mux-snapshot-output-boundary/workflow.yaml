@@ -1,0 +1,441 @@
+schema_version: 1
+feature: mux-snapshot-output-boundary
+created: '2026-09-27'
+base_branch: main
+goal: |
+  # mux: snapshot 取得が PTY reader の更新境界の外で行われ、取り込んだ出力チャンクが二重適用されうる
+
+  Notion: https://www.notion.so/3e43509ec8ee81b082e0c9d4d6b6ff05 (種別: バグ)
+
+  ## 現象 (必須)
+  mux の snapshot 組み立てが PTY reader の「shadow parser 更新 → リング書き込み → output_target 経由の転送」の途中に割り込めるため、出力チャンクが二重に適用される。
+  - (a) snapshot に含まれたチャンクが Connected 後にもう一度転送される（この feature 以前から存在）
+  - (b) リングには無いが shadow ダンプには含まれるチャンクが生じうる。復元されるカーソル・スクロール領域はそのチャンク以前の状態、画面はチャンク以後の状態になり、`ESC[L` のようなチャンクが二重に適用される
+  結果として一時的な表示崩れが起きる。
+
+  ## 再現手順 (必須)
+  1. mux の pane に出力を流し続ける
+  2. PTY reader が shadow parser を更新してから転送するまでの間に、その pane の snapshot 取得（タブ切替 / reattach）が走る
+  3. snapshot に含まれたチャンクが接続後にもう一度適用され、表示が崩れる
+
+  ## 期待する挙動 (必須)
+  snapshot に取り込まれた出力チャンクは、接続後に再転送されない。
+
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある（reader を shadow 更新と転送の間で止める並行処理テストで、二重適用が起きないことを確認する）
+  - [ ] リング・shadow parser の更新と snapshot の取得が、同じ出力境界で区切られている（例: pane ごとの出力連番を付け、snapshot が取り込んだ最後の番号以下のチャンクを reader が転送しない。または更新と転送を 1 つのクリティカルセクションで行う）
+
+  ## 該当箇所 (任意)
+  - `src-tauri/src/mux/ipc/pty_spawn/mod.rs`：shadow parser への流し込み（~352 行）、リング書き込み（~423 行）、output_target を取っての転送（~501 行）
+  - `src-tauri/src/mux/session/pane/output_target.rs:407` 付近の `resume_pane_with_permit`：output_target を保持するが、リング → shadow parser の順で読むため reader の途中状態を排除できない
+  - `collect_reattach_data`：output_target を取る前に両方を読む
+  - 検出元: mux-snapshot-ring-wrap-restore の review round 2、medium 指摘（stable_id `d80313b063a88627`、comprehensive）
+
+  ## 実害・発生条件 (任意)
+  窓は 1 チャンク。次の再描画で直る一時的な表示崩れ。評価役は high から medium へ下げた。
+
+  ## スコープ外 (任意)
+  リング一周後のプローブ再生のロック外移動は別タスク「mux: リング一周後の snapshot プローブ再生（最大 2 MiB）が output_target ロック内・tokio ワーカー上で走る」で扱う。
+
+  ## 制約・前提 (任意)
+  apt 進捗バー残骸の既知課題に関わるため、snapshot のバイト列の形は変えない。
+parent_branch: em-workflow/mux-snapshot-output-boundary/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.41
+      '2': 0.59
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.0
+      '2': 1.0
+      '3': 0.0
+  at: '2026-09-27T19:52:30+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - src-tauri/src/render/theme.rs
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: a3dfc6a4941a5d50334174c8623c3feb3fdbe00e
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: mux デーモン内部の Rust だけの変更で、UI・画面・ビジュアルの変更が無い。
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: e3a50a92363cd32c76ad080ae5a7eef3db7dba53
+- id: implement
+  status: completed
+  completed_at_commit: 026721de60d5553ab090821d63e8084714d7425f
+  base_commit: 7a1e81eb07a6735d9c7598211c32d95f7b6b6518
+- id: review
+  status: completed
+  completed_at_commit: f7f9308c10e36bda78a0a85e090335ca18be2e52
+- id: verify
+  status: completed
+  completed_at_commit: 4760d4378f3658255dda5bc627b7683d93cd8630
+  result: pass
+  round: 2
+  failed_items: []
+  summary: |
+    build (--no-default-features check) exit 0; test (--lib) 3727 passed / 0 failed / 3 ignored.
+    Round-1 failures TS-1/2/6/7/9/10/11 now each map to a named reader-level test; TS-16 fixed
+    (collect_reattach_data decides deliverability via encoded_snapshot_segments_len outside the
+    output_target lock). TS-13: byte-shape tests have no removed lines. No excluded requirements.
+    Manual MT-1..MT-4 not run (need release build + daemon restart).
+- id: retrospect
+  status: completed
+  completed_at_commit: 694273450966277f8ff32652d5ef0e2e323250f9
+tasks:
+  task0001:
+    title: 'Pane output boundary: sequence capture, sender-bound suppression, ordered delivery'
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/session/pane/output_capture.rs
+    - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+    - src-tauri/src/mux/session/pane/mod.rs
+    - src-tauri/src/mux/session/pane/handles.rs
+    - src-tauri/src/mux/session/pane/output_target.rs
+    - src-tauri/src/mux/session/pane/output_queue.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/ipc/reattach/tests.rs
+    - src-tauri/src/mux/ipc/handlers/mod.rs
+    - src-tauri/src/mux/ipc/handlers/attach.rs
+    - src-tauri/src/mux/ipc/handlers/tests.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+    - src-tauri/src/pty/passthrough_scanner.rs
+    - src-tauri/src/mux/upgrade.rs
+    - src-tauri/src/mux/ipc/connection/output_drain.rs
+    - src-tauri/src/mux/ipc/connection/dispatch.rs
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - FR8
+    - FR9
+    - FR10
+    - FR11
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    status: merged
+    notes: null
+    branch: em-workflow/mux-snapshot-output-boundary/task0001
+  task0002:
+    title: 'Visible reattach: size decision off the output_target lock, and reader-level
+      reattach tests'
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/mux/ipc/reattach.rs
+    - crates/mux_ipc/src/protocol.rs
+    - crates/mux_ipc/src/protocol/tests.rs
+    - src-tauri/src/mux/session/pane/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/reattach/tests.rs
+    - src-tauri/src/mux/ipc/handlers/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR9
+    - FR10
+    - FR11
+    - NFR1
+    - NFR2
+    - NFR3
+    status: merged
+    branch: em-workflow/mux-snapshot-output-boundary/task0002
+    notes: null
+    provenance:
+      source: verify
+      source_ids:
+      - TS-1
+      - TS-9
+      - TS-10
+      - TS-11
+      - TS-16
+      review_round: null
+  task0003:
+    title: 'Reader-level tests: visibility resume, undelivered snapshots, split OSC
+      9'
+    plan: tasks/task0003.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/ipc/handlers/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR5
+    - FR6
+    status: merged
+    branch: em-workflow/mux-snapshot-output-boundary/task0003
+    notes: null
+    provenance:
+      source: verify
+      source_ids:
+      - TS-2
+      - TS-6
+      - TS-7
+      review_round: null
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  residual_critical_high: 0
+  needs_rework: false
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
+requirements:
+  FR1:
+    title: pane ごとの出力連番
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+  FR2:
+    title: 更新と取得を同じ排他で区切る
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+    - TS-4
+    - TS-12
+  FR3:
+    title: 取り込み済みチャンクを再転送しない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+  FR4:
+    title: バックプレッシャ経路も対象にする
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-5
+  FR5:
+    title: 取り込んでいないチャンクまで止めない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0003
+    tests:
+    - TS-6
+  FR6:
+    title: 抑止したチャンクの通知とリッチコンテンツ
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0003
+    tests:
+    - TS-7
+  FR7:
+    title: コメントを新しい保証に合わせる
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-15
+  FR8:
+    title: 抑止は転送だけに効く
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+  FR9:
+    title: 抑止したチャンクの端末問い合わせ
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-9
+  FR10:
+    title: 境界をまたぐシーケンスの続きを文字として表示しない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-10
+  FR11:
+    title: 抑止の境界を送信先と結び付ける
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-5
+    - TS-11
+  NFR1:
+    title: snapshot のバイト列とワイヤ形式を変えない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-13
+  NFR2:
+    title: ロック規律とデッドロック回避
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-12
+    - TS-16
+  NFR3:
+    title: ロック内処理を増やさない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-16
+  NFR4:
+    title: reader の通常経路のコスト
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-17
+  NFR5:
+    title: ビルド構成とプラットフォーム
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-14
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 1
+    failed_id_counts:
+      TS-1: 1
+      TS-2: 1
+      TS-6: 1
+      TS-7: 1
+      TS-9: 1
+      TS-10: 1
+      TS-11: 1
+      TS-16: 1
+  infra_resume:
+    rounds: 0
+    cap: 2

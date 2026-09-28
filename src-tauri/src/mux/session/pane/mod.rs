@@ -16,10 +16,12 @@ use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
 
 mod handles;
+mod output_capture;
 mod output_queue;
 mod output_target;
 
 pub use handles::*;
+pub use output_capture::*;
 pub use output_queue::*;
 pub use output_target::*;
 
@@ -41,6 +43,22 @@ pub(in crate::mux) fn encode_snapshot_segments(
         })
         .collect();
     mux_ipc::protocol::encode_snapshot_payload(&dim_segments, bytes)
+}
+
+/// Length counterpart of [`encode_snapshot_segments`]
+/// (mux-snapshot-output-boundary task0002, AC-1/AC-2): the exact byte length
+/// `encode_snapshot_segments` would produce for the same `(bytes, segments)`,
+/// computed arithmetically via
+/// `mux_ipc::protocol::encoded_snapshot_payload_len` — no allocation, no
+/// copy. Lets a caller (`mux::ipc::reattach::collect_reattach_data`) decide
+/// [`mux_ipc::protocol::fits_single_snapshot_frame`] for an already-assembled
+/// snapshot BEFORE taking the pane's `output_target` lock, instead of
+/// encoding the snapshot itself to find out (NFR3).
+pub(in crate::mux) fn encoded_snapshot_segments_len(
+    bytes: &[u8],
+    segments: &[(usize, u16, u16)],
+) -> usize {
+    mux_ipc::protocol::encoded_snapshot_payload_len(segments.len(), bytes.len())
 }
 
 /// A pane's child-process reference (task plan task0007, IMPLEMENTATION.md
@@ -126,6 +144,14 @@ pub struct MuxPane {
     /// Lock-free snapshot of this pane's current dimensions (task0003 D5).
     /// See [`PaneDims`] for the ordering guarantee this closes.
     pub dims: SharedPaneDims,
+    /// Per-pane output capture state and suppression boundary record
+    /// (mux-snapshot-output-boundary task0001): the capture exclusion
+    /// ordering the reader's shadow+ring update against every snapshot
+    /// read, and the per-destination-sender record of which output
+    /// sequence numbers a delivered snapshot already covers. Starts fresh
+    /// ("nothing captured") on every construction, including a pane
+    /// restored by hot-upgrade (ASM-3).
+    pub output_capture: SharedOutputCapture,
 }
 
 /// Clamp `(cols, rows)` to the domain the wire decoder ACTUALLY accepts for
@@ -398,6 +424,7 @@ impl MuxPane {
             passthrough_scanner: Arc::new(StdMutex::new(PassthroughScanner::new())),
             scrollback: Arc::new(StdMutex::new(scrollback)),
             dims: Arc::new(PaneDims::new(cols, rows)),
+            output_capture: Arc::new(OutputCapture::new()),
         }
     }
 
@@ -486,6 +513,13 @@ impl MuxPane {
             .master
             .as_ref()
             .ok_or_else(|| "PTY master closed".to_string())?;
+        let old_cols = self.cols;
+        let old_rows = self.rows;
+        let pane_id = self.id;
+        let dims = &self.dims;
+        let scrollback = &self.scrollback;
+        let shadow_parser = &self.shadow_parser;
+        let dims_changed = old_cols != cols || old_rows != rows;
         // IMPLEMENTATION.md D1/D2 (task0001), structural since task0004
         // round-4 rework D1': record a resize segment into the scrollback
         // ring's `dim_markers` side channel (`write_resize_marker`) so a
@@ -517,79 +551,105 @@ impl MuxPane {
         // ordering owner: the reader thread needs this SAME lock to append
         // anything, so it cannot record a single byte until AFTER the
         // marker is in place.
-        if self.cols != cols || self.rows != rows {
-            let mut scrollback = self.scrollback.lock().unwrap();
-            // task0004 round-4 rework (review round-3 finding
-            // `5ac1a5171a1e6a58`): publish the new dims via `self.dims`
-            // BEFORE `master.resize()` sends SIGWINCH — still inside this
-            // same scrollback-locked section. `master.resize()` is what
-            // makes the child observe the new size and start producing
-            // output at it; if the reader thread's `read()` returns that
-            // output and calls `PaneDims::get()` in the gap BETWEEN
-            // `master.resize()` and the OLD placement of this `set()` call
-            // (after resize + marker write), it would see the OLD dims and
-            // misattribute genuinely-new-size content via
-            // `ScrollbackRingBuffer::attribute_write`'s correction path —
-            // the opposite of what that path exists to prevent. Publishing
-            // first closes that window: by the time the child could
-            // possibly react to SIGWINCH, `PaneDims` already reports the
-            // size the reaction was produced under.
-            let (old_cols, old_rows) = (self.cols, self.rows);
-            self.dims.set(cols, rows);
-            if let Err(e) = master.resize(portable_pty::PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            }) {
-                // D7'' (task0005 rework, review round-4 finding
-                // `ef9ab1689853785c`, medium): `master.resize()` failing
-                // means the PTY never actually changed size — but `self.dims`
-                // was already published above (needed to close the OTHER
-                // race this ordering fixes). Left as-is, `PaneDims` would
-                // keep reporting a size the PTY was never at; the reader
-                // thread reads it on every chunk and hands it to
-                // `ScrollbackRingBuffer::attribute_write`, which — seeing a
-                // mismatch against the ring's last-recorded dims — would
-                // record a CORRECTIVE marker for those bogus dims, and every
-                // later chunk in this pane's scrollback would be attributed
-                // to a size that never existed. Roll `self.dims` back to the
-                // size the PTY still actually has (still inside this same
-                // scrollback-locked section, so no reader-thread read can
-                // observe the bogus dims and misattribute against them
-                // between the `set` above and this rollback) before
-                // returning the error. `self.cols`/`self.rows` were never
-                // updated on this path (still assigned after this whole
-                // `if`/`else`), so they already agree with the rollback.
-                self.dims.set(old_cols, old_rows);
-                return Err(format!("PTY resize failed: {}", e));
-            }
-            scrollback.write_resize_marker(cols, rows);
-        } else {
-            master
-                .resize(portable_pty::PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })
-                .map_err(|e| format!("PTY resize failed: {}", e))?;
-        }
+        //
+        // mux-snapshot-output-boundary task0001 (IMPLEMENTATION.md
+        // "Resize"): the ring marker, the PTY resize itself, and the
+        // shadow-parser resize below all run as ONE step under the capture
+        // exclusion (`captured_read`, not `capture` — this resize is not
+        // itself an output chunk, so it never bumps the output sequence
+        // number), ordering them against the reader thread's own capture
+        // step (shadow update + ring write) and against every snapshot
+        // path's captured read of that same state. The existing
+        // scrollback-lock span across the PTY resize, and the shadow lock
+        // NOT nested inside it, are both unchanged below.
+        let (result, _last_captured) =
+            self.output_capture.captured_read(|| -> Result<(), String> {
+                if dims_changed {
+                    let mut scrollback = scrollback.lock().unwrap();
+                    // task0004 round-4 rework (review round-3 finding
+                    // `5ac1a5171a1e6a58`): publish the new dims via
+                    // `dims` BEFORE `master.resize()` sends SIGWINCH —
+                    // still inside this same scrollback-locked section.
+                    // `master.resize()` is what makes the child observe
+                    // the new size and start producing output at it; if
+                    // the reader thread's `read()` returns that output
+                    // and calls `PaneDims::get()` in the gap BETWEEN
+                    // `master.resize()` and the OLD placement of this
+                    // `set()` call (after resize + marker write), it
+                    // would see the OLD dims and misattribute
+                    // genuinely-new-size content via
+                    // `ScrollbackRingBuffer::attribute_write`'s
+                    // correction path — the opposite of what that path
+                    // exists to prevent. Publishing first closes that
+                    // window: by the time the child could possibly
+                    // react to SIGWINCH, `PaneDims` already reports the
+                    // size the reaction was produced under.
+                    dims.set(cols, rows);
+                    if let Err(e) = master.resize(portable_pty::PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    }) {
+                        // D7'' (task0005 rework, review round-4 finding
+                        // `ef9ab1689853785c`, medium): `master.resize()`
+                        // failing means the PTY never actually changed
+                        // size — but `dims` was already published above
+                        // (needed to close the OTHER race this ordering
+                        // fixes). Left as-is, `PaneDims` would keep
+                        // reporting a size the PTY was never at; the
+                        // reader thread reads it on every chunk and
+                        // hands it to
+                        // `ScrollbackRingBuffer::attribute_write`, which
+                        // — seeing a mismatch against the ring's
+                        // last-recorded dims — would record a
+                        // CORRECTIVE marker for those bogus dims, and
+                        // every later chunk in this pane's scrollback
+                        // would be attributed to a size that never
+                        // existed. Roll `dims` back to the size the PTY
+                        // still actually has (still inside this same
+                        // scrollback-locked section, so no
+                        // reader-thread read can observe the bogus dims
+                        // and misattribute against them between the
+                        // `set` above and this rollback) before
+                        // returning the error. `self.cols`/`self.rows`
+                        // are only assigned after this whole call
+                        // returns successfully, so they already agree
+                        // with the rollback.
+                        dims.set(old_cols, old_rows);
+                        return Err(format!("PTY resize failed: {}", e));
+                    }
+                    scrollback.write_resize_marker(cols, rows);
+                } else {
+                    master
+                        .resize(portable_pty::PtySize {
+                            rows,
+                            cols,
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        })
+                        .map_err(|e| format!("PTY resize failed: {}", e))?;
+                }
+
+                let mut parser = lock_shadow_parser(shadow_parser);
+                let resized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    parser.screen_mut().set_size(rows, cols);
+                }));
+                if resized.is_err() {
+                    // vt100 panicked mid-resize; its internal state may
+                    // be torn. Rebuild so subsequent output
+                    // re-populates the shadow screen.
+                    *parser = new_shadow_parser(rows, cols);
+                    log::error!(
+                        "pane {}: shadow parser panicked during resize; parser reset",
+                        pane_id
+                    );
+                }
+                Ok(())
+            });
+        result?;
         self.cols = cols;
         self.rows = rows;
-        let mut parser = lock_shadow_parser(&self.shadow_parser);
-        let resized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            parser.screen_mut().set_size(rows, cols);
-        }));
-        if resized.is_err() {
-            // vt100 panicked mid-resize; its internal state may be torn.
-            // Rebuild so subsequent output re-populates the shadow screen.
-            *parser = new_shadow_parser(rows, cols);
-            log::error!(
-                "pane {}: shadow parser panicked during resize; parser reset",
-                self.id
-            );
-        }
         Ok(())
     }
 
@@ -896,6 +956,7 @@ impl MuxPane {
             passthrough_scanner: Arc::new(StdMutex::new(PassthroughScanner::new())),
             scrollback: Arc::new(StdMutex::new(scrollback)),
             dims: Arc::new(PaneDims::new(cols, rows)),
+            output_capture: Arc::new(OutputCapture::new()),
         }
     }
 
@@ -942,6 +1003,7 @@ impl MuxPane {
                 DEFAULT_SCROLLBACK_CAPACITY,
             ))),
             dims: Arc::new(PaneDims::new(cols, rows)),
+            output_capture: Arc::new(OutputCapture::new()),
         }
     }
 }
