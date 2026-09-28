@@ -123,9 +123,11 @@ workflow:
   status: completed
   completed_at_commit: f558ec82f557d2679908a104ee79f7369c5de740
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  result: pass
   failed_items: []
+  completed_at_commit: 1ac53457095de334df332de6740eb38399745a13
+  summary: 'build (default + CLI-only) ok; lib tests 3707 passed (default) / 1143 passed (CLI-only); bridge tests 46 passed incl. TS-1..TS-3; fmt check ok; scope limited to src-tauri/src/mux/bridge/mod.rs and tests.rs'
 - id: retrospect
   status: pending
 tasks:
