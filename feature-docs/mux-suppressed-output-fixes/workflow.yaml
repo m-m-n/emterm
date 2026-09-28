@@ -102,9 +102,18 @@ workflow:
   status: completed
   completed_at_commit: fc181089f0f2af202c491167b70e0f6c8569b8ed
 - id: verify
-  status: in_progress
-  result: null
-  failed_items: []
+  status: failed
+  result: fail
+  failed_items:
+  - id: TS-9
+    category: spec
+    note: 'FR8/AC-5: hidden-alt-exit ケースの pane レベル回帰テスト visibility_resume_after_hidden_alt_exit_shows_main_screen が HEAD に存在しない（20c4cd9c にはあったが task0003 の親側採用による再実装 06bf0714 で消失）。test-docs task0003.tests.yaml と DECISIONS.md は存在を前提に記載している'
+  - id: TS-10
+    category: spec
+    note: 'FR8/AC-5: apt 風プログレスバー（DECSTBM, DECSC/DECRC）の主画面 pane を hide/show する回帰テスト visibility_resume_keeps_main_pane_progress_bar_layout が HEAD に存在しない（同じく task0003 再実装で消失）'
+  - id: TS-15
+    category: spec
+    note: 'FR13/AC-7: DECISIONS.md の 830f950f39e499fa 行が存在しない 2 テストを回帰テストとして挙げている。9e6a468b3a45ceeb 行はビューア起動に image 種別も含めて届けると記すが、実装は image を除外（client_parity_scan.rs の kind != "image"、task0001 の D3 判断）。decisions_md_contains_every_d7_registry_test_name は名前の記載のみ検査しテストの実在を検査しない'
 - id: retrospect
   status: pending
 tasks:
@@ -425,8 +434,11 @@ requirements:
 batch:
   review_rework_count: 0
   verify_rework:
-    rounds: 0
-    failed_id_counts: {}
+    rounds: 1
+    failed_id_counts:
+      TS-9: 1
+      TS-10: 1
+      TS-15: 1
   infra_resume:
     rounds: 0
     cap: 2
