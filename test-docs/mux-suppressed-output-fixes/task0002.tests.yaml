@@ -1,0 +1,128 @@
+task_id: task0002
+baseline_failures: []          # 3727 passed, 0 failed, 3 ignored (cargo test --manifest-path src-tauri/Cargo.toml --lib), before any change
+final_failures: []             # 3736 passed, 0 failed, 3 ignored (same command), after the fix; also `cargo check --no-default-features` passes cleanly
+acceptance_tests:
+  AC-1:
+    tests: [write_filter_holds_string_ending_in_trailing_esc_until_completed]
+    red_confirmed: false
+    red_reason: >
+      Observed green against the pre-fix code (searched: this is a NEW test,
+      no existing test in pty_spawn/tests.rs covers this exact scenario).
+      This specific scenario — a single feed() call whose OSC body ends in a
+      trailing ESC as the very last byte of the buffer — was already handled
+      correctly before this task: the pre-fix `find_osc_end` also falls
+      through to `None` (held) whenever the scan runs off the end of the
+      buffer, regardless of whether the last examined byte was ESC. The bug
+      this task fixes is specifically ESC-abort recognition (a mid-body ESC
+      followed by a NON-backslash byte) and the escape-disambiguation rules
+      (ESC ESC, ESC(/), lone trailing ESC at top level) — none of which this
+      single-feed, already-at-buffer-end example exercises. Kept as the
+      test named by the D7 registry (TS-1, shared with task0001) and as
+      regression coverage for the still-correct pending contract.
+  AC-2:
+    tests: [write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail]
+    red_confirmed: true
+    red_reason: >
+      Pre-fix: `assert_eq!` failed — "the aborted OSC and the aborted DCS
+      are both closed and flushed; nothing after them is held because of
+      them" — left (actual): [] (nothing flushed at all), right (expected):
+      the 12-byte "\x1b]0;osc\x1bPdcs". The pre-fix `find_osc_end`/`find_st`
+      treated a mid-body ESC-not-backslash as `None` ("still unterminated")
+      instead of an abort, so `find_safe_boundary` held the ENTIRE chunk —
+      including the aborted OSC and DCS — from the very first introducer.
+  AC-3:
+    tests:
+      - write_filter_double_esc_treats_the_second_esc_as_the_introducer
+      - write_filter_charset_designator_consumes_the_next_byte_even_if_esc
+      - write_filter_two_byte_escapes_x_and_caret_do_not_force_a_hold
+      - write_filter_lone_trailing_esc_is_held_until_the_next_byte_disambiguates_it
+    red_confirmed: false
+    red_reason: >
+      Mixed, reported honestly per-test rather than as one blanket verdict
+      (not every listed test observed a genuine pre-fix failure):
+      write_filter_double_esc_treats_the_second_esc_as_the_introducer
+      observed RED pre-fix — "only the superseded FIRST esc flushes; the OSC
+      the second esc introduces is still incomplete and must be held" —
+      left (actual): [27,27,93,49,49,59,63] (old code flushed the whole
+      thing, never recognizing the second ESC as its own OSC attempt),
+      right (expected): [27] (just the superseded first ESC).
+      write_filter_charset_designator_consumes_the_next_byte_even_if_esc
+      observed RED pre-fix — "the designator-consumed ESC never introduces
+      an OSC; nothing is held even though the presumed OSC body never
+      terminates" — left (actual): [27,40] (old code, lacking
+      designator-awareness, misrecognized the swallowed ESC as a fresh OSC
+      introducer and held everything from there), right (expected): the
+      full 12-byte input (old code held it forever with no terminator ever
+      coming). write_filter_lone_trailing_esc_is_held_until_the_next_byte_disambiguates_it
+      observed RED pre-fix on its first assertion — left (actual):
+      [...,116,101,120,116,27] ("plain text" + the trailing ESC, wrongly
+      flushed), right (expected): "plain text" without the ESC (old code's
+      top-of-loop check treated ANY lone trailing ESC as immediately
+      flushable, never holding it).
+      write_filter_two_byte_escapes_x_and_caret_do_not_force_a_hold did NOT
+      observe red (passed unchanged both before and after): `ESC X` / `ESC
+      ^` fall into the same generic default arm (`i += 2`) in both the old
+      and new code — this task's fix did not touch that path, so this test
+      is regression coverage confirming the documented rule, not a
+      demonstration of a fix. Listed in the report's unconfirmed_reds.
+  AC-4:
+    tests: [suppressed_chunk_after_aborted_strings_does_not_resend_delivered_query_or_text]
+    red_confirmed: true
+    red_reason: >
+      Pre-fix: `assert_eq!` failed — "chunk0 (forwarded raw), the on-demand
+      snapshot, then EOF — chunk1's suppressed-chunk replacement must be
+      EMPTY (no query, no tail) and send nothing" — left (actual number of
+      received chunks): 4, right (expected): 3. The 3rd received chunk's
+      payload was the ENTIRE stale pending run
+      ("\x1b]0;osc\x1bPdcs\x1b[6ntext" + "more-output"), i.e. chunk1's
+      suppressed-chunk replacement incorrectly re-sent the CSI 6n query and
+      "text" that chunk0 already delivered raw — exactly the duplicate-
+      delivery bug AC-4 describes, caused by the pre-fix write filter never
+      draining `pending` past the aborted OSC/DCS.
+  AC-5:
+    tests: [write_filter_boundaries_are_split_position_independent_and_match_term_core]
+    red_confirmed: true
+    red_reason: >
+      Pre-fix: `assert_eq!` failed — "split at 1 for [27,93,49,49,59,63,27]
+      must flush the same bytes as an unsplit feed" — left (actual, from
+      the two-call split feed): [27,93,49,49,59,63,27] (the whole AC-1
+      "open" corpus item flushed immediately), right (expected, from the
+      one-call whole feed): [] (correctly held, since the item is genuinely
+      incomplete). This demonstrates the pre-fix boundary decision was
+      split-position DEPENDENT: feeding 1 byte then the remaining 6
+      flushed everything, while feeding all 7 at once held everything —
+      exactly the kind of inconsistency the postcondition rules out.
+  AC-6:
+    tests: [write_filter_hostile_aborted_introducers_stream_is_linear_and_holds_only_the_final_pair]
+    red_confirmed: true
+    red_reason: >
+      Pre-fix: `assert_eq!` failed — "everything before the final
+      (incomplete) pair is flushed unchanged" — left (actual): [] (nothing
+      flushed at all), right (expected): the 65534-byte flushed prefix. The
+      64 KiB hostile stream's very first `ESC ]` pair was misclassified as
+      "unterminated" (instead of immediately-aborted), so the pre-fix
+      filter held the ENTIRE 64 KiB in `pending` rather than draining
+      everything but the genuinely-incomplete final pair. The pre-existing
+      pending-cap test (scrollback_filter_flushes_raw_past_pending_cap) and
+      the pending-attribution tests
+      (feed_attributes_a_carried_over_pending_run_to_the_dims_it_started_under,
+      feed_reattributes_a_partial_drains_retained_tail_to_the_read_that_produced_it)
+      were not modified and pass unchanged before and after this task's
+      fix, confirmed by the full-suite run (3736 passed, 0 failed).
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >
+      Build/lint outcome, not a single named test. Pre-fix: scoped
+      `cargo test --manifest-path src-tauri/Cargo.toml --lib` runs (filtered
+      to the new test names — `write_filter_` and the AC-4 reader-level
+      test) were actually executed and observed to report FAILED (6 of 8
+      new filter-level tests, plus the new reader-level test). Post-fix: the
+      full, unfiltered `cargo test --manifest-path src-tauri/Cargo.toml
+      --lib` reports 3736 passed, 0 failed, 3 ignored (baseline was 3727
+      passed, 0 failed, 3 ignored — the 9 new tests account for the
+      difference), and `cargo check --manifest-path src-tauri/Cargo.toml
+      --no-default-features` passes cleanly. No existing test's expectation
+      needed to change for this task (AC-8 of IMPLEMENTATION.md
+      Conventions): every test that passed in the baseline still passes
+      unmodified.
