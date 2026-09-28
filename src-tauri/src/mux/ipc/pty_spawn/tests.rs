@@ -2952,41 +2952,142 @@ fn decisions_md_carries_the_known_gap_register() {
     }
 }
 
+/// AC-4 (task0006): the IMPLEMENTATION.md D7 registry's test-name list —
+/// SHARED, never duplicated, between
+/// `decisions_md_contains_every_d7_registry_test_name` (every name is
+/// cited in DECISIONS.md) and
+/// `every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source`
+/// (every name actually names a test function under `src-tauri/src`).
+/// Moving this list into a shared constant is a behavior-preserving change
+/// to the pre-existing `decisions_md_contains_every_d7_registry_test_name`
+/// (task0006 completion report).
+const D7_REGISTRY_TEST_NAMES: [&str; 23] = [
+    "suppressed_alt_osc_color_query_split_inside_st_is_delivered_once",
+    "write_filter_holds_string_ending_in_trailing_esc_until_completed",
+    "replacement_never_extracts_a_query_consumed_as_charset_designator",
+    "replacement_matches_client_reference_for_transition_corpus",
+    "color_query_predicate_matches_client_osc_number_and_theme_rules",
+    "incomplete_csi_tail_is_resent_without_executed_c0_controls",
+    "pending_does_not_drop_alt_region_queries_viewer_launches_or_own_tail",
+    "viewer_launch_in_suppressed_chunk_is_delivered_exactly_once",
+    "write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail",
+    "suppressed_chunk_after_aborted_strings_does_not_resend_delivered_query_or_text",
+    "query_split_across_reads_is_answered_once_at_every_split_position",
+    "utf8_split_across_reads_never_prints_a_replacement_character",
+    "consecutive_suppressed_chunks_leave_next_forwarded_chunk_intact",
+    "inline_images_in_suppressed_chunk_are_not_delivered",
+    "viewer_launch_image_kind_is_not_redelivered_d3",
+    "visibility_resume_restores_alt_screen_mode_and_content",
+    "visibility_resume_after_hidden_alt_exit_shows_main_screen",
+    "visibility_resume_keeps_main_pane_progress_bar_layout",
+    "suppressed_queries_arrive_after_snapshot_in_order_once_each",
+    "evaluate_output_target_never_resumes_a_detached_pane",
+    "production_visible_resume_delivers_snapshot_before_replacement_and_next_chunk",
+    "split_osc9_across_two_suppressed_chunks_never_fires_more_than_once",
+    "snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock",
+];
+
 /// AC-4: every regression-test name from the IMPLEMENTATION.md D7 registry
 /// is cited somewhere in DECISIONS.md — a transcription check that would
 /// catch a dropped or misspelled test name.
 #[test]
 fn decisions_md_contains_every_d7_registry_test_name() {
-    let d7_test_names = [
-        "suppressed_alt_osc_color_query_split_inside_st_is_delivered_once",
-        "write_filter_holds_string_ending_in_trailing_esc_until_completed",
-        "replacement_never_extracts_a_query_consumed_as_charset_designator",
-        "replacement_matches_client_reference_for_transition_corpus",
-        "color_query_predicate_matches_client_osc_number_and_theme_rules",
-        "incomplete_csi_tail_is_resent_without_executed_c0_controls",
-        "pending_does_not_drop_alt_region_queries_viewer_launches_or_own_tail",
-        "viewer_launch_in_suppressed_chunk_is_delivered_exactly_once",
-        "write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail",
-        "suppressed_chunk_after_aborted_strings_does_not_resend_delivered_query_or_text",
-        "query_split_across_reads_is_answered_once_at_every_split_position",
-        "utf8_split_across_reads_never_prints_a_replacement_character",
-        "consecutive_suppressed_chunks_leave_next_forwarded_chunk_intact",
-        "inline_images_in_suppressed_chunk_are_not_delivered",
-        "visibility_resume_restores_alt_screen_mode_and_content",
-        "visibility_resume_after_hidden_alt_exit_shows_main_screen",
-        "visibility_resume_keeps_main_pane_progress_bar_layout",
-        "suppressed_queries_arrive_after_snapshot_in_order_once_each",
-        "evaluate_output_target_never_resumes_a_detached_pane",
-        "production_visible_resume_delivers_snapshot_before_replacement_and_next_chunk",
-        "split_osc9_across_two_suppressed_chunks_never_fires_more_than_once",
-        "snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock",
-    ];
-    for name in d7_test_names {
+    for name in D7_REGISTRY_TEST_NAMES {
         assert!(
             DECISIONS_MD.contains(name),
             "DECISIONS.md must cite the D7 registry test name {name:?}"
         );
     }
+}
+
+/// Recursively search `dir` (and its subdirectories) for a `.rs` file
+/// whose text defines a function named `name` — `fn NAME(` at a word
+/// boundary (not a prefix of a longer identifier). Platform-neutral: uses
+/// `std::path::Path`/`std::fs::read_dir` throughout, no hardcoded path
+/// separators.
+fn source_tree_defines_function(dir: &std::path::Path, name: &str) -> bool {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return false,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if source_tree_defines_function(&path, name) {
+                return true;
+            }
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if file_defines_function(&content, name) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether `content` contains a `fn NAME(` definition, where the
+/// character immediately following `NAME` (before any `(`) is never an
+/// identifier character — so a search for `foo` never matches a
+/// definition of `foo_bar`.
+fn file_defines_function(content: &str, name: &str) -> bool {
+    let needle = format!("fn {name}");
+    let mut search_from = 0;
+    while let Some(pos) = content[search_from..].find(&needle) {
+        let match_end = search_from + pos + needle.len();
+        let boundary_ok = content[match_end..]
+            .chars()
+            .next()
+            .map(|c| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(true);
+        if boundary_ok && content[match_end..].trim_start().starts_with('(') {
+            return true;
+        }
+        search_from = match_end;
+    }
+    false
+}
+
+/// AC-4 (FR13; TS-21): the lookup `every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source`
+/// below drives — a name is "defined" only if some `.rs` file under this
+/// crate's `src` (found from the crate manifest directory, via
+/// `CARGO_MANIFEST_DIR`, never a hardcoded path) actually defines a
+/// function by that name.
+fn registry_test_name_is_defined_in_crate_source(name: &str) -> bool {
+    let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    source_tree_defines_function(&src_dir, name)
+}
+
+/// AC-4 (FR13; TS-21): every name on the D7 registry list — the SAME list
+/// `decisions_md_contains_every_d7_registry_test_name` uses, never a
+/// second copy — must actually be a test function defined somewhere under
+/// `src-tauri/src`, not merely a name DECISIONS.md happens to mention.
+#[test]
+fn every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source() {
+    for name in D7_REGISTRY_TEST_NAMES {
+        assert!(
+            registry_test_name_is_defined_in_crate_source(name),
+            "D7 registry test name {name:?} is not defined as a function \
+             anywhere under src-tauri/src"
+        );
+    }
+}
+
+/// AC-4: the lookup itself is negative-sensitive — a name that is
+/// deliberately never defined anywhere must be reported missing, so this
+/// test's own pass state never depends on a name that merely happens to
+/// be absent by accident (and a lookup that vacuously always returns
+/// `true` would be caught here).
+#[test]
+fn registry_test_name_lookup_reports_a_deliberately_undefined_name_as_missing() {
+    assert!(
+        !registry_test_name_is_defined_in_crate_source(
+            "definitely_not_a_real_test_function_zzzzz_task0006"
+        ),
+        "the lookup must report a name that is never defined as missing"
+    );
 }
 
 // ── task0004 round-4 rework (D1'): dimensions travel as structural
