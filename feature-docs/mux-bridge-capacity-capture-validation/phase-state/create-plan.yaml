@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-bridge-capacity-capture-validation
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 86bfa8414ac6b3b3bfd883e25d40e38a7b0b9080
+last_input_digest: sha256:a79f840dc75304cb2a215e242deedbe6af15c33fa0a25611d1c8df01ca2be6af
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:a79f840dc75304cb2a215e242deedbe6af15c33fa0a25611d1c8df01ca2be6af
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
