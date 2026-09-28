@@ -588,6 +588,42 @@ fn capture_if_capacity_captures_capacity_and_only_capacity() {
     assert_eq!(capture_if_capacity(&attach, &attach_body), None);
 }
 
+/// mux-bridge-capacity-capture-validation task0001 AC-1: only a
+/// length-valid (exactly 4 bytes) `ClientScrollbackCapacity` payload is
+/// captured for a later resend. Length-invalid payloads (0, 3, 5 bytes) are
+/// rejected regardless of content; a 4-byte payload is accepted verbatim,
+/// including the value 0 (no clamping or substitution — FR3).
+#[test]
+fn capture_if_capacity_rejects_length_invalid_capacity_payloads() {
+    for len in [0usize, 3, 5] {
+        let msg = MuxMessage {
+            msg_type: MessageType::ClientScrollbackCapacity,
+            pane_id: 0,
+            payload: vec![0u8; len],
+        };
+        let body = msg.to_frame_body();
+        assert_eq!(
+            capture_if_capacity(&msg, &body),
+            None,
+            "a {len}-byte capacity payload must not be captured"
+        );
+    }
+
+    for lines in [0u32, 4321] {
+        let msg = MuxMessage {
+            msg_type: MessageType::ClientScrollbackCapacity,
+            pane_id: 0,
+            payload: ClientScrollbackCapacityPayload { lines }.to_payload(),
+        };
+        let body = msg.to_frame_body();
+        assert_eq!(
+            capture_if_capacity(&msg, &body),
+            Some(body.clone()),
+            "a 4-byte capacity payload (lines={lines}) must be captured verbatim"
+        );
+    }
+}
+
 /// AC-3 / AC-7: the connection-ended decision is exactly the observed
 /// announcement flag — never sticky across calls (`forward_loop`
 /// creates a fresh flag every invocation, so a reconnected connection
@@ -1582,5 +1618,209 @@ async fn forward_loop_capacity_capture_replaces_and_is_unaffected_by_other_messa
         Some(second_body),
         "the later capacity report replaces the stored one; the trailing \
          non-capacity message does not disturb it"
+    );
+}
+
+// ---- mux-bridge-capacity-capture-validation task0001: length-invalid
+// capacity reports must not displace the last valid one ----
+
+/// AC-3: a length-invalid capacity report with no prior valid report still
+/// reaches the daemon unchanged (FR2), but leaves the retained capacity
+/// empty — there is nothing valid to capture.
+#[tokio::test]
+async fn forward_loop_length_invalid_capacity_with_no_prior_valid_leaves_retained_capacity_empty() {
+    use tokio::io::AsyncReadExt as _;
+    use tokio::io::AsyncWriteExt as _;
+
+    let (mut stdin, mut stdin_writer) = tokio::io::duplex(4096);
+    let mut parser = StdinApcParser::new();
+    let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+
+    let (sock, mut daemon_side) = tokio::io::duplex(4096);
+    let (mut sock_reader, mut sock_writer) = tokio::io::split(sock);
+
+    let invalid = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: vec![0u8; 3],
+    };
+    let expected_body = invalid.to_frame_body();
+
+    stdin_writer
+        .write_all(invalid.to_plaintext().as_bytes())
+        .await
+        .expect("write length-invalid capacity plaintext");
+    stdin_writer
+        .flush()
+        .await
+        .expect("flush length-invalid capacity plaintext");
+    drop(stdin_writer);
+
+    let daemon_task = tokio::spawn(async move {
+        let mut len_buf = [0u8; 4];
+        daemon_side
+            .read_exact(&mut len_buf)
+            .await
+            .expect("read forwarded frame length");
+        let frame_len = u32::from_be_bytes(len_buf) as usize;
+        let mut frame_buf = vec![0u8; frame_len];
+        daemon_side
+            .read_exact(&mut frame_buf)
+            .await
+            .expect("read forwarded frame body");
+        frame_buf
+    });
+
+    let ended = forward_loop(
+        &mut sock_reader,
+        &mut sock_writer,
+        &transport,
+        &last_capacity,
+        &last_attach,
+        &mut stdin,
+        &mut parser,
+    )
+    .await;
+    assert_eq!(ended, ConnectionEnded::Normal);
+
+    let forwarded_body = daemon_task.await.expect("daemon task panicked");
+    assert_eq!(
+        forwarded_body, expected_body,
+        "the length-invalid frame still reaches the daemon unchanged"
+    );
+    assert_eq!(
+        last_capacity
+            .lock()
+            .expect("last_capacity mutex poisoned")
+            .clone(),
+        None,
+        "with no prior valid report, the retained capacity stays empty"
+    );
+}
+
+/// AC-4 / AC-5 (SPEC reproduction sequence, TS-2): a valid capacity report
+/// followed by a length-invalid one both reach the daemon unchanged and in
+/// order (AC-4); the retained capacity keeps the valid report's body, not
+/// the length-invalid one that arrived after it. Continuing from that same
+/// retained state (not a hand-set value), an upgrade-driven reconnect
+/// against a stand-in daemon resends the valid capacity — proving the
+/// length-invalid report never displaced it (AC-5). With no Attach
+/// retained, the capacity frame is the only frame expected after the
+/// reconnect handshake.
+#[cfg(unix)]
+#[tokio::test]
+async fn forward_loop_then_reconnect_resends_last_valid_capacity_after_a_trailing_length_invalid_report()
+ {
+    use std::os::unix::net::UnixListener;
+    use tokio::io::AsyncReadExt as _;
+    use tokio::io::AsyncWriteExt as _;
+
+    let (mut stdin, mut stdin_writer) = tokio::io::duplex(4096);
+    let mut parser = StdinApcParser::new();
+    let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
+    let last_capacity: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+
+    let (sock, mut daemon_side) = tokio::io::duplex(4096);
+    let (mut sock_reader, mut sock_writer) = tokio::io::split(sock);
+
+    let valid = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: ClientScrollbackCapacityPayload { lines: 5 }.to_payload(),
+    };
+    let valid_body = valid.to_frame_body();
+    let invalid = MuxMessage {
+        msg_type: MessageType::ClientScrollbackCapacity,
+        pane_id: 0,
+        payload: vec![0u8; 3],
+    };
+    let invalid_body = invalid.to_frame_body();
+
+    for msg in [&valid, &invalid] {
+        stdin_writer
+            .write_all(msg.to_apc().as_bytes())
+            .await
+            .expect("write frame");
+    }
+    stdin_writer.flush().await.expect("flush");
+    drop(stdin_writer);
+
+    let daemon_task = tokio::spawn(async move {
+        let mut received = Vec::new();
+        for _ in 0..2 {
+            let mut len_buf = [0u8; 4];
+            daemon_side
+                .read_exact(&mut len_buf)
+                .await
+                .expect("read forwarded frame length");
+            let frame_len = u32::from_be_bytes(len_buf) as usize;
+            let mut frame_buf = vec![0u8; frame_len];
+            daemon_side
+                .read_exact(&mut frame_buf)
+                .await
+                .expect("read forwarded frame body");
+            received.push(frame_buf);
+        }
+        received
+    });
+
+    let ended = forward_loop(
+        &mut sock_reader,
+        &mut sock_writer,
+        &transport,
+        &last_capacity,
+        &last_attach,
+        &mut stdin,
+        &mut parser,
+    )
+    .await;
+    assert_eq!(ended, ConnectionEnded::Normal);
+
+    let received = daemon_task.await.expect("daemon task panicked");
+    assert_eq!(
+        received,
+        vec![valid_body.clone(), invalid_body],
+        "both frames reach the daemon unchanged, in order (AC-4)"
+    );
+    assert_eq!(
+        last_capacity
+            .lock()
+            .expect("last_capacity mutex poisoned")
+            .clone(),
+        Some(valid_body.clone()),
+        "the length-invalid report never displaces the last valid one (AC-4)"
+    );
+
+    // AC-5: reconnect resends the retained (valid) capacity as the first
+    // frame after the handshake, using the SAME `last_capacity` mutex the
+    // forwarding loop above produced.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock_path = dir.path().join("reconnect-capacity-validation.sock");
+    let bind_path = sock_path.clone();
+
+    let daemon = std::thread::spawn(move || {
+        let listener = UnixListener::bind(&bind_path).expect("bind stand-in daemon socket");
+        let mut stream = accept_and_handshake_blocking(&listener);
+        let resent = read_frame_blocking(&mut stream);
+        assert_no_more_frames_blocking(&mut stream);
+        resent
+    });
+
+    let result = reconnect_and_reattach(&sock_path, &last_capacity, &last_attach).await;
+    assert!(
+        result.is_some(),
+        "reconnect_and_reattach should succeed against a live stand-in daemon"
+    );
+
+    let resent = daemon.join().expect("stand-in daemon thread panicked");
+    assert_eq!(resent.msg_type, MessageType::ClientScrollbackCapacity);
+    let decoded = ClientScrollbackCapacityPayload::from_payload(&resent.payload)
+        .expect("resent capacity payload must decode");
+    assert_eq!(
+        decoded.lines, 5,
+        "the resent capacity is the last VALID report, not the length-invalid one"
     );
 }
