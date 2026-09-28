@@ -1,0 +1,39 @@
+feature: mux-bridge-capacity-capture-validation
+collected_at: "2026-09-28T14:01:08+09:00"
+session_ids: [01a0e662-9dac-747a-8add-c8ea9bdd5c90]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: reduced
+    rationale: "description_plus_code の最終読みで bucket 1（小さなルール追加＋テスト追加）が確率 0.89、score 1.11 だったため reduced"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.0, confidence: 1.0, probabilities: {'0': 0.0, '1': 1.0, '2': 0.0, '3': 0.0}}
+        observed_at: "2026-09-28T13:20:00+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.11, confidence: 0.89, probabilities: {'0': 0.0, '1': 0.89, '2': 0.11, '3': 0.0}}
+        observed_at: "2026-09-28T13:27:00+09:00"
+    pre_survey_estimate:
+      files_expected: [src-tauri/src/mux/bridge/mod.rs, src-tauri/src/mux/bridge/tests.rs]
+      changed_lines_approx: 100
+      new_functions_needed: 1
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 1
+      body_change_kind: new_logic
+      change_containment: single_function
+      caller_and_dependency_count: 2
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1 で spec 観点の litellm (muse-spark-contributor) が rate_limited でスキップし、chain の次エントリ codex で完了した"
