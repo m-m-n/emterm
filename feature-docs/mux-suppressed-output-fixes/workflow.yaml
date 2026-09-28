@@ -114,7 +114,7 @@ workflow:
     note: 'build (cargo check --no-default-features) exit 0; cargo test --lib 3781 passed / 0 failed / 3 ignored. TS-9/TS-10 の回帰テストが pane/tests.rs に実在し成功、TS-15/TS-21 は DECISIONS.md の 18 stable_id 行と D7 レジストリ実在検査テストで成功。round1.yaml と crates/mux_ipc は無変更。M-1〜M-4 は手動確認（未実施）'
   completed_at_commit: 90de43acb9f0ab2cb55a5fc3c72189a9121bd3bd
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Client-parity replacement builder with cross-chunk start state
