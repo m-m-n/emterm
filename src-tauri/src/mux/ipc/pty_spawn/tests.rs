@@ -400,6 +400,287 @@ fn scrollback_filter_csi_does_not_force_pending() {
     assert_eq!(scrollback.lock().unwrap().read_all(), &chunk[..]);
 }
 
+// ── mux-suppressed-output-fixes task0002: boundary rules aligned with
+//    term_core (AC-1 through AC-6) ──────────────────────────────────────
+
+/// AC-1 (FR1; TS-1): a main-buffer OSC whose body ends in ESC at the end of
+/// a feed is INCOMPLETE (not aborted — the next byte hasn't arrived yet) and
+/// is held whole in `pending`. When the next feed supplies the backslash,
+/// the complete OSC is released in one flush and the ring holds it unsplit.
+#[test]
+fn write_filter_holds_string_ending_in_trailing_esc_until_completed() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let (_dims, out1) = filter.feed(b"\x1b]11;?\x1b", (80, 24));
+    assert!(
+        out1.is_empty(),
+        "an OSC body ending in ESC is incomplete (not aborted) — held whole"
+    );
+    assert_eq!(filter.pending(), b"\x1b]11;?\x1b".as_slice());
+
+    let (_dims, out2) = filter.feed(b"\\", (80, 24));
+    assert_eq!(
+        out2,
+        b"\x1b]11;?\x1b\\".to_vec(),
+        "the complete OSC is released in one flush, unsplit"
+    );
+    assert_eq!(filter.pending_len(), 0);
+}
+
+/// AC-2 (FR5): OSC, DCS and APC bodies followed by ESC plus a non-backslash
+/// byte count as CLOSED (aborted) at that ESC — nothing after them is held
+/// because of them. A string that begins at that very ESC and is still
+/// incomplete at the end of the feed is held from its own start. Here an
+/// ESC-aborted OSC is immediately followed by an ESC-aborted DCS (the
+/// aborting ESC of each is the introducer of the next), and finally an
+/// unterminated APC that stays incomplete to the end.
+#[test]
+fn write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(b"\x1b]0;osc"); // OSC introducer + body
+    chunk.extend_from_slice(b"\x1b"); // aborts the OSC
+    chunk.extend_from_slice(b"Pdcs"); // DCS introducer (the aborting ESC's 'P') + body
+    chunk.extend_from_slice(b"\x1b"); // aborts the DCS
+    chunk.extend_from_slice(b"_apcbody"); // APC introducer (the aborting ESC's '_') + body, no terminator
+
+    let (_dims, out) = filter.feed(&chunk, (80, 24));
+    assert_eq!(
+        out,
+        b"\x1b]0;osc\x1bPdcs".to_vec(),
+        "the aborted OSC and the aborted DCS are both closed and flushed; \
+         nothing after them is held because of them"
+    );
+    assert_eq!(
+        filter.pending(),
+        b"\x1b_apcbody".as_slice(),
+        "the still-open APC is held from its own start"
+    );
+}
+
+/// AC-3 (FR5): `ESC ESC` followed by an OSC introducer treats the SECOND ESC
+/// as the introducer — the first ESC is superseded (flushed as an ordinary
+/// byte, not held, and not treated as a fresh OSC/DCS/APC attempt itself),
+/// and the OSC the second ESC introduces is held whole while it stays
+/// incomplete. A byte-blind scanner that just skips 2 bytes past any
+/// non-`_`/`P`/`]` byte (never re-examining the second ESC) would instead
+/// treat the whole thing as ordinary text and never hold anything for the
+/// still-open OSC — this input has NO terminator, so that difference is
+/// observable.
+#[test]
+fn write_filter_double_esc_treats_the_second_esc_as_the_introducer() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let (_dims, out1) = filter.feed(b"\x1b\x1b]11;?", (80, 24));
+    assert_eq!(
+        out1,
+        b"\x1b".to_vec(),
+        "only the superseded FIRST esc flushes; the OSC the second esc \
+         introduces is still incomplete and must be held"
+    );
+    assert_eq!(
+        filter.pending(),
+        b"\x1b]11;?".as_slice(),
+        "pending must start at the SECOND esc, not the first"
+    );
+
+    let (_dims, out2) = filter.feed(b"\x07", (80, 24));
+    assert_eq!(out2, b"\x1b]11;?\x07".to_vec());
+    assert_eq!(filter.pending_len(), 0);
+}
+
+/// AC-3 (FR5): `ESC (` (charset designation) ALWAYS consumes the very next
+/// byte as the designator, even when that byte is itself an ESC — so an
+/// `ESC ]` right after `ESC (` never introduces an OSC; nothing is held,
+/// even when there is no terminator anywhere in the fed bytes (a scanner
+/// that (incorrectly) re-examined the designator byte as a fresh introducer
+/// would instead hold everything from there to the end, waiting forever for
+/// a terminator that was never going to be an OSC's in the first place).
+#[test]
+fn write_filter_charset_designator_consumes_the_next_byte_even_if_esc() {
+    let mut filter = ScrollbackWriteFilter::new();
+    // `ESC (` then `ESC ]11;?tail` (no BEL/ST anywhere) — the second ESC is
+    // swallowed as the designator for `(`, so what follows (`]11;?tail`) is
+    // ordinary bytes, never a recognized (and therefore never a HELD) OSC.
+    let chunk = b"\x1b(\x1b]11;?tail".to_vec();
+    let (_dims, out) = filter.feed(&chunk, (80, 24));
+    assert_eq!(
+        out, chunk,
+        "the designator-consumed ESC never introduces an OSC; nothing is \
+         held even though the presumed OSC body never terminates"
+    );
+    assert_eq!(filter.pending_len(), 0);
+}
+
+/// AC-3 (FR5): `ESC X` and `ESC ^` are complete two-byte sequences, not
+/// strings — they never force a pending hold, and text around them flushes
+/// straight through.
+#[test]
+fn write_filter_two_byte_escapes_x_and_caret_do_not_force_a_hold() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let chunk = b"\x1bXafter1\x1b^after2".to_vec();
+    let (_dims, out) = filter.feed(&chunk, (80, 24));
+    assert_eq!(out, chunk);
+    assert_eq!(filter.pending_len(), 0);
+}
+
+/// AC-3 (FR5): a lone trailing ESC (nothing after it in the fed stream) is
+/// held — we cannot yet tell whether it introduces a string — and is
+/// released once the next feed's leading byte disambiguates it. Here it
+/// turns out to be a CSI (`ESC [`), not a strip target, so the whole thing
+/// flushes once the disambiguating byte arrives. (An SGR CSI, not a device
+/// query — a device query would be REMOVED by the strip step for unrelated
+/// reasons (FR3's own concern), which would make a byte-equality assertion
+/// here about the wrong thing.)
+#[test]
+fn write_filter_lone_trailing_esc_is_held_until_the_next_byte_disambiguates_it() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let (_dims, out1) = filter.feed(b"plain text\x1b", (80, 24));
+    assert_eq!(out1, b"plain text".to_vec());
+    assert_eq!(filter.pending(), b"\x1b".as_slice());
+
+    let (_dims, out2) = filter.feed(b"[31m", (80, 24));
+    assert_eq!(
+        out2,
+        b"\x1b[31m".to_vec(),
+        "the held ESC turned out to introduce a CSI, not a strip target — \
+         it releases along with the rest once disambiguated"
+    );
+    assert_eq!(filter.pending_len(), 0);
+}
+
+/// AC-5 (FR5, postcondition): reusing the AC-1 to AC-4 inputs, split at
+/// EVERY position, feeding the two halves through a fresh filter across two
+/// `feed` calls must flush the same bytes and leave the same `pending` run
+/// as feeding the whole input in one shot — the boundary decision never
+/// depends on where a read happened to split the stream. Every resulting
+/// `pending` also has the shape the postcondition allows: empty, a lone
+/// ESC, or a run starting with its own OSC/DCS/APC opening ESC.
+///
+/// Oracle: for each corpus item taken as a whole, `term_core` (fed the same
+/// bytes plus a literal probe marker) is asked whether IT still considers a
+/// string open at the end of the item — if the probe is swallowed (never
+/// printed to the grid), `term_core` says "still open"; if it prints
+/// literally, `term_core` says "closed". This filter's own open/closed
+/// verdict (whether `pending` ends up empty) must agree.
+///
+/// The AC-4 item's CSI is SGR (`ESC[31m`), not a device query: a device
+/// query is a strip TARGET removed by `strip_pty_output_for_scrollback_write`
+/// (FR3's own, unrelated concern), and whether a strip target gets removed
+/// legitimately depends on which single `feed` call sees it whole — CSI
+/// content is explicitly out of this filter's hold contract (it is never
+/// held, so it can legitimately land in more than one flush), so a query
+/// split across the two split-feed calls here would make the split-invariance
+/// assertion fail for a reason this task does not own. An SGR CSI is not a
+/// strip target either way, so the flushed bytes stay identical regardless
+/// of where it is split.
+#[test]
+fn write_filter_boundaries_are_split_position_independent_and_match_term_core() {
+    use term_core::terminal_core::TerminalCore;
+
+    let corpus: Vec<Vec<u8>> = vec![
+        b"\x1b]11;?\x1b\\".to_vec(),                      // AC-1, closed
+        b"\x1b]11;?\x1b".to_vec(),                        // AC-1, open (trailing ESC in body)
+        b"\x1b]0;osc\x1bPdcs\x1b_apcbody\x1b\\".to_vec(), // AC-2, closed
+        b"\x1b]0;osc\x1bPdcs\x1b_apcbody".to_vec(),       // AC-2, open (incomplete APC)
+        b"\x1b\x1b]11;?\x07".to_vec(),                    // AC-3, double ESC, closed
+        b"\x1b(\x1b]11;?\x07tail".to_vec(), // AC-3, charset designator swallow, closed
+        b"\x1bXafter1\x1b^after2".to_vec(), // AC-3, two-byte escapes, closed
+        b"plain text\x1b".to_vec(),         // AC-3, lone trailing ESC, open
+        b"\x1b]0;osc\x1bPdcs\x1b[31mtext".to_vec(), // AC-4, closed (non-query CSI + text, no hold)
+    ];
+
+    for input in &corpus {
+        let mut whole = ScrollbackWriteFilter::new();
+        let (_dims, whole_out) = whole.feed(input, (80, 24));
+        let whole_pending = whole.pending().to_vec();
+
+        for split in 0..=input.len() {
+            let mut filter = ScrollbackWriteFilter::new();
+            let (_dims, out1) = filter.feed(&input[..split], (80, 24));
+            let (_dims, out2) = filter.feed(&input[split..], (80, 24));
+            let mut combined = out1;
+            combined.extend_from_slice(&out2);
+            assert_eq!(
+                combined, whole_out,
+                "split at {split} for {input:?} must flush the same bytes \
+                 as an unsplit feed"
+            );
+            assert_eq!(
+                filter.pending(),
+                whole_pending.as_slice(),
+                "split at {split} for {input:?} must leave the same pending \
+                 run as an unsplit feed"
+            );
+
+            let pending = filter.pending();
+            assert!(
+                pending.is_empty()
+                    || pending == b"\x1b"
+                    || (pending[0] == 0x1b
+                        && pending.len() >= 2
+                        && matches!(pending[1], b']' | b'P' | b'_')),
+                "pending after split {split} for {input:?} has an \
+                 unexpected shape: {pending:?}"
+            );
+        }
+
+        let mut oracle = TerminalCore::new(80, 24, 1000);
+        let mut probed = input.clone();
+        probed.extend_from_slice(b"PROBEMARK");
+        oracle.process_pty_data_fully(&probed);
+        let probe_visible = (0..24).any(|r| oracle.get_line_text(r).contains("PROBEMARK"));
+
+        if whole_pending.is_empty() {
+            assert!(
+                probe_visible,
+                "filter says {input:?} is fully closed, but term_core still \
+                 swallowed the probe text — the filter closed a string \
+                 term_core would keep open"
+            );
+        } else {
+            assert!(
+                !probe_visible,
+                "filter says {input:?} still has an open string, but \
+                 term_core already printed the probe text as literal \
+                 characters — the filter held a string term_core would \
+                 consider closed"
+            );
+        }
+    }
+}
+
+/// AC-6 (TM-2, NFR5): a hostile 64 KiB feed made of nothing but repeated
+/// `ESC ]` pairs, each aborting the previous OSC and opening a new one,
+/// completes in linear time and holds at most the final (genuinely
+/// incomplete) pair.
+#[test]
+fn write_filter_hostile_aborted_introducers_stream_is_linear_and_holds_only_the_final_pair() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let pair_count = 32 * 1024; // 64 KiB of `ESC ]` pairs
+    let chunk: Vec<u8> = std::iter::repeat_n(*b"\x1b]", pair_count)
+        .flatten()
+        .collect();
+
+    let start = std::time::Instant::now();
+    let (_dims, out) = filter.feed(&chunk, (80, 24));
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "a hostile chain of aborted introducers must scan in linear time; \
+         took {elapsed:?}"
+    );
+    assert_eq!(
+        out,
+        chunk[..chunk.len() - 2].to_vec(),
+        "everything before the final (incomplete) pair is flushed unchanged"
+    );
+    assert_eq!(
+        filter.pending(),
+        b"\x1b]".as_slice(),
+        "only the final, genuinely incomplete introducer pair is held"
+    );
+}
+
 /// task0012 AC-5: an `agent-status` OSC report split across chunk
 /// boundaries must never land in scrollback. `ScrollbackWriteFilter`
 /// already holds ANY unterminated OSC introducer (not just viewer
@@ -4548,6 +4829,201 @@ async fn visible_reattach_redelivers_a_pending_rich_content_candidate_and_the_cl
             "row {r} mismatch"
         );
     }
+}
+
+/// mux-suppressed-output-fixes task0002 AC-4 (FR5; TS-5): a FORWARDED
+/// (unsuppressed) read containing an ESC-aborted OSC and an ESC-aborted DCS,
+/// followed by a complete CSI device query (`ESC[6n`) and plain text, must
+/// leave the write filter's `pending` EMPTY once it is fully processed — the
+/// aborted strings are closed, not held, so nothing after them is trapped.
+/// When the NEXT read is suppressed by a production on-demand snapshot
+/// (`handle_request_pane_snapshot`), its FR9/FR10 replacement must not
+/// resend that already-delivered query or text: with a buggy filter that
+/// still treated the aborted OSC as unterminated, `pending` would still hold
+/// the whole first chunk (query and text included) when the second chunk's
+/// replacement is built, duplicating what the client already received raw.
+/// The daemon's scrollback ring, built from two SEPARATE `feed` calls (one
+/// per chunk), must equal a single strip of the whole concatenated
+/// main-buffer stream — splitting across reads must not change the result.
+#[tokio::test]
+async fn suppressed_chunk_after_aborted_strings_does_not_resend_delivered_query_or_text() {
+    let pane_id: PaneId = 70;
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let output_target: SharedOutputTarget =
+        Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+
+    let pane = MuxPane::new_test(pane_id, 80, 24, output_target.clone());
+    let shadow_parser = pane.shadow_parser.clone();
+    let cwd = pane.cwd.clone();
+    let title = pane.title.clone();
+    let title_sender = pane.title_sender.clone();
+    let notification_sender = pane.notification_sender.clone();
+    let agent_status_report_sender = pane.agent_status_report_sender.clone();
+    let raw_passthrough = pane.raw_passthrough.clone();
+    let passthrough_scanner = pane.passthrough_scanner.clone();
+    let scrollback = pane.scrollback.clone();
+    let dims = pane.dims.clone();
+    let output_capture = pane.output_capture.clone();
+
+    let mgr = Arc::new(tokio::sync::Mutex::new(SessionManager::new()));
+    let session_id = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        m.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+        sid
+    };
+
+    // chunk0: ESC-aborted OSC, ESC-aborted DCS, then a complete CSI device
+    // query and plain text — meant to be delivered normally.
+    let chunk0 = b"\x1b]0;osc\x1bPdcs\x1b[6ntext".to_vec();
+    // chunk1: unrelated plain content — meant to be suppressed.
+    let chunk1 = b"more-output".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let handle = std::thread::spawn({
+        let output_target = output_target.clone();
+        let shadow_parser = shadow_parser.clone();
+        let cwd = cwd.clone();
+        let title = title.clone();
+        let title_sender = title_sender.clone();
+        let notification_sender = notification_sender.clone();
+        let agent_status_report_sender = agent_status_report_sender.clone();
+        let raw_passthrough = raw_passthrough.clone();
+        let passthrough_scanner = passthrough_scanner.clone();
+        let scrollback = scrollback.clone();
+        let dims = dims.clone();
+        let output_capture = output_capture.clone();
+        let chunks = vec![chunk0.clone(), chunk1.clone()];
+        move || {
+            pty_reader_loop(
+                pane_id,
+                Box::new(ScriptedReader::new(chunks)),
+                output_target,
+                shadow_parser,
+                cwd,
+                title,
+                title_sender,
+                notification_sender,
+                agent_status_report_sender,
+                raw_passthrough,
+                passthrough_scanner,
+                scrollback,
+                dims,
+                Arc::new(StdMutex::new(None)),
+                output_capture,
+            );
+        }
+    });
+
+    // Pause on chunk0's own P2 (right after its capture — the write filter
+    // has already been fed chunk0 by this point). Re-arm P2 for chunk1
+    // BEFORE releasing chunk0, so the re-arm happens while the reader thread
+    // is still blocked inside the OLD `hit()` call — no race with the
+    // reader racing ahead to chunk1's own P2 first.
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on chunk0");
+    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
+    release_tx.send(()).unwrap();
+
+    // chunk0 proceeds past P2 with no boundary recorded yet — forwarded
+    // normally to the connected destination.
+
+    arrived_rx_2
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on chunk1");
+
+    // Drive the PRODUCTION on-demand snapshot path while paused on chunk1 —
+    // its boundary now covers BOTH chunk0 and chunk1 (both already
+    // captured), so chunk1 (the "next" read) will be suppressed once
+    // released.
+    let req = mux_ipc::protocol::MuxMessage {
+        msg_type: mux_ipc::protocol::MessageType::RequestPaneSnapshot,
+        pane_id,
+        payload: Vec::new(),
+    };
+    let mut deferred = crate::mux::session::pane::DeferredOutputQueue::new();
+    crate::mux::ipc::handlers::handle_request_pane_snapshot(
+        &req,
+        session_id,
+        &mgr,
+        &owned_tx,
+        &mut deferred,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+    assert!(deferred.is_empty(), "the channel has room; must not defer");
+
+    release_tx_2.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        received.push(c);
+    }
+    let received_data: Vec<&[u8]> = received.iter().map(|c| c.data.as_slice()).collect();
+    assert_eq!(
+        received.len(),
+        3,
+        "chunk0 (forwarded raw), the on-demand snapshot, then EOF — chunk1's \
+         suppressed-chunk replacement must be EMPTY (no query, no tail) and \
+         send nothing: {received_data:?}"
+    );
+    assert_eq!(
+        received[0].kind,
+        crate::mux::session::pane::ChunkKind::PtyOutput
+    );
+    assert_eq!(
+        received[0].data, chunk0,
+        "chunk0 must be forwarded verbatim, unsuppressed"
+    );
+    assert_eq!(
+        received[1].kind,
+        crate::mux::session::pane::ChunkKind::Snapshot
+    );
+    assert!(received[2].data.is_empty(), "EOF chunk must follow");
+
+    // Restricted to PtyOutput-kind chunks: the Snapshot chunk's payload is
+    // the RENDERED grid (built from the shadow parser's screen contents), so
+    // it legitimately contains the literal text "text" already drawn by
+    // chunk0 — that is not a "resend" via the suppressed-chunk pipeline this
+    // assertion is about.
+    let all_pty_output: Vec<u8> = received
+        .iter()
+        .filter(|c| c.kind == crate::mux::session::pane::ChunkKind::PtyOutput)
+        .flat_map(|c| c.data.clone())
+        .collect();
+    let query_occurrences = all_pty_output
+        .windows(4)
+        .filter(|w| *w == b"\x1b[6n")
+        .count();
+    assert_eq!(
+        query_occurrences, 1,
+        "the CSI device query must reach the client exactly once (via \
+         chunk0's normal forward), never resent by chunk1's replacement"
+    );
+    let text_occurrences = all_pty_output.windows(4).filter(|w| *w == b"text").count();
+    assert_eq!(
+        text_occurrences, 1,
+        "the plain text after the query must reach the client exactly once, \
+         never resent by chunk1's replacement"
+    );
+
+    let mut concatenated = chunk0.clone();
+    concatenated.extend_from_slice(&chunk1);
+    let expected_ring = strip_pty_output_for_scrollback_write(&concatenated);
+    assert_eq!(
+        scrollback.lock().unwrap().read_all(),
+        expected_ring,
+        "the ring, built from two separate feed() calls, must equal a \
+         single strip of the whole concatenated main-buffer stream"
+    );
 }
 
 /// AC-6 (FR11; TS-11): destination A holds a boundary for the pane ABOVE
