@@ -2328,6 +2328,237 @@ fn visibility_resume_restores_alt_screen_mode_and_content() {
     assert_eq!(client.get_cursor_col(), want_col);
 }
 
+/// AC-1 (FR8; TS-9; mux-suppressed-output-fixes task0006): a pane that is
+/// hidden while on the alternate screen, and that then receives
+/// `ESC[?1049l` (exit the alternate screen) WHILE STILL HIDDEN, is on the
+/// main screen by the time it is resumed through the PRODUCTION
+/// `resume_pane_with_permit` — the mirror-image transition of
+/// `visibility_resume_restores_alt_screen_mode_and_content` above (which
+/// covers STAYING on the alternate screen through a hide/resume cycle;
+/// this one covers LEAVING it while hidden). Restored from commit
+/// 20c4cd9c, lost when task0003 was re-implemented through parent-side
+/// adoption (06bf0714) — see
+/// `feature-docs/mux-suppressed-output-fixes/DECISIONS.md`
+/// (`830f950f39e499fa`).
+#[test]
+fn visibility_resume_after_hidden_alt_exit_shows_main_screen() {
+    use term_core::terminal_core::{MODE_ALT_SCREEN, TerminalCore};
+
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::HiddenByVisibility,
+        owner: Some(owned_tx.clone()),
+    }));
+    let pane = MuxPane::new_test(34, cols, rows, target.clone());
+    let output_capture = pane.output_capture.clone();
+
+    let before_alt: &[u8] = b"before-alt-line\r\n";
+    output_capture.capture(|| {
+        pane.shadow_parser.lock().unwrap().process(before_alt);
+        pane.scrollback.lock().unwrap().write(before_alt);
+    });
+    // Enters the alternate screen and draws TUI content — excluded from
+    // scrollback, matching real capture (alt-buffer bytes are never
+    // written to the pane's scrollback ring).
+    let enter_alt: &[u8] = b"\x1b[?1049h\x1b[1;1HALT-TUI-CONTENT";
+    output_capture.capture(|| {
+        pane.shadow_parser.lock().unwrap().process(enter_alt);
+    });
+    assert!(
+        pane.shadow_parser
+            .lock()
+            .unwrap()
+            .screen()
+            .alternate_screen(),
+        "test prerequisite: the pane must be on the alternate screen \
+         before it receives the exit sequence"
+    );
+
+    // Receives ESC[?1049l (exit the alternate screen) while hidden,
+    // through the PRODUCTION reader — the pane is Detached the whole
+    // time, so nothing is ever forwarded on the channel for this read.
+    let exit_alt = b"\x1b[?1049l".to_vec();
+    let handle = spawn_reader_thread(&pane, vec![exit_alt]);
+    handle.join().unwrap();
+    assert!(
+        rx.try_recv().is_err(),
+        "a Detached pane must never forward a live chunk"
+    );
+
+    let after_alt: &[u8] = b"after-alt-line\r\n";
+    output_capture.capture(|| {
+        pane.shadow_parser.lock().unwrap().process(after_alt);
+        pane.scrollback.lock().unwrap().write(after_alt);
+    });
+
+    assert!(
+        !pane
+            .shadow_parser
+            .lock()
+            .unwrap()
+            .screen()
+            .alternate_screen(),
+        "test prerequisite: the pane must be back on the main screen \
+         before it is resumed"
+    );
+
+    let permit = owned_tx
+        .try_reserve()
+        .expect("S has capacity for the resume permit");
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+    let chunk = rx.try_recv().expect("snapshot enqueued");
+    assert_eq!(chunk.kind, ChunkKind::Snapshot);
+    assert!(rx.try_recv().is_err(), "nothing else must be delivered");
+
+    let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&chunk.data);
+    let replay_segments: Vec<term_core::terminal_core::ReplaySegment> = segments
+        .iter()
+        .map(|s| term_core::terminal_core::ReplaySegment {
+            offset: s.offset,
+            cols: s.cols,
+            rows: s.rows,
+        })
+        .collect();
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(content, &replay_segments);
+
+    assert!(
+        !client.get_mode(MODE_ALT_SCREEN),
+        "AC-1: after applying the resume snapshot, the client model must \
+         be on the main screen"
+    );
+
+    // Reference: an independent client fed the surviving main-buffer bytes
+    // once — the alt-screen content is never captured, so it plays no
+    // part in the reference either.
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(before_alt);
+    reference.process_pty_data_fully(after_alt);
+    for r in 0..rows {
+        assert_eq!(
+            client.get_line_text(r).trim_end(),
+            reference.get_line_text(r).trim_end(),
+            "row {r} mismatch"
+        );
+    }
+}
+
+/// AC-2 (FR8; TS-10; mux-suppressed-output-fixes task0006): a main-screen
+/// pane shows an apt-style progress bar — drawn with a narrowed scroll
+/// region (DECSTBM) and a cursor save/restore pair (DECSC/DECRC) used to
+/// paint a status line outside the region. Hiding it
+/// (`evaluate_output_target`, `visible = false`) and resuming it
+/// (`resume_pane_with_permit`) must leave the cursor position, scroll
+/// region and visible rows exactly as they were before the hide. Restored
+/// from commit 20c4cd9c, lost when task0003 was re-implemented through
+/// parent-side adoption (06bf0714) — see
+/// `feature-docs/mux-suppressed-output-fixes/DECISIONS.md`
+/// (`830f950f39e499fa`).
+#[test]
+fn visibility_resume_keeps_main_pane_progress_bar_layout() {
+    use term_core::terminal_core::TerminalCore;
+
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let target: SharedOutputTarget =
+        Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+    let pane = MuxPane::new_test(35, cols, rows, target.clone());
+
+    let mut stream = Vec::new();
+    for i in 0..20u32 {
+        stream.extend_from_slice(format!("apt line {i}\r\n").as_bytes());
+    }
+    stream.extend_from_slice(b"\x1b[1;23r"); // narrow the scroll region, leaving the last row free
+    stream.extend_from_slice(b"\x1b7"); // save cursor (DECSC)
+    stream.extend_from_slice(b"\x1b[24;1H99%"); // draw the progress bar on the last row
+    stream.extend_from_slice(b"\x1b8"); // restore cursor (DECRC)
+
+    let handle = spawn_reader_thread(&pane, vec![stream.clone()]);
+    handle.join().unwrap();
+    while rx.try_recv().is_ok() {} // drain the forwarded live chunk + EOF
+
+    // Reference: an independent client model fed the same raw stream
+    // once — the pre-hide values a resumed client model must still match.
+    let mut reference = TerminalCore::new(cols, rows, 10_000);
+    reference.process_pty_data_fully(&stream);
+
+    let eval = evaluate_output_target(&pane, false, false, &owned_tx);
+    assert!(matches!(eval, EvalResult::SwitchedToDetached));
+
+    let permit = owned_tx
+        .try_reserve()
+        .expect("S has capacity for the resume permit");
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+    let chunk = rx.try_recv().expect("snapshot enqueued");
+    assert_eq!(chunk.kind, ChunkKind::Snapshot);
+    assert!(rx.try_recv().is_err(), "nothing else must be delivered");
+
+    let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&chunk.data);
+    let replay_segments: Vec<term_core::terminal_core::ReplaySegment> = segments
+        .iter()
+        .map(|s| term_core::terminal_core::ReplaySegment {
+            offset: s.offset,
+            cols: s.cols,
+            rows: s.rows,
+        })
+        .collect();
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(content, &replay_segments);
+
+    assert_eq!(
+        client.get_cursor_row(),
+        reference.get_cursor_row(),
+        "AC-2: cursor row must survive the hide/resume cycle"
+    );
+    assert_eq!(
+        client.get_cursor_col(),
+        reference.get_cursor_col(),
+        "AC-2: cursor col must survive the hide/resume cycle"
+    );
+    assert_eq!(
+        client.get_scroll_region_top(),
+        reference.get_scroll_region_top(),
+        "AC-2: scroll region top must survive the hide/resume cycle"
+    );
+    assert_eq!(
+        client.get_scroll_region_bottom(),
+        reference.get_scroll_region_bottom(),
+        "AC-2: scroll region bottom must survive the hide/resume cycle"
+    );
+    for r in 0..rows {
+        assert_eq!(
+            client.get_line_text(r).trim_end(),
+            reference.get_line_text(r).trim_end(),
+            "row {r} mismatch"
+        );
+    }
+
+    // Behavioral corroboration (AC-2's alternative check): one LF at the
+    // scroll region's bottom margin must scroll only the rows INSIDE the
+    // region, identically in the resumed model and the reference — proves
+    // the region is not merely reported correctly but ACTS correctly.
+    let lf_at_bottom_margin = b"\x1b[23;1H\n";
+    client.process_pty_data_fully(lf_at_bottom_margin);
+    reference.process_pty_data_fully(lf_at_bottom_margin);
+    for r in 0..rows {
+        assert_eq!(
+            client.get_line_text(r).trim_end(),
+            reference.get_line_text(r).trim_end(),
+            "post-LF row {r} mismatch: the scroll region must act \
+             identically in the resumed model and the reference"
+        );
+    }
+}
+
 /// D3'''' (round-7 rework, review round-6 finding `46c29c2c65970d26`):
 /// settles the reachability question the round-6 reviewers disagreed
 /// on — does an oversize resume failure freeze the pane permanently
