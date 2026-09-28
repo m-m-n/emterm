@@ -1,0 +1,117 @@
+task_id: task0004
+baseline_failures: []          # cargo test --lib, before any edit: 3727 passed; 0 failed; 3 ignored
+final_failures: []             # cargo test --lib, after implementation: 3726 passed; 0 failed; 3 ignored
+                                # (net -1: 3 evaluate_output_target-variant tests deleted,
+                                # 2 ported to resume_pane_with_permit, 2 new tests added)
+acceptance_tests:
+  AC-1:
+    tests: [mux::session::pane::tests::evaluate_output_target_never_resumes_a_detached_pane]
+    red_confirmed: true
+    red_reason: >-
+      Observed failing against the pre-edit output_target.rs (ResumeWithSnapshot
+      variant still present): "a would-be resume must return Unchanged, never
+      a resume result" — the old code returned EvalResult::ResumeWithSnapshot
+      and swapped the target to Connected instead of leaving it untouched.
+  AC-2:
+    tests:
+      - mux::session::pane::tests::test_evaluate_output_target_network_detached_visible_stays_detached
+      - mux::session::pane::tests::test_evaluate_output_target_identity_scoped_connected_to_detached
+      - mux::session::pane::tests::test_evaluate_output_target_owner_can_detach
+      - mux::session::pane::tests::test_evaluate_output_target_already_connected_visible_no_op
+      - mux::session::pane::tests::test_evaluate_output_target_other_connection_cannot_reclaim_hidden
+      - mux::session::pane::tests::test_evaluate_output_target_both_reasons_visible_keeps_detached
+      - mux::session::pane::tests::test_evaluate_output_target_system_origin_stays_detached_until_reattach
+    red_confirmed: false
+    red_reason: >-
+      AC-2 requires these pre-existing hide-side tests to pass UNMODIFIED
+      (no behavior change intended for them); they were green before this
+      task's edits and are still green after. Not applicable to
+      re-observe as red: no source line these tests exercise was changed.
+  AC-3:
+    tests: [mux::session::pane::tests::production_visible_resume_delivers_snapshot_before_replacement_and_next_chunk]
+    red_confirmed: false
+    red_reason: >-
+      This is a new test but it exercises the pre-existing suppressed-chunk
+      replacement pipeline (mux::ipc::pty_spawn's run_suppressed_pipeline /
+      build_suppressed_replacement), which this task is explicitly barred
+      from changing (task plan Out of Scope: "The replacement builder").
+      The task plan's Shared Components "Suppressed-chunk delivery
+      contract" states the replacement for this exact input (text, one
+      main-buffer CSI device query, text) "is exactly that query's bytes
+      both before and after this feature" — i.e. the behavior is required
+      to be unchanged by this task. Confirmed by running the test against
+      the pre-edit tree (output_target.rs reverted to its committed state,
+      resume_pane_with_permit unchanged): it already passed, since
+      resume_pane_with_permit and the suppression pipeline it drives were
+      untouched. Searched pane/tests.rs and pty_spawn/tests.rs (by path and
+      by filename) for an existing test covering this exact production
+      call path (paused-reader + resume_pane_with_permit + a device-query
+      chunk): none exists — the closest,
+      resume_pane_with_permit_drives_the_paused_reader_to_suppress_the_paused_chunk_and_matches_the_raw_stream_reference,
+      uses an insert-line-only chunk whose replacement is empty, so it
+      never exercises the replacement-delivery ordering this test pins.
+  AC-4:
+    tests:
+      - mux::session::pane::tests::resume_pane_with_permit_recovers_a_poisoned_shadow_parser
+      - mux::session::pane::tests::resume_pane_with_permit_hide_show_roundtrip_on_same_connection
+    red_confirmed: false
+    red_reason: >-
+      Both are ports of tests that previously asserted the now-removed
+      EvalResult::ResumeWithSnapshot variant
+      (test_evaluate_output_target_survives_poisoned_shadow_parser and
+      test_evaluate_output_target_same_connection_hide_show_roundtrip),
+      re-expressed against resume_pane_with_permit per the task plan's
+      "Ported" test-change list. resume_pane_with_permit's own resume
+      logic is unchanged by this task (only evaluate_output_target's
+      Detached branch changed), so the behavior these two properties pin
+      already existed and was already green before this task's edits.
+      Confirmed by running both against the pre-edit tree (output_target.rs
+      reverted to its committed state): both already passed.
+  AC-5:
+    tests:
+      - mux::session::pane::tests::test_resume_pane_with_permit_restores_the_shadow_parsers_header_row_for_a_wrapped_ring
+      - mux::session::pane::tests::test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit
+    red_confirmed: false
+    red_reason: >-
+      AC-5 requires these two production-path tests to pass UNMODIFIED (the
+      task plan's "Already covered" note); they were green before this
+      task's edits and are still green after — no source line they
+      exercise was changed. Documentation-reference check: grepped
+      ResumeWithSnapshot across src-tauri/src and crates/ after the edit —
+      only three historical doc-comment mentions remain in
+      pane/tests.rs, each explaining what was deleted/ported, not a live
+      reference to the removed branch; snapshot_bytes.rs's doc no longer
+      names evaluate_output_target's resume branch; attach.rs never named
+      the removed branch to begin with (checked, no edit needed there).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by running both full commands after implementation:
+      "cargo test --manifest-path src-tauri/Cargo.toml --lib" (3726 passed;
+      0 failed; 3 ignored) and "cargo check --manifest-path
+      src-tauri/Cargo.toml --no-default-features" (clean, no errors, no
+      new warnings). This is a build/full-suite outcome, not a single
+      failing-first test; the "before" state (all previous tests still
+      green) was confirmed in Step 4a's baseline run (3727 passed; 0
+      failed; 3 ignored). Every deleted/ported test is listed below.
+notes: >-
+  Deleted (asserted the removed EvalResult::ResumeWithSnapshot variant, with
+  its property either superseded by an existing production-path
+  (resume_pane_with_permit) sibling test or by the new
+  evaluate_output_target_never_resumes_a_detached_pane test):
+  test_evaluate_output_target_detached_to_connected_returns_snapshot
+  (superseded by test_resume_pane_with_permit_sends_then_swaps, unmodified);
+  test_evaluate_output_target_restores_the_shadow_parsers_header_row_for_a_wrapped_ring
+  (superseded by
+  test_resume_pane_with_permit_restores_the_shadow_parsers_header_row_for_a_wrapped_ring,
+  unmodified, AC-5); test_evaluate_output_target_stays_detached_when_snapshot_exceeds_frame_limit
+  (superseded by test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit,
+  unmodified, AC-5).
+  Ported (same property, re-expressed against resume_pane_with_permit per the
+  task plan's "Ported" list):
+  test_evaluate_output_target_survives_poisoned_shadow_parser ->
+  resume_pane_with_permit_recovers_a_poisoned_shadow_parser;
+  test_evaluate_output_target_same_connection_hide_show_roundtrip ->
+  resume_pane_with_permit_hide_show_roundtrip_on_same_connection.
+  All other existing tests pass unmodified (see baseline_failures/final_failures).
