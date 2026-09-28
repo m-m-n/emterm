@@ -68,8 +68,8 @@ project:
   components:
     src-tauri:
       language: rust
-      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
-        src-tauri/Cargo.toml --no-default-features
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+        --no-default-features
       test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
         --lib
       format_command: ''
@@ -104,7 +104,113 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Client-parity replacement builder with cross-chunk start state
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+    - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+    - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/upgrade.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    - concurrency
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR6
+    - FR7
+    - FR9
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
+  task0002:
+    title: ScrollbackWriteFilter boundary rules aligned with term_core
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR5
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
+  task0003:
+    title: Visibility-resume snapshot restores the screen mode
+    plan: tasks/task0003.md
+    files:
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/snapshot_bytes/wrap_restore_tests.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/session/pane/output_target.rs
+    skills:
+    - backend-impl
+    domains:
+    - api-contract
+    complexity: high
+    requirements:
+    - FR8
+    - NFR1
+    - NFR6
+    status: pending
+    notes: null
+  task0004:
+    title: Remove the ResumeWithSnapshot branch
+    plan: tasks/task0004.md
+    files:
+    - src-tauri/src/mux/session/pane/output_target.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/ipc/handlers/attach.rs
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    complexity: high
+    requirements:
+    - FR10
+    - NFR2
+    - NFR6
+    status: pending
+    notes: null
+  task0005:
+    title: 'Review-finding closure: pause ordering, concurrent snapshot paths, decision table'
+    plan: tasks/task0005.md
+    files:
+    - feature-docs/mux-suppressed-output-fixes/DECISIONS.md
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    complexity: high
+    requirements:
+    - FR11
+    - FR12
+    - FR13
+    - NFR2
+    - NFR6
+    status: pending
+    notes: null
 review:
   status: pending
   rounds_completed: 0
@@ -116,7 +222,9 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
+    - task0002
     tests:
     - TS-1
   FR2:
@@ -124,7 +232,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-2
   FR3:
@@ -132,7 +241,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-3
   FR4:
@@ -140,7 +250,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-4
   FR5:
@@ -148,7 +259,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0002
     tests:
     - TS-5
   FR6:
@@ -156,7 +268,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-6
     - TS-7
@@ -165,7 +278,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-8
   FR8:
@@ -173,7 +287,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0003
     tests:
     - TS-9
     - TS-10
@@ -182,7 +297,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-11
   FR10:
@@ -190,7 +306,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0004
     tests:
     - TS-12
   FR11:
@@ -198,7 +315,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0005
     tests:
     - TS-13
   FR12:
@@ -206,7 +324,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0005
     tests:
     - TS-14
   FR13:
@@ -214,50 +333,72 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0005
+    tests:
+    - TS-15
   NFR1:
     title: 互換性（ワイヤ形式と snapshot の形）
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0003
+    tests:
+    - TS-16
   NFR2:
     title: ロック規律
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0004
+    - task0005
+    tests:
+    - TS-14
   NFR3:
     title: reader 通常経路の負荷
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-17
   NFR4:
     title: セキュリティ（TM-1）
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-18
   NFR5:
     title: セキュリティ（TM-2）
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-19
   NFR6:
     title: ビルドとプラットフォーム
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    - task0004
+    - task0005
+    tests:
+    - TS-20
 batch:
   review_rework_count: 0
   verify_rework:

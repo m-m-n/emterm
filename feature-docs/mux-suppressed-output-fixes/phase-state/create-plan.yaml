@@ -3,7 +3,7 @@ feature: mux-suppressed-output-fixes
 phase: create-plan
 status: applying_patch
 generation: 1
-base_revision: cefe357f052d5fb087d9e12928bd28791cb35067
+base_revision: d14d130ee8ec7d4ef4065d3b241b7f8cdf7b6876
 last_input_digest: sha256:e930465324a44100d146e23472c7a6fbbdd005e3160eb8e68ae59a9cc6cde558
 active_request_id: create-plan-run-0001
 packets: {}
@@ -40,7 +40,7 @@ artifacts:
   produced_by: create-plan-run-0001
 patches:
 - patch_id: create-plan-p0001
-  status: validated
+  status: applied
   base_input_digest: sha256:e930465324a44100d146e23472c7a6fbbdd005e3160eb8e68ae59a9cc6cde558
   base_workflow_blob: ead597dccbde149c5ea9c42a21fe72863aee2dfd
 progress_fingerprint: null
