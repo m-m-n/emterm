@@ -4063,9 +4063,11 @@ async fn visible_reattach_redelivers_device_queries_once_in_order_and_never_from
         received.push(c);
     }
     assert_eq!(
-        received[0].data, b"\x1b[6n\x1b[c",
-        "both real device queries, in order, and NOTHING from inside the \
-         DCS payload"
+        received[0].data, b"\x1b[6n\x1b[c\x1b[6n",
+        "the two plain device queries plus the DCS-embedded one: the \
+         embedded ESC aborts the DCS string (as-03), and the bytes that \
+         follow it — \"[6n\" — are a genuine, freshly-dispatched CSI query, \
+         not payload"
     );
     assert_eq!(received[1].data, continuation_chunk);
     assert!(received[2].data.is_empty());
@@ -4211,13 +4213,126 @@ async fn on_demand_snapshot_redelivers_device_queries_once_in_order_and_never_fr
         "the on-demand snapshot itself must arrive first"
     );
     assert_eq!(
-        received[1].data, b"\x1b[6n\x1b[c",
-        "both real device queries, in order, and NOTHING from inside the \
-         DCS payload"
+        received[1].data, b"\x1b[6n\x1b[c\x1b[6n",
+        "the two plain device queries plus the DCS-embedded one: the \
+         embedded ESC aborts the DCS string (as-03), and the bytes that \
+         follow it — \"[6n\" — are a genuine, freshly-dispatched CSI query, \
+         not payload"
     );
     assert_eq!(received[2].data, continuation_chunk);
     assert!(received[3].data.is_empty());
     assert_eq!(received.len(), 4, "nothing else must have been delivered");
+}
+
+/// AC-6 (FR9, TM-3, NFR1; TS-11), reader level, on-demand path: a
+/// suppressed chunk containing `A ESC[6n B ESC[c` delivers both queries
+/// after the snapshot and before the next chunk, in order, once each, as a
+/// single `PtyOutput`-kind chunk sent only to the covering snapshot's
+/// destination. The client model produces exactly two responses.
+#[cfg(feature = "gui")]
+#[tokio::test]
+async fn suppressed_queries_arrive_after_snapshot_in_order_once_each() {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    let pane_id: PaneId = 54;
+    let (requester_tx, mut requester_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(
+        requester_tx.clone(),
+    )));
+    let pane = MuxPane::new_test(pane_id, cols, rows, output_target);
+    let output_capture = pane.output_capture.clone();
+
+    let mut paused_chunk = Vec::new();
+    paused_chunk.extend_from_slice(b"A");
+    paused_chunk.extend_from_slice(b"\x1b[6n");
+    paused_chunk.extend_from_slice(b"B");
+    paused_chunk.extend_from_slice(b"\x1b[c");
+    let continuation_chunk = b"final line\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) = spawn_reader_with_chunks_in_session(
+        pane,
+        vec![paused_chunk.clone(), continuation_chunk.clone()],
+    )
+    .await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2");
+
+    let req = mux_ipc::protocol::MuxMessage {
+        msg_type: mux_ipc::protocol::MessageType::RequestPaneSnapshot,
+        pane_id,
+        payload: Vec::new(),
+    };
+    let mut deferred = crate::mux::session::pane::DeferredOutputQueue::new();
+    crate::mux::ipc::handlers::handle_request_pane_snapshot(
+        &req,
+        session_id,
+        &mgr,
+        &requester_tx,
+        &mut deferred,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = requester_rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(
+        received[0].kind,
+        crate::mux::session::pane::ChunkKind::Snapshot,
+        "the snapshot itself must arrive first"
+    );
+    assert_eq!(
+        received[1].kind,
+        crate::mux::session::pane::ChunkKind::PtyOutput,
+        "the replacement is a single PtyOutput-kind chunk"
+    );
+    assert_eq!(
+        received[1].data, b"\x1b[6n\x1b[c",
+        "both queries, in order, once each"
+    );
+    assert_eq!(received[2].data, continuation_chunk);
+    assert!(received[3].data.is_empty());
+    assert_eq!(
+        received.len(),
+        4,
+        "nothing else must have been delivered — a \
+        single PtyOutput-kind replacement chunk, sent only to the covering \
+        snapshot's destination"
+    );
+
+    // The client model produces exactly two responses when fed the
+    // replacement alone.
+    use crate::callbacks::{NativeCallbackState, ThemeColorResponder};
+    use crate::render::theme::Theme;
+    use parking_lot::Mutex as PLMutex;
+    use term_core::terminal_core::TerminalCore;
+    let theme = Arc::new(PLMutex::new(Theme::default()));
+    let state = Arc::new(PLMutex::new(NativeCallbackState::default()));
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.osc_responder = Some(Box::new(ThemeColorResponder::new(theme, state)));
+    client.process_pty_data_fully(&received[1].data);
+    let responses = client.take_response();
+    // Two independent device-query responses (CPR + DA1) are each their
+    // own complete CSI sequence terminated by a distinct final byte ('R'
+    // and 'c' respectively) — count them by their final bytes rather than
+    // assuming a fixed length.
+    let response_count = responses
+        .iter()
+        .filter(|&&b| b == b'R' || b == b'c')
+        .count();
+    assert_eq!(
+        response_count,
+        2,
+        "exactly two responses, one per query: {:?}",
+        String::from_utf8_lossy(&responses)
+    );
 }
 
 /// AC-4 (FR9; TS-9), reader level, on-demand path: the on-demand
