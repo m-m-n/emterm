@@ -1,0 +1,518 @@
+round: 1
+executed_at: '2026-09-28T00:59:44+09:00'
+scope:
+  review_mode: diff
+  base_commit: 7a1e81eb07a6735d9c7598211c32d95f7b6b6518
+  head_commit: f7f9308c10e36bda78a0a85e090335ca18be2e52
+  changed_files:
+  - src-tauri/src/mux/ipc/connection/dispatch.rs
+  - src-tauri/src/mux/ipc/connection/output_drain.rs
+  - src-tauri/src/mux/ipc/handlers/attach.rs
+  - src-tauri/src/mux/ipc/handlers/mod.rs
+  - src-tauri/src/mux/ipc/handlers/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/ipc/reattach.rs
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/session/pane/handles.rs
+  - src-tauri/src/mux/session/pane/mod.rs
+  - src-tauri/src/mux/session/pane/output_capture.rs
+  - src-tauri/src/mux/session/pane/output_queue.rs
+  - src-tauri/src/mux/session/pane/output_target.rs
+  - src-tauri/src/mux/session/pane/tests.rs
+  - src-tauri/src/mux/upgrade.rs
+  - src-tauri/src/pty/passthrough_scanner.rs
+  - test-docs/mux-snapshot-output-boundary/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: performance#1
+  perspective: performance
+  role: primary
+  source: codex
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: architecture#1
+  perspective: architecture
+  role: primary
+  source: codex
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: spec#1
+  perspective: spec
+  role: primary
+  source: codex
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+- run_id: security#loop1
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: comprehensive#loop1
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#loop1
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: performance#loop1.1
+  perspective: performance
+  role: primary
+  source: codex
+  status: completed
+- run_id: architecture#loop1
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: architecture#loop1.1
+  perspective: architecture
+  role: primary
+  source: codex
+  status: completed
+- run_id: spec#loop1
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: spec#loop1.1
+  perspective: spec
+  role: primary
+  source: codex
+  status: completed
+- run_id: security#loop2
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: comprehensive#loop2
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#loop2
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: performance#loop2.1
+  perspective: performance
+  role: primary
+  source: codex
+  status: completed
+- run_id: architecture#loop2
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: architecture#loop2.1
+  perspective: architecture
+  role: primary
+  source: codex
+  status: completed
+- run_id: spec#loop2
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: rate_limited
+- run_id: spec#loop2.1
+  perspective: spec
+  role: primary
+  source: codex
+  status: completed
+findings:
+- stable_id: ef376d6f4d430bf3
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/mux/session/pane/output_queue.rs
+  line: 573
+  title: スナップショットのチャネル挿入と境界記録が同じ排他区間で行われていない
+  description: enqueue_pane_output_chunk は try_send 成功後に record_boundary で境界ロックを取り直しており、その隙間に reader が取り込み済みチャンクを snapshot の後に送信できた（FR11 違反）。attach.rs の遅延送信 2 経路にも同じ隙間があった。
+  suggestion: hold_boundary を try_send の前に取り、成功時の record までガードを保持する。
+  sources:
+  - codex:comprehensive
+  - codex:architecture
+  - codex:spec
+  confidence: 100
+  resolution: fixed
+  resolution_reason: auto-applied loop 1 (orchestrator fixed borrowck error in the editor output before commit)
+- stable_id: 493534b0645e3b7d
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  line: 653
+  title: 容量待ちから復帰した reader が、境界判定の後、permit.send の前にロックを解放している
+  description: NeedsSlot 経路で is_covered 判定後に output_target と境界ガードを解放してから permit.send しており、その隙間に snapshot が挿入されると取り込み済みチャンクが後ろに入る（FR4・FR11 違反）。
+  suggestion: ガードを保持したまま permit.send を呼ぶ。
+  sources:
+  - codex:comprehensive
+  - codex:spec
+  confidence: 100
+  resolution: fixed
+  resolution_reason: auto-applied loop 1
+- stable_id: 76bfecbfe01cfdeb
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/handlers/attach.rs
+  line: 327
+  title: 遅延送信ではスナップショット投入と境界記録の間に通常出力が割り込める
+  description: flush_deferred_output と apply_fair_permit_to_front_deferred_item が送信後に境界ロックを取り直しており、reader が取り込み済みチャンクを snapshot の後に送信できた。
+  suggestion: 両経路で送信前に hold_boundary を取り、成功後の record まで保持する。
+  sources:
+  - codex:comprehensive
+  - codex:architecture
+  - codex:spec
+  confidence: 75
+  resolution: fixed
+  resolution_reason: auto-applied loop 2 (loop-1 re-review finding; formatting adjusted by orchestrator for the pre-commit fmt check)
+- stable_id: ab177521a183b3b4
+  severity: high
+  category: spec
+  file: src-tauri/src/mux/ipc/handlers/attach.rs
+  line: 327
+  title: 延期送信でも snapshot の挿入と境界記録を同じ排他で保護する
+  description: SPEC FR11 に対し、延期送信で try_send 後に record_boundary を呼んでいた。
+  suggestion: 両方の延期送信経路で hold_boundary を挿入前に取得する。
+  sources:
+  - codex:spec
+  confidence: 75
+  resolution: fixed
+  resolution_reason: covered by loop 2 auto-fix; loop-2 spec re-review confirmed
+- stable_id: 76bfecbfe01cfdeb
+  severity: medium
+  category: architecture
+  file: src-tauri/src/mux/ipc/handlers/attach.rs
+  line: 327
+  title: 送信と境界確定の契約が保留経路で分離している
+  description: 保留経路の送信と境界記録が分離していた。
+  suggestion: 送信と境界記録を同じ境界ロック内で行う操作に集約する。
+  sources:
+  - codex:architecture
+  confidence: 75
+  resolution: fixed
+  resolution_reason: covered by loop 2 auto-fix; loop-2 architecture re-review confirmed
+- stable_id: 66170217dc5057ce
+  severity: medium
+  category: security
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 75
+  title: 中断された OSC を抱えた pending から、応答済みの問い合わせと表示済みの文字を再送する
+  description: find_osc_end が途中の ESC で None を返すため中断済み OSC 以降が pending に残り、抑止時に応答済みの CSI 6n などを再送する（THREAT-MODEL TM-1）。loop 2 でも残存を確認。
+  suggestion: クライアントと同じ終了・中断規則で本当に未完了の末尾だけを再送する。
+  sources:
+  - codex:security
+  - codex:comprehensive
+  confidence: 95
+  resolution: unresolved
+- stable_id: c8aa5052b1a02acd
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 75
+  title: pending から求めた走査の上限が、リングに書かないチャンク後半の問い合わせまで除外する
+  description: pending 長から求めた scan_limit が代替画面側の問い合わせまで除外する。古い pending が現在の未完了制御列を置き換える問題も同じ箇所（loop 1 再レビュー）。
+  suggestion: pending に対応する元チャンクの区間だけを除外する。
+  sources:
+  - codex:comprehensive
+  - codex:security
+  confidence: 90
+  resolution: unresolved
+- stable_id: 19209420de72b144
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 318
+  title: チャンク末尾の ESC で OSC を中断扱いにし、色問い合わせの本体を失う
+  description: 末尾 ESC を Aborted と判定するため、代替画面で ST が分割されると OSC 本体が置換出力から落ちる。
+  suggestion: 末尾 ESC は Unterminated として扱う。
+  sources:
+  - codex:comprehensive
+  - codex:spec
+  confidence: 90
+  resolution: unresolved
+- stable_id: 61d33252f22b6fd2
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 318
+  title: OSC 終端の ESC がチャンク末尾にある場合は未完了として保持する
+  description: SPEC FR10・エッジケースに対し、末尾 ESC を Aborted と判定して問い合わせが失われる。
+  suggestion: 後続バイトがない ESC は未完了と判定する。
+  sources:
+  - codex:spec
+  - codex:comprehensive
+  confidence: 75
+  resolution: unresolved
+- stable_id: 66d05376ff960d53
+  severity: medium
+  category: architecture
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 349
+  title: 独自の OSC 番号判定が、共有パーサーの数値解析と一致しない可能性
+  description: is_color_query がバイト列の完全一致で判定し、先頭ゼロ付き番号や問い合わせと設定の混在列で端末側と解釈が食い違う。
+  suggestion: 色問い合わせの解析を端末側と共有する。
+  sources:
+  - codex:architecture
+  confidence: 35
+  resolution: unresolved
+- stable_id: 692921cdd030612d
+  severity: medium
+  category: performance
+  file: src-tauri/src/mux/ipc/reattach.rs
+  line: 266
+  title: サイズを確かめるためだけに、output_target ロックの中で snapshot 全体をエンコードしている
+  description: collect_reattach_data がサイズ判定のためだけに snapshot 全体をエンコードして捨て、送信時に再度エンコードする。ロック内で行うため NFR3 にも反する。
+  suggestion: 確保なしで長さを計算するか、エンコード結果を再利用し、ロック外で行う。
+  sources:
+  - codex:performance
+  - codex:spec
+  confidence: 100
+  resolution: unresolved
+- stable_id: 9a7dc7697c6af992
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/reattach.rs
+  line: 266
+  title: 追加したエンコード処理を output_target ロックの外へ移す
+  description: SPEC NFR3 に対し、ロック内で encode_snapshot_segments を実行している。
+  suggestion: エンコードとサイズ判定をロック取得前に行う。
+  sources:
+  - codex:spec
+  - codex:performance
+  confidence: 75
+  resolution: unresolved
+- stable_id: 29ff65b6c01032dc
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/session/pane/output_target.rs
+  line: 346
+  title: ResumeWithSnapshot 分岐では、snapshot の挿入より先に置換出力が届きうる
+  description: 境界記録と Connected 切替の後、snapshot 送信を呼び出し元に任せている。現状は本番から到達しない分岐。
+  suggestion: snapshot 挿入と Connected 切替を一体化するか、SPEC から外す。
+  sources:
+  - codex:spec
+  confidence: 40
+  resolution: unresolved
+- stable_id: 3bc1e21fdd8702ef
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 136
+  title: 前のチャンクから続く CSI・UTF-8 の解析状態を、抑止したチャンクの走査に引き継いでいない
+  description: チャンク先頭を常に通常状態として走査するため、前チャンクから続く CSI 問い合わせや UTF-8 の途中が復元できない（FR9・FR10）。
+  suggestion: チャンクをまたぐ未完了状態を持ち越す。
+  sources:
+  - codex:spec
+  - codex:comprehensive
+  confidence: 75
+  resolution: unresolved
+- stable_id: 30ee5a7036a7fc6e
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 138
+  title: 前の読み取りから続く問い合わせを再送できない
+  description: ESC [ 6 と n が別の読み取りに分かれ後半が抑止されると、問い合わせへの応答が失われる。
+  suggestion: 読み取りをまたぐ解析状態を保持する。
+  sources:
+  - codex:comprehensive
+  - codex:spec
+  confidence: 75
+  resolution: unresolved
+- stable_id: 001161ab9fa3c20b
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 90
+  title: 未完了 CSI の尾部に含まれる、実行済みの C0 制御文字を再送している
+  description: 尾部の未完了 CSI 内の C0（LF 等）が snapshot と再送で二重に実行される（AC-11）。
+  suggestion: 尾部の再送から実行済み C0 を除く。
+  sources:
+  - codex:spec
+  confidence: 55
+  resolution: unresolved
+- stable_id: c8aa5052b1a02acd
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 75
+  title: pending の一括再送で完結したビューア起動を転送する
+  description: 前の読み取りの未終端 OSC により pending が伸び、抑止チャンク内で完結した OSC 777 起動まで再送される（FR6）。
+  suggestion: pending 内の中断済み・未完了シーケンスを区別する。
+  sources:
+  - codex:spec
+  confidence: 60
+  resolution: unresolved
+- stable_id: aca2b1d612ab97e0
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  line: 1787
+  title: AC-13・AC-1 の並行処理テストが、実際の snapshot 経路を動かしていない
+  description: AC-13/TS-12 のテストが実際の 4 経路を呼んでいない。
+  suggestion: 実際の snapshot 4 経路を並行で回すテストを追加する。
+  sources:
+  - codex:spec
+  confidence: 45
+  resolution: unresolved
+- stable_id: 5988c2406aa06a7b
+  severity: medium
+  category: spec
+  file: test-docs/mux-snapshot-output-boundary/task0001.tests.yaml
+  line: 27
+  title: 再接続と可視化復帰の必須並行テストが不足している
+  description: AC-1 の visible reattach と resume_pane_with_permit の停止点付きテストが無い。
+  suggestion: TS-1・TS-2 に従ってテストを追加する。
+  sources:
+  - codex:spec
+  confidence: 60
+  resolution: unresolved
+- stable_id: 8d069c589dc21784
+  severity: medium
+  category: security
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 250
+  title: 'TM-1: 文字集合指定の内部から問い合わせを誤抽出する'
+  description: ESC ( ESC [ 6n で、クライアントは 2 個目の ESC を文字集合指定として消費するが、走査は内側の CSI 6n を問い合わせとして抽出し、抑止時に余分な応答を発生させる（TM-1）。
+  suggestion: 文字集合指定をクライアントと同じ遷移で消費する。
+  sources:
+  - codex:security
+  confidence: 60
+  resolution: unresolved
+- stable_id: 9e6a468b3a45ceeb
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  line: 761
+  title: 抑制された画像やビューアー起動命令が一度も届かない
+  description: 抑止チャンク内で完結した OSC 777 や画像命令が履歴からも置換出力からも除かれ、後から回復しない。
+  suggestion: 未送信の画像・ビューアー起動命令を一度だけ送る。
+  sources:
+  - codex:comprehensive
+  confidence: 60
+  resolution: unresolved
+- stable_id: 39267160fcf1bb2a
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  line: 1579
+  title: 次の停止点を準備する前に読み取りスレッドを再開している
+  description: release 直後に reader が次の停止点を先に通過しうるため、テストが 5 秒で失敗しうる。
+  suggestion: chunk_a の解除前に p2.arm() を行う。
+  sources:
+  - codex:comprehensive
+  confidence: 60
+  resolution: unresolved
+- stable_id: 830f950f39e499fa
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/session/pane/output_target.rs
+  line: 566
+  title: 復帰時の出力抑制で代替画面への切り替えが失われる
+  description: ESC[?1049h を含むチャンクが抑止されると、復帰 snapshot が代替画面の状態を含まず、全画面アプリが主画面に残る。
+  suggestion: 復帰 snapshot で代替画面の状態も復元する。
+  sources:
+  - codex:comprehensive
+  confidence: 60
+  resolution: unresolved
+- stable_id: 9a548939524b405a
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  line: 164
+  title: 問い合わせの再送位置が変わり、カーソル位置の応答が誤る
+  description: 抽出した問い合わせが snapshot の後に送られるため、A ESC[6n B で本来と異なるカーソル位置を返す。
+  suggestion: 状態依存の問い合わせは元の位置の状態で応答させる。
+  sources:
+  - codex:comprehensive
+  confidence: 60
+  resolution: unresolved
+evaluation:
+  round_summary: '第 1 ラウンド（diff、cross_validation=true）。5 観点すべてに完了した reviewer 実行がある（performance#0・architecture#0・spec#0 は rate_limited でスキップされ #1 が代わりに完了）。high 2 件はどちらも送信と境界記録のあいだの隙間で FR11 の中心となる不変条件を破り、comprehensive#0・architecture#1・spec#1 が独立に指摘、評価者もコードで確認。medium は suppressed_output.rs の置換出力（pending の尾部・走査の上限・末尾の ESC・持ち越し状態・C0 の再実行）が中心。プロンプト注入の試みは見当たらない。観点ごとの確認状況: security / comprehensive / performance = corroborated、architecture = corroborated（OSC 番号解析の finding は term_core が changed_files 外のため未確認）、spec = corroborated（pty_spawn/tests.rs と test-docs の finding は not verified — read budget exhausted）。'
+  recommended_action: auto_fix
+  action_rationale: high の 2 件は原因が特定でき修正範囲も局所的なので自動修正で対応できる。medium の多くは suppressed_output.rs の尾部や走査の論理にまたがるので、次のラウンドかリワークで扱う。
+dismissed_sites:
+- file: src-tauri/src/mux/session/pane/output_queue.rs
+  line: 573
+  run_id: architecture#1
+  reason: duplicate of another finding
+- file: src-tauri/src/mux/session/pane/output_queue.rs
+  line: 573
+  run_id: spec#1
+  reason: duplicate of another finding
+- file: src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  line: 653
+  run_id: spec#1
+  reason: duplicate of another finding
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 2
+  applied_total: 3
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null

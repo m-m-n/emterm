@@ -1,0 +1,70 @@
+schema_version: 2
+feature: mux-snapshot-output-boundary
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.59
+    confidence: 0.59
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.41
+      '2': 0.59
+      '3': 0.0
+  observed_at: '2026-09-27T19:52:30+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 2.0
+    confidence: 0.99
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.0
+      '2': 1.0
+      '3': 0.0
+  observed_at: '2026-09-27T19:52:30+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/reattach.rs
+  - src-tauri/src/mux/ipc/reattach/tests.rs
+  - src-tauri/src/mux/session/pane/output_target.rs
+  - src-tauri/src/mux/session/pane/tests.rs
+  - src-tauri/src/mux/ipc/handlers/mod.rs
+  - src-tauri/src/mux/ipc/handlers/tests.rs
+  changed_lines_approx: 350
+  new_functions_needed: 2
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules:
+  - mux::ipc::handlers
+  - mux::session::pane::output_queue
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 6
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 8
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: pty_spawn/mod.rs:352・423・501ではshadow更新、リング書込み、転送を別々にロックしている。resume_pane_with_permitはoutput_target保持中にリング→shadowを読むが、collect_reattach_dataは両方を読んだ後でoutput_targetを取得する。handlers/mod.rs:441にも同種の競合が明記されている。復元・順序・送信待機の既存テストはあるが、shadow更新後にreaderを止めて二重適用を検出するテストは確認できない。同期境界と送信待機の扱いを修正する必要がある。数値は既存の同期機構とテストファイルを使う場合の概算で、ファイル変更・テスト実行はしていない
+decided_at: '2026-09-27T19:52:30+09:00'

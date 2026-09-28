@@ -1845,3 +1845,76 @@ fn test_client_scrollback_capacity_payload_encoder_emits_exactly_4_bytes() {
         assert_eq!(decoded.lines, value);
     }
 }
+
+// ── encoded_snapshot_payload_len (mux-snapshot-output-boundary task0002,
+// AC-1 / TS-16): the pure, arithmetic length function
+// `collect_reattach_data` uses to decide deliverability WITHOUT allocating
+// or copying the real (up to ~2 MiB) snapshot. Pinned equal to
+// `encode_snapshot_payload(...).len()` for every input shape the task plan
+// names.
+
+#[test]
+fn encoded_snapshot_payload_len_matches_encoder_no_segments_empty_bytes() {
+    assert_eq!(
+        encoded_snapshot_payload_len(0, 0),
+        encode_snapshot_payload(&[], &[]).len()
+    );
+}
+
+#[test]
+fn encoded_snapshot_payload_len_matches_encoder_no_segments_non_empty_bytes() {
+    let bytes = b"some snapshot content bytes".to_vec();
+    assert_eq!(
+        encoded_snapshot_payload_len(0, bytes.len()),
+        encode_snapshot_payload(&[], &bytes).len()
+    );
+}
+
+#[test]
+fn encoded_snapshot_payload_len_matches_encoder_one_segment() {
+    let segments = vec![DimSegment {
+        offset: 0,
+        cols: 80,
+        rows: 24,
+    }];
+    let bytes = b"one segment worth of content".to_vec();
+    assert_eq!(
+        encoded_snapshot_payload_len(segments.len(), bytes.len()),
+        encode_snapshot_payload(&segments, &bytes).len()
+    );
+}
+
+#[test]
+fn encoded_snapshot_payload_len_matches_encoder_many_segments() {
+    let segments: Vec<DimSegment> = (0..MAX_SEGMENTS)
+        .map(|_| DimSegment {
+            offset: 0,
+            cols: 80,
+            rows: 24,
+        })
+        .collect();
+    let bytes = b"many segments worth of content".to_vec();
+    assert_eq!(
+        encoded_snapshot_payload_len(segments.len(), bytes.len()),
+        encode_snapshot_payload(&segments, &bytes).len()
+    );
+}
+
+/// Byte length right at `MAX_SNAPSHOT_FRAME_PAYLOAD` minus the (no-segment)
+/// header, and one above it — the exact boundary
+/// `fits_single_snapshot_frame` decides on. Built once (not looped byte by
+/// byte, per the task plan's Test Notes).
+#[test]
+fn encoded_snapshot_payload_len_matches_encoder_at_and_above_the_frame_limit() {
+    let header_len = encoded_snapshot_payload_len(0, 0);
+    let at_limit = vec![0u8; MAX_SNAPSHOT_FRAME_PAYLOAD - header_len];
+    assert_eq!(
+        encoded_snapshot_payload_len(0, at_limit.len()),
+        encode_snapshot_payload(&[], &at_limit).len()
+    );
+    let one_above = vec![0u8; at_limit.len() + 1];
+    assert_eq!(
+        encoded_snapshot_payload_len(0, one_above.len()),
+        encode_snapshot_payload(&[], &one_above).len()
+    );
+}

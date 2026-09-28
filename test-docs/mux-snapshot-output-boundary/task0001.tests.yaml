@@ -1,0 +1,255 @@
+task_id: task0001
+# Step 4a deviation (disclosed, not fabricated): this task's implementation
+# was largely built across a prior session that ended in a context
+# compaction mid-task. This continuation session inherited an
+# already-substantially-implemented worktree rather than an untouched one,
+# so a genuine "before any edit" baseline run was never captured by either
+# session. baseline_failures below reflects the earliest full-suite run
+# observed in THIS session (before this session's own edits: the two
+# suppressed_output.rs test fixes, the P2 hook, the new tests below, and the
+# FR7/comment rewrites) — not a from-scratch pre-implementation baseline.
+baseline_failures: []          # 3698 passed, 2 failed (own new tests, fixed same session), 3 ignored
+final_failures: []             # 3712 passed, 0 failed, 3 ignored (full suite, default parallel runner)
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::on_demand_snapshot_shaped_suppression_matches_a_reference_and_redelivers_the_query
+    red_confirmed: true
+    red_reason: >-
+      Confirmed via targeted mutation: temporarily forced both
+      `boundary.is_covered(&s, chunk_number)` call sites in
+      pty_spawn/mod.rs's reader forward-decision to `false && ...` (the
+      reader never treats a chunk as covered), reran this test, and it
+      failed at tests.rs:1402 ("the paused chunk's raw bytes must never
+      reach the destination after the snapshot") because the paused
+      chunk's raw bytes then DID reach the destination after the
+      snapshot. Reverted immediately after confirming; full suite
+      reconfirmed green. Scope gap: AC-1 names three paths (visible
+      reattach, resume_pane_with_permit, on-demand snapshot); only the
+      on-demand-snapshot-shaped path got a dedicated new reader-level
+      test this session. The other two paths' D3/D9 boundary-recording
+      logic (output_target.rs, reattach.rs) was verified correct by
+      direct code reading in the prior (pre-compaction) session, and
+      both share the exact same reader-side suppression mechanism this
+      test exercises, but that is not a dedicated red-confirmed test per
+      path as the criterion's "Pre-change failure: each of the three
+      tests fails" literally asks for.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::output_sequence_numbers_increment_once_per_non_empty_read_including_alt_screen_only_chunks
+      - mux::ipc::pty_spawn::tests::snapshot_style_captured_read_waits_for_the_capture_step_to_finish
+      - mux::session::pane::tests::test_resize_and_a_concurrent_captured_read_are_mutually_excluded
+      - mux::session::pane::output_capture::tests::capture_assigns_sequential_numbers_starting_at_one
+      - mux::session::pane::output_capture::tests::captured_read_does_not_advance_the_number
+    red_confirmed: true
+    red_reason: >-
+      Confirmed via targeted mutation: temporarily commented out
+      `*last += 1;` inside `OutputCapture::capture` (output_capture.rs).
+      Reran the first two pty_spawn tests plus the pre-existing
+      `capture_assigns_sequential_numbers_starting_at_one` unit test —
+      all three failed with the captured number stuck at 0 instead of
+      1/2/3. Reverted immediately after confirming.
+      `test_resize_and_a_concurrent_captured_read_are_mutually_excluded`
+      was NOT independently red-confirmed via mutation this session —
+      mutual exclusion here is a structural property of `capture()` and
+      `captured_read()` sharing one `std::sync::Mutex`, and reverting
+      that sharing would require restructuring the exclusion's own field
+      layout rather than a small, safely-reversible change; verified
+      correct by code reading instead (mirrors the pre-existing,
+      similarly-unconfirmed `test_resize_holds_scrollback_lock_...`
+      pattern already in this file). No dedicated new test exists this
+      session for "a chunk that triggers a shadow panic-reset still gets
+      a number" — `capture()`'s number increment is unconditional
+      regardless of what its `step` closure does internally (the
+      pre-existing `catch_unwind` panic recovery lives INSIDE that
+      closure), so this is a structural guarantee verified by code
+      reading, not a dedicated test; manufacturing a real vt100-panicking
+      byte sequence was judged disproportionate to the value added.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::covered_chunk_waiting_for_a_slot_never_reaches_the_destination_after_the_snapshot
+      - mux::ipc::pty_spawn::tests::closed_destination_while_reader_waits_for_a_slot_runs_passthrough_once_and_detaches
+      - mux::ipc::pty_spawn::tests::closed_destination_does_not_override_a_newer_owners_target
+    red_confirmed: true
+    red_reason: >-
+      All three independently confirmed via targeted mutation, each
+      reverted immediately after confirming: (1) the same
+      `is_covered -> false` mutation used for AC-1 made
+      `covered_chunk_waiting_for_a_slot_never_reaches_the_destination_after_the_snapshot`
+      fail (it delivered "plain output text" instead of stopping at EOF
+      right after the snapshot); (2) commenting out the
+      `capture_passthrough` call inside the reserve-failed (`Err(_closed)`)
+      arm made `closed_destination_while_reader_waits_for_a_slot_runs_passthrough_once_and_detaches`
+      fail (0 notifications instead of 1); (3) replacing the
+      `if still_points_at_s` guard with `if true` made
+      `closed_destination_does_not_override_a_newer_owners_target` fail
+      (a newer owner's Connected target was overwritten to Detached).
+      Full suite reconfirmed green (3712 passed, 0 failed, 3 ignored)
+      after each revert.
+  AC-4:
+    tests:
+      - mux::session::pane::output_capture::tests::boundary_record_is_monotonic_max
+      - mux::session::pane::output_capture::tests::boundary_record_is_per_sender_isolated
+      - mux::session::pane::output_capture::tests::is_boundary_covered_false_when_no_entry_exists
+      - mux::session::pane::output_capture::tests::boundary_record_prunes_closed_senders
+      - mux::session::pane::output_capture::tests::boundary_record_keeps_a_single_entry_per_sender
+      - mux::session::pane::output_capture::tests::hold_boundary_combines_check_and_record_atomically
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_for_a_pane_outside_the_requesters_session_records_no_boundary
+    red_confirmed: false
+    red_reason: >-
+      The output_capture.rs monotonic-max / per-sender-isolation /
+      closed-sender-pruning (TM-4) / hold_boundary unit tests were
+      written together with output_capture.rs in the prior
+      (pre-compaction) session of this same task; this session did not
+      revert that implementation to re-observe their reds (most of
+      task0001's other paths already depend on it, so a clean, narrow
+      revert was not available the way it was for the mutations used
+      above). The new TM-3 authorization test
+      (`handle_request_pane_snapshot_for_a_pane_outside_the_requesters_session_records_no_boundary`)
+      exercises the PRE-EXISTING (task0001-unrelated)
+      session-authorization early return in `handle_request_pane_snapshot`,
+      which returns before any of this task's new `captured_read` /
+      `record_boundary` code ever runs — reverting only this task's own
+      changes cannot make that specific test fail, so no red is
+      observable from this task's diff alone for that test. The "no
+      record" sub-cases this AC also names (size-rejected on-demand,
+      NoChange, Unchanged, hidden reattach, oversize visible reattach,
+      evicted/coalesced-away deferred snapshot) have no dedicated NEW
+      test added this session; their correctness was verified by direct
+      reading of output_target.rs / reattach.rs / output_queue.rs in the
+      prior session, not by a test written or re-confirmed in this one.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::osc9_notification_in_a_suppressed_chunk_fires_exactly_once_and_the_chunk_is_withheld
+      - mux::ipc::pty_spawn::tests::split_osc9_across_two_suppressed_chunks_never_fires_more_than_once
+      - mux::ipc::pty_spawn::tests::side_effects_for_a_suppressed_chunk_match_the_same_chunk_unsuppressed
+    red_confirmed: true
+    red_reason: >-
+      The two OSC 9 tests were independently confirmed via the same
+      `is_covered -> false` mutation used for AC-1/AC-3: with suppression
+      disabled, `osc9_notification_in_a_suppressed_chunk_fires_exactly_once_and_the_chunk_is_withheld`
+      failed (0 notifications instead of 1 — the chunk was delivered
+      raw instead of running the suppression pipeline that fires the
+      notification), and `split_osc9_across_two_suppressed_chunks_never_fires_more_than_once`
+      failed (3 items delivered instead of 2). Reverted immediately
+      after confirming. `side_effects_for_a_suppressed_chunk_match_the_same_chunk_unsuppressed`
+      passed even WITH that same mutation applied — title / agent-status
+      / OSC133 / OSC7 detection all run unconditionally before the
+      forward decision in both the old and new code, so disabling
+      suppression itself cannot make this specific equality fail. Its
+      red was not independently observed this session; correctness
+      verified by reading the reader flow's ordering (side effects
+      happen in "step 3", before "step 4" decides Suppressed/Connected/
+      Detached).
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::on_demand_snapshot_shaped_suppression_matches_a_reference_and_redelivers_the_query
+      - mux::ipc::pty_spawn::suppressed_output::tests::empty_chunk_yields_empty_result
+      - mux::ipc::pty_spawn::suppressed_output::tests::plain_output_with_no_query_and_no_tail_yields_empty_result
+      - mux::ipc::pty_spawn::suppressed_output::tests::csi_cursor_position_query_is_redelivered
+      - mux::ipc::pty_spawn::suppressed_output::tests::csi_primary_device_attributes_query_is_redelivered
+      - mux::ipc::pty_spawn::suppressed_output::tests::csi_device_query_surrounded_by_plain_text_is_extracted_alone
+      - mux::ipc::pty_spawn::suppressed_output::tests::non_query_csi_is_not_redelivered
+      - mux::ipc::pty_spawn::suppressed_output::tests::multiple_queries_are_redelivered_in_original_order
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc_color_query_outside_ring_written_ranges_is_redelivered
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc_color_query_inside_ring_written_ranges_is_not_redelivered
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc_4_indexed_color_query_is_recognized
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc_color_query_terminated_by_st_is_recognized
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc_non_color_query_is_not_redelivered
+      - mux::ipc::pty_spawn::suppressed_output::tests::cut_csi_tail_is_redelivered_verbatim
+      - mux::ipc::pty_spawn::suppressed_output::tests::bare_trailing_esc_is_treated_as_a_tail
+      - mux::ipc::pty_spawn::suppressed_output::tests::cut_utf8_character_tail_is_redelivered_verbatim
+      - mux::ipc::pty_spawn::suppressed_output::tests::complete_utf8_character_is_not_treated_as_a_tail
+      - mux::ipc::pty_spawn::suppressed_output::tests::pending_rich_content_candidate_is_redelivered_as_the_whole_pending_run
+      - mux::ipc::pty_spawn::suppressed_output::tests::pending_run_excludes_its_own_contribution_from_the_query_scan
+      - mux::ipc::pty_spawn::suppressed_output::tests::embedded_esc_aborts_the_osc_and_the_following_csi_query_is_extracted
+      - mux::ipc::pty_spawn::suppressed_output::tests::query_shaped_bytes_inside_dcs_string_payload_are_not_extracted
+      - mux::ipc::pty_spawn::suppressed_output::tests::query_shaped_bytes_inside_apc_string_payload_are_not_extracted
+      - mux::ipc::pty_spawn::suppressed_output::tests::result_never_exceeds_chunk_length_when_pending_is_empty
+      - mux::ipc::pty_spawn::suppressed_output::tests::adversarial_repeated_introducers_complete_within_a_time_bound
+    red_confirmed: true
+    red_reason: >-
+      The end-to-end reader-level test
+      (`on_demand_snapshot_shaped_suppression_matches_a_reference_and_redelivers_the_query`)
+      was confirmed red via the same `is_covered -> false` mutation
+      described under AC-1 (the device query was never separated out as
+      a replacement once suppression was disabled). Among the builder
+      unit tests, two were genuinely observed failing THIS session
+      against the (already-written) implementation and then fixed —
+      NOT because the implementation was missing, but because the TESTS
+      themselves were wrong: `pending_rich_content_candidate_is_redelivered_as_the_whole_pending_run`
+      used a self-contradictory `ring_written_ranges` argument that
+      excluded its own query from the scan (fixed by passing `&[]`, per
+      the fixture's own stated intent), and
+      `embedded_esc_aborts_the_osc_and_the_following_csi_query_is_extracted`
+      (originally named `query_shaped_bytes_inside_osc_string_payload_are_not_extracted`)
+      asserted a premise that cannot hold under correct terminal-parser
+      semantics (a bare ESC always aborts an OSC body, so the embedded
+      CSI query legitimately becomes a real top-level query, not a
+      protected nested one) — the test was rewritten to assert the
+      correct behavior instead. Those two are genuine observed failures
+      of the CHECK, but do not constitute a red-then-green cycle for the
+      underlying criterion (the implementation was already correct;
+      only the tests needed fixing), so they are not claimed as red
+      confirmation here. The remaining ~21 builder-level unit tests were
+      written together with suppressed_output.rs across this task's two
+      sessions (spanning the compaction boundary) and were not
+      individually re-confirmed via reversion this session.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::stress_reader_with_concurrent_resize_and_snapshot_paths_completes_within_budget
+    red_confirmed: false
+    red_reason: >-
+      This stress test currently passes against the implementation
+      (~0.02s; well inside its 30s budget). Its purpose is regression
+      detection for a deadlock, not a red-then-green TDD cycle:
+      deliberately reintroducing a deadlock in the implementation to
+      observe this test fail was judged too risky to attempt (a real
+      deadlock has no bounded failure mode other than this test's own
+      30s panic-on-timeout, and confirming it would mean deliberately
+      risking a hang in a shared test binary). The panic-on-timeout path
+      itself WAS exercised live during this test's own development: an
+      earlier draft (which drained the output channel only after joining
+      all worker threads, rather than concurrently) genuinely hit the
+      30s timeout and panicked with the expected message — that was a
+      self-inflicted test-harness bug (the pane's own `output_target`
+      Arc, returned via `resize_handle.join()`, kept a `Sender` clone
+      alive so channel-closure-based drain-completion never fired), not
+      an implementation defect, but it demonstrates the panic path is
+      live and reachable. Fixed by switching the drain thread to an
+      explicit stop-flag protocol. The existing pre-task0001 regression
+      tests this AC also names (the EOF G1 test
+      `eof_branch_does_not_hold_output_target_across_blocking_send`,
+      connection fairness/starvation tests) all pass unmodified in the
+      full suite.
+  AC-8:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      "Commands... both exit 0" is this criterion's only sub-bullet with
+      a directly executable check, and genuine failures of that check
+      were observed and fixed during this session before reaching the
+      current clean state: (1) a compile error in
+      `mux::upgrade::spawn_restored_reader_thread` ("this function takes
+      15 arguments but 14 arguments were supplied") after
+      `pty_reader_loop` gained its `output_capture` parameter, fixed by
+      passing `pane.output_capture.clone()` through; (2) two unresolved-
+      import compile errors (`cannot find type ChunkKind in this scope`)
+      in a newly-added test, fixed by qualifying the path; (3) the two
+      suppressed_output.rs test failures described under AC-6. Both
+      `cargo test --manifest-path src-tauri/Cargo.toml --lib` (3712
+      passed, 0 failed, 3 ignored) and `cargo check --manifest-path
+      src-tauri/Cargo.toml --no-default-features` now exit 0. The other
+      sub-bullets under this AC — byte-shape tests unmodified (confirmed
+      by the full suite showing 0 failures, no existing assertion
+      touched), the five FR7 comments no longer contradicting the new
+      guarantee (four verified already rewritten in the prior session;
+      the fifth, `handle_request_pane_snapshot`'s "A narrow race window
+      remains" paragraph, found still stale this session and rewritten
+      to state the new guarantee), no new platform-specific API
+      (confirmed: `futures::executor::block_on` and every new type in
+      this diff is platform-neutral), and the lock-order/lock-scope
+      conventions holding on every changed path — have no single
+      executable check beyond the same build/test exit codes; they were
+      verified by direct code and comment review, not by a dedicated red-
+      then-green test.

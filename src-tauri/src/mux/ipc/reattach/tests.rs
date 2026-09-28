@@ -1237,7 +1237,7 @@ async fn test_collect_reattach_data_hidden_then_visible_round_trip() {
 
 /// AC-6: a visible reattach through `collect_reattach_data` passes its
 /// `probe_capacity` argument all the way to the wrap-aware snapshot builder
-/// (`build_shadow_parser_snapshot_for_ring`) it calls internally.
+/// (`build_snapshot_bytes_for_ring`) it calls internally.
 #[tokio::test]
 async fn collect_reattach_data_visible_reattach_site_reach_uses_the_passed_probe_capacity() {
     let mgr = Arc::new(Mutex::new(SessionManager::new()));
@@ -1291,5 +1291,77 @@ async fn collect_reattach_data_visible_reattach_site_reach_uses_the_passed_probe
         snapshot, &expected_payload_10k,
         "the passed probe_capacity (5) must actually reach the builder, not \
          silently fall back to the legacy 10,000 default"
+    );
+}
+
+/// mux-snapshot-output-boundary task0002, AC-2 (FR3, FR5, NFR2, NFR3;
+/// TS-16), "Deliverable pane": a visible reattach of a normal-sized pane
+/// records the boundary for the new destination, and `send_reattach_data`
+/// given the returned data admits a `SnapshotRestore` frame whose payload
+/// equals `encode_snapshot_segments` of the returned bytes and segments —
+/// the two independent size-policy checks (the arithmetic one in
+/// `collect_reattach_data`, the real-encode one in `send_reattach_data`)
+/// agree on this pane.
+#[tokio::test]
+async fn collect_reattach_data_records_boundary_and_send_reattach_data_admits_snapshot_restore_for_a_deliverable_pane()
+ {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (old_tx, _old_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(old_tx)));
+
+    let session_id;
+    let output_capture;
+    {
+        let mut m = mgr.lock().await;
+        session_id = m.create_session("default".to_string());
+        let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+        let pane = make_test_pane_with_target(1, target);
+        pane.scrollback
+            .lock()
+            .unwrap()
+            .write(b"normal sized history\r\n");
+        output_capture = pane.output_capture.clone();
+        m.get_session_mut(session_id)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+    }
+
+    let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let data =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true, 10_000).await;
+    assert_eq!(data.len(), 1);
+    let (pane_id, bytes, segments) = data[0].clone();
+    assert_eq!(pane_id, 1);
+
+    // `is_boundary_covered(&tx, 0)` is true exactly when SOME entry exists
+    // for `tx` (any recorded boundary, being a `u64`, covers 0) — the same
+    // idiom `handle_request_pane_snapshot`'s tests already use.
+    assert!(
+        output_capture.is_boundary_covered(&new_tx, 0),
+        "a deliverable pane's visible reattach must record a boundary for \
+         the new destination"
+    );
+
+    let (frame_tx, mut frame_rx) = mpsc::channel::<MuxMessage>(4);
+    let mut admission = OutboundAdmission::new(frame_tx);
+    send_reattach_data(&mut admission, &data)
+        .await
+        .expect("send_reattach_data ok");
+    drop(admission);
+
+    let _pane_created = frame_rx.recv().await.unwrap();
+    let snapshot_frame = frame_rx.recv().await.unwrap();
+    assert_eq!(snapshot_frame.msg_type, MessageType::SnapshotRestore);
+    let expected = crate::mux::session::pane::encode_snapshot_segments(&bytes, &segments);
+    assert_eq!(
+        snapshot_frame.payload, expected,
+        "send_reattach_data's SnapshotRestore payload must equal \
+         encode_snapshot_segments of collect_reattach_data's returned \
+         bytes and segments"
     );
 }

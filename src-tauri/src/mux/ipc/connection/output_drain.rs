@@ -74,7 +74,10 @@ pub(super) fn allow_client_message_arm(
 /// direct, always-available signal for "something is queued in the channel
 /// that has not yet been forwarded to the client", regardless of whether it
 /// arrived via this connection's own deferred-output path or via a PTY
-/// reader thread's direct `try_send`/`blocking_send`. This also means
+/// reader thread's direct `try_send` (or, once a `try_send` finds the
+/// channel full, its own fair-queue `reserve_owned()` wait —
+/// mux-snapshot-output-boundary task0001 D4; the EOF branch alone still
+/// uses a plain `blocking_send`). This also means
 /// ordinary (non-deferred) high-volume PTY output gets the same starvation
 /// protection under continuous client traffic — not just this feature's own
 /// deferred-snapshot path — which is the correct, broader reading of "queued
@@ -137,7 +140,10 @@ pub(super) type PendingDeferredReserve = std::pin::Pin<
 ///
 /// `flush_deferred_output`'s `try_send`/`try_reserve` retries never join
 /// tokio's semaphore waiter queue, so while `pty_spawn.rs`'s reader thread
-/// has a `blocking_send` parked there, every freed permit is handed to that
+/// has its own fair-queue `reserve_owned()` wait parked there
+/// (mux-snapshot-output-boundary task0001 D4 backpressure; the EOF branch
+/// alone still uses a plain `blocking_send`, which joins the same waiter
+/// queue by the same mechanism), every freed permit is handed to that
 /// waiter directly — `try_send` observes zero capacity essentially always,
 /// a systematic priority inversion (review round 2, `2aec511b92102c24`/
 /// `7e47bd5fe31dc720`), not an occasional race. Polling

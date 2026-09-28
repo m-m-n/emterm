@@ -1,0 +1,82 @@
+schema_version: 1
+feature: mux-snapshot-output-boundary
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 1c18416b763589d7efc2edbbd1776441fe6dd845
+last_input_digest: sha256:35b8f25b53a71c4266a20338a56f3e8eb8a672d3808ee9e0e303cb74813b0ab4
+active_request_id: null
+packets: {}
+answers:
+  create-spec.requirement-clarification.fr6-side-effects:
+    packet_id: null
+    answered_at: '2026-09-27T20:04:59+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: '案 A を採る: 抑止したチャンクは Detached 腕と同じ capture_passthrough を 1 回通す。OSC 9
+      は「Detached と同じ通知処理を 1 回実行する」と書き、try_send 失敗時の既存の欠落までは保証しない。リッチコンテンツ（ビューア起動・画像）は
+      snapshot の既存方針どおり再生せず、抑止した 1 チャンクだけに含まれるビューア起動・画像が届かないことを仕様上の既知の欠落として明記する。追加の注意:
+      (1) DSR・DA 等の端末問い合わせ、タイトル・cwd・agent-status など、転送とは別に reader が行う既存処理は、転送の抑止によって飛ばさない。(2)
+      番号だけでは整合しないので、shadow 更新・リング更新・番号確定と snapshot 側の採取を同じ排他で守る。共通の捕捉ロックを追加するなら reader・snapshot・resize
+      で下位ロック（リング・shadow）より先に取り、reader はそれを解放してから output_target を取る。resize は現在リングロックを解放してから
+      shadow ロックを取るので、既存コードに逆順の同時保持は無い。(3) 抑止境界は受信先と結び付け、blocking_send 待ちや送信延期（DeferredOutputQueue）で判定後に順序が変わる経路でも整合させる。(4)
+      ScrollbackWriteFilter.pending の未完了列はリングに入っていないため、境界後の続きが文字として漏れない扱いを確認する。'
+    normalized_answer: '案 A を採る: 抑止したチャンクは Detached 腕と同じ capture_passthrough を 1 回通す。OSC
+      9 は「Detached と同じ通知処理を 1 回実行する」と書き、try_send 失敗時の既存の欠落までは保証しない。リッチコンテンツ（ビューア起動・画像）は
+      snapshot の既存方針どおり再生せず、抑止した 1 チャンクだけに含まれるビューア起動・画像が届かないことを仕様上の既知の欠落として明記する。追加の注意:
+      (1) DSR・DA 等の端末問い合わせ、タイトル・cwd・agent-status など、転送とは別に reader が行う既存処理は、転送の抑止によって飛ばさない。(2)
+      番号だけでは整合しないので、shadow 更新・リング更新・番号確定と snapshot 側の採取を同じ排他で守る。共通の捕捉ロックを追加するなら reader・snapshot・resize
+      で下位ロック（リング・shadow）より先に取り、reader はそれを解放してから output_target を取る。resize は現在リングロックを解放してから
+      shadow ロックを取るので、既存コードに逆順の同時保持は無い。(3) 抑止境界は受信先と結び付け、blocking_send 待ちや送信延期（DeferredOutputQueue）で判定後に順序が変わる経路でも整合させる。(4)
+      ScrollbackWriteFilter.pending の未完了列はリングに入っていないため、境界後の続きが文字として漏れない扱いを確認する。'
+    resolution_note: 'gate: create-spec.requirement-clarification (orchestrator-opened,
+      FR6 side effects of suppressed chunk); options: A=capture_passthrough like Detached,
+      no rich-content replay / B=forward only passthrough portion / C=other; chosen:
+      A; not chosen: B (PassthroughScanner does not extract OSC 777, OSC 9999/DCS
+      detection mismatches strip logic, replay after restore loses cursor/draw order),
+      C; codex_consulted: true; opus_escalation: false'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-27T20:17:40+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'kind: project_native, paths: [src-tauri/src/render/theme.rs]
+      (top of 3 candidates; design step skipped, Rust-only mux daemon change)'
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-09-27T20:17:40+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step skipped per analyst recommendation (no UI change)
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:65cdd338c2f30a1e4d5dd8558ef62ecedf400618290e292235faa45353ebf63c
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:35b8f25b53a71c4266a20338a56f3e8eb8a672d3808ee9e0e303cb74813b0ab4
+  output_digest: null
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:35b8f25b53a71c4266a20338a56f3e8eb8a672d3808ee9e0e303cb74813b0ab4
+  output_digest: null
+artifacts:
+- path: feature-docs/mux-snapshot-output-boundary/REQUIREMENTS.md
+  sha256: sha256:5ebbbc1bc50c6700ca2e47378f4b7b8f17a90f69b66f3bea083093040a227c90
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-snapshot-output-boundary/SPEC.md
+  sha256: sha256:f46754671f048e2aff7da971e2c3fddeeb42844488c18c1fff27fbd44a1a8dd7
+  produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
