@@ -400,6 +400,287 @@ fn scrollback_filter_csi_does_not_force_pending() {
     assert_eq!(scrollback.lock().unwrap().read_all(), &chunk[..]);
 }
 
+// ── mux-suppressed-output-fixes task0002: boundary rules aligned with
+//    term_core (AC-1 through AC-6) ──────────────────────────────────────
+
+/// AC-1 (FR1; TS-1): a main-buffer OSC whose body ends in ESC at the end of
+/// a feed is INCOMPLETE (not aborted — the next byte hasn't arrived yet) and
+/// is held whole in `pending`. When the next feed supplies the backslash,
+/// the complete OSC is released in one flush and the ring holds it unsplit.
+#[test]
+fn write_filter_holds_string_ending_in_trailing_esc_until_completed() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let (_dims, out1) = filter.feed(b"\x1b]11;?\x1b", (80, 24));
+    assert!(
+        out1.is_empty(),
+        "an OSC body ending in ESC is incomplete (not aborted) — held whole"
+    );
+    assert_eq!(filter.pending(), b"\x1b]11;?\x1b".as_slice());
+
+    let (_dims, out2) = filter.feed(b"\\", (80, 24));
+    assert_eq!(
+        out2,
+        b"\x1b]11;?\x1b\\".to_vec(),
+        "the complete OSC is released in one flush, unsplit"
+    );
+    assert_eq!(filter.pending_len(), 0);
+}
+
+/// AC-2 (FR5): OSC, DCS and APC bodies followed by ESC plus a non-backslash
+/// byte count as CLOSED (aborted) at that ESC — nothing after them is held
+/// because of them. A string that begins at that very ESC and is still
+/// incomplete at the end of the feed is held from its own start. Here an
+/// ESC-aborted OSC is immediately followed by an ESC-aborted DCS (the
+/// aborting ESC of each is the introducer of the next), and finally an
+/// unterminated APC that stays incomplete to the end.
+#[test]
+fn write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(b"\x1b]0;osc"); // OSC introducer + body
+    chunk.extend_from_slice(b"\x1b"); // aborts the OSC
+    chunk.extend_from_slice(b"Pdcs"); // DCS introducer (the aborting ESC's 'P') + body
+    chunk.extend_from_slice(b"\x1b"); // aborts the DCS
+    chunk.extend_from_slice(b"_apcbody"); // APC introducer (the aborting ESC's '_') + body, no terminator
+
+    let (_dims, out) = filter.feed(&chunk, (80, 24));
+    assert_eq!(
+        out,
+        b"\x1b]0;osc\x1bPdcs".to_vec(),
+        "the aborted OSC and the aborted DCS are both closed and flushed; \
+         nothing after them is held because of them"
+    );
+    assert_eq!(
+        filter.pending(),
+        b"\x1b_apcbody".as_slice(),
+        "the still-open APC is held from its own start"
+    );
+}
+
+/// AC-3 (FR5): `ESC ESC` followed by an OSC introducer treats the SECOND ESC
+/// as the introducer — the first ESC is superseded (flushed as an ordinary
+/// byte, not held, and not treated as a fresh OSC/DCS/APC attempt itself),
+/// and the OSC the second ESC introduces is held whole while it stays
+/// incomplete. A byte-blind scanner that just skips 2 bytes past any
+/// non-`_`/`P`/`]` byte (never re-examining the second ESC) would instead
+/// treat the whole thing as ordinary text and never hold anything for the
+/// still-open OSC — this input has NO terminator, so that difference is
+/// observable.
+#[test]
+fn write_filter_double_esc_treats_the_second_esc_as_the_introducer() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let (_dims, out1) = filter.feed(b"\x1b\x1b]11;?", (80, 24));
+    assert_eq!(
+        out1,
+        b"\x1b".to_vec(),
+        "only the superseded FIRST esc flushes; the OSC the second esc \
+         introduces is still incomplete and must be held"
+    );
+    assert_eq!(
+        filter.pending(),
+        b"\x1b]11;?".as_slice(),
+        "pending must start at the SECOND esc, not the first"
+    );
+
+    let (_dims, out2) = filter.feed(b"\x07", (80, 24));
+    assert_eq!(out2, b"\x1b]11;?\x07".to_vec());
+    assert_eq!(filter.pending_len(), 0);
+}
+
+/// AC-3 (FR5): `ESC (` (charset designation) ALWAYS consumes the very next
+/// byte as the designator, even when that byte is itself an ESC — so an
+/// `ESC ]` right after `ESC (` never introduces an OSC; nothing is held,
+/// even when there is no terminator anywhere in the fed bytes (a scanner
+/// that (incorrectly) re-examined the designator byte as a fresh introducer
+/// would instead hold everything from there to the end, waiting forever for
+/// a terminator that was never going to be an OSC's in the first place).
+#[test]
+fn write_filter_charset_designator_consumes_the_next_byte_even_if_esc() {
+    let mut filter = ScrollbackWriteFilter::new();
+    // `ESC (` then `ESC ]11;?tail` (no BEL/ST anywhere) — the second ESC is
+    // swallowed as the designator for `(`, so what follows (`]11;?tail`) is
+    // ordinary bytes, never a recognized (and therefore never a HELD) OSC.
+    let chunk = b"\x1b(\x1b]11;?tail".to_vec();
+    let (_dims, out) = filter.feed(&chunk, (80, 24));
+    assert_eq!(
+        out, chunk,
+        "the designator-consumed ESC never introduces an OSC; nothing is \
+         held even though the presumed OSC body never terminates"
+    );
+    assert_eq!(filter.pending_len(), 0);
+}
+
+/// AC-3 (FR5): `ESC X` and `ESC ^` are complete two-byte sequences, not
+/// strings — they never force a pending hold, and text around them flushes
+/// straight through.
+#[test]
+fn write_filter_two_byte_escapes_x_and_caret_do_not_force_a_hold() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let chunk = b"\x1bXafter1\x1b^after2".to_vec();
+    let (_dims, out) = filter.feed(&chunk, (80, 24));
+    assert_eq!(out, chunk);
+    assert_eq!(filter.pending_len(), 0);
+}
+
+/// AC-3 (FR5): a lone trailing ESC (nothing after it in the fed stream) is
+/// held — we cannot yet tell whether it introduces a string — and is
+/// released once the next feed's leading byte disambiguates it. Here it
+/// turns out to be a CSI (`ESC [`), not a strip target, so the whole thing
+/// flushes once the disambiguating byte arrives. (An SGR CSI, not a device
+/// query — a device query would be REMOVED by the strip step for unrelated
+/// reasons (FR3's own concern), which would make a byte-equality assertion
+/// here about the wrong thing.)
+#[test]
+fn write_filter_lone_trailing_esc_is_held_until_the_next_byte_disambiguates_it() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let (_dims, out1) = filter.feed(b"plain text\x1b", (80, 24));
+    assert_eq!(out1, b"plain text".to_vec());
+    assert_eq!(filter.pending(), b"\x1b".as_slice());
+
+    let (_dims, out2) = filter.feed(b"[31m", (80, 24));
+    assert_eq!(
+        out2,
+        b"\x1b[31m".to_vec(),
+        "the held ESC turned out to introduce a CSI, not a strip target — \
+         it releases along with the rest once disambiguated"
+    );
+    assert_eq!(filter.pending_len(), 0);
+}
+
+/// AC-5 (FR5, postcondition): reusing the AC-1 to AC-4 inputs, split at
+/// EVERY position, feeding the two halves through a fresh filter across two
+/// `feed` calls must flush the same bytes and leave the same `pending` run
+/// as feeding the whole input in one shot — the boundary decision never
+/// depends on where a read happened to split the stream. Every resulting
+/// `pending` also has the shape the postcondition allows: empty, a lone
+/// ESC, or a run starting with its own OSC/DCS/APC opening ESC.
+///
+/// Oracle: for each corpus item taken as a whole, `term_core` (fed the same
+/// bytes plus a literal probe marker) is asked whether IT still considers a
+/// string open at the end of the item — if the probe is swallowed (never
+/// printed to the grid), `term_core` says "still open"; if it prints
+/// literally, `term_core` says "closed". This filter's own open/closed
+/// verdict (whether `pending` ends up empty) must agree.
+///
+/// The AC-4 item's CSI is SGR (`ESC[31m`), not a device query: a device
+/// query is a strip TARGET removed by `strip_pty_output_for_scrollback_write`
+/// (FR3's own, unrelated concern), and whether a strip target gets removed
+/// legitimately depends on which single `feed` call sees it whole — CSI
+/// content is explicitly out of this filter's hold contract (it is never
+/// held, so it can legitimately land in more than one flush), so a query
+/// split across the two split-feed calls here would make the split-invariance
+/// assertion fail for a reason this task does not own. An SGR CSI is not a
+/// strip target either way, so the flushed bytes stay identical regardless
+/// of where it is split.
+#[test]
+fn write_filter_boundaries_are_split_position_independent_and_match_term_core() {
+    use term_core::terminal_core::TerminalCore;
+
+    let corpus: Vec<Vec<u8>> = vec![
+        b"\x1b]11;?\x1b\\".to_vec(),                      // AC-1, closed
+        b"\x1b]11;?\x1b".to_vec(),                        // AC-1, open (trailing ESC in body)
+        b"\x1b]0;osc\x1bPdcs\x1b_apcbody\x1b\\".to_vec(), // AC-2, closed
+        b"\x1b]0;osc\x1bPdcs\x1b_apcbody".to_vec(),       // AC-2, open (incomplete APC)
+        b"\x1b\x1b]11;?\x07".to_vec(),                    // AC-3, double ESC, closed
+        b"\x1b(\x1b]11;?\x07tail".to_vec(), // AC-3, charset designator swallow, closed
+        b"\x1bXafter1\x1b^after2".to_vec(), // AC-3, two-byte escapes, closed
+        b"plain text\x1b".to_vec(),         // AC-3, lone trailing ESC, open
+        b"\x1b]0;osc\x1bPdcs\x1b[31mtext".to_vec(), // AC-4, closed (non-query CSI + text, no hold)
+    ];
+
+    for input in &corpus {
+        let mut whole = ScrollbackWriteFilter::new();
+        let (_dims, whole_out) = whole.feed(input, (80, 24));
+        let whole_pending = whole.pending().to_vec();
+
+        for split in 0..=input.len() {
+            let mut filter = ScrollbackWriteFilter::new();
+            let (_dims, out1) = filter.feed(&input[..split], (80, 24));
+            let (_dims, out2) = filter.feed(&input[split..], (80, 24));
+            let mut combined = out1;
+            combined.extend_from_slice(&out2);
+            assert_eq!(
+                combined, whole_out,
+                "split at {split} for {input:?} must flush the same bytes \
+                 as an unsplit feed"
+            );
+            assert_eq!(
+                filter.pending(),
+                whole_pending.as_slice(),
+                "split at {split} for {input:?} must leave the same pending \
+                 run as an unsplit feed"
+            );
+
+            let pending = filter.pending();
+            assert!(
+                pending.is_empty()
+                    || pending == b"\x1b"
+                    || (pending[0] == 0x1b
+                        && pending.len() >= 2
+                        && matches!(pending[1], b']' | b'P' | b'_')),
+                "pending after split {split} for {input:?} has an \
+                 unexpected shape: {pending:?}"
+            );
+        }
+
+        let mut oracle = TerminalCore::new(80, 24, 1000);
+        let mut probed = input.clone();
+        probed.extend_from_slice(b"PROBEMARK");
+        oracle.process_pty_data_fully(&probed);
+        let probe_visible = (0..24).any(|r| oracle.get_line_text(r).contains("PROBEMARK"));
+
+        if whole_pending.is_empty() {
+            assert!(
+                probe_visible,
+                "filter says {input:?} is fully closed, but term_core still \
+                 swallowed the probe text — the filter closed a string \
+                 term_core would keep open"
+            );
+        } else {
+            assert!(
+                !probe_visible,
+                "filter says {input:?} still has an open string, but \
+                 term_core already printed the probe text as literal \
+                 characters — the filter held a string term_core would \
+                 consider closed"
+            );
+        }
+    }
+}
+
+/// AC-6 (TM-2, NFR5): a hostile 64 KiB feed made of nothing but repeated
+/// `ESC ]` pairs, each aborting the previous OSC and opening a new one,
+/// completes in linear time and holds at most the final (genuinely
+/// incomplete) pair.
+#[test]
+fn write_filter_hostile_aborted_introducers_stream_is_linear_and_holds_only_the_final_pair() {
+    let mut filter = ScrollbackWriteFilter::new();
+    let pair_count = 32 * 1024; // 64 KiB of `ESC ]` pairs
+    let chunk: Vec<u8> = std::iter::repeat_n(*b"\x1b]", pair_count)
+        .flatten()
+        .collect();
+
+    let start = std::time::Instant::now();
+    let (_dims, out) = filter.feed(&chunk, (80, 24));
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "a hostile chain of aborted introducers must scan in linear time; \
+         took {elapsed:?}"
+    );
+    assert_eq!(
+        out,
+        chunk[..chunk.len() - 2].to_vec(),
+        "everything before the final (incomplete) pair is flushed unchanged"
+    );
+    assert_eq!(
+        filter.pending(),
+        b"\x1b]".as_slice(),
+        "only the final, genuinely incomplete introducer pair is held"
+    );
+}
+
 /// task0012 AC-5: an `agent-status` OSC report split across chunk
 /// boundaries must never land in scrollback. `ScrollbackWriteFilter`
 /// already holds ANY unterminated OSC introducer (not just viewer
@@ -1577,11 +1858,18 @@ fn split_osc9_across_two_suppressed_chunks_never_fires_more_than_once() {
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("the reader must reach P2 on chunk_a");
     output_capture.record_boundary(&tx, 2);
+
+    // FR11: arm the P2 pause for chunk_b BEFORE releasing chunk_a. P2
+    // disarms itself after one hit (per PauseHook::hit doc), so it must be
+    // re-armed for chunk_b — but arming it only after the release let the
+    // reader race ahead and blow past P2 on chunk_b before this test ever
+    // re-armed it, occasionally failing the 5s recv_timeout below. Arming
+    // while the reader is still paused on chunk_a is safe: `PauseHook::hit`
+    // takes its armed state (`Option::take`) before it blocks on release,
+    // so re-arming here only affects the NEXT hit.
+    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
     release_tx.send(()).unwrap();
 
-    // P2 disarms itself after one hit (per PauseHook::hit doc); re-arm
-    // for chunk_b.
-    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
     arrived_rx_2
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("the reader must reach P2 on chunk_b");
@@ -2119,6 +2407,690 @@ fn stress_reader_with_concurrent_resize_and_snapshot_paths_completes_within_budg
         start.elapsed() < budget,
         "stress test exceeded its time budget: {:?}",
         start.elapsed()
+    );
+}
+
+/// A `MasterPty` double whose `resize` always succeeds and does nothing
+/// else. Stands in for a real OS PTY so
+/// `snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock`
+/// below can drive `MuxPane::resize` — FR12/TS-14's design constraint is
+/// "no real PTY, no platform-specific process control" — without opening
+/// one. Cross-platform: only the two `#[cfg(unix)]`-only trait methods are
+/// gated, unlike `pane::tests::FailingResizeMaster`, which is gated
+/// entirely and so is unix-only.
+struct AlwaysResizableMaster;
+
+impl portable_pty::MasterPty for AlwaysResizableMaster {
+    fn resize(&self, _size: portable_pty::PtySize) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+    fn get_size(&self) -> Result<portable_pty::PtySize, anyhow::Error> {
+        Ok(portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+    }
+    fn try_clone_reader(&self) -> Result<Box<dyn std::io::Read + Send>, anyhow::Error> {
+        Err(anyhow::anyhow!("not supported in test double"))
+    }
+    fn take_writer(&self) -> Result<Box<dyn std::io::Write + Send>, anyhow::Error> {
+        Err(anyhow::anyhow!("not supported in test double"))
+    }
+    #[cfg(unix)]
+    fn process_group_leader(&self) -> Option<libc::pid_t> {
+        None
+    }
+    #[cfg(unix)]
+    fn as_raw_fd(&self) -> Option<std::os::unix::io::RawFd> {
+        None
+    }
+}
+
+/// AC-2 (FR12, NFR2; TS-14), stable_id `aca2b1d612ab97e0`: the three
+/// PRODUCTION snapshot paths — `collect_reattach_data` (visible reattach),
+/// `handle_request_pane_snapshot` (on-demand) and `resume_pane_with_permit`
+/// (visibility resume, reached via `evaluate_output_target`'s hide step) —
+/// run concurrently with the reader and a resize loop against the SAME
+/// pane and the SAME destination channel (standing in for one client
+/// connection, drained continuously so backpressure never stalls anything).
+///
+/// Unlike the older stand-in stress test above (which exercises
+/// `captured_read` + `record_boundary` directly and needs a real PTY only
+/// so `MuxPane::resize` has something to call), this test drives the real
+/// production entry points end to end and needs no real PTY at all: the
+/// resize loop runs against [`AlwaysResizableMaster`], a `MasterPty` double
+/// that always succeeds — satisfying the design's "no real PTY, no
+/// platform-specific process control" constraint, so this test runs
+/// identically on Linux and Windows.
+///
+/// Bounded by iteration count on every concurrent loop; the whole test is
+/// ALSO bounded by a wall-clock budget via bounded polling (never a bare
+/// `.join()`/`.await`), so a deadlock regression fails this ONE test with a
+/// clear message instead of hanging the suite. Deterministic in outcome,
+/// not in interleaving (Test Notes): this asserts only completion (no
+/// deadlock), no panic, that every `Snapshot`-kind chunk observed decodes,
+/// and that each of the three production paths delivered successfully at
+/// least once — never a specific interleaving order.
+#[tokio::test]
+async fn snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock() {
+    let start = std::time::Instant::now();
+    let budget = std::time::Duration::from_secs(30);
+
+    let pane_id: PaneId = 90;
+    let (dest_tx, dest_rx) = mpsc::channel::<PtyOutputChunk>(64);
+    let output_target: SharedOutputTarget =
+        Arc::new(StdMutex::new(PaneOutputTarget::Connected(dest_tx.clone())));
+
+    let pane = MuxPane::new(
+        pane_id,
+        80,
+        24,
+        output_target,
+        Box::new(std::io::sink()),
+        Box::new(AlwaysResizableMaster),
+        None,
+    );
+
+    // Field clones for the reader thread, taken BEFORE `pane` moves into
+    // the manager — mirrors `spawn_reader_with_chunks_in_session`'s own
+    // clone dance, so both the production handlers (via the manager) and
+    // the reader observe exactly this one pane's shared state.
+    let output_target_for_reader = pane.output_target.clone();
+    let shadow_parser = pane.shadow_parser.clone();
+    let cwd = pane.cwd.clone();
+    let title = pane.title.clone();
+    let title_sender = pane.title_sender.clone();
+    let notification_sender = pane.notification_sender.clone();
+    let agent_status_report_sender = pane.agent_status_report_sender.clone();
+    let raw_passthrough = pane.raw_passthrough.clone();
+    let passthrough_scanner = pane.passthrough_scanner.clone();
+    let scrollback = pane.scrollback.clone();
+    let dims = pane.dims.clone();
+    let output_capture = pane.output_capture.clone();
+
+    let mgr = Arc::new(tokio::sync::Mutex::new(SessionManager::new()));
+    let (session_id, window_id) = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        m.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+        (sid, wid)
+    };
+
+    // A long, bounded stream: plain lines with occasional CSI device
+    // queries (design's "text lines with occasional CSI device queries").
+    let mut chunks = Vec::new();
+    for i in 0..1000u32 {
+        if i % 7 == 0 {
+            chunks.push(b"\x1b[6n".to_vec());
+        } else {
+            chunks.push(format!("line {i}\r\n").into_bytes());
+        }
+    }
+
+    let reader_handle = std::thread::spawn(move || {
+        pty_reader_loop(
+            pane_id,
+            Box::new(ScriptedReader::new(chunks)),
+            output_target_for_reader,
+            shadow_parser,
+            cwd,
+            title,
+            title_sender,
+            notification_sender,
+            agent_status_report_sender,
+            raw_passthrough,
+            passthrough_scanner,
+            scrollback,
+            dims,
+            Arc::new(StdMutex::new(None)),
+            output_capture,
+        );
+    });
+
+    // One destination channel, standing in for one client connection,
+    // drained continuously so backpressure never stalls the reader or any
+    // of the concurrent snapshot paths below (mirrors the older stress
+    // test's stand-in drain).
+    let received: Arc<StdMutex<Vec<PtyOutputChunk>>> = Arc::new(StdMutex::new(Vec::new()));
+    let drain_received = received.clone();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let drain_stop = stop.clone();
+    let mut rx = dest_rx;
+    let drain_handle = std::thread::spawn(move || {
+        loop {
+            match rx.try_recv() {
+                Ok(chunk) => drain_received.lock().unwrap().push(chunk),
+                Err(mpsc::error::TryRecvError::Disconnected) => break,
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    if drain_stop.load(std::sync::atomic::Ordering::SeqCst) {
+                        while let Ok(chunk) = rx.try_recv() {
+                            drain_received.lock().unwrap().push(chunk);
+                        }
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        }
+    });
+
+    let reattach_successes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let snapshot_successes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let resume_successes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    // Loop 1: visible reattach through the PRODUCTION
+    // `collect_reattach_data`, targeting the SAME destination.
+    let reattach_handle = {
+        let mgr = mgr.clone();
+        let dest_tx = dest_tx.clone();
+        let reattach_successes = reattach_successes.clone();
+        tokio::spawn(async move {
+            for _ in 0..50 {
+                let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+                let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+                let data = crate::mux::ipc::reattach::collect_reattach_data(
+                    &mgr, session_id, &dest_tx, &title_tx, kick_tx, true, 10_000,
+                )
+                .await;
+                if data.len() == 1 {
+                    reattach_successes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        })
+    };
+
+    // Loop 2: the PRODUCTION on-demand snapshot handler, targeting the
+    // SAME destination.
+    let snapshot_handle = {
+        let mgr = mgr.clone();
+        let dest_tx = dest_tx.clone();
+        let snapshot_successes = snapshot_successes.clone();
+        tokio::spawn(async move {
+            for _ in 0..50 {
+                let req = mux_ipc::protocol::MuxMessage {
+                    msg_type: mux_ipc::protocol::MessageType::RequestPaneSnapshot,
+                    pane_id,
+                    payload: Vec::new(),
+                };
+                let mut deferred = crate::mux::session::pane::DeferredOutputQueue::new();
+                let outcome = crate::mux::ipc::handlers::handle_request_pane_snapshot(
+                    &req,
+                    session_id,
+                    &mgr,
+                    &dest_tx,
+                    &mut deferred,
+                    10_000,
+                )
+                .await;
+                if outcome.is_ok() && deferred.is_empty() {
+                    snapshot_successes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        })
+    };
+
+    // Loop 3: hide via the PRODUCTION `evaluate_output_target`, then
+    // resume via the PRODUCTION `resume_pane_with_permit` with a reserved
+    // permit — both against the SAME destination. The permit is reserved
+    // BEFORE either call, so nothing here holds `output_target` while
+    // waiting on the channel (NFR2).
+    let hide_resume_handle = {
+        let mgr = mgr.clone();
+        let dest_tx = dest_tx.clone();
+        let resume_successes = resume_successes.clone();
+        tokio::spawn(async move {
+            for _ in 0..50 {
+                let permit = match dest_tx.reserve().await {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                let m = mgr.lock().await;
+                let pane_ref = m
+                    .get_session(session_id)
+                    .unwrap()
+                    .windows
+                    .get(&window_id)
+                    .unwrap()
+                    .panes
+                    .get(&pane_id)
+                    .unwrap();
+                let _ = crate::mux::session::pane::evaluate_output_target(
+                    pane_ref, false, false, &dest_tx,
+                );
+                let outcome = crate::mux::session::pane::resume_pane_with_permit(
+                    pane_ref,
+                    &dest_tx,
+                    crate::mux::session::pane::AnyPermit::Borrowed(permit),
+                    10_000,
+                );
+                drop(m);
+                if matches!(outcome, crate::mux::session::pane::ResumeOutcome::Resumed) {
+                    resume_successes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        })
+    };
+
+    // Loop 4: the pane resize, alternating between two sizes — pure
+    // contention against the same manager/pane locks, no real PTY (see
+    // `AlwaysResizableMaster`), no platform-specific process control.
+    let resize_handle = {
+        let mgr = mgr.clone();
+        tokio::spawn(async move {
+            for i in 0..50u32 {
+                let (cols, rows) = if i % 2 == 0 { (100, 30) } else { (80, 24) };
+                let mut m = mgr.lock().await;
+                if let Some(session) = m.get_session_mut(session_id) {
+                    if let Some(window) = session.windows.get_mut(&window_id) {
+                        if let Some(pane) = window.panes.get_mut(&pane_id) {
+                            let _ = pane.resize(cols, rows);
+                        }
+                    }
+                }
+            }
+        })
+    };
+
+    loop {
+        if reader_handle.is_finished()
+            && reattach_handle.is_finished()
+            && snapshot_handle.is_finished()
+            && hide_resume_handle.is_finished()
+            && resize_handle.is_finished()
+        {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            break;
+        }
+        if start.elapsed() > budget {
+            panic!(
+                "concurrent snapshot-paths threads did not finish within the \
+                 {budget:?} budget — possible deadlock (reader={} reattach={} \
+                 snapshot={} hide_resume={} resize={})",
+                reader_handle.is_finished(),
+                reattach_handle.is_finished(),
+                snapshot_handle.is_finished(),
+                hide_resume_handle.is_finished(),
+                resize_handle.is_finished(),
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    reader_handle.join().expect("reader thread must not panic");
+    reattach_handle.await.expect("reattach task must not panic");
+    snapshot_handle.await.expect("snapshot task must not panic");
+    hide_resume_handle
+        .await
+        .expect("hide/resume task must not panic");
+    resize_handle.await.expect("resize task must not panic");
+
+    while !drain_handle.is_finished() {
+        if start.elapsed() > budget {
+            panic!("the stand-in drain thread did not notice the stop signal in time");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    drain_handle.join().expect("drain thread must not panic");
+
+    assert!(
+        start.elapsed() < budget,
+        "concurrent snapshot-paths test exceeded its time budget: {:?}",
+        start.elapsed()
+    );
+
+    // Every Snapshot-kind chunk observed must decode as a structured
+    // payload (never Malformed — this daemon always encodes via
+    // `encode_snapshot_segments`, which always emits the magic prefix).
+    let received = received.lock().unwrap();
+    let mut snapshot_chunk_count = 0usize;
+    for chunk in received.iter() {
+        if chunk.kind == crate::mux::session::pane::ChunkKind::Snapshot {
+            snapshot_chunk_count += 1;
+            let decoded = mux_ipc::protocol::decode_snapshot_payload_typed(&chunk.data);
+            assert!(
+                matches!(
+                    decoded,
+                    mux_ipc::protocol::DecodedSnapshotPayload::Structured { .. }
+                ),
+                "every Snapshot-kind chunk received must decode as a \
+                 structured payload"
+            );
+        }
+    }
+    assert!(
+        snapshot_chunk_count > 0,
+        "at least one Snapshot-kind chunk must have been observed across \
+         the concurrent runs"
+    );
+
+    // Each of the three PRODUCTION snapshot paths must have completed at
+    // least one successful delivery.
+    assert!(
+        reattach_successes.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "collect_reattach_data must have delivered at least once"
+    );
+    assert!(
+        snapshot_successes.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "handle_request_pane_snapshot must have delivered at least once"
+    );
+    assert!(
+        resume_successes.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "resume_pane_with_permit must have delivered at least once"
+    );
+}
+
+// ── FR13 (task0005): DECISIONS.md document-contract checks. These read
+// the checked-in `feature-docs/mux-suppressed-output-fixes/DECISIONS.md`
+// at compile time so AC-3/AC-4's content requirements are covered by an
+// executable check rather than by inspection alone. `feature-docs/
+// mux-suppressed-output-fixes/**` is one of this feature's own declared
+// paths, so embedding it here is reading within the feature's own scope.
+
+const DECISIONS_MD: &str =
+    include_str!("../../../../../feature-docs/mux-suppressed-output-fixes/DECISIONS.md");
+
+/// The 17 stable_ids the DECISIONS.md table must list as exactly one row
+/// each. `9e6a468b3a45ceeb` is deliberately excluded — it has its own
+/// two-row assertion below.
+const SINGLY_LISTED_STABLE_IDS: [&str; 17] = [
+    "19209420de72b144",
+    "61d33252f22b6fd2",
+    "8d069c589dc21784",
+    "66d05376ff960d53",
+    "001161ab9fa3c20b",
+    "c8aa5052b1a02acd",
+    "66170217dc5057ce",
+    "3bc1e21fdd8702ef",
+    "30ee5a7036a7fc6e",
+    "830f950f39e499fa",
+    "9a548939524b405a",
+    "29ff65b6c01032dc",
+    "39267160fcf1bb2a",
+    "692921cdd030612d",
+    "9a7dc7697c6af992",
+    "5988c2406aa06a7b",
+    "aca2b1d612ab97e0",
+];
+
+/// Every `(stable_id cell, full row line)` pair from DECISIONS.md's
+/// judgement table — lines starting with `| ` that are neither the header
+/// nor the `|---|` separator row. Scoped to the TABLE's first column
+/// (rather than a whole-document substring search) so a stable_id
+/// mentioned in another row's prose (e.g. "692921cdd030612d と同一箇所")
+/// for cross-reference purposes is never mistaken for a second row.
+fn decisions_md_rows() -> Vec<(String, &'static str)> {
+    DECISIONS_MD
+        .lines()
+        .filter(|l| l.starts_with("| ") && !l.contains("---"))
+        .map(|l| {
+            let cell = l
+                .trim_start_matches('|')
+                .split('|')
+                .next()
+                .unwrap()
+                .trim()
+                .to_string();
+            (cell, l)
+        })
+        // Exclude the header row by an EXACT match on its first cell
+        // ("stable_id") rather than a substring search over the whole
+        // line — a data row's own rationale prose may legitimately use
+        // the word "stable_id" (e.g. "同一 stable_id で2件の指摘がある"),
+        // and a substring filter would wrongly drop that row too.
+        .filter(|(cell, _)| cell != "stable_id")
+        .collect()
+}
+
+/// AC-4: all 18 stable_ids from the IMPLEMENTATION.md D7 registry are
+/// listed, and only those, each exactly once — except `9e6a468b3a45ceeb`,
+/// which has one row per target (viewer launch, inline image), so exactly
+/// twice. 17 + 2 = 19 rows total.
+#[test]
+fn decisions_md_lists_every_d7_stable_id_exactly_once_except_the_split_row() {
+    let rows = decisions_md_rows();
+    assert_eq!(rows.len(), 19, "expected 19 table rows: {rows:?}");
+    for id in SINGLY_LISTED_STABLE_IDS {
+        let count = rows.iter().filter(|(cell, _)| cell == id).count();
+        assert_eq!(
+            count, 1,
+            "stable_id {id} must appear as exactly one row: {rows:?}"
+        );
+    }
+    let split_count = rows
+        .iter()
+        .filter(|(cell, _)| cell.starts_with("9e6a468b3a45ceeb"))
+        .count();
+    assert_eq!(
+        split_count, 2,
+        "9e6a468b3a45ceeb must have exactly two rows: {rows:?}"
+    );
+}
+
+/// AC-4: every row has a verdict of 対応済み or 対応不要, and a non-empty
+/// rationale + regression-test cell (the table has 5 columns: stable_id,
+/// requirement, verdict, rationale, regression tests).
+#[test]
+fn decisions_md_every_row_has_a_verdict_and_nonempty_rationale_and_tests() {
+    for (cell, line) in decisions_md_rows() {
+        let cols: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
+        assert_eq!(
+            cols.len(),
+            5,
+            "row for {cell} must have 5 columns (stable_id, requirement, \
+             verdict, rationale, regression tests): {line}"
+        );
+        let verdict = cols[2];
+        assert!(
+            verdict.starts_with("対応済み") || verdict.starts_with("対応不要"),
+            "row for {cell} must have a verdict of 対応済み or 対応不要: {verdict}"
+        );
+        assert!(
+            !cols[3].is_empty(),
+            "row for {cell} must have a non-empty rationale"
+        );
+        assert!(
+            !cols[4].is_empty(),
+            "row for {cell} must have a non-empty regression-tests cell"
+        );
+    }
+}
+
+/// AC-3: the three FR12 "already addressed" stable_ids are recorded as
+/// 対応済み (never 対応不要).
+#[test]
+fn decisions_md_marks_fr12_already_addressed_stable_ids_as_addressed() {
+    let rows = decisions_md_rows();
+    for id in ["692921cdd030612d", "9a7dc7697c6af992", "5988c2406aa06a7b"] {
+        let (_, line) = rows
+            .iter()
+            .find(|(cell, _)| cell == id)
+            .unwrap_or_else(|| panic!("no DECISIONS.md row found for stable_id {id}"));
+        assert!(
+            line.contains("対応済み"),
+            "stable_id {id}'s row must be verdict 対応済み: {line}"
+        );
+    }
+}
+
+/// AC-4: `9e6a468b3a45ceeb` records the target-specific verdicts the task
+/// plan requires as two DISTINCT rows — viewer launch is 対応済み, inline
+/// image is 対応不要.
+#[test]
+fn decisions_md_splits_9e6a468b3a45ceeb_into_addressed_viewer_launch_and_unaddressed_inline_image()
+{
+    let rows: Vec<(String, &str)> = decisions_md_rows()
+        .into_iter()
+        .filter(|(cell, _)| cell.starts_with("9e6a468b3a45ceeb"))
+        .collect();
+    assert_eq!(rows.len(), 2, "expected exactly two rows: {rows:?}");
+    assert!(
+        rows.iter()
+            .any(|(_, l)| l.contains("ビューア起動") && l.contains("対応済み")),
+        "the viewer-launch row must be 対応済み: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|(_, l)| l.contains("インライン画像") && l.contains("対応不要")),
+        "the inline-image row must be 対応不要: {rows:?}"
+    );
+}
+
+/// AC-4: the known-gap register (IMPLEMENTATION.md D6) is carried —
+/// inline images, the N-byte retained-window gap, and the OSC-number u16
+/// overflow are all named.
+#[test]
+fn decisions_md_carries_the_known_gap_register() {
+    for needle in ["Kitty APC", "SIXEL DCS", "256 バイト", "u16"] {
+        assert!(
+            DECISIONS_MD.contains(needle),
+            "DECISIONS.md's known-gap register must mention {needle:?}"
+        );
+    }
+}
+
+/// AC-4 (task0006): the IMPLEMENTATION.md D7 registry's test-name list —
+/// SHARED, never duplicated, between
+/// `decisions_md_contains_every_d7_registry_test_name` (every name is
+/// cited in DECISIONS.md) and
+/// `every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source`
+/// (every name actually names a test function under `src-tauri/src`).
+/// Moving this list into a shared constant is a behavior-preserving change
+/// to the pre-existing `decisions_md_contains_every_d7_registry_test_name`
+/// (task0006 completion report).
+const D7_REGISTRY_TEST_NAMES: [&str; 23] = [
+    "suppressed_alt_osc_color_query_split_inside_st_is_delivered_once",
+    "write_filter_holds_string_ending_in_trailing_esc_until_completed",
+    "replacement_never_extracts_a_query_consumed_as_charset_designator",
+    "replacement_matches_client_reference_for_transition_corpus",
+    "color_query_predicate_matches_client_osc_number_and_theme_rules",
+    "incomplete_csi_tail_is_resent_without_executed_c0_controls",
+    "pending_does_not_drop_alt_region_queries_viewer_launches_or_own_tail",
+    "viewer_launch_in_suppressed_chunk_is_delivered_exactly_once",
+    "write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail",
+    "suppressed_chunk_after_aborted_strings_does_not_resend_delivered_query_or_text",
+    "query_split_across_reads_is_answered_once_at_every_split_position",
+    "utf8_split_across_reads_never_prints_a_replacement_character",
+    "consecutive_suppressed_chunks_leave_next_forwarded_chunk_intact",
+    "inline_images_in_suppressed_chunk_are_not_delivered",
+    "viewer_launch_image_kind_is_not_redelivered_d3",
+    "visibility_resume_restores_alt_screen_mode_and_content",
+    "visibility_resume_after_hidden_alt_exit_shows_main_screen",
+    "visibility_resume_keeps_main_pane_progress_bar_layout",
+    "suppressed_queries_arrive_after_snapshot_in_order_once_each",
+    "evaluate_output_target_never_resumes_a_detached_pane",
+    "production_visible_resume_delivers_snapshot_before_replacement_and_next_chunk",
+    "split_osc9_across_two_suppressed_chunks_never_fires_more_than_once",
+    "snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock",
+];
+
+/// AC-4: every regression-test name from the IMPLEMENTATION.md D7 registry
+/// is cited somewhere in DECISIONS.md — a transcription check that would
+/// catch a dropped or misspelled test name.
+#[test]
+fn decisions_md_contains_every_d7_registry_test_name() {
+    for name in D7_REGISTRY_TEST_NAMES {
+        assert!(
+            DECISIONS_MD.contains(name),
+            "DECISIONS.md must cite the D7 registry test name {name:?}"
+        );
+    }
+}
+
+/// Recursively search `dir` (and its subdirectories) for a `.rs` file
+/// whose text defines a function named `name` — `fn NAME(` at a word
+/// boundary (not a prefix of a longer identifier). Platform-neutral: uses
+/// `std::path::Path`/`std::fs::read_dir` throughout, no hardcoded path
+/// separators.
+fn source_tree_defines_function(dir: &std::path::Path, name: &str) -> bool {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return false,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if source_tree_defines_function(&path, name) {
+                return true;
+            }
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if file_defines_function(&content, name) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether `content` contains a `fn NAME(` definition, where the
+/// character immediately following `NAME` (before any `(`) is never an
+/// identifier character — so a search for `foo` never matches a
+/// definition of `foo_bar`.
+fn file_defines_function(content: &str, name: &str) -> bool {
+    let needle = format!("fn {name}");
+    let mut search_from = 0;
+    while let Some(pos) = content[search_from..].find(&needle) {
+        let match_end = search_from + pos + needle.len();
+        let boundary_ok = content[match_end..]
+            .chars()
+            .next()
+            .map(|c| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(true);
+        if boundary_ok && content[match_end..].trim_start().starts_with('(') {
+            return true;
+        }
+        search_from = match_end;
+    }
+    false
+}
+
+/// AC-4 (FR13; TS-21): the lookup `every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source`
+/// below drives — a name is "defined" only if some `.rs` file under this
+/// crate's `src` (found from the crate manifest directory, via
+/// `CARGO_MANIFEST_DIR`, never a hardcoded path) actually defines a
+/// function by that name.
+fn registry_test_name_is_defined_in_crate_source(name: &str) -> bool {
+    let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    source_tree_defines_function(&src_dir, name)
+}
+
+/// AC-4 (FR13; TS-21): every name on the D7 registry list — the SAME list
+/// `decisions_md_contains_every_d7_registry_test_name` uses, never a
+/// second copy — must actually be a test function defined somewhere under
+/// `src-tauri/src`, not merely a name DECISIONS.md happens to mention.
+#[test]
+fn every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source() {
+    for name in D7_REGISTRY_TEST_NAMES {
+        assert!(
+            registry_test_name_is_defined_in_crate_source(name),
+            "D7 registry test name {name:?} is not defined as a function \
+             anywhere under src-tauri/src"
+        );
+    }
+}
+
+/// AC-4: the lookup itself is negative-sensitive — a name that is
+/// deliberately never defined anywhere must be reported missing, so this
+/// test's own pass state never depends on a name that merely happens to
+/// be absent by accident (and a lookup that vacuously always returns
+/// `true` would be caught here).
+#[test]
+fn registry_test_name_lookup_reports_a_deliberately_undefined_name_as_missing() {
+    assert!(
+        !registry_test_name_is_defined_in_crate_source(
+            "definitely_not_a_real_test_function_zzzzz_task0006"
+        ),
+        "the lookup must report a name that is never defined as missing"
     );
 }
 
@@ -4068,9 +5040,11 @@ async fn visible_reattach_redelivers_device_queries_once_in_order_and_never_from
         received.push(c);
     }
     assert_eq!(
-        received[0].data, b"\x1b[6n\x1b[c",
-        "both real device queries, in order, and NOTHING from inside the \
-         DCS payload"
+        received[0].data, b"\x1b[6n\x1b[c\x1b[6n",
+        "the two plain device queries plus the DCS-embedded one: the \
+         embedded ESC aborts the DCS string (as-03), and the bytes that \
+         follow it — \"[6n\" — are a genuine, freshly-dispatched CSI query, \
+         not payload"
     );
     assert_eq!(received[1].data, continuation_chunk);
     assert!(received[2].data.is_empty());
@@ -4217,13 +5191,127 @@ async fn on_demand_snapshot_redelivers_device_queries_once_in_order_and_never_fr
         "the on-demand snapshot itself must arrive first"
     );
     assert_eq!(
-        received[1].data, b"\x1b[6n\x1b[c",
-        "both real device queries, in order, and NOTHING from inside the \
-         DCS payload"
+        received[1].data, b"\x1b[6n\x1b[c\x1b[6n",
+        "the two plain device queries plus the DCS-embedded one: the \
+         embedded ESC aborts the DCS string (as-03), and the bytes that \
+         follow it — \"[6n\" — are a genuine, freshly-dispatched CSI query, \
+         not payload"
     );
     assert_eq!(received[2].data, continuation_chunk);
     assert!(received[3].data.is_empty());
     assert_eq!(received.len(), 4, "nothing else must have been delivered");
+}
+
+/// AC-6 (FR9, TM-3, NFR1; TS-11), reader level, on-demand path: a
+/// suppressed chunk containing `A ESC[6n B ESC[c` delivers both queries
+/// after the snapshot and before the next chunk, in order, once each, as a
+/// single `PtyOutput`-kind chunk sent only to the covering snapshot's
+/// destination. The client model produces exactly two responses.
+#[cfg(feature = "gui")]
+#[tokio::test]
+async fn suppressed_queries_arrive_after_snapshot_in_order_once_each() {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+    let pane_id: PaneId = 54;
+    let (requester_tx, mut requester_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(
+        requester_tx.clone(),
+    )));
+    let pane = MuxPane::new_test(pane_id, cols, rows, output_target);
+    let output_capture = pane.output_capture.clone();
+
+    let mut paused_chunk = Vec::new();
+    paused_chunk.extend_from_slice(b"A");
+    paused_chunk.extend_from_slice(b"\x1b[6n");
+    paused_chunk.extend_from_slice(b"B");
+    paused_chunk.extend_from_slice(b"\x1b[c");
+    let continuation_chunk = b"final line\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) = spawn_reader_with_chunks_in_session(
+        pane,
+        vec![paused_chunk.clone(), continuation_chunk.clone()],
+    )
+    .await;
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2");
+
+    let req = mux_ipc::protocol::MuxMessage {
+        msg_type: mux_ipc::protocol::MessageType::RequestPaneSnapshot,
+        pane_id,
+        payload: Vec::new(),
+    };
+    let mut deferred = crate::mux::session::pane::DeferredOutputQueue::new();
+    crate::mux::ipc::handlers::handle_request_pane_snapshot(
+        &req,
+        session_id,
+        &mgr,
+        &requester_tx,
+        &mut deferred,
+        10_000,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = requester_rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(
+        received[0].kind,
+        crate::mux::session::pane::ChunkKind::Snapshot,
+        "the snapshot itself must arrive first"
+    );
+    assert_eq!(
+        received[1].kind,
+        crate::mux::session::pane::ChunkKind::PtyOutput,
+        "the replacement is a single PtyOutput-kind chunk"
+    );
+    assert_eq!(
+        received[1].data, b"\x1b[6n\x1b[c",
+        "both queries, in order, once each"
+    );
+    assert_eq!(received[2].data, continuation_chunk);
+    assert!(received[3].data.is_empty());
+    assert_eq!(
+        received.len(),
+        4,
+        "nothing else must have been delivered — a \
+        single PtyOutput-kind replacement chunk, sent only to the covering \
+        snapshot's destination"
+    );
+
+    // The client model produces exactly two responses when fed the
+    // replacement alone.
+    use crate::callbacks::{NativeCallbackState, ThemeColorResponder};
+    use crate::render::theme::Theme;
+    use parking_lot::Mutex as PLMutex;
+    use term_core::terminal_core::TerminalCore;
+    let theme = Arc::new(PLMutex::new(Theme::default()));
+    let state = Arc::new(PLMutex::new(NativeCallbackState::default()));
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.osc_responder = Some(Box::new(ThemeColorResponder::new(theme, state)));
+    client.process_pty_data_fully(&received[1].data);
+    let responses = client.take_response();
+    // Two independent device-query responses (CPR + DA1) are each their
+    // own complete CSI sequence terminated by a distinct final byte ('R'
+    // and 'c' respectively) — count them by their final bytes rather than
+    // assuming a fixed length.
+    let response_count = responses
+        .iter()
+        .filter(|&&b| b == b'R' || b == b'c')
+        .count();
+    assert_eq!(
+        response_count,
+        2,
+        "exactly two responses, one per query: {:?}",
+        String::from_utf8_lossy(&responses)
+    );
 }
 
 /// AC-4 (FR9; TS-9), reader level, on-demand path: the on-demand
@@ -4556,6 +5644,202 @@ async fn visible_reattach_redelivers_a_pending_rich_content_candidate_and_the_cl
             "row {r} mismatch"
         );
     }
+}
+
+/// mux-suppressed-output-fixes task0002 AC-4 (FR5; TS-5): a FORWARDED
+/// (unsuppressed) read containing an ESC-aborted OSC and an ESC-aborted DCS,
+/// followed by a complete CSI device query (`ESC[6n`) and plain text, must
+/// leave the write filter's `pending` EMPTY once it is fully processed — the
+/// aborted strings are closed, not held, so nothing after them is trapped.
+/// When the NEXT read is suppressed by a production on-demand snapshot
+/// (`handle_request_pane_snapshot`), its FR9/FR10 replacement must not
+/// resend that already-delivered query or text: with a buggy filter that
+/// still treated the aborted OSC as unterminated, `pending` would still hold
+/// the whole first chunk (query and text included) when the second chunk's
+/// replacement is built, duplicating what the client already received raw.
+/// The daemon's scrollback ring, built from two SEPARATE `feed` calls (one
+/// per chunk), must equal a single strip of the whole concatenated
+/// main-buffer stream — splitting across reads must not change the result.
+#[tokio::test]
+async fn suppressed_chunk_after_aborted_strings_does_not_resend_delivered_query_or_text() {
+    let pane_id: PaneId = 70;
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let output_target: SharedOutputTarget =
+        Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+
+    let pane = MuxPane::new_test(pane_id, 80, 24, output_target.clone());
+    let shadow_parser = pane.shadow_parser.clone();
+    let cwd = pane.cwd.clone();
+    let title = pane.title.clone();
+    let title_sender = pane.title_sender.clone();
+    let notification_sender = pane.notification_sender.clone();
+    let agent_status_report_sender = pane.agent_status_report_sender.clone();
+    let raw_passthrough = pane.raw_passthrough.clone();
+    let passthrough_scanner = pane.passthrough_scanner.clone();
+    let scrollback = pane.scrollback.clone();
+    let dims = pane.dims.clone();
+    let output_capture = pane.output_capture.clone();
+
+    let mgr = Arc::new(tokio::sync::Mutex::new(SessionManager::new()));
+    let session_id = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        m.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+        sid
+    };
+
+    // chunk0: ESC-aborted OSC, ESC-aborted DCS, then a complete CSI device
+    // query and plain text — meant to be delivered normally.
+    let chunk0 = b"\x1b]0;osc\x1bPdcs\x1b[6ntext".to_vec();
+    // chunk1: unrelated plain content — meant to be suppressed.
+    let chunk1 = b"more-output".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let handle = std::thread::spawn({
+        let output_target = output_target.clone();
+        let shadow_parser = shadow_parser.clone();
+        let cwd = cwd.clone();
+        let title = title.clone();
+        let title_sender = title_sender.clone();
+        let notification_sender = notification_sender.clone();
+        let agent_status_report_sender = agent_status_report_sender.clone();
+        let raw_passthrough = raw_passthrough.clone();
+        let passthrough_scanner = passthrough_scanner.clone();
+        let scrollback = scrollback.clone();
+        let dims = dims.clone();
+        let output_capture = output_capture.clone();
+        let chunks = vec![chunk0.clone(), chunk1.clone()];
+        move || {
+            pty_reader_loop(
+                pane_id,
+                Box::new(ScriptedReader::new(chunks)),
+                output_target,
+                shadow_parser,
+                cwd,
+                title,
+                title_sender,
+                notification_sender,
+                agent_status_report_sender,
+                raw_passthrough,
+                passthrough_scanner,
+                scrollback,
+                dims,
+                Arc::new(StdMutex::new(None)),
+                output_capture,
+            );
+        }
+    });
+
+    // Pause on chunk0's own P2 (right after its capture — the write filter
+    // has already been fed chunk0 by this point). Re-arm P2 for chunk1
+    // BEFORE releasing chunk0, so the re-arm happens while the reader thread
+    // is still blocked inside the OLD `hit()` call — no race with the
+    // reader racing ahead to chunk1's own P2 first.
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on chunk0");
+    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
+    release_tx.send(()).unwrap();
+
+    // chunk0 proceeds past P2 with no boundary recorded yet — forwarded
+    // normally to the connected destination.
+
+    arrived_rx_2
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on chunk1");
+
+    // Drive the PRODUCTION on-demand snapshot path while paused on chunk1 —
+    // its boundary now covers BOTH chunk0 and chunk1 (both already
+    // captured), so chunk1 (the "next" read) will be suppressed once
+    // released.
+    let req = mux_ipc::protocol::MuxMessage {
+        msg_type: mux_ipc::protocol::MessageType::RequestPaneSnapshot,
+        pane_id,
+        payload: Vec::new(),
+    };
+    let mut deferred = crate::mux::session::pane::DeferredOutputQueue::new();
+    crate::mux::ipc::handlers::handle_request_pane_snapshot(
+        &req,
+        session_id,
+        &mgr,
+        &owned_tx,
+        &mut deferred,
+        10_000,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+    assert!(deferred.is_empty(), "the channel has room; must not defer");
+
+    release_tx_2.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        received.push(c);
+    }
+    let received_data: Vec<&[u8]> = received.iter().map(|c| c.data.as_slice()).collect();
+    assert_eq!(
+        received.len(),
+        3,
+        "chunk0 (forwarded raw), the on-demand snapshot, then EOF — chunk1's \
+         suppressed-chunk replacement must be EMPTY (no query, no tail) and \
+         send nothing: {received_data:?}"
+    );
+    assert_eq!(
+        received[0].kind,
+        crate::mux::session::pane::ChunkKind::PtyOutput
+    );
+    assert_eq!(
+        received[0].data, chunk0,
+        "chunk0 must be forwarded verbatim, unsuppressed"
+    );
+    assert_eq!(
+        received[1].kind,
+        crate::mux::session::pane::ChunkKind::Snapshot
+    );
+    assert!(received[2].data.is_empty(), "EOF chunk must follow");
+
+    // Restricted to PtyOutput-kind chunks: the Snapshot chunk's payload is
+    // the RENDERED grid (built from the shadow parser's screen contents), so
+    // it legitimately contains the literal text "text" already drawn by
+    // chunk0 — that is not a "resend" via the suppressed-chunk pipeline this
+    // assertion is about.
+    let all_pty_output: Vec<u8> = received
+        .iter()
+        .filter(|c| c.kind == crate::mux::session::pane::ChunkKind::PtyOutput)
+        .flat_map(|c| c.data.clone())
+        .collect();
+    let query_occurrences = all_pty_output
+        .windows(4)
+        .filter(|w| *w == b"\x1b[6n")
+        .count();
+    assert_eq!(
+        query_occurrences, 1,
+        "the CSI device query must reach the client exactly once (via \
+         chunk0's normal forward), never resent by chunk1's replacement"
+    );
+    let text_occurrences = all_pty_output.windows(4).filter(|w| *w == b"text").count();
+    assert_eq!(
+        text_occurrences, 1,
+        "the plain text after the query must reach the client exactly once, \
+         never resent by chunk1's replacement"
+    );
+
+    let mut concatenated = chunk0.clone();
+    concatenated.extend_from_slice(&chunk1);
+    let expected_ring = strip_pty_output_for_scrollback_write(&concatenated);
+    assert_eq!(
+        scrollback.lock().unwrap().read_all(),
+        expected_ring,
+        "the ring, built from two separate feed() calls, must equal a \
+         single strip of the whole concatenated main-buffer stream"
+    );
 }
 
 /// AC-6 (FR11; TS-11): destination A holds a boundary for the pane ABOVE

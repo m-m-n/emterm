@@ -190,7 +190,7 @@ pub(in crate::mux::ipc) async fn handle_set_visibility(
                 if pane.exited {
                     continue;
                 }
-                let _ = evaluate_output_target(pane, false, false, pane_output_tx, probe_capacity);
+                let _ = evaluate_output_target(pane, false, false, pane_output_tx);
             }
         }
         return;
