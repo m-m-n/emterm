@@ -1,6 +1,6 @@
 task_id: task0003
-baseline_failures: []          # cargo test --lib (pre-edit, captured via stash): 3727 passed; 0 failed; 3 ignored
-final_failures: []             # cargo test --lib (post-implementation): 3732 passed; 0 failed; 3 ignored
+baseline_failures: []          # refreshed after parent-side adoption (task0004 merged in): cargo test --lib: 3728 passed; 0 failed; 3 ignored
+final_failures: []             # post-re-implementation: cargo test --lib: 3729 passed; 0 failed; 3 ignored
 acceptance_tests:
   AC-1:
     tests:

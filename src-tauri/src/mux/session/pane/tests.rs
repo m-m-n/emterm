@@ -2202,6 +2202,132 @@ fn production_visible_resume_delivers_snapshot_before_replacement_and_next_chunk
     assert!(received[3].data.is_empty(), "EOF chunk must follow");
 }
 
+/// AC-1 (FR8; TS-9) / AC-3 (FR8; TS-9; mux-suppressed-output-fixes
+/// task0003): a chunk that enters the alternate screen (`ESC[?1049h`) and
+/// draws content, in one read, is suppressed by a visibility resume that
+/// runs while the PRODUCTION reader is paused on it — mirrors
+/// `resume_pane_with_permit_drives_the_paused_reader_to_suppress_the_paused_chunk_and_matches_the_raw_stream_reference`,
+/// this task's alt-screen variant. The chunk carries no device query,
+/// incomplete tail, or viewer-launch sequence, so its suppressed-chunk
+/// replacement is empty regardless of which classifier implementation is
+/// in place (task0001 of this feature, developed in parallel — see
+/// IMPLEMENTATION.md's "Suppressed-chunk delivery contract"). After the
+/// client model applies [the resume Snapshot, the (empty) replacement, and
+/// the next chunk], it is on the alternate screen and its visible rows +
+/// cursor equal the shadow parser's own. The next chunk keeps drawing on
+/// the alternate screen, so this one test also covers AC-3 (the pane stays
+/// on the alternate screen through the whole hide/resume cycle).
+#[test]
+fn visibility_resume_restores_alt_screen_mode_and_content() {
+    use term_core::terminal_core::{MODE_ALT_SCREEN, TerminalCore};
+
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::HiddenByVisibility,
+        owner: Some(owned_tx.clone()),
+    }));
+    let pane = MuxPane::new_test(30, cols, rows, target.clone());
+    let output_capture = pane.output_capture.clone();
+
+    let baseline: &[u8] = b"before-alt\r\n";
+    output_capture.capture(|| {
+        pane.shadow_parser.lock().unwrap().process(baseline);
+        pane.scrollback.lock().unwrap().write(baseline);
+    });
+
+    // Enters the alternate screen and draws content in the SAME chunk — no
+    // device query, incomplete tail, or viewer-launch sequence, so its
+    // suppressed-chunk replacement is empty.
+    let paused_chunk = b"\x1b[?1049h\x1b[1;1HALT-CONTENT".to_vec();
+    // Stays on the alternate screen (AC-3).
+    let continuation_chunk = b"\x1b[2;1HMORE-ALT".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let handle = spawn_reader_thread(
+        &pane,
+        vec![paused_chunk.clone(), continuation_chunk.clone()],
+    );
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the paused chunk");
+
+    let permit = owned_tx
+        .try_reserve()
+        .expect("S has capacity for the resume permit");
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        received.push(c);
+    }
+
+    assert!(
+        !received.iter().any(|c| c.data == paused_chunk),
+        "the paused chunk's raw bytes must never reach S after the snapshot"
+    );
+    assert_eq!(
+        received[0].kind,
+        ChunkKind::Snapshot,
+        "S must hold the snapshot first"
+    );
+    assert_eq!(
+        received[1].data, continuation_chunk,
+        "the next (unsuppressed) reader chunk must follow the snapshot \
+         directly — the paused chunk's own replacement is empty"
+    );
+    assert!(received[2].data.is_empty(), "EOF chunk must follow");
+    assert_eq!(received.len(), 3, "nothing else must have been delivered");
+
+    let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&received[0].data);
+    let replay_segments: Vec<term_core::terminal_core::ReplaySegment> = segments
+        .iter()
+        .map(|s| term_core::terminal_core::ReplaySegment {
+            offset: s.offset,
+            cols: s.cols,
+            rows: s.rows,
+        })
+        .collect();
+    let mut client = TerminalCore::new(cols, rows, 10_000);
+    client.reset_and_replay_segments(content, &replay_segments);
+    client.process_pty_data_fully(&continuation_chunk);
+
+    assert!(
+        client.get_mode(MODE_ALT_SCREEN),
+        "AC-1/AC-3: after applying the resume snapshot and the next chunk, \
+         the client model must be on the alternate screen"
+    );
+
+    // Oracle: the shadow parser, which the reader has already updated in
+    // real time with the same paused + continuation bytes by the time the
+    // reader thread joined above.
+    let parser = pane.shadow_parser.lock().unwrap();
+    assert!(
+        parser.screen().alternate_screen(),
+        "test prerequisite: the shadow parser must also be on the \
+         alternate screen"
+    );
+    for r in 0..rows {
+        let got = client.get_line_text(r);
+        let want = parser
+            .screen()
+            .rows(0, cols)
+            .nth(r as usize)
+            .unwrap_or_default();
+        assert_eq!(got.trim_end(), want.trim_end(), "row {r} mismatch");
+    }
+    let (want_row, want_col) = parser.screen().cursor_position();
+    assert_eq!(client.get_cursor_row(), want_row);
+    assert_eq!(client.get_cursor_col(), want_col);
+}
+
 /// D3'''' (round-7 rework, review round-6 finding `46c29c2c65970d26`):
 /// settles the reachability question the round-6 reviewers disagreed
 /// on — does an oversize resume failure freeze the pane permanently
