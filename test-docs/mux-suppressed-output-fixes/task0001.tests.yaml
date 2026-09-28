@@ -1,0 +1,167 @@
+task_id: task0001
+baseline_failures: []          # cargo test --lib, before any change: 3727 passed; 0 failed; 3 ignored
+final_failures: []             # cargo test --lib, after implementation: 3759 passed; 0 failed; 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::suppressed_output::tests::replacement_matches_client_reference_for_transition_corpus
+      - mux::ipc::pty_spawn::suppressed_output::tests::replacement_never_extracts_a_query_consumed_as_charset_designator
+      - mux::ipc::pty_spawn::client_parity_scan::tests::color_query_predicate_matches_client_osc_number_and_theme_rules
+      - mux::ipc::pty_spawn::suppressed_output::tests::suppressed_alt_osc_color_query_split_inside_st_is_delivered_once
+    red_confirmed: true
+    red_reason: >
+      Observed by temporarily reverting the production rule each test
+      targets and re-running: (a) disabling the FR2(d) charset-designator
+      branch made replacement_never_extracts_a_query_consumed_as_charset_designator
+      fail with "the CSI query must never be extracted..."; (b) forcing
+      is_color_query to always return false made
+      color_query_predicate_matches_client_osc_number_and_theme_rules fail
+      and made replacement_matches_client_reference_for_transition_corpus
+      fail on case "designator swallows ESC[6n" (left=[27,91,49,59,49,82]
+      vs right=[]); (c) changing find_osc_terminator's trailing-ESC arm
+      from Unterminated to Aborted (i.e. reinstating the pre-FR1 "abort on
+      trailing ESC" behavior) made
+      suppressed_alt_osc_color_query_split_inside_st_is_delivered_once fail
+      with left=[27] vs right=[27,93,49,49,59,63,27]. All reverts were
+      undone immediately after observing the failure; the full suite was
+      re-run green afterward (3759 passed; 0 failed; 3 ignored).
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::suppressed_output::tests::incomplete_csi_tail_is_resent_without_executed_c0_controls
+    red_confirmed: true
+    red_reason: >
+      Observed by disabling the tail's C0-stripping branch (always
+      extend_from_slice the raw tail bytes instead of filtering through
+      strip_c0 when tail_strip_c0 is set). The test then failed comparing
+      the LF-containing tail bytes against the expected LF-stripped bytes.
+      Reverted immediately after observing the failure.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::suppressed_output::tests::pending_does_not_drop_alt_region_queries_viewer_launches_or_own_tail
+    red_confirmed: true
+    red_reason: >
+      Observed by disabling D4 rule 3's ring-written-end gate (using
+      pending as the tail whenever it is non-empty, regardless of whether
+      the chunk ends in a ring-written span). Scenario (c) of the test
+      (chunk ends outside any ring-written span) then failed: left
+      included the pending run appended after the query instead of the
+      chunk's own tail alone. Reverted immediately after observing the
+      failure.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::suppressed_output::tests::query_split_across_reads_is_answered_once_at_every_split_position
+      - mux::ipc::pty_spawn::suppressed_output::tests::utf8_split_across_reads_never_prints_a_replacement_character
+      - mux::ipc::pty_spawn::suppressed_output::tests::consecutive_suppressed_chunks_leave_next_forwarded_chunk_intact
+      - mux::ipc::pty_spawn::suppressed_output::tests::retained_window_holds_last_n_bytes_across_reads
+    red_confirmed: true
+    red_reason: >
+      Observed by (a) disabling derive_prefix_start's window search
+      (always returning window.len(), i.e. ignoring the window entirely),
+      which made query_split_across_reads_is_answered_once_at_every_split_position
+      fail at split position 1 (left=[] vs right=[27,91,54,110]) and also
+      broke the pre-existing single-split-point sibling test
+      query_split_across_window_and_chunk_is_answered_once and
+      incomplete_sequence_started_in_window_still_incomplete_at_chunk_end_is_resent_from_its_start;
+      (b) disabling advance_retained_window's bounded-copy cap (returning
+      the raw chunk unbounded instead of the last N bytes of window++chunk),
+      which made retained_window_holds_last_n_bytes_across_reads fail
+      (left: 356 vs right: 256). Both reverts were undone immediately
+      after observing the failures.
+      utf8_split_across_reads_never_prints_a_replacement_character and
+      consecutive_suppressed_chunks_leave_next_forwarded_chunk_intact were
+      NOT independently driven red by these two reverts (a completed
+      cross-read UTF-8 character produces an empty result whether or not
+      the window is consulted, since ground text is never flagged as a
+      tail either way, and the second test's own incomplete-SGR completion
+      step is unaffected by the window-derivation revert) — they are
+      listed in unconfirmed_reds for that reason, but the AC's other two
+      tests give this criterion a directly observed red.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::suppressed_output::tests::viewer_launch_in_suppressed_chunk_is_delivered_exactly_once
+      - mux::ipc::pty_spawn::suppressed_output::tests::inline_images_in_suppressed_chunk_are_not_delivered
+    red_confirmed: true
+    red_reason: >
+      Observed by forcing is_viewer_launch to always return false.
+      viewer_launch_in_suppressed_chunk_is_delivered_exactly_once then
+      failed (the viewer-launch bytes were missing from both scenarios in
+      the test), and the pre-existing sibling tests
+      viewer_launch_markdown_is_redelivered,
+      viewer_launch_json_yaml_html_are_redelivered and
+      viewer_launch_osc_9999_emterm_md_is_redelivered failed the same way.
+      Reverted immediately after observing the failures.
+      inline_images_in_suppressed_chunk_are_not_delivered was NOT
+      independently driven red by this revert (it asserts an ABSENCE that
+      is already structurally guaranteed — APC/DCS content never produces
+      a scan item in this design regardless of is_viewer_launch — so
+      disabling is_viewer_launch cannot make it fail); it is listed in
+      unconfirmed_reds for that reason.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::suppressed_queries_arrive_after_snapshot_in_order_once_each
+    red_confirmed: true
+    red_reason: >
+      Observed by changing run_suppressed_pipeline's chunk constructor
+      from PtyOutputChunk::pty_output to PtyOutputChunk::snapshot. The
+      test's "the replacement is a single PtyOutput-kind chunk" assertion
+      then failed (left: Snapshot vs right: PtyOutput), and this same
+      revert also broke two pre-existing, unrelated tests
+      (on_demand_snapshot_shaped_suppression_matches_a_reference_and_redelivers_the_query
+      and
+      split_osc9_across_a_production_on_demand_snapshot_boundary_fires_at_most_once_and_never_stitches_into_a_later_detached_period),
+      confirming the PtyOutput-kind invariant is load-bearing and already
+      covered elsewhere too. Reverted immediately after observing the
+      failures.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::suppressed_output::tests::hostile_chunk_replacement_is_linear_and_never_empty
+    red_confirmed: false
+    red_reason: >
+      This test's guarantee (every scan_view branch advances pos, so the
+      scan cannot stall, and adversarial/hostile input completes in
+      bounded time) is a structural property of the single-forward-pass
+      design, unchanged by this task's own new rules (FR1/FR2/FR6/FR7)
+      layered on top of that pass. The test itself is a rename of a
+      pre-existing, already-passing test
+      (hostile_chunk_replacement_is_linear_and_never_empty_beyond_chunk_length,
+      renamed to match the task plan's required name) with no assertion
+      change. No revert targeting this task's own new logic was found
+      that would make this specific test fail without also fabricating an
+      unrelated, artificial bug in the pre-existing scan loop structure,
+      so no red was observed for it.
+  AC-8:
+    tests:
+      - mux::ipc::pty_spawn::suppressed_output::tests::embedded_esc_inside_dcs_string_payload_aborts_it_and_the_following_csi_query_is_extracted
+      - mux::ipc::pty_spawn::suppressed_output::tests::embedded_esc_inside_apc_string_payload_aborts_it_and_the_following_color_query_is_extracted
+      - mux::ipc::pty_spawn::tests::on_demand_snapshot_redelivers_device_queries_once_in_order_and_never_from_inside_a_dcs_payload
+      - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_device_queries_once_in_order_and_never_from_inside_a_dcs_payload
+      - mux::ipc::pty_spawn::suppressed_output::tests::pending_rich_content_candidate_is_redelivered_as_the_whole_pending_run
+    red_confirmed: true
+    red_reason: >
+      These five pre-existing tests (the first two under their PRE-rename
+      names query_shaped_bytes_inside_dcs_string_payload_are_not_extracted
+      and query_shaped_bytes_inside_apc_string_payload_are_not_extracted)
+      were directly observed FAILING against the new classifier/builder
+      while still carrying their pre-task assertions, via
+      `cargo test --lib pty_spawn` ("122 passed; 5 failed", the 5th being
+      an unrelated pre-existing flake confirmed by 3x isolated
+      `--test-threads=1` reruns — see notes). Concrete diffs observed:
+      query_shaped_bytes_inside_dcs_string_payload_are_not_extracted:
+      "assertion failed: result.is_empty()" (now `\x1b[6n`, the
+      DCS-embedded query is genuinely extracted per as-03);
+      query_shaped_bytes_inside_apc_string_payload_are_not_extracted: same
+      shape (now `\x1b]10;?\x07`);
+      on_demand_snapshot_redelivers_device_queries...: left
+      [27,91,54,110,27,91,99,27,91,54,110] vs old-expected
+      [27,91,54,110,27,91,99]; visible_reattach_redelivers_device_queries...:
+      same diff. Each was then updated (and the first two renamed, per the
+      task plan's "rename it if its name states the old behavior") to the
+      new, intended expectation, and the suite re-run green. Two other
+      tests the task plan predicted would change —
+      bare_trailing_esc_is_treated_as_a_tail and
+      pending_run_excludes_its_own_contribution_from_the_query_scan — were
+      reviewed and found to need NO assertion change (their expected
+      bytes are identical to before; only an explanatory comment was
+      updated on the first, and the second is reached via the new D4 gate
+      but produces the same output), so they are not listed here; this is
+      reported in the completion notes.

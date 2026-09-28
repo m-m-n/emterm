@@ -21,11 +21,31 @@ use crate::pty::visibility::RawPassthroughBuffer;
 /// captured while detached or hidden). Drained into the resume snapshot.
 type SharedRawPassthrough = Arc<StdMutex<RawPassthroughBuffer>>;
 
+mod client_parity_scan;
 mod suppressed_output;
 mod write_filter;
 
 use suppressed_output::build_suppressed_replacement;
 use write_filter::*;
+
+/// FR6/NFR3: the reader's retained window — the last up to
+/// [`client_parity_scan::RETAINED_WINDOW_BYTES`] bytes of the PTY stream
+/// preceding the CURRENT read, updated by a bounded copy after every
+/// non-empty read on every path (forwarded, suppressed, detached, closed).
+/// On the normal (non-suppressed) path this copy is the ONLY extra work the
+/// reader does — no scan, no allocation beyond the bounded copy itself.
+fn advance_retained_window(window: &[u8], chunk: &[u8]) -> Vec<u8> {
+    let max = client_parity_scan::RETAINED_WINDOW_BYTES;
+    if chunk.len() >= max {
+        return chunk[chunk.len() - max..].to_vec();
+    }
+    let need_from_window = max - chunk.len();
+    let start = window.len().saturating_sub(need_from_window);
+    let mut new_window = Vec::with_capacity((window.len() - start) + chunk.len());
+    new_window.extend_from_slice(&window[start..]);
+    new_window.extend_from_slice(chunk);
+    new_window
+}
 
 /// Shared per-pane stateful passthrough scanner. Lives outside the buffer
 /// so partial sequences spanning chunk boundaries are recovered.
@@ -274,6 +294,9 @@ pub(in crate::mux) fn pty_reader_loop(
     // live, main-buffer spans of each chunk (SPEC FR5) via the
     // `live_spans` argument passed to `feed` below.
     let mut agent_status_feed_scanner = AgentStatusFeedScanner::new();
+    // FR6/NFR3 (mux-suppressed-output-fixes task0001): reader-thread-local,
+    // no lock — see `advance_retained_window`'s doc.
+    let mut retained_window: Vec<u8> = Vec::new();
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
@@ -611,6 +634,7 @@ pub(in crate::mux) fn pty_reader_loop(
                             &notification_sender,
                             &scrollback_filter,
                             &live_spans,
+                            &retained_window,
                         );
                     }
                     ReaderForward::NeedsSlot(s, chunk) => {
@@ -649,6 +673,7 @@ pub(in crate::mux) fn pty_reader_loop(
                                         &notification_sender,
                                         &scrollback_filter,
                                         &live_spans,
+                                        &retained_window,
                                     );
                                 } else {
                                     // Keep output_target and the boundary
@@ -693,6 +718,12 @@ pub(in crate::mux) fn pty_reader_loop(
                         }
                     }
                 }
+
+                // FR6/NFR3: advance the retained window on EVERY path
+                // above (forwarded, suppressed, detached, closed) — the
+                // suppressed-pipeline call(s) above already used the window
+                // as it stood BEFORE this read.
+                retained_window = advance_retained_window(&retained_window, data);
             }
             Err(e) => {
                 log::info!(
@@ -745,6 +776,7 @@ fn run_suppressed_pipeline(
     notification_sender: &SharedNotificationSender,
     scrollback_filter: &ScrollbackWriteFilter,
     ring_written_ranges: &[std::ops::Range<usize>],
+    retained_window: &[u8],
 ) {
     capture_passthrough(
         pane_id,
@@ -758,8 +790,12 @@ fn run_suppressed_pipeline(
     // Detached period's output.
     passthrough_scanner.lock().unwrap().discard_partial();
 
-    let replacement =
-        build_suppressed_replacement(data, ring_written_ranges, scrollback_filter.pending());
+    let replacement = build_suppressed_replacement(
+        data,
+        ring_written_ranges,
+        scrollback_filter.pending(),
+        retained_window,
+    );
     if replacement.is_empty() {
         // TM-2: never turn an empty replacement into an empty `PtyOutput`
         // chunk — the client reads that as PTY exit.
