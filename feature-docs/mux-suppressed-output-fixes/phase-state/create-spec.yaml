@@ -1,0 +1,17 @@
+schema_version: 1
+feature: mux-suppressed-output-fixes
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: 01a87b010deb0042b484275f0a6c66c6eabf1c0e
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
