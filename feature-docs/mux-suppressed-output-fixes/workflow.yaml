@@ -99,8 +99,8 @@ workflow:
   base_commit: 390d9eff0b40d930db2d50f3d40e028c8d7c9b1f
   completed_at_commit: 6b77abdd97b4fe0f7b5ec005ead297d5fdbbb39f
 - id: review
-  status: in_progress
-  completed_at_commit: fc181089f0f2af202c491167b70e0f6c8569b8ed
+  status: completed
+  completed_at_commit: 0ae9fdeaabacb2da26b2116c8ec9baa691c82f05
 - id: verify
   status: pending
   result: fail
@@ -257,7 +257,7 @@ tasks:
       - TS-10
       - TS-15
 review:
-  status: in_progress
+  status: completed
   plan:
     floor:
     - comprehensive
@@ -267,7 +267,7 @@ review:
     - spec
     discretionary: []
     cross_validation: true
-  rounds_completed: 1
+  rounds_completed: 2
   perspectives:
   - comprehensive
   - security
