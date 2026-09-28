@@ -1,14 +1,18 @@
 schema_version: 1
 feature: mux-suppressed-output-fixes
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: 01a87b010deb0042b484275f0a6c66c6eabf1c0e
-last_input_digest: null
-active_request_id: null
+base_revision: 4bec884422ef8b8237b75e17c6c50bf689c84daa
+last_input_digest: sha256:14f7b2b782cc3f336c8810afdca1d429b1005582b1f38172fa6854bfbfe8ac29
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:14f7b2b782cc3f336c8810afdca1d429b1005582b1f38172fa6854bfbfe8ac29
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
