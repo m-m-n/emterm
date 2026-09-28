@@ -1,20 +1,48 @@
 schema_version: 1
 feature: mux-suppressed-output-fixes
 phase: create-plan
-status: dispatching
+status: applying_patch
 generation: 1
-base_revision: 1d1380e7d37da21ea1d49c71ccc5c01e5e10738e
+base_revision: cefe357f052d5fb087d9e12928bd28791cb35067
 last_input_digest: sha256:e930465324a44100d146e23472c7a6fbbdd005e3160eb8e68ae59a9cc6cde558
 active_request_id: create-plan-run-0001
 packets: {}
 answers: {}
 worker_runs:
 - request_id: create-plan-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:e930465324a44100d146e23472c7a6fbbdd005e3160eb8e68ae59a9cc6cde558
-  output_digest: null
-artifacts: []
-patches: []
+  output_digest: sha256:78beb3b34e0eac506ba0edef357b8194d2eda1a4c396fd6437c699319311fceb
+artifacts:
+- path: feature-docs/mux-suppressed-output-fixes/THREAT-MODEL.md
+  sha256: sha256:4ec090f6facc3735a40c158e84a106e9634a9465e4f1fcf02bb433c6687c91db
+  produced_by: create-plan-run-0001
+- path: feature-docs/mux-suppressed-output-fixes/IMPLEMENTATION.md
+  sha256: sha256:1216997a07ce4276891a5b4c63bcf470c8d3467c12b56f24a0736770e22ac8d6
+  produced_by: create-plan-run-0001
+- path: feature-docs/mux-suppressed-output-fixes/VERIFICATION.md
+  sha256: sha256:88f0a40fefea256dc44d756b1ac32c1308ad9cf942713295d0e2ef31efd82b23
+  produced_by: create-plan-run-0001
+- path: feature-docs/mux-suppressed-output-fixes/tasks/task0001.md
+  sha256: sha256:7c91687b904d51f6b60984b822f8266d486d01db8a76bdba3a61bf685e54a523
+  produced_by: create-plan-run-0001
+- path: feature-docs/mux-suppressed-output-fixes/tasks/task0002.md
+  sha256: sha256:e2d284e8b1f16309793536c4ecfbe28b5555a7d0c81fd575e65c05d034413185
+  produced_by: create-plan-run-0001
+- path: feature-docs/mux-suppressed-output-fixes/tasks/task0003.md
+  sha256: sha256:2e18fb4a3ffc2a91abcd9e6347367b07acb15ff1fddcdb4460442ceae867c2f2
+  produced_by: create-plan-run-0001
+- path: feature-docs/mux-suppressed-output-fixes/tasks/task0004.md
+  sha256: sha256:3507e46c1e83a78066cac6a718abe7aeecad26b860baf4cd9a16ac5d47989cd8
+  produced_by: create-plan-run-0001
+- path: feature-docs/mux-suppressed-output-fixes/tasks/task0005.md
+  sha256: sha256:406cc477b5721ba607035bbde017d8604eab7ae618bbc2b54e5eaa6c951f7813
+  produced_by: create-plan-run-0001
+patches:
+- patch_id: create-plan-p0001
+  status: validated
+  base_input_digest: sha256:e930465324a44100d146e23472c7a6fbbdd005e3160eb8e68ae59a9cc6cde558
+  base_workflow_blob: ead597dccbde149c5ea9c42a21fe72863aee2dfd
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
