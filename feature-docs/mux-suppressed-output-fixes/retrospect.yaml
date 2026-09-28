@@ -1,0 +1,97 @@
+feature: mux-suppressed-output-fixes
+collected_at: '2026-09-28T17:07:27+09:00'
+session_ids:
+- 01a0e70c-d001-73b0-97e8-5d345f50033d.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures:
+  - id: TS-9
+    category: spec
+    round: 1
+    note: 'FR8/AC-5: hidden-alt-exit ケースの pane レベル回帰テスト visibility_resume_after_hidden_alt_exit_shows_main_screen が HEAD に存在しない（20c4cd9c
+      にはあったが task0003 の親側採用による再実装 06bf0714 で消失）。test-docs task0003.tests.yaml と DECISIONS.md は存在を前提に記載している'
+  - id: TS-10
+    category: spec
+    round: 1
+    note: 'FR8/AC-5: apt 風プログレスバー（DECSTBM, DECSC/DECRC）の主画面 pane を hide/show する回帰テスト visibility_resume_keeps_main_pane_progress_bar_layout
+      が HEAD に存在しない（同じく task0003 再実装で消失）'
+  - id: TS-15
+    category: spec
+    round: 1
+    note: 'FR13/AC-7: DECISIONS.md の 830f950f39e499fa 行が存在しない 2 テストを回帰テストとして挙げている。9e6a468b3a45ceeb 行はビューア起動に image 種別も含めて届けると記すが、実装は
+      image を除外（client_parity_scan.rs の kind != "image"、task0001 の D3 判断）。decisions_md_contains_every_d7_registry_test_name
+      は名前の記載のみ検査しテストの実在を検査しない'
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: 'description_plus_code の最終読みがスコア 2.01（バケット 2: 複数モジュールにまたがる新規ロジック）で full を選択'
+    bases:
+    - basis: description_only
+      score:
+        type: score
+        score: 2.0
+        confidence: 0.99
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread across a few files together with a
+            small test change.
+          '2': New logic, a change reaching across several modules, or a change to an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.01
+          '2': 0.98
+          '3': 0.01
+      observed_at: '2026-09-28T13:18:40+09:00'
+    - basis: description_plus_code
+      score:
+        type: score
+        score: 2.01
+        confidence: 0.99
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread across a few files together with a
+            small test change.
+          '2': New logic, a change reaching across several modules, or a change to an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.0
+          '2': 0.99
+          '3': 0.01
+      observed_at: '2026-09-28T13:22:05+09:00'
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+      - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+      - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+      - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+      - src-tauri/src/mux/session/pane/output_target.rs
+      - src-tauri/src/mux/session/pane/tests.rs
+      - src-tauri/src/mux/snapshot_bytes.rs
+      - feature-docs/mux-snapshot-output-boundary/reviews/round1.yaml
+      changed_lines_approx: 900
+      new_functions_needed: 4
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules:
+      - mux::ipc::pty_spawn::write_filter
+      - mux::session::pane
+      - mux::snapshot_bytes
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 18
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 9
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+- implementer の親側採用による再実装（task0003 → 06bf0714）で、先行コミットにあった回帰テスト 2 件が消失し、verify round 1 で検出された。再実装時に元コミットのテスト名一覧との突合が無い
+- DECISIONS.md のテスト名記載検査が名前の存在のみを見てテスト関数の実在を見ていなかった（task0006 で実在検査を追加）
+- review round 1/2 で medium 8 件が unresolved のまま残った（auto-fix は critical/high のみ対象）
