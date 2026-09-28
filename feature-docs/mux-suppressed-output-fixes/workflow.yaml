@@ -99,7 +99,7 @@ workflow:
   base_commit: 390d9eff0b40d930db2d50f3d40e028c8d7c9b1f
   completed_at_commit: 6b77abdd97b4fe0f7b5ec005ead297d5fdbbb39f
 - id: review
-  status: pending
+  status: in_progress
   completed_at_commit: fc181089f0f2af202c491167b70e0f6c8569b8ed
 - id: verify
   status: pending
@@ -257,7 +257,7 @@ tasks:
       - TS-10
       - TS-15
 review:
-  status: completed
+  status: in_progress
   plan:
     floor:
     - comprehensive
