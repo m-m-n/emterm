@@ -135,7 +135,8 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-fixes/task0001
     notes: null
   task0002:
     title: ScrollbackWriteFilter boundary rules aligned with term_core
@@ -153,7 +154,8 @@ tasks:
     - FR5
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-fixes/task0002
     notes: null
   task0003:
     title: Visibility-resume snapshot restores the screen mode
@@ -172,7 +174,8 @@ tasks:
     - FR8
     - NFR1
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-fixes/task0003
     notes: null
   task0004:
     title: Remove the ResumeWithSnapshot branch
@@ -191,7 +194,8 @@ tasks:
     - FR10
     - NFR2
     - NFR6
-    status: pending
+    status: merged
+    branch: em-workflow/mux-suppressed-output-fixes/task0004
     notes: null
   task0005:
     title: 'Review-finding closure: pause ordering, concurrent snapshot paths, decision table'
@@ -210,7 +214,8 @@ tasks:
     - FR13
     - NFR2
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-fixes/task0005
     notes: null
 review:
   status: pending
