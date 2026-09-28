@@ -7,11 +7,10 @@ fn make_output_target() -> SharedOutputTarget {
     Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx)))
 }
 
-/// Decode a `Snapshot`-kind chunk's / `EvalResult::ResumeWithSnapshot`'s
-/// wire-encoded bytes (task0004 round-4 rework D1',
-/// `mux_ipc::protocol::decode_snapshot_payload`) back into plain
-/// content bytes, discarding the structural segment header — used by
-/// tests that only care about the ANSI content layout.
+/// Decode a `Snapshot`-kind chunk's wire-encoded bytes (task0004 round-4
+/// rework D1', `mux_ipc::protocol::decode_snapshot_payload`) back into
+/// plain content bytes, discarding the structural segment header — used
+/// by tests that only care about the ANSI content layout.
 fn decode_snapshot_content(data: &[u8]) -> Vec<u8> {
     mux_ipc::protocol::decode_snapshot_payload(data).1.to_vec()
 }
@@ -1452,170 +1451,52 @@ fn test_evaluate_output_target_owner_can_detach() {
     }
 }
 
-/// TS-14 (revised): Detached -> Connected returns snapshot bytes that
-/// route through `build_resume_snapshot_bytes` (the visibility-resume
-/// SSOT). For a main-buffer pane (shadow_parser never entered alt-screen)
-/// the helper drops the daemon vt100 `contents_formatted()` slice and
-/// rebuilds the visible viewport from scrollback alone — same
-/// main/alt split contract as the reattach path. Captured
-/// raw_passthrough must NOT appear (replaying it would re-spawn
-/// viewers / re-render inline images) and the buffer must still be
-/// drained + cleared.
+/// AC-1 (FR10; task0004): `evaluate_output_target` no longer has a
+/// resume branch — only `resume_pane_with_permit` performs a Detached ->
+/// Connected transition. For a Detached pane whose owner matches the
+/// caller and whose reasons would all clear (a "would-be resume"),
+/// `evaluate_output_target` leaves the target — state, reason and owner —
+/// exactly as it was, returns `Unchanged`, and puts nothing on the
+/// destination channel.
+///
+/// Replaces `test_evaluate_output_target_detached_to_connected_returns_snapshot`,
+/// `test_evaluate_output_target_restores_the_shadow_parsers_header_row_for_a_wrapped_ring`
+/// and `test_evaluate_output_target_stays_detached_when_snapshot_exceeds_frame_limit`
+/// (deleted: all three asserted the now-removed `EvalResult::ResumeWithSnapshot`
+/// variant). The header-row and oversize-frame-limit properties stay
+/// covered, unmodified, by their production-path (`resume_pane_with_permit`)
+/// siblings: `test_resume_pane_with_permit_restores_the_shadow_parsers_header_row_for_a_wrapped_ring`
+/// and `test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit`.
 #[test]
-fn test_evaluate_output_target_detached_to_connected_returns_snapshot() {
-    let (owned_tx, _rx) = mpsc::channel(16);
+fn evaluate_output_target_never_resumes_a_detached_pane() {
+    let (owned_tx, mut rx) = mpsc::channel(16);
     let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
         reason: DetachReason::HiddenByVisibility,
         owner: Some(owned_tx.clone()),
     }));
-    let pane = MuxPane::new_test(1, 80, 24, target.clone());
-    pane.scrollback.lock().unwrap().write(b"buffered-from-ring");
-    pane.shadow_parser.lock().unwrap().process(b"hello-shadow");
-    pane.raw_passthrough
-        .lock()
-        .unwrap()
-        .append(b"\x1b_Gi=1;ZZ\x1b\\");
-    let result = evaluate_output_target(&pane, false, true, &owned_tx);
-    match result {
-        EvalResult::ResumeWithSnapshot { chunk } => {
-            // D6''''' (AC-9): the chunk must already be tagged
-            // Snapshot-kind, not the default PtyOutput — a caller
-            // sending it as PtyOutput would render the raw envelope
-            // literally instead of decoding it.
-            assert_eq!(chunk.kind, ChunkKind::Snapshot);
-            let snapshot = decode_snapshot_content(&chunk.data);
-            assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
-            let s = String::from_utf8_lossy(&snapshot);
-            assert!(
-                snapshot
-                    .windows(b"buffered-from-ring".len())
-                    .any(|w| w == b"buffered-from-ring"),
-                "snapshot must include ring data"
-            );
-            // Main-buffer pane: the daemon vt100 dump must NOT appear in
-            // the snapshot. `build_resume_snapshot_bytes` follows the
-            // main/alt split — the client rebuilds the visible viewport
-            // from scrollback alone.
-            assert!(
-                !snapshot
-                    .windows(b"hello-shadow".len())
-                    .any(|w| w == b"hello-shadow"),
-                "main-buffer resume snapshot must omit the shadow screen dump"
-            );
-            assert!(
-                !s.contains("\u{1b}_Gi=1"),
-                "snapshot must NOT include captured passthrough"
-            );
-        }
-        _ => panic!("expected ResumeWithSnapshot"),
-    }
-    assert!(matches!(
-        *target.lock().unwrap(),
-        PaneOutputTarget::Connected(_)
-    ));
-    assert_eq!(pane.raw_passthrough.lock().unwrap().len(), 0);
-}
-
-/// AC-3 (FR2, FR5, FR6, FR7; mux-snapshot-ring-wrap-restore task0001):
-/// `evaluate_output_target`'s resume branch also restores the shadow
-/// parser's header row for a wrapped MAIN-BUFFER pane — mirrors
-/// `test_resume_pane_with_permit_restores_the_shadow_parsers_header_row_for_a_wrapped_ring`
-/// for this sibling resume site.
-#[test]
-fn test_evaluate_output_target_restores_the_shadow_parsers_header_row_for_a_wrapped_ring() {
-    let cols: u16 = 80;
-    let rows: u16 = 24;
-    const SMALL_CAPACITY: usize = 2048;
-
-    let (owned_tx, _rx) = mpsc::channel(16);
-    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
-        reason: DetachReason::HiddenByVisibility,
-        owner: Some(owned_tx.clone()),
-    }));
-    let pane = MuxPane::new_test(14, cols, rows, target.clone());
-    *pane.scrollback.lock().unwrap() =
-        crate::mux::scrollback_buffer::ScrollbackRingBuffer::new(SMALL_CAPACITY);
-
-    let mut cumulative: usize = 0;
-    let mut header = Vec::new();
-    header.extend_from_slice(b"\x1b[H\x1b[2J\x1b[1;1H");
-    header.extend_from_slice(b"PID USER HEADER-ROW-TEXT");
+    let pane = MuxPane::new_test(15, 80, 24, target.clone());
     pane.scrollback
         .lock()
         .unwrap()
-        .attribute_write(cols, rows, &header);
-    pane.shadow_parser.lock().unwrap().process(&header);
-    cumulative += header.len();
-    for i in 0..200u32 {
-        let frame = format!("\x1b[2;1Hframe {i:>4}\x1b[K").into_bytes();
-        pane.scrollback
-            .lock()
-            .unwrap()
-            .attribute_write(cols, rows, &frame);
-        pane.shadow_parser.lock().unwrap().process(&frame);
-        cumulative += frame.len();
-    }
-    assert!(
-        cumulative > SMALL_CAPACITY,
-        "test prerequisite: ring must have wrapped"
-    );
+        .write(b"would-be-resume-data");
 
     let result = evaluate_output_target(&pane, false, true, &owned_tx);
-    match result {
-        EvalResult::ResumeWithSnapshot { chunk } => {
-            let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&chunk.data);
-            let replay_segments: Vec<term_core::terminal_core::ReplaySegment> = segments
-                .iter()
-                .map(|s| term_core::terminal_core::ReplaySegment {
-                    offset: s.offset,
-                    cols: s.cols,
-                    rows: s.rows,
-                })
-                .collect();
-            let mut core = term_core::terminal_core::TerminalCore::new(cols, rows, 10_000);
-            core.reset_and_replay_segments(content, &replay_segments);
-            let header_row = core.get_line_text(0);
-            assert!(
-                header_row.contains("HEADER-ROW-TEXT"),
-                "post-wrap evaluate_output_target resume snapshot must \
-                 restore the shadow parser's header row; replayed row 0 \
-                 was {header_row:?}"
-            );
-        }
-        _ => panic!("expected ResumeWithSnapshot"),
-    }
-}
 
-/// D6''' (round-6 rework, review round-5 finding `89b58cd82d7aa713`):
-/// mirrors `test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit`
-/// for `evaluate_output_target`'s parallel `ResumeWithSnapshot` branch
-/// — an oversize encoded snapshot must not transition the pane to
-/// Connected at all.
-#[test]
-fn test_evaluate_output_target_stays_detached_when_snapshot_exceeds_frame_limit() {
-    let (owned_tx, _rx) = mpsc::channel(16);
-    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
-        reason: DetachReason::HiddenByVisibility,
-        owner: Some(owned_tx.clone()),
-    }));
-    let pane = MuxPane::new_test(2, 80, 24, target.clone());
-    let oversize_capacity = mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD + 1024 * 1024;
-    *pane.scrollback.lock().unwrap() =
-        crate::mux::scrollback_buffer::ScrollbackRingBuffer::new(oversize_capacity);
-    pane.scrollback
-        .lock()
-        .unwrap()
-        .write(&vec![b'x'; oversize_capacity]);
-
-    let result = evaluate_output_target(&pane, false, true, &owned_tx);
     assert!(
         matches!(result, EvalResult::Unchanged),
-        "oversize snapshot must not resume the pane"
+        "a would-be resume must return Unchanged, never a resume result"
     );
+    match &*target.lock().unwrap() {
+        PaneOutputTarget::Detached { reason, owner } => {
+            assert_eq!(*reason, DetachReason::HiddenByVisibility);
+            let owner = owner.as_ref().expect("owner must remain set");
+            assert!(owner.same_channel(&owned_tx));
+        }
+        _ => panic!("expected Detached; evaluate_output_target must never resume a pane"),
+    }
     assert!(
-        matches!(*target.lock().unwrap(), PaneOutputTarget::Detached { .. }),
-        "pane must stay Detached rather than swap to Connected with an \
-         unsendable snapshot"
+        rx.try_recv().is_err(),
+        "nothing must be sent on the destination channel"
     );
 }
 
@@ -1657,10 +1538,17 @@ fn test_evaluate_output_target_other_connection_cannot_reclaim_hidden() {
     }
 }
 
-/// F6: same connection's hide -> show round trip restores Connected.
+/// AC-4 (FR10; TS-12; task0004): same connection's hide -> show round
+/// trip restores Connected. Ported from
+/// `test_evaluate_output_target_same_connection_hide_show_roundtrip`
+/// (deleted: it asserted the now-removed `EvalResult::ResumeWithSnapshot`
+/// variant on the show side) — hide still goes through
+/// `evaluate_output_target` (visible = false), but show now goes through
+/// the production `resume_pane_with_permit`, the only function that
+/// performs a Detached -> Connected transition.
 #[test]
-fn test_evaluate_output_target_same_connection_hide_show_roundtrip() {
-    let (a_tx, _a_rx) = mpsc::channel(16);
+fn resume_pane_with_permit_hide_show_roundtrip_on_same_connection() {
+    let (a_tx, mut a_rx) = mpsc::channel::<PtyOutputChunk>(16);
     let target: SharedOutputTarget =
         Arc::new(StdMutex::new(PaneOutputTarget::Connected(a_tx.clone())));
     let pane = MuxPane::new_test(1, 80, 24, target.clone());
@@ -1668,12 +1556,21 @@ fn test_evaluate_output_target_same_connection_hide_show_roundtrip() {
     let r1 = evaluate_output_target(&pane, false, false, &a_tx);
     assert!(matches!(r1, EvalResult::SwitchedToDetached));
 
-    let r2 = evaluate_output_target(&pane, false, true, &a_tx);
-    assert!(matches!(r2, EvalResult::ResumeWithSnapshot { .. }));
+    let permit = a_tx
+        .try_reserve()
+        .expect("channel has capacity for the resume permit");
+    let outcome = resume_pane_with_permit(&pane, &a_tx, AnyPermit::Borrowed(permit));
+    assert!(matches!(outcome, ResumeOutcome::Resumed));
     assert!(matches!(
         *target.lock().unwrap(),
         PaneOutputTarget::Connected(_)
     ));
+
+    let chunk = a_rx
+        .try_recv()
+        .expect("exactly one snapshot chunk delivered");
+    assert_eq!(chunk.kind, ChunkKind::Snapshot);
+    assert!(a_rx.try_recv().is_err(), "nothing else must be delivered");
 }
 
 /// F6: when both NetworkDetach and HiddenByVisibility are active,
@@ -2225,6 +2122,86 @@ fn resume_pane_with_permit_drives_the_paused_reader_to_suppress_the_paused_chunk
     assert_eq!(client.get_cursor_col(), reference.get_cursor_col());
 }
 
+/// AC-3 (FR10, NFR2; TS-12): production visible-resume path with a
+/// reader paused at P2, on a chunk whose only special content is one
+/// complete main-buffer CSI device query — the IMPLEMENTATION.md
+/// "Suppressed-chunk delivery contract" input, whose replacement is
+/// exactly the query's bytes both before and after this feature. Unlike
+/// `resume_pane_with_permit_drives_the_paused_reader_to_suppress_the_paused_chunk_and_matches_the_raw_stream_reference`
+/// above (an insert-line-only paused chunk, whose replacement is empty —
+/// nothing is delivered for it), this exercises the FR9/FR10 replacement
+/// delivery: the destination must receive the Snapshot-kind chunk first,
+/// then the replacement, then the next reader chunk, and nothing else.
+#[test]
+fn production_visible_resume_delivers_snapshot_before_replacement_and_next_chunk() {
+    let cols: u16 = 80;
+    let rows: u16 = 24;
+
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::HiddenByVisibility,
+        owner: Some(owned_tx.clone()),
+    }));
+    let pane = MuxPane::new_test(22, cols, rows, target.clone());
+    let output_capture = pane.output_capture.clone();
+
+    // Main-buffer text, one complete CSI device query (cursor-position
+    // report), more main-buffer text — the delivery-contract input.
+    let paused_chunk = b"before\x1b[6nafter".to_vec();
+    let continuation_chunk = b"more output after resume\r\n".to_vec();
+
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let handle = spawn_reader_thread(
+        &pane,
+        vec![paused_chunk.clone(), continuation_chunk.clone()],
+    );
+
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the paused chunk");
+
+    // Drive the production visible path down to `resume_pane_with_permit`
+    // while the reader is paused.
+    let permit = owned_tx
+        .try_reserve()
+        .expect("S has capacity for the resume permit");
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        received.push(c);
+    }
+
+    assert_eq!(
+        received.len(),
+        4,
+        "expected snapshot, replacement, next chunk, EOF and nothing else"
+    );
+    assert_eq!(
+        received[0].kind,
+        ChunkKind::Snapshot,
+        "the destination must receive the snapshot first"
+    );
+    assert_eq!(
+        received[1].data, b"\x1b[6n",
+        "the replacement must be exactly the device query's bytes"
+    );
+    assert_eq!(
+        received[1].kind,
+        ChunkKind::PtyOutput,
+        "the replacement is an ordinary PtyOutput chunk, not another snapshot"
+    );
+    assert_eq!(
+        received[2].data, continuation_chunk,
+        "the next (unsuppressed) reader chunk must follow the replacement"
+    );
+    assert!(received[3].data.is_empty(), "EOF chunk must follow");
+}
+
 /// D3'''' (round-7 rework, review round-6 finding `46c29c2c65970d26`):
 /// settles the reachability question the round-6 reviewers disagreed
 /// on — does an oversize resume failure freeze the pane permanently
@@ -2413,38 +2390,45 @@ fn test_lock_shadow_parser_recovers_from_poison() {
     assert!(contents.contains("before-poison"));
 }
 
-/// Reattach (Detached -> Connected) must still produce a snapshot after
-/// the shadow parser mutex was poisoned by a reader-thread panic.
+/// AC-4 (FR10; TS-12; task0004): the production visibility resume must
+/// still produce a snapshot after the shadow parser mutex was poisoned by
+/// a reader-thread panic. Ported from
+/// `test_evaluate_output_target_survives_poisoned_shadow_parser` (deleted:
+/// it asserted the now-removed `EvalResult::ResumeWithSnapshot` variant)
+/// onto the production `resume_pane_with_permit` path.
 ///
 /// The main-buffer pane drops the shadow slice (same main/alt split as
 /// `build_resume_snapshot_bytes`), so we feed scrollback bytes instead
 /// and assert those survive the poisoned lock.
 #[test]
-fn test_evaluate_output_target_survives_poisoned_shadow_parser() {
-    let (owned_tx, _rx) = mpsc::channel(16);
+fn resume_pane_with_permit_recovers_a_poisoned_shadow_parser() {
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
     let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
         reason: DetachReason::HiddenByVisibility,
         owner: Some(owned_tx.clone()),
     }));
-    let pane = MuxPane::new_test(1, 80, 24, target.clone());
+    let pane = MuxPane::new_test(16, 80, 24, target.clone());
     pane.scrollback.lock().unwrap().write(b"ring-bytes-x");
     pane.shadow_parser.lock().unwrap().process(b"shadow-data");
     poison_shadow_parser(&pane);
 
-    let result = evaluate_output_target(&pane, false, true, &owned_tx);
-    match result {
-        EvalResult::ResumeWithSnapshot { chunk } => {
-            assert_eq!(chunk.kind, ChunkKind::Snapshot);
-            assert!(
-                chunk
-                    .data
-                    .windows(b"ring-bytes-x".len())
-                    .any(|w| w == b"ring-bytes-x"),
-                "snapshot must include scrollback even after poisoned shadow lock"
-            );
-        }
-        _ => panic!("expected ResumeWithSnapshot"),
-    }
+    let permit = owned_tx
+        .try_reserve()
+        .expect("channel has capacity for the resume permit");
+    let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
+    assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+    let chunk = rx
+        .try_recv()
+        .expect("snapshot enqueued despite the poisoned shadow lock");
+    assert_eq!(chunk.kind, ChunkKind::Snapshot);
+    assert!(
+        chunk
+            .data
+            .windows(b"ring-bytes-x".len())
+            .any(|w| w == b"ring-bytes-x"),
+        "snapshot must include scrollback even after poisoned shadow lock"
+    );
     assert!(matches!(
         *target.lock().unwrap(),
         PaneOutputTarget::Connected(_)
