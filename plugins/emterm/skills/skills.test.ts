@@ -495,15 +495,12 @@ describe("feature-docs/emterm-plugin-runtime-fixes/{SPEC,VERIFICATION}.md byte h
   }
 });
 
-describe("plugin/marketplace version regression guard (task0002 AC-9)", () => {
-  test("plugin.json still reports version 0.1.1", () => {
+describe("plugin/marketplace version consistency", () => {
+  test("marketplace.json reports the same emterm version as plugin.json", () => {
     const pluginJson = JSON.parse(
       readFileSync(join(PLUGIN_DIR, ".claude-plugin", "plugin.json"), "utf-8"),
     ) as { version: string };
-    expect(pluginJson.version).toBe("0.1.1");
-  });
-
-  test("marketplace.json still reports the emterm plugin entry as version 0.1.1", () => {
+    expect(pluginJson.version).toMatch(/^\d+\.\d+\.\d+$/);
     const marketplaceJson = JSON.parse(
       readFileSync(
         join(MARKETPLACE_ROOT, ".claude-plugin", "marketplace.json"),
@@ -511,6 +508,6 @@ describe("plugin/marketplace version regression guard (task0002 AC-9)", () => {
       ),
     ) as { plugins: Array<{ name: string; version: string }> };
     const entry = marketplaceJson.plugins.find((p) => p.name === "emterm");
-    expect(entry?.version).toBe("0.1.1");
+    expect(entry?.version).toBe(pluginJson.version);
   });
 });

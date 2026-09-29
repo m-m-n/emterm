@@ -1,0 +1,121 @@
+name: Bump plugin versions
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: plugin-version-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Bump patch version of changed plugins
+        id: bump
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          python3 - "$BEFORE" "$AFTER" <<'EOF'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          before, after = sys.argv[1], sys.argv[2]
+          MARKET = ".claude-plugin/marketplace.json"
+
+
+          def git(*args):
+              r = subprocess.run(["git", *args], capture_output=True, text=True)
+              return r.stdout if r.returncode == 0 else None
+
+
+          def version_of(text):
+              try:
+                  return json.loads(text).get("version")
+              except (TypeError, ValueError, AttributeError):
+                  return None
+
+
+          def plugin_dir(path):
+              d = os.path.dirname(path)
+              while d:
+                  if os.path.isfile(os.path.join(d, ".claude-plugin", "plugin.json")):
+                      return d
+                  d = os.path.dirname(d)
+              return None
+
+
+          def write_json(path, data):
+              with open(path, "w", encoding="utf-8") as f:
+                  json.dump(data, f, indent=2, ensure_ascii=False)
+                  f.write("\n")
+
+
+          if set(before) == {"0"} or git("cat-file", "-e", before + "^{commit}") is None:
+              print(f"skip: base commit {before} is not available")
+              sys.exit(0)
+
+          plugins = sorted({d for f in git("diff", "--name-only", before, after).splitlines()
+                            if (d := plugin_dir(f))})
+
+          market = None
+          if os.path.isfile(MARKET):
+              with open(MARKET, encoding="utf-8") as f:
+                  market = json.load(f)
+
+          bumped = []
+          for d in plugins:
+              pj = os.path.join(d, ".claude-plugin", "plugin.json")
+              old_v = version_of(git("show", f"{before}:{pj}"))
+              if old_v is None:
+                  print(f"skip: {d} is new in this push")
+                  continue
+              with open(pj, encoding="utf-8") as f:
+                  plugin = json.load(f)
+              cur_v = plugin.get("version")
+              if cur_v != old_v:
+                  print(f"skip: {d} version was changed by hand ({old_v} -> {cur_v})")
+                  continue
+              m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", cur_v or "")
+              if not m:
+                  print(f"skip: {d} version {cur_v!r} is not MAJOR.MINOR.PATCH")
+                  continue
+              new_v = f"{m[1]}.{m[2]}.{int(m[3]) + 1}"
+              plugin["version"] = new_v
+              write_json(pj, plugin)
+              if market:
+                  for p in market.get("plugins", []):
+                      if p.get("name") == plugin.get("name") and "version" in p:
+                          p["version"] = new_v
+              bumped.append(f"{plugin.get('name')}@{new_v}")
+              print(f"bump: {d} {cur_v} -> {new_v}")
+
+          if bumped and market:
+              write_json(MARKET, market)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"bumped={', '.join(bumped)}\n")
+          EOF
+
+      - name: Commit and push
+        if: steps.bump.outputs.bumped != ''
+        env:
+          BUMPED: ${{ steps.bump.outputs.bumped }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: bump plugin versions ($BUMPED)"
+          git pull --rebase origin main
+          git push origin HEAD:main
