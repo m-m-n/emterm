@@ -155,7 +155,7 @@ workflow:
   failed_items: []
   summary: 'build (--no-default-features check) exit 0; cargo test --lib 3965 passed / 0 failed / 3 ignored; 8 round2_ registry tests pass with red_confirmed true; 3 behavior-changing tests renamed per DECISIONS.md; diff limited to declared task files; mux-suppressed-output-fixes/reviews/round2.yaml unchanged; TS-12/TS-13 review items covered by review round 1 (0 critical/high); MT-1..MT-3 manual checks not run (need release build + daemon restart)'
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Shared OSC number recovery and viewer-launch identification
