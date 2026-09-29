@@ -6055,3 +6055,603 @@ mod child_reap_e2e {
         }
     }
 }
+
+// ── mux-suppressed-output-round2-fixes task0004 (FR8, finding
+//    `3eccc254dd278b33`): a tail the snapshot already carried is not
+//    re-sent ────────────────────────────────────────────────────────────
+
+mod fr8_snapshot_tail {
+    use super::*;
+    use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
+    use crate::mux::session::pane::{AnyPermit, ChunkKind, ResumeOutcome, resume_pane_with_permit};
+    use crate::mux::snapshot_tail::trailing_construct_bytes;
+    use term_core::terminal_core::TerminalCore;
+
+    const ESC: u8 = 0x1b;
+    const COLS: u16 = 80;
+    const ROWS: u16 = 24;
+
+    /// Answers `OSC 11 ; ?` with a fixed color report and nothing else, so a
+    /// test can count color-query answers without the gui theme.
+    struct FixedColorResponder;
+
+    impl term_core::OscResponder for FixedColorResponder {
+        fn respond(
+            &self,
+            code: u16,
+            payload: &str,
+            _terminator: term_core::OscTerminator,
+        ) -> Vec<Vec<u8>> {
+            if code == 11 && payload == "?" {
+                vec![b"\x1b]11;rgb:1111/2222/3333\x07".to_vec()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    fn new_core() -> TerminalCore {
+        let mut core = TerminalCore::new(COLS, ROWS, 10_000);
+        core.osc_responder = Some(Box::new(FixedColorResponder));
+        core
+    }
+
+    /// The client's view of a delivered snapshot chunk: replayed through
+    /// `reset_and_replay_segments`, its responses discarded (the client never
+    /// answers a snapshot's own queries).
+    fn apply_snapshot(core: &mut TerminalCore, chunk: &PtyOutputChunk) {
+        assert_eq!(chunk.kind, ChunkKind::Snapshot);
+        let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&chunk.data);
+        let replay: Vec<ReplaySegment> = segments
+            .iter()
+            .map(|s| ReplaySegment {
+                offset: s.offset,
+                cols: s.cols,
+                rows: s.rows,
+            })
+            .collect();
+        core.reset_and_replay_segments(content, &replay);
+        let _ = core.take_response();
+    }
+
+    /// Spawn `pty_reader_loop` on a background thread against `pane`, fed
+    /// `chunks`, WITHOUT touching the pane's output target (unlike
+    /// `spawn_reader_with_chunks`, which forces `Connected`).
+    fn spawn_reader_keeping_target(
+        pane: &MuxPane,
+        chunks: Vec<Vec<u8>>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn({
+            let output_target = pane.output_target.clone();
+            let shadow_parser = pane.shadow_parser.clone();
+            let cwd = pane.cwd.clone();
+            let title = pane.title.clone();
+            let title_sender = pane.title_sender.clone();
+            let notification_sender = pane.notification_sender.clone();
+            let agent_status_report_sender = pane.agent_status_report_sender.clone();
+            let raw_passthrough = pane.raw_passthrough.clone();
+            let passthrough_scanner = pane.passthrough_scanner.clone();
+            let scrollback = pane.scrollback.clone();
+            let dims = pane.dims.clone();
+            let output_capture = pane.output_capture.clone();
+            let pane_id = pane.id;
+            move || {
+                pty_reader_loop(
+                    pane_id,
+                    Box::new(ScriptedReader::new(chunks)),
+                    output_target,
+                    shadow_parser,
+                    cwd,
+                    title,
+                    title_sender,
+                    notification_sender,
+                    agent_status_report_sender,
+                    raw_passthrough,
+                    passthrough_scanner,
+                    scrollback,
+                    dims,
+                    Arc::new(StdMutex::new(None)),
+                    output_capture,
+                );
+            }
+        })
+    }
+
+    /// What the owner's channel received during a visibility restore that
+    /// landed between the first chunk's capture step and its forward
+    /// decision.
+    struct RestoreRun {
+        /// Everything received, in order (snapshot first, EOF last).
+        received: Vec<PtyOutputChunk>,
+    }
+
+    impl RestoreRun {
+        fn snapshot(&self) -> &PtyOutputChunk {
+            &self.received[0]
+        }
+
+        /// Non-snapshot chunks after the snapshot, EOF (empty) excluded.
+        fn forwarded(&self) -> Vec<Vec<u8>> {
+            self.received[1..]
+                .iter()
+                .filter(|c| !c.data.is_empty())
+                .map(|c| c.data.clone())
+                .collect()
+        }
+    }
+
+    /// Run the production visibility restore (`resume_pane_with_permit`) of
+    /// a main-screen pane while the reader is paused between `chunks[0]`'s
+    /// capture step and its forward decision (P2), then let the reader run
+    /// to EOF. `ring` replaces the pane's scrollback ring when given.
+    fn run_visibility_restore(
+        pane_id: PaneId,
+        ring: Option<ScrollbackRingBuffer>,
+        chunks: Vec<Vec<u8>>,
+    ) -> RestoreRun {
+        let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+        let output_target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                reason: DetachReason::HiddenByVisibility,
+                owner: Some(tx.clone()),
+            }));
+        let pane = MuxPane::new_test(pane_id, COLS, ROWS, output_target);
+        if let Some(ring) = ring {
+            *pane.scrollback.lock().unwrap() = ring;
+        }
+        let (arrived_rx, release_tx) = pane.output_capture.p2.arm();
+        let handle = spawn_reader_keeping_target(&pane, chunks);
+        arrived_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the reader must reach P2 on the first chunk");
+
+        let permit = tx.try_reserve().expect("capacity for the resume permit");
+        let outcome = resume_pane_with_permit(&pane, &tx, AnyPermit::Borrowed(permit), 10_000);
+        assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+        release_tx.send(()).unwrap();
+        handle.join().unwrap();
+
+        let mut received = Vec::new();
+        while let Ok(c) = rx.try_recv() {
+            received.push(c);
+        }
+        assert!(
+            received.len() >= 2,
+            "at least the snapshot and EOF must have been delivered"
+        );
+        assert!(
+            received.last().unwrap().data.is_empty(),
+            "the last chunk is the EOF marker"
+        );
+        RestoreRun { received }
+    }
+
+    fn assert_display_matches(client: &TerminalCore, reference: &TerminalCore, what: &str) {
+        for r in 0..ROWS {
+            let got = client.get_line_text(r);
+            assert_eq!(
+                got.trim_end(),
+                reference.get_line_text(r).trim_end(),
+                "{what}: row {r} mismatch"
+            );
+            assert!(
+                !got.contains('\u{fffd}'),
+                "{what}: row {r} shows a replacement character: {got:?}"
+            );
+        }
+        assert_eq!(
+            client.get_cursor_row(),
+            reference.get_cursor_row(),
+            "{what}: cursor row"
+        );
+        assert_eq!(
+            client.get_cursor_col(),
+            reference.get_cursor_col(),
+            "{what}: cursor col"
+        );
+    }
+
+    struct Split {
+        name: &'static str,
+        first: Vec<u8>,
+        second: Vec<u8>,
+        /// A character that must not appear in any client row (the
+        /// designator `(` the pre-fix re-send displays).
+        forbidden: Option<char>,
+    }
+
+    /// The three splits of AC-4: mid UTF-8, right after `ESC (`, and inside
+    /// an incomplete CSI.
+    fn splits() -> Vec<Split> {
+        vec![
+            Split {
+                name: "mid utf-8",
+                first: [b"abc".as_slice(), &[0xe4, 0xb8]].concat(),
+                second: [[0xad].as_slice(), b"def\r\n"].concat(),
+                forbidden: None,
+            },
+            Split {
+                name: "right after ESC (",
+                first: [b"abc".as_slice(), &[ESC, b'(']].concat(),
+                second: b"0lqk\x1b(B\r\nZ".to_vec(),
+                forbidden: Some('('),
+            },
+            Split {
+                name: "inside an incomplete csi",
+                first: [b"abc".as_slice(), &[ESC, b'[', b'3']].concat(),
+                second: b"1mred\x1b[0m\r\n".to_vec(),
+                forbidden: None,
+            },
+        ]
+    }
+
+    fn check_client_against_reference(run: &RestoreRun, split: &Split, what: &str) {
+        let mut client = new_core();
+        apply_snapshot(&mut client, run.snapshot());
+        for data in run.forwarded() {
+            client.process_pty_data_fully(&data);
+        }
+        let mut reference = new_core();
+        reference.process_pty_data_fully(&split.first);
+        reference.process_pty_data_fully(&split.second);
+        assert_display_matches(&client, &reference, what);
+        if let Some(forbidden) = split.forbidden {
+            for r in 0..ROWS {
+                assert!(
+                    !client.get_line_text(r).contains(forbidden),
+                    "{what}: row {r} must not display {forbidden:?}: {:?}",
+                    client.get_line_text(r)
+                );
+            }
+        }
+    }
+
+    /// AC-4 (registry, finding `3eccc254dd278b33`): visibility restore of a
+    /// main-screen pane, ring not wrapped, three splits. The first half is
+    /// suppressed. For every split the client's display, cursor and parsing of
+    /// the following chunk match a reference fed the raw stream, and the tail
+    /// the snapshot already carries is not re-sent (the second half is the
+    /// very next delivery). The `ESC (` split fails the display comparison on
+    /// the pre-fix code: the re-sent `ESC (` makes the client take the second
+    /// ESC as the designator and display a literal `(`, and the next chunk's
+    /// first byte is printed instead of selecting the charset.
+    #[test]
+    fn round2_3eccc254_visibility_restore_does_not_resend_a_tail_the_snapshot_carried() {
+        let runs: Vec<(Split, RestoreRun)> = splits()
+            .into_iter()
+            .enumerate()
+            .map(|(i, split)| {
+                let run = run_visibility_restore(
+                    200 + i as PaneId,
+                    None,
+                    vec![split.first.clone(), split.second.clone()],
+                );
+                (split, run)
+            })
+            .collect();
+        for (split, run) in &runs {
+            check_client_against_reference(run, split, split.name);
+        }
+        for (split, run) in &runs {
+            assert_eq!(
+                run.forwarded(),
+                vec![split.second.clone()],
+                "{}: nothing may be re-sent between the snapshot and the next chunk",
+                split.name
+            );
+        }
+    }
+
+    /// AC-4 companion: one split of the registry test's body, so a failure
+    /// names its split. The client comparison runs first, then the
+    /// "nothing re-sent" check.
+    fn check_split(pane_id: PaneId, index: usize) {
+        let split = splits().remove(index);
+        let run = run_visibility_restore(
+            pane_id,
+            None,
+            vec![split.first.clone(), split.second.clone()],
+        );
+        check_client_against_reference(&run, &split, split.name);
+        assert_eq!(
+            run.forwarded(),
+            vec![split.second.clone()],
+            "{}: nothing may be re-sent between the snapshot and the next chunk",
+            split.name
+        );
+    }
+
+    #[test]
+    fn visibility_restore_of_a_cut_utf8_tail_sends_nothing_between_snapshot_and_next_chunk() {
+        check_split(210, 0);
+    }
+
+    #[test]
+    fn visibility_restore_after_esc_paren_sends_nothing_and_the_next_chunk_selects_the_charset() {
+        check_split(211, 1);
+        let split = splits().remove(1);
+        let run =
+            run_visibility_restore(213, None, vec![split.first.clone(), split.second.clone()]);
+        let mut client = new_core();
+        apply_snapshot(&mut client, run.snapshot());
+        for data in run.forwarded() {
+            client.process_pty_data_fully(&data);
+        }
+        assert!(
+            client.get_line_text(0).contains('\u{250c}'),
+            "the first byte of the next chunk must select DEC line drawing: {:?}",
+            client.get_line_text(0)
+        );
+    }
+
+    #[test]
+    fn visibility_restore_of_a_cut_csi_tail_sends_nothing_between_snapshot_and_next_chunk() {
+        check_split(212, 2);
+    }
+
+    /// AC-4, second ring shape: ring wrapped with an EMPTY screen dump. The
+    /// shadow parser's dump is never empty in production, so this payload
+    /// shape is driven through the snapshot assembly function and the
+    /// replacement builder directly (task plan Test Notes), with the same
+    /// client/reference comparison.
+    #[test]
+    fn wrapped_ring_with_an_empty_dump_does_not_resend_a_tail_the_snapshot_carried() {
+        use crate::mux::ipc::pty_spawn::suppressed_output::{
+            SuppressedReplacementRequest, build_suppressed_replacement_for,
+        };
+        use crate::mux::snapshot_bytes::build_resume_snapshot_bytes_for_ring;
+
+        // Bytes that only move the cursor to column 0, so the ring may lose
+        // its head without changing the visible state.
+        let leading = vec![b'\r'; 20];
+        for split in splits() {
+            let first = [leading.as_slice(), &split.first].concat();
+            let mut ring = ScrollbackRingBuffer::new(16);
+            ring.write(&first);
+            let (ring_bytes, ring_segments, wrapped) = ring.read_segments_with_wrap_state();
+            assert!(
+                wrapped,
+                "{}: test prerequisite: the ring wrapped",
+                split.name
+            );
+            let (payload, segments) = build_resume_snapshot_bytes_for_ring(
+                &ring_bytes,
+                &ring_segments,
+                &[],
+                false,
+                true,
+                (COLS, ROWS),
+                10_000,
+            );
+            assert!(
+                payload.ends_with(&split.first[3..]),
+                "{}: the payload still ends in the ring's cut construct",
+                split.name
+            );
+            let construct = trailing_construct_bytes(&payload);
+            assert!(
+                construct.is_some(),
+                "{}: a construct is decided",
+                split.name
+            );
+
+            let replacement = build_suppressed_replacement_for(&SuppressedReplacementRequest {
+                chunk: &first,
+                ring_written_ranges: &[0..first.len()],
+                pending_after: &[],
+                window: &[],
+                snapshot_trailing_construct: construct.as_deref(),
+            });
+            assert!(
+                replacement.is_empty(),
+                "{}: nothing is re-sent, got {replacement:?}",
+                split.name
+            );
+
+            let encoded = crate::mux::session::pane::encode_snapshot_segments(&payload, &segments);
+            let chunk = PtyOutputChunk::snapshot(1, encoded);
+            let mut client = new_core();
+            apply_snapshot(&mut client, &chunk);
+            client.process_pty_data_fully(&replacement);
+            client.process_pty_data_fully(&split.second);
+            let mut reference = new_core();
+            reference.process_pty_data_fully(&first);
+            reference.process_pty_data_fully(&split.second);
+            assert_display_matches(&client, &reference, split.name);
+        }
+    }
+
+    // ---- AC-5: a query coexisting with the tail ----
+
+    /// One tail kind: the bytes the suppressed chunk ends in, what the
+    /// replacement must carry for it, and the next chunk.
+    struct TailKind {
+        name: &'static str,
+        tail: Vec<u8>,
+        /// The designator case needs one filler byte first (the client's
+        /// pending designator slot absorbs it).
+        needs_filler: bool,
+        second: Vec<u8>,
+    }
+
+    fn tail_kinds() -> Vec<TailKind> {
+        vec![
+            TailKind {
+                name: "cut utf-8",
+                tail: vec![0xe4, 0xb8],
+                needs_filler: false,
+                second: [[0xad].as_slice(), b"def\r\n"].concat(),
+            },
+            TailKind {
+                name: "ESC (",
+                tail: vec![ESC, b'('],
+                needs_filler: true,
+                second: b"0lqk\x1b(B\r\nZ".to_vec(),
+            },
+            TailKind {
+                name: "incomplete csi",
+                tail: vec![ESC, b'[', b'3'],
+                needs_filler: false,
+                second: b"1mred\x1b[0m\r\n".to_vec(),
+            },
+        ]
+    }
+
+    /// `prefix` (holding one query) + `abc` + each tail kind, restored
+    /// through the reader. `item` is the query as the replacement carries it.
+    fn check_query_with_each_tail(pane_id_base: PaneId, prefix: &[u8], item: &[u8]) {
+        for (i, kind) in tail_kinds().into_iter().enumerate() {
+            let first = [prefix, b"abc".as_slice(), &kind.tail].concat();
+            let run = run_visibility_restore(
+                pane_id_base + i as PaneId,
+                None,
+                vec![first.clone(), kind.second.clone()],
+            );
+            let mut expected_replacement = Vec::new();
+            if kind.needs_filler {
+                expected_replacement.push(b'B');
+            }
+            expected_replacement.extend_from_slice(item);
+            expected_replacement.extend_from_slice(&kind.tail);
+            assert_eq!(
+                run.forwarded(),
+                vec![expected_replacement, kind.second.clone()],
+                "{}: the query and the tail, then the next chunk",
+                kind.name
+            );
+
+            let mut client = new_core();
+            apply_snapshot(&mut client, run.snapshot());
+            let mut client_responses = Vec::new();
+            for data in run.forwarded() {
+                client.process_pty_data_fully(&data);
+                client_responses.extend(client.take_response());
+            }
+            let mut reference = new_core();
+            let mut reference_responses = Vec::new();
+            for data in [&first, &kind.second] {
+                reference.process_pty_data_fully(data);
+                reference_responses.extend(reference.take_response());
+            }
+            assert!(
+                !reference_responses.is_empty(),
+                "{}: test prerequisite: the query is answered",
+                kind.name
+            );
+            assert_eq!(
+                client_responses, reference_responses,
+                "{}: the query must be answered exactly once, as on the reference",
+                kind.name
+            );
+            assert_display_matches(&client, &reference, kind.name);
+        }
+    }
+
+    /// AC-5: an alternate-screen color query (absent from the snapshot) and
+    /// each of the three tail kinds in one suppressed chunk.
+    #[test]
+    fn suppressed_chunk_with_a_color_query_and_each_tail_kind_answers_once_and_parses_on() {
+        check_query_with_each_tail(
+            220,
+            b"\x1b[?1049h\x1b]11;?\x07\x1b[?1049l",
+            b"\x1b]11;?\x07",
+        );
+    }
+
+    /// AC-5: a CSI device query and each of the three tail kinds in one
+    /// suppressed chunk.
+    #[test]
+    fn suppressed_chunk_with_a_csi_query_and_each_tail_kind_answers_once_and_parses_on() {
+        check_query_with_each_tail(230, b"\x1b[c", b"\x1b[c");
+    }
+
+    // ---- AC-6: shapes that keep the pre-feature re-send ----
+
+    /// AC-6 (as-03): a wrapped ring gets a dump block after the ring, so the
+    /// snapshot does not end in the cut construct; nothing is recorded and
+    /// the tail is re-sent as before.
+    #[test]
+    fn visibility_restore_of_a_wrapped_ring_with_a_dump_block_still_resends_the_tail() {
+        let first = [b"visible text\r\n".repeat(5), vec![ESC, b'(']].concat();
+        let second = b"0lqk\x1b(B\r\nZ".to_vec();
+        let run = run_visibility_restore(
+            240,
+            Some(ScrollbackRingBuffer::new(32)),
+            vec![first, second.clone()],
+        );
+        assert_eq!(
+            run.forwarded(),
+            vec![vec![ESC, b'('], second],
+            "the dump block ends the snapshot, so the tail is re-sent as before"
+        );
+    }
+
+    /// Run the reader over `chunks` for a `Connected(dest)` pane after
+    /// `record` has recorded boundaries, returning what `dest` received
+    /// (EOF excluded).
+    fn run_reader_with_records(
+        pane_id: PaneId,
+        chunks: Vec<Vec<u8>>,
+        record: impl FnOnce(&OutputCapture, &mpsc::Sender<PtyOutputChunk>),
+    ) -> Vec<Vec<u8>> {
+        let (dest, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+        let output_target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(dest.clone())));
+        let pane = MuxPane::new_test(pane_id, COLS, ROWS, output_target);
+        record(&pane.output_capture, &dest);
+        spawn_reader_keeping_target(&pane, chunks).join().unwrap();
+        let mut out = Vec::new();
+        while let Ok(c) = rx.try_recv() {
+            if !c.data.is_empty() {
+                out.push(c.data);
+            }
+        }
+        out
+    }
+
+    use crate::mux::session::pane::OutputCapture;
+
+    /// AC-6: with two destinations, each uses only its own record.
+    #[test]
+    fn a_suppressed_chunk_uses_only_the_construct_recorded_for_its_own_destination() {
+        let esc_paren = vec![ESC, b'('];
+        let first = [b"abc".as_slice(), &esc_paren].concat();
+
+        // The construct is recorded for ANOTHER destination only: this
+        // destination's own record has none, so the tail is re-sent.
+        let (other, _other_rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let got = run_reader_with_records(250, vec![first.clone()], |capture, dest| {
+            capture.record_boundary_with_construct(&other, 1, Some(esc_paren.clone()));
+            capture.record_boundary(dest, 1);
+        });
+        assert_eq!(got, vec![esc_paren.clone()]);
+
+        // Its own record carries the construct: the tail is omitted, and the
+        // other destination's record is not consulted.
+        let (other, _other_rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let got = run_reader_with_records(251, vec![first.clone()], |capture, dest| {
+            capture.record_boundary(&other, 1);
+            capture.record_boundary_with_construct(dest, 1, Some(esc_paren.clone()));
+        });
+        assert!(got.is_empty(), "nothing to send, got {got:?}");
+    }
+
+    /// AC-6: the construct applies only to the chunk numbered exactly at the
+    /// recorded boundary; an earlier covered chunk re-sends its tail.
+    #[test]
+    fn the_construct_applies_only_to_the_chunk_at_the_recorded_boundary() {
+        let esc_paren = vec![ESC, b'('];
+        let chunk1 = [b"abc".as_slice(), &esc_paren].concat();
+        let chunk2 = [b"xyz".as_slice(), &esc_paren].concat();
+        let got = run_reader_with_records(252, vec![chunk1, chunk2], |capture, dest| {
+            capture.record_boundary_with_construct(dest, 2, Some(esc_paren.clone()));
+        });
+        assert_eq!(
+            got,
+            vec![esc_paren.clone()],
+            "chunk 1 (below the boundary) re-sends its tail; chunk 2 (at the \
+             boundary) uses the construct and sends nothing"
+        );
+    }
+}

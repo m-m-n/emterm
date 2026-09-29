@@ -122,9 +122,14 @@ pub const MAX_DEFERRED_ITEMS: usize = 8;
 /// `output_capture` is the specific PANE's capture state (cloned at defer
 /// time, before any possible pane destruction) — never a connection-wide
 /// value — since the boundary record is per pane, not per connection.
+///
+/// `construct` (mux-suppressed-output-round2-fixes task0004, FR8) is the
+/// incomplete construct the carried snapshot leaves the client parser in;
+/// it is recorded together with `boundary` and discarded together with it.
 pub struct DeferredBoundaryCommit {
     pub output_capture: Arc<OutputCapture>,
     pub boundary: u64,
+    pub construct: Option<Vec<u8>>,
 }
 
 /// One item held in the connection-owned [`DeferredOutputQueue`] while
@@ -558,7 +563,7 @@ impl Default for DeferredOutputQueue {
 ///
 /// `boundary_commit` (mux-snapshot-output-boundary task0001,
 /// IMPLEMENTATION.md D3 "On-demand, immediate") is `Some((output_capture,
-/// boundary))` for an on-demand snapshot chunk that must suppress every
+/// boundary, construct))` for an on-demand snapshot chunk that must suppress every
 /// pending PTY chunk up to `boundary` once IT is the one actually delivered
 /// to `tx`. The boundary exclusion is held ([`OutputCapture::hold_boundary`])
 /// across the `try_send` call itself and the record that follows it on the
@@ -567,24 +572,28 @@ impl Default for DeferredOutputQueue {
 /// record (FR11). On the slow (deferred) path the record is carried on the
 /// queued item instead ([`DeferredBoundaryCommit`]) and only takes effect if
 /// this exact chunk is later flushed successfully; on `Full`/`Closed` no
-/// record is made here.
+/// record is made here. `construct` (mux-suppressed-output-round2-fixes
+/// task0004) is the incomplete construct the snapshot leaves the client
+/// parser in; it is recorded together with the boundary.
 pub fn enqueue_pane_output_chunk(
     tx: &mpsc::Sender<PtyOutputChunk>,
     chunk: PtyOutputChunk,
     deferred: &mut DeferredOutputQueue,
-    boundary_commit: Option<(Arc<OutputCapture>, u64)>,
+    boundary_commit: Option<(Arc<OutputCapture>, u64, Option<Vec<u8>>)>,
 ) {
     let held_capture = boundary_commit
         .as_ref()
-        .map(|(output_capture, _)| Arc::clone(output_capture));
+        .map(|(output_capture, _, _)| Arc::clone(output_capture));
     let mut guard = held_capture
         .as_ref()
         .map(|output_capture| output_capture.hold_boundary());
 
     match tx.try_send(chunk) {
         Ok(()) => {
-            if let (Some((_, boundary)), Some(guard)) = (&boundary_commit, guard.as_mut()) {
-                guard.record(tx, *boundary);
+            if let (Some((_, boundary, construct)), Some(guard)) =
+                (&boundary_commit, guard.as_mut())
+            {
+                guard.record_with_construct(tx, *boundary, construct.clone());
             }
         }
         Err(mpsc::error::TrySendError::Full(chunk)) => {
@@ -598,9 +607,12 @@ pub fn enqueue_pane_output_chunk(
                 PTY_CHANNEL_CAPACITY,
                 chunk.kind,
             );
-            let commit = boundary_commit.map(|(output_capture, boundary)| DeferredBoundaryCommit {
-                output_capture,
-                boundary,
+            let commit = boundary_commit.map(|(output_capture, boundary, construct)| {
+                DeferredBoundaryCommit {
+                    output_capture,
+                    boundary,
+                    construct,
+                }
             });
             deferred.defer_chunk(chunk, commit);
         }

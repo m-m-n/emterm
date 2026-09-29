@@ -25,7 +25,7 @@ mod client_parity_scan;
 mod suppressed_output;
 mod write_filter;
 
-use suppressed_output::build_suppressed_replacement;
+use suppressed_output::{SuppressedReplacementRequest, build_suppressed_replacement_for};
 use write_filter::*;
 
 /// FR6/NFR3: the reader's retained window — the last up to
@@ -569,9 +569,9 @@ pub(in crate::mux) fn pty_reader_loop(
                         PaneOutputTarget::Connected(tx) => {
                             let s = tx.clone();
                             let boundary = output_capture.hold_boundary();
-                            if boundary.is_covered(&s, chunk_number) {
+                            if let Some(cover) = boundary.cover(&s, chunk_number) {
                                 drop(boundary);
-                                ReaderForward::Suppressed(s)
+                                ReaderForward::Suppressed(s, cover.construct)
                             } else {
                                 let chunk = PtyOutputChunk::pty_output(pane_id, data.to_vec());
                                 match tx.try_send(chunk) {
@@ -624,11 +624,12 @@ pub(in crate::mux) fn pty_reader_loop(
 
                 match forward {
                     ReaderForward::Done => {}
-                    ReaderForward::Suppressed(s) => {
+                    ReaderForward::Suppressed(s, snapshot_construct) => {
                         run_suppressed_pipeline(
                             pane_id,
                             data,
                             &s,
+                            snapshot_construct.as_deref(),
                             &raw_passthrough,
                             &passthrough_scanner,
                             &notification_sender,
@@ -660,7 +661,7 @@ pub(in crate::mux) fn pty_reader_loop(
                                 // to re-read the target's value.
                                 let target = output_target.lock().unwrap();
                                 let boundary = output_capture.hold_boundary();
-                                if boundary.is_covered(&s, chunk_number) {
+                                if let Some(cover) = boundary.cover(&s, chunk_number) {
                                     drop(boundary);
                                     drop(target);
                                     drop(permit); // release the reserved slot back to S
@@ -668,6 +669,7 @@ pub(in crate::mux) fn pty_reader_loop(
                                         pane_id,
                                         data,
                                         &s,
+                                        cover.construct.as_deref(),
                                         &raw_passthrough,
                                         &passthrough_scanner,
                                         &notification_sender,
@@ -746,8 +748,11 @@ enum ReaderForward {
     Done,
     /// The destination's recorded boundary already covers this chunk's
     /// number: the FR9/FR10 replacement pipeline runs for it instead of the
-    /// raw bytes.
-    Suppressed(mpsc::Sender<PtyOutputChunk>),
+    /// raw bytes. The second field is the incomplete construct the covering
+    /// snapshot left the client parser in, obtained together with the
+    /// covered decision (task0004, FR8); `None` when that chunk is not the
+    /// snapshot's last covered chunk or the snapshot ended in ground.
+    Suppressed(mpsc::Sender<PtyOutputChunk>, Option<Vec<u8>>),
     /// The channel was full on the non-blocking attempt; the reader must
     /// release every lock and block on a slot reservation (D4) before
     /// deciding again.
@@ -766,11 +771,18 @@ enum ReaderForward {
 /// — the primary chunk's own send attempt already decided this reader's
 /// `output_target` fate; this is a best-effort follow-up delivery to the
 /// same fixed destination.
+///
+/// `snapshot_construct` (mux-suppressed-output-round2-fixes task0004, FR8) is
+/// the incomplete construct the destination's covering snapshot left the
+/// client parser in, obtained with the covered decision for THIS destination;
+/// it goes into the replacement request so a tail the client already holds is
+/// not re-sent.
 #[allow(clippy::too_many_arguments)]
 fn run_suppressed_pipeline(
     pane_id: PaneId,
     data: &[u8],
     s: &mpsc::Sender<PtyOutputChunk>,
+    snapshot_construct: Option<&[u8]>,
     raw_passthrough: &SharedRawPassthrough,
     passthrough_scanner: &SharedPassthroughScanner,
     notification_sender: &SharedNotificationSender,
@@ -790,12 +802,13 @@ fn run_suppressed_pipeline(
     // Detached period's output.
     passthrough_scanner.lock().unwrap().discard_partial();
 
-    let replacement = build_suppressed_replacement(
-        data,
+    let replacement = build_suppressed_replacement_for(&SuppressedReplacementRequest {
+        chunk: data,
         ring_written_ranges,
-        scrollback_filter.pending(),
-        retained_window,
-    );
+        pending_after: scrollback_filter.pending(),
+        window: retained_window,
+        snapshot_trailing_construct: snapshot_construct,
+    });
     if replacement.is_empty() {
         // TM-2: never turn an empty replacement into an empty `PtyOutput`
         // chunk — the client reads that as PTY exit.

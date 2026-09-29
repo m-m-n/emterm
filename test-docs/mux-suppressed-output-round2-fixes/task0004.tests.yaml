@@ -1,0 +1,188 @@
+task_id: task0004
+baseline_failures: []
+# Actually re-executed after the implementation (project test command,
+# 3873 passed / 0 failed / 3 ignored). Baseline before the work was
+# 3820 passed / 0 failed / 3 ignored; the difference is the 53 tests added.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::snapshot_tail::tests::ac1_decider_agrees_with_the_table_and_with_term_core_segment_replay
+      - mux::snapshot_tail::tests::ac1_every_split_position_of_each_construct_agrees_with_term_core
+      - mux::snapshot_tail::tests::ac1_two_mib_random_and_adversarial_payloads_complete_without_panicking
+      - mux::snapshot_tail::tests::concatenated_segments_are_the_payload
+    red_confirmed: true
+    red_reason: >-
+      With the decider stubbed to return none, ac1_decider_agrees_with_the_table_and_with_term_core_segment_replay
+      failed with `case "2-byte lead, no continuation": construct kind
+      left: None right: Utf8`, ac1_every_split_position_of_each_construct_agrees_with_term_core
+      failed with `decider on [97, 98, 228, 184] left: None right: Utf8`,
+      and concatenated_segments_are_the_payload failed on `Option::unwrap()`
+      of None. The 2 MiB no-panic test asserts only shape and time, so it
+      passed against the stub by construction; it constrains the real
+      single-pass decider, not the stub.
+  AC-2:
+    tests:
+      - mux::session::pane::tests::ac2_higher_boundary_replaces_both_boundary_and_construct
+      - mux::session::pane::tests::ac2_higher_boundary_without_a_construct_clears_the_old_construct
+      - mux::session::pane::tests::ac2_equal_boundary_with_an_identical_construct_keeps_it
+      - mux::session::pane::tests::ac2_equal_boundary_with_a_different_construct_yields_none
+      - mux::session::pane::tests::ac2_lower_boundary_leaves_the_entry_unchanged
+      - mux::session::pane::tests::ac2_boundary_only_record_form_means_construct_none
+      - mux::session::pane::tests::ac2_a_record_for_one_destination_never_changes_another
+      - mux::session::pane::tests::ac2_two_back_to_back_snapshots_use_the_record_that_covers_the_chunk
+      - mux::session::pane::tests::ac2_covered_query_returns_the_construct_only_when_the_number_equals_the_boundary
+      - mux::session::pane::tests::ac2_construct_is_read_under_the_same_boundary_hold_as_the_covered_decision
+      - mux::session::pane::tests::ac2_visibility_restore_decides_the_construct_outside_both_exclusions
+      - mux::ipc::handlers::tests::on_demand_snapshot_decides_the_construct_outside_both_exclusions
+      - mux::ipc::reattach::tests::collect_reattach_data_decides_the_construct_outside_both_exclusions
+      - mux::ipc::pty_spawn::tests::snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock
+    red_confirmed: true
+    red_reason: >-
+      Record rules and covered query: with the record rules stubbed (the
+      construct ignored, the covered query always answering none), seven
+      tests failed with left `Some(None)` and right holding the recorded
+      construct, for example ac2_higher_boundary_replaces_both_boundary_and_construct
+      (`left: Some(None) right: Some(Some([228, 184]))`),
+      ac2_equal_boundary_with_an_identical_construct_keeps_it,
+      ac2_lower_boundary_leaves_the_entry_unchanged,
+      ac2_a_record_for_one_destination_never_changes_another,
+      ac2_two_back_to_back_snapshots_use_the_record_that_covers_the_chunk,
+      ac2_covered_query_returns_the_construct_only_when_the_number_equals_the_boundary
+      and ac2_construct_is_read_under_the_same_boundary_hold_as_the_covered_decision.
+      Three record tests that assert none (higher boundary without a
+      construct, equal boundary with a different construct, boundary-only
+      form) pass against the stub because the stub always yields none.
+      The clause "the decider runs outside the capture exclusion and the
+      lock order is unchanged" has no failing-first observation: the call
+      already sat after the captured read at the record point when the
+      three placement tests were first run, so they passed on the stub.
+      They probe both exclusions from a test-only decider entry hook, and
+      the existing concurrent stress test
+      snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock
+      passes unchanged.
+  AC-3:
+    tests:
+      - mux::session::pane::tests::ac3_visibility_restore_records_the_construct_of_the_snapshot_it_sent
+      - mux::session::pane::tests::ac3_enqueue_fast_path_records_the_construct_with_the_boundary
+      - mux::session::pane::tests::ac3_enqueue_on_a_full_channel_defers_the_construct_with_the_commit
+      - mux::session::pane::tests::ac3_enqueue_without_a_boundary_commit_records_nothing
+      - mux::ipc::handlers::tests::on_demand_snapshot_sends_the_assembly_bytes_and_records_the_construct_of_that_payload
+      - mux::ipc::handlers::tests::on_demand_alternate_screen_snapshot_records_none
+      - mux::ipc::handlers::tests::deferred_on_demand_snapshot_records_the_construct_only_when_flushed
+      - mux::ipc::handlers::tests::flush_deferred_output_records_the_deferred_construct_with_the_boundary
+      - mux::ipc::handlers::tests::apply_fair_permit_to_front_deferred_item_records_the_deferred_construct_with_the_boundary
+      - mux::ipc::handlers::tests::a_coalesced_deferred_chunk_discards_the_construct_it_carried
+      - mux::ipc::reattach::tests::collect_reattach_data_records_the_construct_of_the_payload_it_returns
+    red_confirmed: true
+    red_reason: >-
+      Four tests were observed failing before the implementation:
+      ac3_visibility_restore_records_the_construct_of_the_snapshot_it_sent
+      (`case cut utf-8 ... left: Some(None) right: Some(Some([228, 184]))`),
+      ac3_enqueue_fast_path_records_the_construct_with_the_boundary,
+      flush_deferred_output_records_the_deferred_construct_with_the_boundary
+      and apply_fair_permit_to_front_deferred_item_records_the_deferred_construct_with_the_boundary,
+      each with left `Some(None)` where the construct was expected. The
+      clause "snapshot bytes, frames and wire format are unchanged" has no
+      failing-first observation: it is pre-existing behavior, and the
+      byte-identity assertions (sent payload equals the assembly output and
+      its wire encoding) passed before the change. The on-demand and
+      reattach record tests can only observe none, because those layouts
+      always end in a screen-switch sequence or a dump block, so they pass
+      on the stub as well; the non-none plumbing of the deferred, fair-permit
+      and fast paths is what the four failing tests cover.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::fr8_snapshot_tail::round2_3eccc254_visibility_restore_does_not_resend_a_tail_the_snapshot_carried
+      - mux::ipc::pty_spawn::tests::fr8_snapshot_tail::visibility_restore_of_a_cut_utf8_tail_sends_nothing_between_snapshot_and_next_chunk
+      - mux::ipc::pty_spawn::tests::fr8_snapshot_tail::visibility_restore_after_esc_paren_sends_nothing_and_the_next_chunk_selects_the_charset
+      - mux::ipc::pty_spawn::tests::fr8_snapshot_tail::visibility_restore_of_a_cut_csi_tail_sends_nothing_between_snapshot_and_next_chunk
+      - mux::ipc::pty_spawn::tests::fr8_snapshot_tail::wrapped_ring_with_an_empty_dump_does_not_resend_a_tail_the_snapshot_carried
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_awaiting_designator_tail_equal_to_the_construct_with_no_items_is_omitted
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_utf8_tail_equal_to_the_construct_with_no_items_is_omitted
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_csi_tail_equal_to_the_construct_with_no_items_is_omitted
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_csi_tail_is_compared_after_c0_removal
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_tail_starting_in_the_window_is_compared_as_a_whole
+    red_confirmed: true
+    red_reason: >-
+      Against the pre-fix behavior (tail always re-sent), the registry test
+      failed at the client comparison of the `ESC (` split with
+      `right after ESC (: row 0 mismatch left: "abc(0lqk" right: "abc┌─┐"`:
+      the re-sent `ESC (` made the client take its second ESC as the
+      designator, display a literal `(`, and print the next chunk's
+      charset selector instead of applying it. The same failure was
+      observed in visibility_restore_after_esc_paren_sends_nothing_and_the_next_chunk_selects_the_charset.
+      The UTF-8 and CSI splits pass the client comparison on the pre-fix
+      code (they are regression guards for display parity, as the plan
+      states); their companions failed on the added "nothing re-sent"
+      assertion (`left: [[228, 184], [173, 100, 101, 102, 13, 10]] right:
+      [[173, 100, 101, 102, 13, 10]]`). The wrapped-ring-with-an-empty-dump
+      test, driven through the assembly function and the builder because a
+      production shadow dump is never empty, failed with `mid utf-8: a
+      construct is decided` against the stubbed decider. The five builder
+      tests failed with the tail still re-sent (`got [27, 40]`, `got
+      [228, 184]`, `got [27, 91, 51]`).
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::fr8_snapshot_tail::suppressed_chunk_with_a_color_query_and_each_tail_kind_answers_once_and_parses_on
+      - mux::ipc::pty_spawn::tests::fr8_snapshot_tail::suppressed_chunk_with_a_csi_query_and_each_tail_kind_answers_once_and_parses_on
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_designator_construct_with_a_csi_query_emits_filler_items_then_tail
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_designator_construct_with_an_alt_span_color_query_emits_filler_items_then_tail
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_designator_construct_with_a_viewer_launch_emits_filler_items_then_tail
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_utf8_construct_with_items_emits_items_then_tail_with_no_filler
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_csi_construct_with_items_emits_items_then_tail_with_no_filler
+    red_confirmed: true
+    red_reason: >-
+      Both reader-level coexistence tests failed on the forwarded bytes for
+      the `ESC (` tail kind: `left: [[27, 93, 49, 49, 59, 63, 7, 27, 40],
+      ...] right: [[66, 27, 93, 49, 49, 59, 63, 7, 27, 40], ...]`, that is,
+      the pre-fix replacement carries no filler designator and the client
+      holding `ESC (` would take the query's ESC as the designator. The
+      three builder tests for the designator with a CSI query, an
+      alternate-screen color query and a viewer launch failed the same way
+      (`left: [27, 91, 54, 110, 27, 40] right: [66, 27, 91, ...]`). The
+      UTF-8 and CSI tail kinds with items (last two builder tests, and the
+      first tail kind of each reader-level test) pass on the pre-fix code
+      because the rule leaves them unchanged.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_a_cut_csi_tail_and_the_client_view_matches_the_reference
+      - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_a_cut_utf8_tail_with_no_replacement_character_in_any_row
+      - mux::session::pane::tests::ac6_alternate_screen_visibility_restore_records_none
+      - mux::session::pane::tests::ac6_wrapped_ring_with_a_dump_block_records_none
+      - mux::ipc::pty_spawn::tests::fr8_snapshot_tail::visibility_restore_of_a_wrapped_ring_with_a_dump_block_still_resends_the_tail
+      - mux::ipc::pty_spawn::tests::fr8_snapshot_tail::a_suppressed_chunk_uses_only_the_construct_recorded_for_its_own_destination
+      - mux::ipc::pty_spawn::tests::fr8_snapshot_tail::the_construct_applies_only_to_the_chunk_at_the_recorded_boundary
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_construct_absent_or_different_leaves_the_output_unchanged
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_designator_construct_that_differs_from_the_tail_gets_no_filler
+      - mux::ipc::pty_spawn::suppressed_output::tests::fr8_pending_run_tail_is_never_affected_by_the_construct
+      - mux::ipc::handlers::tests::on_demand_snapshot_sends_the_assembly_bytes_and_records_the_construct_of_that_payload
+      - mux::ipc::handlers::tests::on_demand_alternate_screen_snapshot_records_none
+      - mux::ipc::reattach::tests::collect_reattach_data_records_the_construct_of_the_payload_it_returns
+    red_confirmed: true
+    red_reason: >-
+      The two clauses that changed behavior were observed failing before
+      the implementation: a_suppressed_chunk_uses_only_the_construct_recorded_for_its_own_destination
+      (`nothing to send, got [[27, 40]]`: the destination's own construct
+      was ignored) and the_construct_applies_only_to_the_chunk_at_the_recorded_boundary
+      (`left: [[27, 40], [27, 40]] right: [[27, 40]]`), plus the
+      record-level ac2 tests for back-to-back snapshots and per-destination
+      records listed under AC-2. The remaining tests in this list pin
+      behavior that already existed (shapes that record none and re-send
+      the tail as before, a pending-run tail untouched, the two existing
+      visible-reattach tests unchanged), so they pass both before and after
+      the change and have no failing-first observation.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The criterion is verified by the `--lib` test run (every existing
+      test unchanged; it ended with 3873 passed and 0 failed) and by
+      `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features`
+      (exit 0, no warnings), which compiles the new module, declared
+      without a feature gate, in the CLI-only build. No failure of either
+      check was observed before the implementation: the new module did not
+      exist and the suite was green at baseline. Searched by path and
+      basename (src-tauri/tests, git ls-files for snapshot_tail and
+      no-default-features) and found no existing test that asserts the
+      no-default-features build or the new module's dependencies.
