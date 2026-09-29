@@ -1,13 +1,15 @@
 {
   "name": "emterm-plugins",
-  "owner": { "name": "m-m-n" },
+  "owner": {
+    "name": "m-m-n"
+  },
   "description": "eMterm integration plugins for Claude Code",
   "plugins": [
     {
       "name": "emterm",
       "source": "./plugins/emterm",
       "description": "eMterm agent-status hook + rich-display skills + mux API skills",
-      "version": "0.1.1"
+      "version": "0.1.2"
     }
   ]
 }
