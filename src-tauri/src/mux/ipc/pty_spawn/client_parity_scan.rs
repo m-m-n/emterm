@@ -36,12 +36,12 @@
 //! byte is consumed as data (the designator) even when its value is 0x1B
 //! (FR2 (d)). So scanning forward from Ground at ANY ESC position in the
 //! window reproduces the true parser's state at the window's end — as long
-//! as that ESC is not itself sitting in an undecidable designator slot,
-//! which is exactly what the offset-0 / offset-1-after-`(`/`)` exclusions
-//! rule out.
+//! as that ESC is not itself sitting in a designator slot the window cannot
+//! rule out, which is exactly what [`esc_may_be_designator_byte`] excludes.
 
 use std::ops::Range;
 
+use crate::mux::osc_identify::{OscIdentity, RecoveredOsc, identify_osc, recover_osc};
 use crate::mux::scrollback_filter::scan_csi_device_query;
 
 /// FR6/D2: the number of bytes of PTY stream the reader retains from before
@@ -136,6 +136,10 @@ pub(in crate::mux) fn scan(window: &[u8], chunk: &[u8], limit_in_chunk: usize) -
 /// `window` from which a plain Ground-state walk (through `window[s..]`
 /// then the chunk) reproduces the true parser's state — see the module doc
 /// for why any ESC except the designator slot is a safe resync point.
+///
+/// Round-2 FR1: the first ESC that [`esc_may_be_designator_byte`] does not
+/// exclude. A single forward pass over the window with no panicking
+/// indexing (TM-2).
 fn derive_prefix_start(window: &[u8]) -> usize {
     if window.len() < RETAINED_WINDOW_BYTES {
         // D2: the window holds the entire stream so far — no truncation,
@@ -144,11 +148,8 @@ fn derive_prefix_start(window: &[u8]) -> usize {
     }
     let mut i = 0;
     while i < window.len() {
-        if window[i] == 0x1b {
-            let undecidable = i == 0 || (i == 1 && matches!(window[0], b'(' | b')'));
-            if !undecidable {
-                return i;
-            }
+        if window[i] == 0x1b && !esc_may_be_designator_byte(window, i) {
+            return i;
         }
         i += 1;
     }
@@ -157,6 +158,33 @@ fn derive_prefix_start(window: &[u8]) -> usize {
     // character — in which case start the walk there so the combined scan
     // naturally re-derives the UTF-8-partial state at the boundary.
     utf8_tail_start_at_end(window).unwrap_or(window.len())
+}
+
+/// Round-2 FR1 (TM-1): whether the ESC at `window[esc_pos]` may be the
+/// designator byte the client's parser consumes right after `ESC (` /
+/// `ESC )` (FR2 (d) — consumed as data even when its value is ESC), judged
+/// from the window alone. Such an ESC never starts a sequence, so a walk
+/// restarted there would fabricate queries from the bytes that follow it.
+///
+/// The ESC is excluded when it is the window's first byte (an `ESC (`
+/// before the window is undecidable), or when the byte before it is `(` /
+/// `)` and either that byte is the window's first byte or the byte before
+/// that is ESC. The rule is applied at every candidate, so an
+/// `ESC ( ESC ( …` chain excludes each of its ESCs in turn. It may exclude
+/// an ESC the client would in fact have started a sequence at (an ESC
+/// whose preceding ESC was itself a designator byte); that only loses a
+/// query or launch, never fabricates one.
+fn esc_may_be_designator_byte(window: &[u8], esc_pos: usize) -> bool {
+    let Some(intro_pos) = esc_pos.checked_sub(1) else {
+        return true;
+    };
+    if !matches!(window.get(intro_pos), Some(b'(' | b')')) {
+        return false;
+    }
+    match intro_pos.checked_sub(1) {
+        None => true,
+        Some(before_intro) => window.get(before_intro) == Some(&0x1b),
+    }
 }
 
 /// Outcome of scanning for a string's terminator (OSC/DCS/APC). Mirrors
@@ -394,37 +422,16 @@ fn scan_view(combined: &[u8], limit: usize) -> (Vec<ScanItem>, Option<usize>, bo
 /// `u16` (as-06) — term_core's own arithmetic can wrap or panic there, so no
 /// route can be reliably established; this reconstruction never panics
 /// regardless (all arithmetic is saturating/checked).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::mux) struct ReconstructedOsc {
-    pub(in crate::mux) number: Option<u16>,
-    pub(in crate::mux) data: String,
-}
+///
+/// The reconstruction itself lives in the shared OSC identification layer
+/// ([`crate::mux::osc_identify`]) that the scrollback strip also uses
+/// (mux-suppressed-output-round2-fixes FR7); this is the delivery side's
+/// name for it.
+pub(in crate::mux) type ReconstructedOsc = RecoveredOsc;
 
+/// Delivery-side name for [`recover_osc`] (see [`ReconstructedOsc`]).
 pub(in crate::mux) fn reconstruct_osc_number_and_data(body: &[u8]) -> ReconstructedOsc {
-    let mut acc: u32 = 0;
-    let mut overflowed = false;
-    let mut done = false;
-    let mut data = Vec::with_capacity(body.len());
-    for &b in body {
-        if !done {
-            if b.is_ascii_digit() {
-                acc = acc.saturating_mul(10).saturating_add(u32::from(b - b'0'));
-                if acc > u16::MAX as u32 {
-                    overflowed = true;
-                }
-                continue;
-            }
-            if b == b';' {
-                done = true;
-                continue;
-            }
-        }
-        data.push(b);
-    }
-    let number = if overflowed { None } else { Some(acc as u16) };
-    let data = String::from_utf8(data)
-        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
-    ReconstructedOsc { number, data }
+    recover_osc(body)
 }
 
 /// FR2 (h)/as-01: whether the theme would answer this OSC dispatch with at
@@ -481,23 +488,21 @@ fn osc_default_color_has_query_item(data: &str, osc_number: u16) -> bool {
 /// actually opens a child window for, or a complete OSC 9999
 /// `emterm-md[;...]`.
 ///
+/// The delivery side's selection over the shared identification
+/// ([`identify_osc`]): every viewer launch except `image`, and Markdown
+/// launches. Never an agent-status report, never a not-identified OSC.
+///
 /// D3 finding: `image` is excluded even though it is listed in the
 /// viewer-kind SSOT ([`crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS`]) — the
 /// GUI's `ViewerRouter::route` treats it as a reserved, not-yet-implemented
 /// no-op (`src-tauri/src/viewer/mod.rs`, the `"image"` arm), so it never
 /// opens a viewer window. The `agent-status` kind is handled by the daemon
-/// itself and is not in the SSOT at all, so it is excluded structurally.
+/// itself and is not a viewer launch, so it is excluded by its identity.
 pub(in crate::mux) fn is_viewer_launch(osc: &ReconstructedOsc) -> bool {
-    match osc.number {
-        Some(777) => {
-            let Some(rest) = osc.data.strip_prefix("emterm;") else {
-                return false;
-            };
-            let kind = rest.split(';').next().unwrap_or(rest);
-            kind != "image" && crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS.contains(&kind)
-        }
-        Some(9999) => osc.data == "emterm-md" || osc.data.starts_with("emterm-md;"),
-        _ => false,
+    match identify_osc(osc) {
+        OscIdentity::ViewerLaunch(kind) => kind != "image",
+        OscIdentity::MarkdownLaunch => true,
+        OscIdentity::AgentStatusReport | OscIdentity::NotIdentified => false,
     }
 }
 
@@ -525,6 +530,148 @@ mod tests {
         // never reliably establish a route — never a fabricated query.
         let osc = reconstruct_osc_number_and_data(b"999999999;?");
         assert_eq!(osc.number, None);
+    }
+
+    // ---- round-2 task0001 (FR7): delivery-side viewer-launch predicate ----
+
+    fn launch_predicate(body: &[u8]) -> bool {
+        is_viewer_launch(&reconstruct_osc_number_and_data(body))
+    }
+
+    /// AC-4: true for every viewer kind except `image` (canonical,
+    /// leading-zero and non-digit-prefixed forms) and for Markdown launches;
+    /// false for `image`, agent-status and everything not identified.
+    #[test]
+    fn round2_task0001_viewer_launch_predicate_selects_deliverable_launches_in_all_forms() {
+        for &kind in crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS {
+            let forms = [
+                format!("777;emterm;{kind};x"),
+                format!("777;emterm;{kind}"),
+                format!("0777;emterm;{kind};x"),
+                format!("777emterm;;{kind};x"),
+            ];
+            for body in forms {
+                assert_eq!(
+                    launch_predicate(body.as_bytes()),
+                    kind != "image",
+                    "body {body:?}"
+                );
+            }
+        }
+        for body in [
+            "9999;emterm-md",
+            "9999;emterm-md;x",
+            "09999;emterm-md;x",
+            "09999;emterm-md",
+        ] {
+            assert!(launch_predicate(body.as_bytes()), "body {body:?}");
+        }
+        for body in [
+            "777;emterm;agent-status;x",
+            "0777;emterm;agent-status;x",
+            "777;emterm;fold;x",
+            "9999;emterm-mux;x",
+            "9999;emterm-mdx",
+            "777;other;x",
+            "778;emterm;markdown;x",
+            "70000;emterm;markdown;x",
+            "10;?",
+        ] {
+            assert!(!launch_predicate(body.as_bytes()), "body {body:?}");
+        }
+    }
+
+    fn count_occurrences(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
+    }
+
+    /// Ring-written bytes of a chunk the way the reader produces them: the
+    /// write filter's strip over the main-buffer span.
+    fn ring_bytes(chunk: &[u8], ring_written: &std::ops::Range<usize>) -> Vec<u8> {
+        crate::mux::scrollback_filter::strip_pty_output_for_scrollback_write(
+            &chunk[ring_written.clone()],
+        )
+    }
+
+    /// AC-5 (TS-7, registry): a viewer launch written with a leading-zero
+    /// number reaches the client exactly once — absent from the ring bytes
+    /// the snapshot is assembled from, present once in the replacement.
+    #[test]
+    fn round2_a93dffe3_leading_zero_viewer_launch_reaches_the_client_once() {
+        use crate::mux::ipc::pty_spawn::suppressed_output::build_suppressed_replacement;
+
+        // Main-screen chunks: the whole chunk is ring-written.
+        for launch in [
+            b"\x1b]0777;emterm;markdown;begin\x07".as_slice(),
+            b"\x1b]09999;emterm-md;begin\x1b\\".as_slice(),
+        ] {
+            let mut chunk = b"before".to_vec();
+            chunk.extend_from_slice(launch);
+            chunk.extend_from_slice(b"after");
+            let ring_written = 0..chunk.len();
+
+            let in_ring = count_occurrences(&ring_bytes(&chunk, &ring_written), launch);
+            let in_replacement = count_occurrences(
+                &build_suppressed_replacement(&chunk, &[ring_written], &[], &[]),
+                launch,
+            );
+            assert_eq!(
+                in_ring,
+                0,
+                "launch {:?} must be stripped from the ring",
+                String::from_utf8_lossy(launch)
+            );
+            assert_eq!(
+                in_replacement,
+                1,
+                "launch {:?} must be delivered once",
+                String::from_utf8_lossy(launch)
+            );
+            assert_eq!(in_ring + in_replacement, 1);
+        }
+
+        // Alternate-screen range: nothing of the launch is ring-written, the
+        // replacement delivers it once.
+        for launch in [
+            b"\x1b]0777;emterm;markdown;begin\x07".as_slice(),
+            b"\x1b]09999;emterm-md;begin\x1b\\".as_slice(),
+        ] {
+            let mut chunk = b"main\x1b[?1049h".to_vec();
+            let main_end = chunk.len();
+            chunk.extend_from_slice(launch);
+            chunk.extend_from_slice(b"alt text");
+            let ring_written = 0..main_end;
+
+            let in_ring = count_occurrences(&ring_bytes(&chunk, &ring_written), launch);
+            let in_replacement = count_occurrences(
+                &build_suppressed_replacement(&chunk, &[ring_written], &[], &[]),
+                launch,
+            );
+            assert_eq!(in_ring, 0);
+            assert_eq!(
+                in_replacement,
+                1,
+                "alternate-screen launch {:?} must be delivered once",
+                String::from_utf8_lossy(launch)
+            );
+        }
+
+        // Image launch: stripped from the ring, never delivered.
+        let launch = b"\x1b]0777;emterm;image;begin\x07".as_slice();
+        let mut chunk = b"before".to_vec();
+        chunk.extend_from_slice(launch);
+        chunk.extend_from_slice(b"after");
+        let ring_written = 0..chunk.len();
+        let in_ring = count_occurrences(&ring_bytes(&chunk, &ring_written), launch);
+        let in_replacement = count_occurrences(
+            &build_suppressed_replacement(&chunk, &[ring_written], &[], &[]),
+            launch,
+        );
+        assert_eq!(in_ring, 0, "image launch must be stripped from the ring");
+        assert_eq!(in_replacement, 0, "image launch is never delivered");
     }
 
     /// AC-1 (FR2 (g)/(h), as-04): [`is_color_query`] must agree with the
@@ -573,5 +720,205 @@ mod tests {
                 "OSC {number};{data}: predicate disagreed with the theme's actual routing"
             );
         }
+    }
+
+    // ---- round-2 FR1: designator-slot ESCs are never restart positions ----
+
+    const ESC: u8 = 0x1b;
+
+    /// A window of exactly [`RETAINED_WINDOW_BYTES`]: `prefix` followed by
+    /// `fill` bytes.
+    fn full_window(prefix: &[u8], fill: u8) -> Vec<u8> {
+        assert!(prefix.len() <= RETAINED_WINDOW_BYTES);
+        let mut window = prefix.to_vec();
+        window.resize(RETAINED_WINDOW_BYTES, fill);
+        assert_eq!(window.len(), RETAINED_WINDOW_BYTES);
+        window
+    }
+
+    /// A full window made of the `ESC <intro> ESC <intro> …` chain, cut at
+    /// exactly [`RETAINED_WINDOW_BYTES`].
+    fn designator_chain_window(intro: u8) -> Vec<u8> {
+        (0..RETAINED_WINDOW_BYTES)
+            .map(|i| if i % 2 == 0 { ESC } else { intro })
+            .collect()
+    }
+
+    /// AC-1 (FR1, TM-1): with a full window, the ESC at offset 0 is never a
+    /// restart position — whether it is the designator byte of an `ESC (`
+    /// that began before the window cannot be decided.
+    #[test]
+    fn ac1_derive_prefix_start_never_returns_offset_zero() {
+        let window = full_window(&[ESC], b'x');
+        assert_eq!(
+            derive_prefix_start(&window),
+            window.len(),
+            "no other ESC exists, so the as-05 fallback (ground at the window end) applies"
+        );
+    }
+
+    /// AC-1 (FR1): an ESC at offset 1 right after a `(` / `)` at offset 0 is
+    /// excluded (the pre-existing rule, kept).
+    #[test]
+    fn ac1_derive_prefix_start_excludes_esc_at_offset_one_after_an_introducer_at_offset_zero() {
+        for intro in [b'(', b')'] {
+            let window = full_window(&[intro, ESC], b'x');
+            assert_eq!(
+                derive_prefix_start(&window),
+                window.len(),
+                "intro {:?}: ESC at offset 1 may be a designator byte",
+                intro as char
+            );
+        }
+    }
+
+    /// AC-1 (FR1, TM-1): an ESC at offset `i >= 2` preceded by `(` / `)`
+    /// that is itself preceded by ESC sits in a designator slot and is
+    /// excluded.
+    #[test]
+    fn ac1_derive_prefix_start_excludes_an_esc_in_a_designator_slot_past_offset_one() {
+        for intro in [b'(', b')'] {
+            let window = full_window(&[ESC, intro, ESC], b'x');
+            assert_eq!(
+                derive_prefix_start(&window),
+                window.len(),
+                "intro {:?}: ESC at offset 2 follows `ESC {:?}` and is the designator byte",
+                intro as char,
+                intro as char
+            );
+        }
+    }
+
+    /// AC-1 (FR1): the rule excludes only what it names — an ESC preceded by
+    /// `(` where the byte before that is NOT ESC is a fresh escape and stays
+    /// a valid restart position, and so does an ESC after any other byte.
+    #[test]
+    fn ac1_derive_prefix_start_keeps_esc_that_is_not_in_a_designator_slot() {
+        // `x ( ESC …`: the `(` is plain text, the ESC starts a sequence.
+        let window = full_window(&[b'x', b'(', ESC], b'y');
+        assert_eq!(derive_prefix_start(&window), 2);
+        // `ESC ( ESC z ESC …`: ESC at 0 and the designator ESC at 2 are
+        // excluded; the ESC at 4 follows a plain byte.
+        let window = full_window(&[ESC, b'(', ESC, b'z', ESC], b'y');
+        assert_eq!(derive_prefix_start(&window), 4);
+        // `ESC ESC …`: the second ESC follows an ESC, not an introducer —
+        // it is a fresh decision point (FR2 (e)).
+        let window = full_window(&[ESC, ESC], b'y');
+        assert_eq!(derive_prefix_start(&window), 1);
+    }
+
+    /// AC-1 (FR1): every ESC of an `ESC ( ESC ( …` chain is excluded in
+    /// turn, so a chain-only window falls back exactly as before; a chain
+    /// followed by a plain byte and an ESC restarts at that later ESC.
+    #[test]
+    fn ac1_derive_prefix_start_excludes_every_esc_of_a_designator_chain() {
+        for intro in [b'(', b')'] {
+            let window = designator_chain_window(intro);
+            assert_eq!(
+                derive_prefix_start(&window),
+                window.len(),
+                "intro {:?}: every ESC of the chain is excluded",
+                intro as char
+            );
+        }
+        for pairs in [1usize, 2, 3, 60, 61] {
+            let mut prefix: Vec<u8> = [ESC, b'('].repeat(pairs);
+            prefix.push(b'z');
+            prefix.push(ESC);
+            let window = full_window(&prefix, b'y');
+            assert_eq!(
+                derive_prefix_start(&window),
+                pairs * 2 + 1,
+                "{pairs} chain pairs, then a plain byte, then a decidable ESC"
+            );
+        }
+    }
+
+    /// AC-1 (FR1, as-05): a window with no qualifying ESC falls back exactly
+    /// as before — ground at the window end, or the start of a trailing
+    /// incomplete UTF-8 character.
+    #[test]
+    fn ac1_derive_prefix_start_fallback_is_unchanged_when_no_esc_qualifies() {
+        let window = full_window(&[ESC, b'(', ESC], b'x');
+        assert_eq!(derive_prefix_start(&window), window.len());
+
+        let mut window = full_window(&[ESC, b'(', ESC], b'x');
+        let last = window.len() - 1;
+        window[last] = 0xe4; // 3-byte UTF-8 lead, incomplete
+        assert_eq!(
+            derive_prefix_start(&window),
+            last,
+            "a trailing UTF-8 partial starts the walk at its lead byte"
+        );
+    }
+
+    /// AC-1 (FR1): a window shorter than the cap still holds the whole
+    /// stream and is scanned from offset 0, whatever it starts with.
+    #[test]
+    fn ac1_derive_prefix_start_scans_a_short_window_from_its_start() {
+        let mut window = vec![ESC, b'(', ESC, b']', b'1', b'0', b';'];
+        window.resize(RETAINED_WINDOW_BYTES - 1, b' ');
+        assert_eq!(derive_prefix_start(&window), 0);
+        assert_eq!(derive_prefix_start(&[]), 0);
+    }
+
+    /// AC-1 (TM-2): windows made of all ESC bytes, all `(` bytes, or
+    /// alternating `ESC (` complete in one pass without panicking, for the
+    /// window alone and through the whole scan.
+    #[test]
+    fn ac1_degenerate_full_windows_complete_without_panicking() {
+        let all_esc = vec![ESC; RETAINED_WINDOW_BYTES];
+        let all_paren = vec![b'('; RETAINED_WINDOW_BYTES];
+        let alternating = designator_chain_window(b'(');
+        let alternating_odd: Vec<u8> = alternating.iter().skip(1).copied().collect();
+        assert_eq!(derive_prefix_start(&all_esc), 1);
+        assert_eq!(derive_prefix_start(&all_paren), RETAINED_WINDOW_BYTES);
+        assert_eq!(derive_prefix_start(&alternating), RETAINED_WINDOW_BYTES);
+        // 255 bytes: shorter than the cap, scanned from the start.
+        assert_eq!(derive_prefix_start(&alternating_odd), 0);
+
+        let chunk = b"\x1b]10;?\x07\x1b[6n";
+        for window in [&all_esc, &all_paren, &alternating] {
+            let outcome = scan(window, chunk, chunk.len());
+            assert_eq!(outcome.combined.len() - outcome.boundary, chunk.len());
+        }
+    }
+
+    /// AC-3 (FR1 positive): when the full window holds a decidable ESC, the
+    /// scan starts there and the color query the window's OSC leads into is
+    /// reported exactly once, verbatim.
+    #[test]
+    fn ac3_scan_starts_at_a_decidable_esc_in_a_full_window() {
+        // `x`, then `ESC ]10;`, padding to 256 bytes; the chunk completes
+        // the query.
+        let window = full_window(&[b'x', ESC, b']', b'1', b'0', b';'], b' ');
+        let chunk = b"?\x07";
+        assert_eq!(derive_prefix_start(&window), 1);
+        let outcome = scan(&window, chunk, chunk.len());
+        assert_eq!(
+            outcome.items.len(),
+            1,
+            "exactly one item: {:?}",
+            outcome.items
+        );
+        let item = &outcome.items[0];
+        assert_eq!(item.kind, ScanItemKind::ColorQuery);
+        let mut expected = window[1..].to_vec();
+        expected.extend_from_slice(chunk);
+        assert_eq!(&outcome.combined[item.range.clone()], expected.as_slice());
+    }
+
+    /// AC-3 (FR1): a window shorter than the cap is scanned from its start
+    /// even when it begins with the bytes a full window would exclude.
+    #[test]
+    fn ac3_scan_of_a_short_window_starts_at_its_first_byte() {
+        // `ESC ]10;` at offset 0 of a 7-byte window: a full window would
+        // never restart at offset 0, a short one holds the whole stream.
+        let window = [ESC, b']', b'1', b'0', b';', b' ', b' '];
+        let chunk = b"?\x07";
+        let outcome = scan(&window, chunk, chunk.len());
+        assert_eq!(outcome.items.len(), 1);
+        assert_eq!(outcome.items[0].kind, ScanItemKind::ColorQuery);
+        assert_eq!(outcome.items[0].range.start, 0);
     }
 }

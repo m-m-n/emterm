@@ -60,10 +60,12 @@ const FILLER_DESIGNATOR: u8 = b'B';
 /// - `ring_written_ranges`: the byte ranges of `chunk` that were fed toward
 ///   the scrollback ring this read (the reader's `live_spans` /
 ///   `main_spans` — main-buffer content; alternate-screen spans are NOT
-///   included). Used to decide which OSC color queries are absent from the
-///   snapshot (one inside these ranges survived into the ring byte-for-byte,
-///   so re-delivering it would duplicate what the snapshot already carries)
-///   and whether the chunk's last byte lies in a ring-written span (D4).
+///   included). Used to decide whether the chunk's last byte lies in a
+///   ring-written span and how much of the write filter's pending run this
+///   chunk contributed (D4). It does NOT decide which items are delivered:
+///   a color query, like a CSI query, is delivered whether or not its bytes
+///   survived into the ring (round-2 FR2), because the snapshot is replayed
+///   with its responses discarded.
 /// - `pending_after`: [`super::write_filter::ScrollbackWriteFilter::pending`]'s
 ///   contents taken right after this chunk was fed to the filter. Never
 ///   empty unless nothing is currently held back.
@@ -152,12 +154,12 @@ pub(in crate::mux) fn build_suppressed_replacement_for(
             tail_exclusion_start(ring_written_ranges, contribution)
         };
         let outcome = client_parity_scan::scan(window, chunk, scan_limit);
-        let mut out = assemble_items(&outcome, ring_written_ranges);
+        let mut out = assemble_items(&outcome);
         out.extend_from_slice(pending_after);
         out
     } else {
         let outcome = client_parity_scan::scan(window, chunk, chunk.len());
-        let mut out = assemble_items(&outcome, ring_written_ranges);
+        let mut out = assemble_items(&outcome);
         let tail: Vec<u8> = match outcome.tail.clone() {
             Some(tail_range) => {
                 let tail_bytes = &outcome.combined[tail_range];
@@ -214,23 +216,17 @@ fn carried_tail_output(items: Vec<u8>, tail: Vec<u8>) -> Vec<u8> {
 /// (Rule 1 of the task plan's "Replacement builder" design):
 /// - CSI device queries: from any region, C0 control bytes removed (FR3) —
 ///   their effect already took place via the snapshot.
-/// - Color queries: only when the completing byte lies OUTSIDE
-///   `ring_written_ranges` (one inside it already survives byte-for-byte in
-///   the snapshot); the whole OSC, terminator included, verbatim.
+/// - Color queries: from any region — inside a ring-written range, outside
+///   it, or across a range edge — the whole OSC, terminator included,
+///   verbatim (round-2 FR2). The snapshot is replayed with its responses
+///   discarded, so a query that survived into the ring is never answered
+///   through the snapshot; this is the same treatment CSI queries get.
 /// - Viewer launches: from any region, the whole sequence verbatim.
-fn assemble_items(outcome: &ScanOutcome, ring_written_ranges: &[Range<usize>]) -> Vec<u8> {
+fn assemble_items(outcome: &ScanOutcome) -> Vec<u8> {
     let mut out = Vec::new();
     for item in &outcome.items {
         match item.kind {
-            ScanItemKind::ColorQuery => {
-                let chunk_start = item.range.start.saturating_sub(outcome.boundary);
-                let chunk_end = item.range.end - outcome.boundary;
-                if overlaps_ranges(chunk_start, chunk_end, ring_written_ranges) {
-                    continue;
-                }
-                out.extend_from_slice(&outcome.combined[item.range.clone()]);
-            }
-            ScanItemKind::ViewerLaunch => {
+            ScanItemKind::ColorQuery | ScanItemKind::ViewerLaunch => {
                 out.extend_from_slice(&outcome.combined[item.range.clone()]);
             }
             ScanItemKind::CsiQuery => {
@@ -266,11 +262,6 @@ fn tail_exclusion_start(ranges: &[Range<usize>], contribution: usize) -> usize {
         remaining -= len;
     }
     0
-}
-
-/// Whether `[start, end)` overlaps any range in `ranges`.
-fn overlaps_ranges(start: usize, end: usize, ranges: &[Range<usize>]) -> bool {
-    ranges.iter().any(|r| start < r.end && end > r.start)
 }
 
 #[cfg(test)]
@@ -346,12 +337,15 @@ mod tests {
     }
 
     #[test]
-    fn osc_color_query_inside_ring_written_ranges_is_not_redelivered() {
+    fn osc_color_query_inside_ring_written_ranges_is_redelivered_once() {
+        // Round-2 FR2 (behavior changed on purpose, SPEC AC-8): a main-buffer
+        // span is written toward the ring, but the snapshot is replayed with
+        // its responses discarded, so a color query that survived into the
+        // ring is never answered through the snapshot. The replacement
+        // delivers it once, exactly like a CSI query.
         let chunk = b"\x1b]11;?\x07";
-        // Main-buffer span: written toward the ring, so it already survives
-        // in the snapshot byte-for-byte (D7) — must not be duplicated.
         let result = build(chunk, &[0..chunk.len()], &[]);
-        assert!(result.is_empty());
+        assert_eq!(result, chunk);
     }
 
     #[test]
@@ -1044,6 +1038,218 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ---- round 2 (mux-suppressed-output-round2-fixes) ----
+
+    const ESC: u8 = 0x1b;
+
+    /// The responses a live client queues after being fed `bytes`: term_core
+    /// with the theme's OSC responder installed when the `gui` feature
+    /// provides one (color queries produce no response without it).
+    fn client_responses(bytes: &[u8]) -> Vec<u8> {
+        use term_core::terminal_core::TerminalCore;
+        let mut core = TerminalCore::new(80, 24, 1_000);
+        #[cfg(feature = "gui")]
+        {
+            use crate::callbacks::{NativeCallbackState, ThemeColorResponder};
+            use crate::render::theme::Theme;
+            use parking_lot::Mutex;
+            use std::sync::Arc;
+
+            let theme = Arc::new(Mutex::new(Theme::default()));
+            let state = Arc::new(Mutex::new(NativeCallbackState::default()));
+            core.osc_responder = Some(Box::new(ThemeColorResponder::new(theme, state)));
+        }
+        core.process_pty_data_fully(bytes);
+        core.take_response()
+    }
+
+    /// A window of exactly [`client_parity_scan::RETAINED_WINDOW_BYTES`]:
+    /// `prefix` then `fill` bytes.
+    fn full_window(prefix: &[u8], fill: u8) -> Vec<u8> {
+        assert!(prefix.len() <= client_parity_scan::RETAINED_WINDOW_BYTES);
+        let mut window = prefix.to_vec();
+        window.resize(client_parity_scan::RETAINED_WINDOW_BYTES, fill);
+        assert_eq!(window.len(), client_parity_scan::RETAINED_WINDOW_BYTES);
+        window
+    }
+
+    /// AC-2 (FR1, TS-1, TM-1; regression test for review round 2 finding
+    /// `ecc48041b65a5380`): an ESC that can sit in a charset designator slot
+    /// is never a restart position for a full retained window. Each case
+    /// below is a stream on which the live client consumes that ESC as a
+    /// designator byte, so it never starts the query-shaped bytes that
+    /// follow; the replacement must be empty and a client fed it (plus a
+    /// BEL) must queue no response.
+    #[test]
+    fn round2_ecc48041_designator_slot_esc_is_never_a_window_restart_position() {
+        // (label, stream bytes BEFORE the retained window, window, chunk)
+        type Case = (String, Vec<u8>, Vec<u8>, Vec<u8>);
+        let mut cases: Vec<Case> = vec![
+            (
+                "ESC ( ESC ]10; + 249 spaces, chunk `?` BEL".to_string(),
+                Vec::new(),
+                full_window(&[ESC, b'(', ESC, b']', b'1', b'0', b';'], b' '),
+                b"?\x07".to_vec(),
+            ),
+            (
+                "ESC ( ESC [ + 252 NULs, chunk `c`".to_string(),
+                Vec::new(),
+                full_window(&[ESC, b'(', ESC, b'['], 0x00),
+                b"c".to_vec(),
+            ),
+        ];
+        // The chain form, with both parities. The pre-fix scan walked every
+        // other ESC of a chain as a real start; which ESCs the live client
+        // treats as designator bytes depends on the stream before the
+        // window, so an even chain is preceded by `ESC (` (its first ESC is
+        // then a designator byte) to keep the final ESC in a designator slot.
+        for pairs in [1usize, 2, 3, 60, 61] {
+            let before: Vec<u8> = if pairs % 2 == 0 {
+                vec![ESC, b'(']
+            } else {
+                Vec::new()
+            };
+            let chain: Vec<u8> = [ESC, b'('].repeat(pairs);
+
+            let mut osc_prefix = chain.clone();
+            osc_prefix.extend_from_slice(&[ESC, b']', b'1', b'0', b';']);
+            cases.push((
+                format!("{pairs}x `ESC (` chain then ESC ]10;, chunk `?` BEL"),
+                before.clone(),
+                full_window(&osc_prefix, b' '),
+                b"?\x07".to_vec(),
+            ));
+
+            let mut csi_prefix = chain;
+            csi_prefix.extend_from_slice(&[ESC, b'[']);
+            cases.push((
+                format!("{pairs}x `ESC (` chain then ESC [ + NULs, chunk `c`"),
+                before,
+                full_window(&csi_prefix, 0x00),
+                b"c".to_vec(),
+            ));
+        }
+
+        for (label, before, window, chunk) in cases {
+            // Premise: the live client, fed the raw stream, answers nothing.
+            let mut raw = before;
+            raw.extend_from_slice(&window);
+            raw.extend_from_slice(&chunk);
+            raw.push(0x07);
+            assert!(
+                client_responses(&raw).is_empty(),
+                "case {label}: the raw stream must produce no response in the client"
+            );
+
+            let replacement = build_suppressed_replacement(&chunk, &[], &[], &window);
+            assert!(
+                replacement.is_empty(),
+                "case {label}: a designator-slot ESC must never restart the scan, got {:?}",
+                String::from_utf8_lossy(&replacement)
+            );
+            let mut delivered = replacement;
+            delivered.push(0x07);
+            assert!(
+                client_responses(&delivered).is_empty(),
+                "case {label}: the client must queue no response"
+            );
+        }
+    }
+
+    /// AC-3 (FR1 positive): a full window that holds a decidable ESC is
+    /// scanned from there and the color query is delivered exactly once.
+    #[test]
+    fn full_window_with_a_decidable_esc_delivers_the_color_query_once() {
+        let window = full_window(&[b'x', ESC, b']', b'1', b'0', b';'], b' ');
+        let chunk = b"?\x07".to_vec();
+        let result = build_suppressed_replacement(&chunk, &[], &[], &window);
+        let mut expected = window[1..].to_vec();
+        expected.extend_from_slice(&chunk);
+        assert_eq!(result, expected);
+    }
+
+    /// AC-3 (FR1): a window shorter than the cap is scanned from its start.
+    #[test]
+    fn short_window_is_scanned_from_its_start_even_when_it_begins_with_esc() {
+        let window = [ESC, b']', b'1', b'0', b';', b' ', b' '];
+        let chunk = b"?\x07".to_vec();
+        let result = build_suppressed_replacement(&chunk, &[], &[], &window);
+        let mut expected = window.to_vec();
+        expected.extend_from_slice(&chunk);
+        assert_eq!(result, expected);
+    }
+
+    /// AC-4 (FR2, builder level): a color query completed in the chunk is
+    /// included verbatim exactly once whether it lies inside a ring-written
+    /// range, outside it, or across a range edge.
+    #[test]
+    fn color_query_is_included_once_whatever_its_ring_written_overlap() {
+        // `A ESC ] 1 1 ; ? BEL B`: the query occupies bytes 1..8.
+        let chunk = b"A\x1b]11;?\x07B";
+        let query = b"\x1b]11;?\x07";
+        let layouts: [(&str, Vec<Range<usize>>); 6] = [
+            ("inside a range", vec![0..chunk.len()]),
+            ("outside every range", vec![]),
+            ("range ends inside the query", vec![0..4]),
+            ("range starts inside the query", vec![5..chunk.len()]),
+            ("straddled by two ranges", vec![0..4, 6..chunk.len()]),
+            ("ranges on both sides only", vec![0..1, 8..9]),
+        ];
+        for (label, ranges) in layouts {
+            let result = build(chunk, &ranges, &[]);
+            assert_eq!(result, query, "layout {label}: exactly one verbatim copy");
+        }
+    }
+
+    /// AC-4 (FR2): queries, color queries and viewer launches come out in
+    /// stream order whatever the ring-written layout, each exactly once.
+    #[test]
+    fn color_queries_keep_stream_order_with_csi_queries_and_viewer_launches() {
+        let items: [&[u8]; 5] = [
+            b"\x1b[6n",
+            b"\x1b]11;?\x07",
+            b"\x1b]777;emterm;markdown;begin;id=1\x07",
+            b"\x1b]10;?\x1b\\",
+            b"\x1b[c",
+        ];
+        // Plain text between the items is never part of the replacement.
+        let mut chunk = Vec::new();
+        let mut expected = Vec::new();
+        for item in items {
+            chunk.extend_from_slice(b"text");
+            chunk.extend_from_slice(item);
+            expected.extend_from_slice(item);
+        }
+        // The whole chunk, none of it, and ranges cutting through items.
+        let layouts: [Vec<Range<usize>>; 4] = [
+            vec![0..chunk.len()],
+            vec![],
+            vec![2..14, 20..chunk.len()],
+            vec![0..4, 8..13, 30..44],
+        ];
+        for ranges in layouts {
+            let result = build(&chunk, &ranges, &[]);
+            assert_eq!(result, expected, "ring-written ranges {ranges:?}");
+        }
+    }
+
+    /// AC-4 (FR2): a color query that completed inside the retained window
+    /// already reached the client in an earlier read and is not included.
+    #[test]
+    fn color_query_completed_inside_the_window_is_not_included() {
+        let window = b"prefix\x1b]11;?\x07".to_vec();
+        let chunk = b"plain text".to_vec();
+        for ranges in [vec![0..chunk.len()], vec![]] {
+            let result = build_suppressed_replacement(&chunk, &ranges, &[], &window);
+            assert!(result.is_empty(), "ring-written ranges {ranges:?}");
+        }
+        // A query that STARTED in the window and completes in the chunk is.
+        let window = b"prefix\x1b]11;".to_vec();
+        let chunk = b"?\x07".to_vec();
+        let result = build_suppressed_replacement(&chunk, &[0..chunk.len()], &[], &window);
+        assert_eq!(result, b"\x1b]11;?\x07");
     }
 
     // ---- FR8 (mux-suppressed-output-round2-fixes task0004): the snapshot
