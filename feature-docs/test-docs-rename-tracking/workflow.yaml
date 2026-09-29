@@ -86,9 +86,11 @@ workflow:
     status: completed
     completed_at_commit: 7a01cfba013d6a1b375439e78863a61d994391da
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 20b13293ffecff288c2a78003fce02dda3cb634f
+    result: pass
     failed_items: []
+    summary: "build (cargo check / bun build) ok; cargo test --lib 3820 passed; bun test 402 passed; cargo fmt --check / biome check clean; TS-1..TS-7 pass (TS-5/TS-6 inspected by orchestrator); no excluded requirements"
   - id: retrospect
     status: pending
 
