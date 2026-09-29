@@ -1,0 +1,30 @@
+feature: mux-suppressed-output-round2-fixes
+collected_at: "2026-09-29T22:59:43+09:00"
+session_ids: [01a0ed75-d82f-7720-bff9-2afd34ec6261]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code の最終読みがスコア 2.01（confidence 0.99）で、複数モジュールにまたがる新ロジックと判定した"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 2.0, confidence: 0.97}
+        observed_at: "2026-09-29T20:31:10+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 2.01, confidence: 0.99}
+        observed_at: "2026-09-29T20:36:47+09:00"
+    pre_survey_estimate:
+      files_expected_count: 10
+      new_functions_needed: true
+      new_files_needed: false
+      new_dependencies_needed: false
+      change_containment: multiple_modules
+      added_test_cases_approx: 12
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1 で medium 8 件が unresolved のまま残った（auto-fix は critical/high のみ）。前 feature の round2 medium 8 件の対応で、新たな medium 8 件が出ている"
