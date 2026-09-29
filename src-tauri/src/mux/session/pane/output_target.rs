@@ -11,6 +11,7 @@ use super::output_queue::PtyOutputChunk;
 use super::{MuxPane, encode_snapshot_segments};
 use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
 use crate::mux::snapshot_bytes::build_resume_snapshot_bytes_for_ring;
+use crate::mux::snapshot_tail::trailing_construct_bytes;
 
 /// Why a pane is currently detached. Combines `NetworkDetach`
 /// (no client connected / kicked / explicit detach) with
@@ -410,7 +411,18 @@ pub fn resume_pane_with_permit(
             // <= boundary that later reaches this same sender is therefore
             // either superseded by this snapshot or suppressed by the
             // reader (FR11).
-            pane.output_capture.record_boundary(owned_tx, boundary);
+            //
+            // mux-suppressed-output-round2-fixes task0004 (FR8): the
+            // incomplete construct this snapshot leaves the client parser
+            // in is decided from the payload exactly as built above
+            // (outside the capture exclusion, which `captured_read` released)
+            // and recorded together with the boundary.
+            let trailing_construct = trailing_construct_bytes(&snapshot);
+            pane.output_capture.record_boundary_with_construct(
+                owned_tx,
+                boundary,
+                trailing_construct,
+            );
             // review round-1 rework, finding `20b2bed0aaf48f94`: tag this as
             // a Snapshot-kind chunk (not the default PtyOutput) so the mux
             // connection drain (`mux::ipc::connection`) sends it as

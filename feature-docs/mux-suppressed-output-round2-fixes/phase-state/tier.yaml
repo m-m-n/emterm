@@ -1,0 +1,93 @@
+schema_version: 2
+feature: mux-suppressed-output-round2-fixes
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 2.0
+    confidence: 0.97
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.01
+      '2': 0.97
+      '3': 0.02
+  observed_at: '2026-09-29T20:31:10+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 2.01
+    confidence: 0.99
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.0
+      '2': 0.99
+      '3': 0.01
+  observed_at: '2026-09-29T20:36:47+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/scrollback_filter/tests.rs
+  - src-tauri/src/mux/snapshot_bytes.rs
+  - src-tauri/src/mux/session/pane/tests.rs
+  - feature-docs/mux-suppressed-output-fixes/reviews/round2.yaml
+  changed_lines_approx: -1
+  new_functions_needed: true
+  new_files_needed: false
+  new_dependencies_needed: false
+  covering_tests_exist: true
+  spillover_modules:
+  - mux::scrollback_filter
+  - mux::snapshot_bytes
+  - mux::session::pane
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 12
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 5
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: '静的確認では8件すべて未修正。対象の本体4ファイルはround2のhead_commitから変更されていない。ファイル変更・テスト実行は行っていない。
+
+    ecc48041b65a5380: 未修正。client_parity_scan.rs:148の除外条件は位置0と特定の位置1だけで、文字集合指定に消費される位置2以降のESCを再開位置に選ぶ。
+
+    dd56f3984c74cde1: 未修正。suppressed_output.rs:133で主画面の色問い合わせを除外する一方、tabs/replay.rs:105,583では復元時の応答を破棄する。既存テストも主画面では再送しない期待値になっている。
+
+    ae48e7cd98084c19: 未修正。write_filter.rs:315で末尾のESC (／ESC )を排出し、指定文字待ちの状態を次のfeedへ保持していない。
+
+    b600645f1fa94686: 未修正。write_filter.rs:442以降で切替列を除いて主画面区間を連結し、suppressed_output.rs:101で中断を反映していないpendingを再送する。
+
+    f8b600bcc0ed55da: 未修正。suppressed_output.rs:94で単一のscan_limitを算出するため、pendingに対応する主画面区間の間にある代替画面の問い合わせも走査対象から外れる。
+
+    03ccd5c7702db8db: 未修正。write_filter.rs:170以降で完結した列をpendingから排出・除去し、mod.rs:793ではfeed後のpendingしか渡さない。256バイトの保持窓より前に始まった起動列の引継ぎがない。
+
+    a93dffe30438a693: 未修正。client_parity_scan.rs:403,490はOSC番号を数値で判定するが、scrollback_filter.rs:303,312は文字列一致で除去する。0777の起動列が復元用データと置換出力の両方に残る。
+
+    3eccc254dd278b33: 未修正。snapshot_bytes.rs:234の主画面復帰には末尾の切替列がなく、term_coreの復元処理も終了時に解析状態を初期化しない。suppressed_output.rs:106は復元済みの未完了UTF-8／文字集合指定の末尾を再送する。
+
+    関連テストは存在するが、8件の条件を網羅していない。対象IDはround2.yamlですべてunresolvedで、固定済み・対応不要の記録は確認できない。
+
+    files_expectedとspillover_modulesは確認箇所に基づく修正候補。追加テスト約12件はレビューの再現条件を分けた検証案で、new_functions_neededには回帰テスト関数を含む。変更行数は実装未確定のため-1とした。caller_and_dependency_countは確認した主要な本番呼出箇所（抑止処理2、置換生成1、feed1、主画面抽出1）の計5で、全依存関係の総数ではない。'
+decided_at: '2026-09-29T20:37:03+09:00'

@@ -3668,3 +3668,488 @@ fn deferred_output_queue_dedupes_repeated_visibility_resume_for_same_pane() {
         "repeated resume requests for the same pane must deduplicate"
     );
 }
+
+// ── mux-suppressed-output-round2-fixes task0004 (FR8): the per-destination
+//    boundary record carries the trailing construct of the covering
+//    snapshot ────────────────────────────────────────────────────────────
+
+const ESC_BYTE: u8 = 0x1b;
+
+fn construct_channel() -> (mpsc::Sender<PtyOutputChunk>, mpsc::Receiver<PtyOutputChunk>) {
+    mpsc::channel(8)
+}
+
+fn cover_construct(
+    capture: &OutputCapture,
+    tx: &mpsc::Sender<PtyOutputChunk>,
+    number: u64,
+) -> Option<Option<Vec<u8>>> {
+    capture.boundary_cover(tx, number).map(|c| c.construct)
+}
+
+/// AC-2: a higher boundary replaces both the boundary and the construct.
+#[test]
+fn ac2_higher_boundary_replaces_both_boundary_and_construct() {
+    let capture = OutputCapture::new();
+    let (tx, _rx) = construct_channel();
+    capture.record_boundary_with_construct(&tx, 5, Some(b"\x1b(".to_vec()));
+    capture.record_boundary_with_construct(&tx, 7, Some(vec![0xe4, 0xb8]));
+    assert_eq!(
+        cover_construct(&capture, &tx, 7),
+        Some(Some(vec![0xe4, 0xb8])),
+        "the new boundary's construct applies to the new boundary"
+    );
+    assert_eq!(
+        cover_construct(&capture, &tx, 5),
+        Some(None),
+        "chunk 5 is still covered, but the old construct was replaced and \
+         never applies to a chunk below the recorded boundary"
+    );
+    assert_eq!(cover_construct(&capture, &tx, 8), None, "8 is not covered");
+}
+
+/// AC-2: a higher boundary recorded without a construct clears the old one.
+#[test]
+fn ac2_higher_boundary_without_a_construct_clears_the_old_construct() {
+    let capture = OutputCapture::new();
+    let (tx, _rx) = construct_channel();
+    capture.record_boundary_with_construct(&tx, 5, Some(b"\x1b(".to_vec()));
+    capture.record_boundary(&tx, 9);
+    assert_eq!(cover_construct(&capture, &tx, 9), Some(None));
+    assert_eq!(cover_construct(&capture, &tx, 5), Some(None));
+}
+
+/// AC-2: an equal boundary with an identical construct keeps it.
+#[test]
+fn ac2_equal_boundary_with_an_identical_construct_keeps_it() {
+    let capture = OutputCapture::new();
+    let (tx, _rx) = construct_channel();
+    capture.record_boundary_with_construct(&tx, 5, Some(b"\x1b[1;".to_vec()));
+    capture.record_boundary_with_construct(&tx, 5, Some(b"\x1b[1;".to_vec()));
+    assert_eq!(
+        cover_construct(&capture, &tx, 5),
+        Some(Some(b"\x1b[1;".to_vec()))
+    );
+}
+
+/// AC-2: an equal boundary with a different construct yields none —
+/// conflicting information falls back to the pre-feature re-send. Every
+/// pairing of (some, other, none) is covered.
+#[test]
+fn ac2_equal_boundary_with_a_different_construct_yields_none() {
+    let a = Some(b"\x1b(".to_vec());
+    let b = Some(b"\x1b)".to_vec());
+    let pairs: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> =
+        vec![(a.clone(), b.clone()), (a.clone(), None), (None, a.clone())];
+    for (first, second) in pairs {
+        let capture = OutputCapture::new();
+        let (tx, _rx) = construct_channel();
+        capture.record_boundary_with_construct(&tx, 5, first.clone());
+        capture.record_boundary_with_construct(&tx, 5, second.clone());
+        assert_eq!(
+            cover_construct(&capture, &tx, 5),
+            Some(None),
+            "first={first:?} second={second:?}"
+        );
+    }
+}
+
+/// AC-2: a lower boundary leaves the entry unchanged (boundary and
+/// construct), whatever construct it carries.
+#[test]
+fn ac2_lower_boundary_leaves_the_entry_unchanged() {
+    let capture = OutputCapture::new();
+    let (tx, _rx) = construct_channel();
+    capture.record_boundary_with_construct(&tx, 9, Some(b"\x1b(".to_vec()));
+    capture.record_boundary_with_construct(&tx, 4, Some(b"\x1b)".to_vec()));
+    capture.record_boundary(&tx, 3);
+    assert_eq!(
+        cover_construct(&capture, &tx, 9),
+        Some(Some(b"\x1b(".to_vec())),
+        "a lower boundary must not touch the recorded boundary or construct"
+    );
+}
+
+/// AC-2: the boundary-only record form means "construct none".
+#[test]
+fn ac2_boundary_only_record_form_means_construct_none() {
+    let capture = OutputCapture::new();
+    let (tx, _rx) = construct_channel();
+    capture.record_boundary(&tx, 3);
+    assert_eq!(cover_construct(&capture, &tx, 3), Some(None));
+    let mut guard = capture.hold_boundary();
+    guard.record(&tx, 6);
+    assert_eq!(guard.cover(&tx, 6).map(|c| c.construct), Some(None));
+}
+
+/// AC-2: a record for one destination never changes another's.
+#[test]
+fn ac2_a_record_for_one_destination_never_changes_another() {
+    let capture = OutputCapture::new();
+    let (tx_a, _rx_a) = construct_channel();
+    let (tx_b, _rx_b) = construct_channel();
+    capture.record_boundary_with_construct(&tx_a, 5, Some(b"\x1b(".to_vec()));
+    capture.record_boundary_with_construct(&tx_b, 5, Some(b"\x1b)".to_vec()));
+    capture.record_boundary_with_construct(&tx_b, 8, None);
+    assert_eq!(
+        cover_construct(&capture, &tx_a, 5),
+        Some(Some(b"\x1b(".to_vec())),
+        "A keeps only its own record"
+    );
+    assert_eq!(cover_construct(&capture, &tx_a, 6), None);
+    assert_eq!(cover_construct(&capture, &tx_b, 8), Some(None));
+    assert_eq!(cover_construct(&capture, &tx_b, 5), Some(None));
+}
+
+/// AC-2 / AC-6: with two snapshots recorded back to back for one
+/// destination, a chunk uses the construct of the record that covers it —
+/// the second snapshot's construct applies to its own boundary chunk only.
+#[test]
+fn ac2_two_back_to_back_snapshots_use_the_record_that_covers_the_chunk() {
+    let capture = OutputCapture::new();
+    let (tx, _rx) = construct_channel();
+    capture.record_boundary_with_construct(&tx, 3, Some(b"\x1b(".to_vec()));
+    // Chunk 3 is checked before the second snapshot lands: first record.
+    assert_eq!(
+        cover_construct(&capture, &tx, 3),
+        Some(Some(b"\x1b(".to_vec()))
+    );
+    capture.record_boundary_with_construct(&tx, 5, Some(vec![0xe4]));
+    // Chunk 3 checked after the second snapshot: covered, but the construct
+    // now belongs to chunk 5 only.
+    assert_eq!(cover_construct(&capture, &tx, 3), Some(None));
+    assert_eq!(cover_construct(&capture, &tx, 4), Some(None));
+    assert_eq!(cover_construct(&capture, &tx, 5), Some(Some(vec![0xe4])));
+}
+
+/// AC-2: the covered query returns the construct only when the chunk
+/// number equals the recorded boundary.
+#[test]
+fn ac2_covered_query_returns_the_construct_only_when_the_number_equals_the_boundary() {
+    let capture = OutputCapture::new();
+    let (tx, _rx) = construct_channel();
+    assert_eq!(cover_construct(&capture, &tx, 1), None, "no entry");
+    capture.record_boundary_with_construct(&tx, 6, Some(b"\x1b[".to_vec()));
+    for number in 0..6 {
+        assert_eq!(
+            cover_construct(&capture, &tx, number),
+            Some(None),
+            "chunk {number} is below the boundary"
+        );
+    }
+    assert_eq!(
+        cover_construct(&capture, &tx, 6),
+        Some(Some(b"\x1b[".to_vec()))
+    );
+    assert_eq!(cover_construct(&capture, &tx, 7), None);
+    assert_eq!(
+        capture.is_boundary_covered(&tx, 6),
+        capture.boundary_cover(&tx, 6).is_some(),
+        "the boolean query and the construct query agree"
+    );
+}
+
+/// AC-2: the construct is read under the SAME boundary hold as the covered
+/// decision — while a guard is held, a record from another thread waits, so
+/// the (covered, construct) pair the guard reads is one consistent snapshot
+/// of the entry.
+#[test]
+fn ac2_construct_is_read_under_the_same_boundary_hold_as_the_covered_decision() {
+    let capture = Arc::new(OutputCapture::new());
+    let (tx, _rx) = construct_channel();
+    capture.record_boundary_with_construct(&tx, 5, Some(b"\x1b(".to_vec()));
+
+    let guard = capture.hold_boundary();
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    let writer = {
+        let capture = capture.clone();
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            capture.record_boundary_with_construct(&tx, 9, Some(vec![0xe4]));
+        })
+    };
+    started_rx.recv().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    assert!(
+        !writer.is_finished(),
+        "a record must wait for the held boundary exclusion"
+    );
+    assert_eq!(
+        guard.cover(&tx, 5).map(|c| c.construct),
+        Some(Some(b"\x1b(".to_vec())),
+        "the covered decision and the construct come from the same hold"
+    );
+    drop(guard);
+    writer.join().unwrap();
+    assert_eq!(
+        cover_construct(&capture, &tx, 9),
+        Some(Some(vec![0xe4])),
+        "after the hold ends the waiting record lands"
+    );
+}
+
+// ── task0004 AC-3: visibility restore records the construct of the
+//    payload it sent ─────────────────────────────────────────────────────
+
+/// A pane hidden by visibility for `owner`, ready for
+/// `resume_pane_with_permit`.
+fn hidden_pane_owned_by(
+    id: PaneId,
+    owner: &mpsc::Sender<PtyOutputChunk>,
+) -> (MuxPane, SharedOutputTarget) {
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::HiddenByVisibility,
+        owner: Some(owner.clone()),
+    }));
+    (MuxPane::new_test(id, 80, 24, target.clone()), target)
+}
+
+/// Seed the ring and the shadow parser with `bytes` through the capture
+/// step (as the reader would), returning the capture's new number.
+fn seed_through_capture(pane: &MuxPane, ring_bytes: &[u8], shadow_bytes: &[u8]) -> u64 {
+    let (_, number) = pane.output_capture.capture(|| {
+        pane.shadow_parser.lock().unwrap().process(shadow_bytes);
+        pane.scrollback.lock().unwrap().write(ring_bytes);
+    });
+    number
+}
+
+/// Run the production visibility restore and return the delivered
+/// snapshot chunk together with the recorded boundary number.
+fn resume_and_take_snapshot(
+    pane: &MuxPane,
+    tx: &mpsc::Sender<PtyOutputChunk>,
+    rx: &mut mpsc::Receiver<PtyOutputChunk>,
+) -> PtyOutputChunk {
+    let permit = tx.try_reserve().expect("capacity for the resume permit");
+    let outcome = resume_pane_with_permit(pane, tx, AnyPermit::Borrowed(permit), 10_000);
+    assert!(matches!(outcome, ResumeOutcome::Resumed));
+    rx.try_recv().expect("the snapshot must have been sent")
+}
+
+/// The snapshot the assembly function builds for the pane's CURRENT ring and
+/// shadow state (the byte-identity oracle of AC-3).
+fn expected_resume_assembly(pane: &MuxPane) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
+    let (ring, segments, wrapped) = pane
+        .scrollback
+        .lock()
+        .unwrap()
+        .read_segments_with_wrap_state();
+    let (screen, alt, dims) = {
+        let parser = pane.shadow_parser.lock().unwrap();
+        let (rows, cols) = parser.screen().size();
+        let alt = parser.screen().alternate_screen();
+        let screen = if alt || wrapped {
+            parser.screen().contents_formatted()
+        } else {
+            Vec::new()
+        };
+        (screen, alt, (cols, rows))
+    };
+    crate::mux::snapshot_bytes::build_resume_snapshot_bytes_for_ring(
+        &ring, &segments, &screen, alt, wrapped, dims, 10_000,
+    )
+}
+
+fn assert_sent_snapshot_is_the_assembly_output(
+    chunk: &PtyOutputChunk,
+    expected: &(Vec<u8>, Vec<(usize, u16, u16)>),
+) {
+    assert_eq!(chunk.kind, ChunkKind::Snapshot);
+    let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&chunk.data);
+    assert_eq!(content, expected.0.as_slice(), "snapshot bytes unchanged");
+    let tuples: Vec<(usize, u16, u16)> = segments
+        .iter()
+        .map(|s| (s.offset as usize, s.cols, s.rows))
+        .collect();
+    assert_eq!(tuples, expected.1, "snapshot segments unchanged");
+    assert_eq!(
+        chunk.data,
+        encode_snapshot_segments(&expected.0, &expected.1),
+        "wire encoding unchanged"
+    );
+}
+
+/// AC-3: a main-buffer visibility restore whose ring ends in each of the
+/// three tail kinds records that construct together with the boundary,
+/// and sends the byte-identical snapshot the assembly function builds.
+#[test]
+fn ac3_visibility_restore_records_the_construct_of_the_snapshot_it_sent() {
+    let cases: Vec<(&str, Vec<u8>, Vec<u8>)> = vec![
+        (
+            "cut utf-8",
+            [b"abc".as_slice(), &[0xe4, 0xb8]].concat(),
+            vec![0xe4, 0xb8],
+        ),
+        (
+            "awaiting designator",
+            [b"abc".as_slice(), &[ESC_BYTE, b'(']].concat(),
+            vec![ESC_BYTE, b'('],
+        ),
+        (
+            "cut csi with an executed C0",
+            [b"abc".as_slice(), &[ESC_BYTE, b'[', b'1', b'\r', b';']].concat(),
+            vec![ESC_BYTE, b'[', b'1', b';'],
+        ),
+    ];
+    for (name, ring_bytes, construct) in cases {
+        let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+        let (pane, _target) = hidden_pane_owned_by(31, &tx);
+        let boundary = seed_through_capture(&pane, &ring_bytes, &ring_bytes);
+        let expected = expected_resume_assembly(&pane);
+
+        let chunk = resume_and_take_snapshot(&pane, &tx, &mut rx);
+
+        assert_sent_snapshot_is_the_assembly_output(&chunk, &expected);
+        assert_eq!(
+            cover_construct(&pane.output_capture, &tx, boundary),
+            Some(Some(construct)),
+            "case {name}: the construct of the sent payload is recorded with the boundary"
+        );
+    }
+}
+
+/// AC-3 / AC-6: an alternate-screen visibility restore sends the byte-
+/// identical snapshot and records the construct of THAT payload, which ends
+/// in the screen dump (no construct).
+#[test]
+fn ac6_alternate_screen_visibility_restore_records_none() {
+    let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (pane, _target) = hidden_pane_owned_by(32, &tx);
+    let boundary = seed_through_capture(&pane, b"abc", b"abc\x1b[?1049hTUI\x1b(");
+    assert!(
+        pane.shadow_parser
+            .lock()
+            .unwrap()
+            .screen()
+            .alternate_screen(),
+        "test prerequisite: the pane is on the alternate screen"
+    );
+    let expected = expected_resume_assembly(&pane);
+
+    let chunk = resume_and_take_snapshot(&pane, &tx, &mut rx);
+
+    assert_sent_snapshot_is_the_assembly_output(&chunk, &expected);
+    assert_eq!(
+        cover_construct(&pane.output_capture, &tx, boundary),
+        Some(None),
+        "an alternate-screen restore ends in the screen dump: nothing is carried"
+    );
+}
+
+/// AC-3 / AC-6: a wrapped ring with a non-empty screen dump gets a dump
+/// block appended after the ring, so the payload no longer ends in the ring's
+/// cut construct and nothing is recorded. (The shadow parser's
+/// `contents_formatted()` is never empty, so every production restore of a
+/// wrapped main-screen ring ends this way; the "wrapped ring with an empty
+/// dump" payload shape is reachable only through the assembly function, and
+/// its tests live with the reader-level FR8 tests in `ipc/pty_spawn/tests.rs`.)
+#[test]
+fn ac6_wrapped_ring_with_a_dump_block_records_none() {
+    let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (pane, _target) = hidden_pane_owned_by(33, &tx);
+    *pane.scrollback.lock().unwrap() = ScrollbackRingBuffer::new(32);
+    let mut ring_bytes = b"visible text on the shadow screen\r\n".repeat(3);
+    ring_bytes.extend_from_slice(&[ESC_BYTE, b'(']);
+    let boundary = seed_through_capture(&pane, &ring_bytes, &ring_bytes);
+    let expected = expected_resume_assembly(&pane);
+    assert!(
+        !expected.0.ends_with(&[ESC_BYTE, b'(']),
+        "test prerequisite: the dump block follows the ring's cut construct"
+    );
+
+    let chunk = resume_and_take_snapshot(&pane, &tx, &mut rx);
+
+    assert_sent_snapshot_is_the_assembly_output(&chunk, &expected);
+    assert_eq!(
+        cover_construct(&pane.output_capture, &tx, boundary),
+        Some(None)
+    );
+}
+
+// ── task0004 AC-3: the enqueue carries the construct with the boundary ─
+
+/// AC-3: the on-demand enqueue's fast path records the construct together
+/// with the boundary, once the chunk is in the channel.
+#[test]
+fn ac3_enqueue_fast_path_records_the_construct_with_the_boundary() {
+    let (tx, mut rx) = construct_channel();
+    let capture = Arc::new(OutputCapture::new());
+    let mut deferred = DeferredOutputQueue::new();
+    enqueue_pane_output_chunk(
+        &tx,
+        PtyOutputChunk::snapshot(1, b"S".to_vec()),
+        &mut deferred,
+        Some((capture.clone(), 6, Some(b"\x1b(".to_vec()))),
+    );
+    assert!(rx.try_recv().is_ok(), "the chunk entered the channel");
+    assert!(deferred.is_empty());
+    assert_eq!(
+        cover_construct(&capture, &tx, 6),
+        Some(Some(b"\x1b(".to_vec()))
+    );
+}
+
+/// AC-3: on a full channel the construct travels with the deferred boundary
+/// commit and nothing is recorded until the flush.
+#[test]
+fn ac3_enqueue_on_a_full_channel_defers_the_construct_with_the_commit() {
+    let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
+    tx.try_send(PtyOutputChunk::pty_output(1, b"filler".to_vec()))
+        .unwrap();
+    let capture = Arc::new(OutputCapture::new());
+    let mut deferred = DeferredOutputQueue::new();
+    enqueue_pane_output_chunk(
+        &tx,
+        PtyOutputChunk::snapshot(1, b"S".to_vec()),
+        &mut deferred,
+        Some((capture.clone(), 6, Some(vec![0xe4, 0xb8]))),
+    );
+    assert_eq!(deferred.len(), 1);
+    assert_eq!(
+        cover_construct(&capture, &tx, 0),
+        None,
+        "nothing is recorded before the flush"
+    );
+    match deferred.pop_front() {
+        Some(DeferredOutputItem::Chunk(_, Some(commit))) => {
+            assert_eq!(commit.boundary, 6);
+            assert_eq!(commit.construct, Some(vec![0xe4, 0xb8]));
+        }
+        other => panic!("expected a deferred chunk with a boundary commit, got {other:?}"),
+    }
+}
+
+/// AC-3: an enqueue without a boundary commit records nothing.
+#[test]
+fn ac3_enqueue_without_a_boundary_commit_records_nothing() {
+    let (tx, _rx) = construct_channel();
+    let capture = Arc::new(OutputCapture::new());
+    let mut deferred = DeferredOutputQueue::new();
+    enqueue_pane_output_chunk(
+        &tx,
+        PtyOutputChunk::pty_output(1, b"x".to_vec()),
+        &mut deferred,
+        None,
+    );
+    assert_eq!(cover_construct(&capture, &tx, 0), None);
+}
+
+/// AC-2: visibility restore decides the construct outside the capture
+/// exclusion and the boundary exclusion (the lock order is unchanged: the
+/// decider only reads the payload and takes no lock of its own).
+#[test]
+fn ac2_visibility_restore_decides_the_construct_outside_both_exclusions() {
+    let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (pane, _target) = hidden_pane_owned_by(35, &tx);
+    seed_through_capture(&pane, b"abc\x1b(", b"abc\x1b(");
+    let probe = pane.output_capture.probe_decider_exclusions();
+    let _ = resume_and_take_snapshot(&pane, &tx, &mut rx);
+    let (calls, free) = probe.finish();
+    assert!(calls >= 1, "the decider must run on the restore path");
+    assert!(
+        free,
+        "the decider must run with neither the capture exclusion nor the boundary exclusion held"
+    );
+}

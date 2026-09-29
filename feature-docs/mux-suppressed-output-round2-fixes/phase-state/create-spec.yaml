@@ -1,0 +1,92 @@
+schema_version: 1
+feature: mux-suppressed-output-round2-fixes
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 492a24e9e4442632aa2490ba9319a9d681931c22
+last_input_digest: sha256:dd3b0c23dc9cea43782b083ee6ef5b7a2fb1ea1361bd65dc29b68535c9e2a947
+active_request_id: null
+packets: {}
+answers:
+  req.fr8-tail-approach:
+    packet_id: null
+    answered_at: '2026-09-29T20:49:30+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: (a) snapshot のバイト列は変えず、snapshot の形と末尾の解析状態を置換出力の組み立てに渡す
+    normalized_answer: FR8 は snapshot のバイト列を変えずに満たす。snapshot の形と末尾の解析状態は、現在のペイン状態から推測せず、送信先と抑止境界に対応する
+      snapshot の情報として境界の記録に保持して置換出力の組み立てに渡す。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation,
+      orchestrator-opened after analyst run 0001 at the user''s launch instruction
+      to consult Codex on unclear points); Codex (codex harness, 1 turn) consulted;
+      Opus escalation: not run; options: (a) 形と解析状態を渡す [chosen] / (b) snapshot から尾部を除く
+      [not chosen]; key points: (b) は置換出力が生じない通常の復帰でも除いた尾部を後続出力につなぐ仕組みが要る。形と状態は境界に対応づけて保持する必要がある'
+  req.fr8-tail-scope:
+    packet_id: null
+    answered_at: '2026-09-29T20:49:30+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: (a) 抑止で尾部が二重になる形に限る。ただし『リング未周回』ではなく『実際に生成された snapshot が未完了の尾部の状態を残すか』で判定する
+    normalized_answer: FR8 の対象は、実際に生成された snapshot がクライアントのパーサーを未完了の尾部の状態のまま残す場合とする（リング周回済みでも画面ダンプが空・生成失敗で後置ブロックが付かない場合を含む）。daemon
+      が付け足すバイトと尾部の干渉（reattach の末尾切り替え列、ダンプブロック等）は対象外（as-03 を維持）。さらに、snapshot 末尾が `ESC
+      (` や未完了 CSI のとき、置換出力の先頭の問い合わせ・起動列の ESC が指定文字として消費される／CSI を打ち切る併存ケースも対象にし、問い合わせの配送と後続チャンクの解析状態の両方を生のストリームと一致させる。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation,
+      orchestrator-opened after analyst run 0001 at the user''s launch instruction
+      to consult Codex on unclear points); Codex (codex harness, 1 turn) consulted;
+      Opus escalation: not run; options: (a) 二重化する形に限る [chosen, refined] / (b) daemon
+      付加バイトの干渉も直す [not chosen]; key points: 干渉の修正は snapshot 生成全般の修正になる。対象判定は『未周回』では狭い。尾部状態と置換出力先頭の問い合わせの併存で
+      ESC が消費される問題を追加'
+  req.fr7-shared-osc-layer:
+    packet_id: null
+    answered_at: '2026-09-29T20:49:30+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: (a) 共通の層に移し、除去側を数値の識別に揃える。識別結果と、各利用側が除去・配送する種類の選択は分ける
+    normalized_answer: 'FR7 は共通の層で OSC 番号の復元とビューア起動の識別を行い、scrollback の除去と置換出力の抽出が共有する。識別結果と、利用側ごとの除去・配送対象の選択は分ける。NFR1
+      の例外（除去対象の変化）は先頭ゼロだけでなく、共通の復元が最初の ; より前の数字以外をデータに残すことで生じる変化（例: `777emterm;;markdown;…`
+      の識別）まで含めて明記する。'
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation,
+      orchestrator-opened after analyst run 0001 at the user''s launch instruction
+      to consult Codex on unclear points); Codex (codex harness, 1 turn) consulted;
+      Opus escalation: not run; options: (a) 共通層・除去側を数値判定へ [chosen] / (b) 置換側を文字列一致へ
+      [not chosen]; key points: (b) では代替画面の先頭ゼロ付き起動を置換出力からも落とす。NFR1 例外の範囲を復元処理の挙動まで含めて明確化'
+  req.fr6-dedupe-and-order:
+    packet_id: null
+    answered_at: '2026-09-29T20:49:30+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: FR6 の重複排除の単位と配送順序を明記する
+    normalized_answer: FR6 で書き込みフィルタから完結列を渡すときは、元チャンク上の位置も渡す。重複排除は『保持窓による同じ列の再検出』だけを除き、同じ内容の別々の起動は消さない。代替画面区間の問い合わせ・起動列との順序は元のストリームの順を保つ。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation,
+      orchestrator-opened after analyst run 0001 at the user''s launch instruction
+      to consult Codex on unclear points); Codex (codex harness, 1 turn) consulted;
+      Opus escalation: not run; key points: 書き込み側は主画面区間を連結して処理するので位置情報が要る。内容一致での重複排除は別々の起動を消す'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:aa75a82bffd9b25a69ca848944846b25cb8f24b29561720b21432be3b634f1ca
+  output_digest: sha256:3d5f76988a75a7eba0c184013a2c4e51650b3595cede03c968aae35270b5e8e1
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:cf047320dd7a4da2d7d44741faa214506c73c161ee72f1d19aaf2630288b0bf2
+  output_digest: sha256:2a5d2b34daf8dbf1ea581b07c0df561cff9030aa9f743489ab095e2ea5d34aa7
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:dd3b0c23dc9cea43782b083ee6ef5b7a2fb1ea1361bd65dc29b68535c9e2a947
+  output_digest: sha256:2ce32663ac259fa416ae82d5b76455113af5755f496315ce387e0e5ff12228a3
+artifacts:
+- path: feature-docs/mux-suppressed-output-round2-fixes/REQUIREMENTS.md
+  sha256: sha256:6cce839ce39e3b47473ffc83d30bb36e1ff5275e0b1f405e2fbe2fe04d67344b
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-suppressed-output-round2-fixes/SPEC.md
+  sha256: sha256:3207674cf6d27d02a071771a096a37c36b55c731859e2703b42291d33cc6c53f
+  produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

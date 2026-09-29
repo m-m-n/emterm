@@ -1,0 +1,154 @@
+task_id: task0003
+baseline_failures: []
+final_failures: [] # re-executed after the parent-side adoption and re-implementation (3965 passed, 0 failed, 3 ignored); the refreshed baseline on the parent was 3911 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::round2_ae48e7cd_awaiting_designator_is_carried_across_feeds
+      - mux::ipc::pty_spawn::tests::write_filter_split_invariance_holds_for_designator_chains_strings_lone_esc_and_utf8
+      - mux::ipc::pty_spawn::tests::awaiting_designator_is_set_after_esc_paren_and_consumes_the_next_byte
+      - mux::ipc::pty_spawn::tests::awaiting_designator_is_not_set_by_bytes_inside_a_held_string
+      - mux::ipc::pty_spawn::tests::split_invariance_includes_the_awaiting_flag
+    red_confirmed: true
+    red_reason: >-
+      Run against the parent's production files without this task's change, the registry test failed with
+      "fed in two calls split right after `ESC (`, the emitted bytes must equal
+      the single-call result" (left [27, 40]), and the split-invariance test
+      with "split at 2 for ESC ( ESC ]11;?tail: emitted bytes differ from a
+      single feed". The last three tests read the awaiting-designator flag
+      and failed to compile on the pre-fix files (no method named
+      `awaiting_designator` on ScrollbackWriteFilter).
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::round2_b600645f_removed_screen_switch_closes_the_pending_string
+      - mux::ipc::pty_spawn::tests::reader_closes_pending_at_a_chunk_that_starts_with_a_switch_to_the_alt_screen
+      - mux::ipc::pty_spawn::tests::feed_with_no_cuts_is_the_existing_feed
+      - mux::ipc::pty_spawn::tests::a_cut_closes_an_in_progress_osc_and_pending_holds_no_closed_osc
+      - mux::ipc::pty_spawn::tests::a_cut_closes_a_held_lone_esc
+      - mux::ipc::pty_spawn::tests::a_cut_clears_the_awaiting_designator_flag
+      - mux::ipc::pty_spawn::tests::an_empty_fed_range_with_a_cut_still_closes_pending
+      - mux::ipc::pty_spawn::tests::pending_after_a_cut_equals_a_fresh_scan_of_the_bytes_after_the_last_cut
+      - mux::ipc::pty_spawn::tests::cuts_are_derived_from_the_main_buffer_span_list
+    red_confirmed: true
+    red_reason: >-
+      Run against the parent's production files without this task's change, the registry test failed with
+      'form "ESC[?47h": no replacement may be sent for the closed OSC; only
+      the BEL read reaches the client as PtyOutput' (left
+      [[27, 93, 49, 49, 59, 63, 32], [7]], the joined OSC was re-sent), and
+      the reader test with "the OSC the client's switch ESC closed is
+      released to the ring" (left []). The remaining tests use
+      `feed_with_cuts`, `awaiting_designator` or `cuts_from_main_spans` and
+      failed to compile on the pre-fix files (no method named
+      `feed_with_cuts`, cannot find function `cuts_from_main_spans`).
+      `fallback_path_derives_no_cuts_and_keeps_the_whole_chunk_gate` also
+      belongs to this criterion but passed on the pre-fix files (the
+      fallback path is pre-existing behavior it pins), so it is not listed.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::round2_f8b600bc_pending_exclusion_keeps_alt_screen_queries
+      - mux::ipc::pty_spawn::tests::removed_switch_between_main_ranges_delivers_the_alt_query_once_and_sends_no_tail
+      - mux::ipc::pty_spawn::suppressed_output::tests::excluded_pieces_are_the_trailing_contribution_split_across_ranges
+      - mux::ipc::pty_spawn::suppressed_output::tests::excluded_pieces_skip_empty_ranges_and_never_cover_gaps
+      - mux::ipc::pty_spawn::suppressed_output::tests::pending_spanning_two_ranges_keeps_the_alt_range_query_and_appends_the_pending_tail
+      - mux::ipc::pty_spawn::client_parity_scan::tests::scan_skips_an_item_overlapping_an_excluded_piece_and_keeps_the_others
+      - mux::ipc::pty_spawn::client_parity_scan::tests::scan_finds_an_item_in_the_gap_between_two_excluded_pieces
+      - mux::ipc::pty_spawn::client_parity_scan::tests::scan_reports_no_tail_when_a_piece_is_excluded_and_a_tail_otherwise
+    red_confirmed: true
+    red_reason: >-
+      Run against the parent's production files without this task's change, the registry test failed with
+      "the alternate-range query is delivered once, then the pending run as
+      the tail" (left [27, 93, 50, 59, 120, 121]: the query was dropped) and
+      the reader-level test with "CSI 6n once and no tail" (left
+      [[27, 93, 50, 59, 120, 121]]). The suppressed_output tests failed to
+      compile (cannot find function `excluded_pieces`, cannot find type
+      `SuppressedReplacementRequest`) and the client_parity_scan tests failed
+      to compile (mismatched types: `scan` took a different third argument).
+      `incomplete_sequence_in_the_last_main_range_is_the_only_tail` also
+      belongs to this criterion but passed on the pre-fix files (only the
+      last incomplete sequence became the tail already), so it is not listed.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::round2_03ccd5c7_carried_over_viewer_launch_is_delivered_once
+      - mux::ipc::pty_spawn::tests::two_identical_content_launches_are_delivered_twice
+      - mux::ipc::pty_spawn::tests::carried_launch_and_alternate_range_items_follow_the_raw_stream_order
+      - mux::ipc::pty_spawn::tests::carried_color_query_completing_in_the_suppressed_chunk_is_answered_once
+      - mux::ipc::pty_spawn::tests::carried_launch_completing_before_a_chunk_ending_on_the_alt_screen_is_delivered_once
+      - mux::ipc::pty_spawn::tests::consecutive_suppressed_chunks_deliver_a_carried_launch_once_after_each_snapshot
+      - mux::ipc::pty_spawn::tests::a_carried_over_sequence_completing_in_the_feed_is_reported
+      - mux::ipc::pty_spawn::tests::nothing_is_reported_for_an_aborted_cut_or_incomplete_carried_sequence
+      - mux::ipc::pty_spawn::tests::a_completion_before_a_cut_is_reported_and_at_most_one_per_feed
+      - mux::ipc::pty_spawn::tests::a_run_flushed_by_the_cap_never_reports_a_completion
+      - mux::ipc::pty_spawn::tests::a_carried_sequence_near_the_cap_is_reported_only_within_it
+      - mux::ipc::pty_spawn::tests::a_fed_offset_maps_to_the_position_just_past_it_in_chunk_coordinates
+      - mux::ipc::pty_spawn::suppressed_output::tests::carried_over_launch_whose_start_is_out_of_the_window_is_delivered
+      - mux::ipc::pty_spawn::suppressed_output::tests::carried_over_launch_also_found_through_the_window_is_delivered_once
+      - mux::ipc::pty_spawn::suppressed_output::tests::a_launch_with_identical_content_ending_elsewhere_is_a_different_sequence
+      - mux::ipc::pty_spawn::suppressed_output::tests::carried_over_launch_precedes_a_later_alternate_range_query
+      - mux::ipc::pty_spawn::suppressed_output::tests::carried_over_launch_and_the_pending_tail_are_both_delivered
+      - mux::ipc::pty_spawn::suppressed_output::tests::carried_over_color_query_is_delivered_with_either_terminator
+      - mux::ipc::pty_spawn::suppressed_output::tests::carried_over_sequences_that_are_not_deliverable_are_dropped
+      - mux::ipc::pty_spawn::suppressed_output::tests::is_deliverable_osc_rejects_unterminated_and_degenerate_input
+    red_confirmed: true
+    red_reason: >-
+      Run against the parent's production files without this task's change, the registry test failed with
+      "the launch must be delivered exactly once" (left 0, the start is out of
+      the retained window and the filter's completion was never reported).
+      The reader-level tests failed on delivery counts, chunk kinds and
+      delivered bytes (two identical launches, raw-stream order, carried color
+      query left [], consecutive suppressed chunks
+      [PtyOutput, Snapshot, PtyOutput, Snapshot, PtyOutput], launch before an
+      alternate-screen end left 0). The filter-level, mapping and builder
+      tests use `feed_with_cuts`, `carried`, `chunk_end_of_fed_prefix`,
+      `CarriedOverCompletion` or `is_deliverable_osc` and failed to compile on
+      the pre-fix files (cannot find function `chunk_end_of_fed_prefix`,
+      cannot find struct `CarriedOverCompletion`, no method named
+      `feed_with_cuts`). `short_launch_started_in_the_window_is_delivered_once_not_twice`
+      also belongs to this criterion but passed on the pre-fix files (the
+      scan already finds a window-started launch once), so it is not listed.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::fr3_designator_stream_matches_the_reference_over_split_positions
+      - mux::ipc::pty_spawn::tests::fr4_removed_switch_stream_matches_the_reference_over_split_positions
+      - mux::ipc::pty_spawn::tests::fr5_alt_range_query_stream_matches_the_reference_over_split_positions
+      - mux::ipc::pty_spawn::tests::fr6_long_launch_stream_matches_the_reference_over_split_positions
+      - mux::ipc::pty_spawn::tests::fr6_long_color_query_stream_matches_the_reference_over_split_positions
+    red_confirmed: true
+    red_reason: >-
+      Run against the parent's production files without this task's change
+      (integration with task0001, task0002 and task0004 merged), each sweep
+      failed at a concrete split. FR3 "split at 5 and 6: response bytes differ from the
+      reference" (the client answered an OSC 11 query the reference never
+      saw). FR4 "split at 1 and 26: response bytes differ from the
+      reference". FR5 "split at 1 and 25: response presence differs from the
+      reference". FR6 launch "split at 300 and 349: the launch must reach the
+      client exactly once" (left 0). FR6 color query "split at 300 and 313:
+      response bytes differ from the reference" (left []).
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::long_designator_chains_are_linear_and_split_invariant
+      - mux::ipc::pty_spawn::tests::overflow_flush_sets_the_awaiting_flag_from_the_end_of_the_flushed_run
+      - mux::ipc::pty_spawn::tests::overflow_with_cuts_flushes_without_a_report
+    red_confirmed: true
+    red_reason: >-
+      Run against the parent's production files without this task's change, the designator-chain test
+      failed with "split at 59999" (emitted bytes differed from a single
+      feed). The two overflow tests read the awaiting flag and the cut-aware
+      report, and failed to compile on the pre-fix files (no method named
+      `awaiting_designator`, no method named `feed_with_cuts`). One more test
+      of this criterion passed on the pre-fix files and is not listed:
+      `repeated_switch_sequences_with_incomplete_introducers_finish_within_budget`
+      (a time and no-empty-chunk guard the pre-fix code already met). The
+      review-only clause (the non-suppressed reader path gains no pass over
+      the chunk) has no executable check and is not covered by any entry
+      here.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red-to-green criterion: the verifiable outcome
+      is the unchanged existing suite plus the `--no-default-features` cargo
+      check after implementation. The suite was green before any edit
+      (baseline 3911 passed, 0 failed, 3 ignored on the merged parent), so no failing state exists
+      to observe. The existing tests live inline in
+      src-tauri/src/mux/ipc/pty_spawn/tests.rs (no separate test directory or
+      file for this module exists).
