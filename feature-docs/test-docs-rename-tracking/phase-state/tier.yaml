@@ -1,0 +1,85 @@
+schema_version: 2
+feature: test-docs-rename-tracking
+tier: reduced
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 0.26
+    confidence: 0.74
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.75
+      '1': 0.24
+      '2': 0.01
+      '3': 0.0
+  observed_at: '2026-09-29T20:33:00+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 0.48
+    confidence: 0.52
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.56
+      '1': 0.42
+      '2': 0.02
+      '3': 0.0
+  observed_at: '2026-09-29T20:42:00+09:00'
+pre_survey_estimate:
+  files_expected:
+  - test-docs/notification-summary-markup-escape/task0001.tests.yaml
+  - test-docs/notification-markup-fail-closed/task0001.tests.yaml
+  - test/README.md
+  changed_lines_approx: 4
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules:
+  - test-docs/notification-body-markup-escape
+  work_still_required: true
+  test_change_kind: none
+  added_test_cases_approx: 0
+  body_change_kind: wording_or_rule_addition
+  change_containment: multiple_modules
+  caller_and_dependency_count: 0
+  changes_external_contract: false
+  changes_behavior: false
+  evidence:
+  - 'test-docs/notification-summary-markup-escape/task0001.tests.yaml:14,33,34,35:
+    旧テスト名4件が残り、現行ソースに対応する旧名の定義が存在しない'
+  - 'test-docs/notification-summary-markup-escape/task0001.tests.yaml:14,33,34,35:
+    changed_lines_approxは確認済みの参照切れ4行を計上した値で、方針未決定の注記・ルール追加行数は含めていない'
+  - 'src-tauri/src/callbacks/tests.rs:897: 旧AC-2の後継テストが存在し、取得失敗時にtitleとbodyの両方をエスケープすることを検証している'
+  - 'src-tauri/src/callbacks/tests.rs:762,756,773: 旧YAMLの33,34,35行に対応する現行テストが、それぞれ存在する'
+  - 'test-docs/notification-markup-fail-closed/task0001.tests.yaml:7,8,29,53: 後継4件を現行名で記録しており、同ファイルのテスト参照13件すべてに定義が存在する'
+  - 'feature-docs/notification-markup-fail-closed/SPEC.md:67: FR1は取得失敗時もエスケープする仕様を定めている'
+  - 'test-docs/notification-summary-markup-escape/task0001.tests.yaml:11: AC-2に仕様置換の注記がなく、新YAMLにも旧AC-2・AC-5との対応表がない'
+  - 'feature-docs/notification-markup-fail-closed/reviews/round1.yaml:107,119,124:
+    指摘03533374d9cc5821はdeferredで、旧YAML更新と新YAMLへの対応表追加を代替案として記載しているため、files_expectedの2つのYAMLは方針次第の候補になる'
+  - 'test/README.md:3,123: 共通のテスト作成・実行指針と命名規則があり、既存ファイルへの運用追記が可能である'
+  - '.claude/rules/core-commands.md:36: テスト実行方法を記載しているが、調査した.claude/rules各ファイルにtest-docsの改名追随・凍結規則はなく、test-docs配下にもREADMEは存在しない'
+  - '/home/sakura/.claude/plugins/cache/em-claude-plugins/em-workflow/0.3.7/agents/implementer.md:110,144:
+    テスト記録の形式とred_confirmedの意味を定義しているが、この記録規則にfeature間の改名対応方針はない'
+  - '/home/sakura/.claude/plugins/cache/em-claude-plugins/em-workflow/0.3.7/references/templates/spec-document.md:193:
+    テスト記録の生成元をimplement-phase.mdとしている'
+  - 'feature-docs/stale-test-name-refs/SPEC.md:64,83: 別featureには旧テスト参照を更新し、改名自体の履歴を保存する個別規定がある'
+  - 'test-docs/notification-body-markup-escape/task0001.tests.yaml:19,20,21: 同じ旧述語テスト名3件の参照切れが別featureにも残っている'
+  - 'src-tauri/src/callbacks.rs:607,691: 現行の判定処理は実装済みで、対象の記録修正に伴う関数・依存関係・実行時動作の変更はない'
+  - 'src-tauri/src/callbacks/tests.rs:756,762,773,897: covering_tests_existは既存動作テストの定義確認を表し、本調査ではテストを実行していない'
+decided_at: '2026-09-29T20:43:00+09:00'
