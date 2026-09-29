@@ -76,7 +76,8 @@ workflow:
     skipped_reason: "Documentation-only change: string replacement and comments in two test-docs records plus one .claude/rules/ file. There is no UI, module, data model or interface to design (design-step gate resolved decide_autonomously); also subtracted by the reduced tier."
   - id: create-plan
     artifacts: [VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 3cb578a41cc8f5c5c454fa050c38fe4674097e59
   - id: implement
     status: pending
   - id: review
