@@ -1,0 +1,98 @@
+task_id: task0001
+baseline_failures: []          # full `--lib` run before any change: 3820 passed, 0 failed, 3 ignored
+final_failures: []             # full `--lib` re-run after implementation: 3837 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::osc_identify::tests::ac1_recovery_returns_number_and_data_as_term_core_reconstructs_them
+      - mux::osc_identify::tests::ac1_recovery_of_an_empty_body_is_number_zero_and_empty_data
+      - mux::osc_identify::tests::ac1_recovery_decodes_invalid_utf8_lossily_without_panicking
+      - mux::osc_identify::tests::ac1_recovery_of_one_million_digits_overflows_without_panicking
+      - mux::osc_identify::tests::ac1_recovery_of_one_million_leading_zeros_keeps_the_value_zero
+    red_confirmed: true
+    red_reason: >-
+      Run against a stub recover_osc that returned number None and empty data:
+      the table test failed with `number of "10;?;?" left: None right:
+      Some(10)`, the empty-body, invalid-UTF-8 and one-million-leading-zeros
+      tests failed the same way. The one-million-digits test passed against the
+      stub (its expected result, number None, is what the stub returned); it is
+      a no-panic guard, not a red.
+  AC-2:
+    tests:
+      - mux::osc_identify::tests::ac2_every_replayable_viewer_kind_is_a_viewer_launch_in_all_forms
+      - mux::osc_identify::tests::ac2_markdown_launch_is_identified_in_all_forms
+      - mux::osc_identify::tests::ac2_agent_status_report_is_identified
+      - mux::osc_identify::tests::ac2_everything_else_is_not_identified
+      - mux::osc_identify::tests::ac2_agent_status_kind_name_has_a_single_source
+    red_confirmed: true
+    red_reason: >-
+      Run against a stub identify_osc that always returned NotIdentified: the
+      viewer-kind test failed with `body "777;emterm;markdown;x" left:
+      NotIdentified right: ViewerLaunch("markdown")`, the Markdown test with
+      `body "9999;emterm-md" left: NotIdentified right: MarkdownLaunch`, the
+      agent-status test with `left: NotIdentified right: AgentStatusReport`.
+      The not-identified and single-source-constant tests passed against the
+      stub (negative-side guards).
+  AC-3:
+    tests:
+      - mux::scrollback_filter::tests::ring_write_strip_removes_leading_zero_and_non_digit_prefixed_launches
+      - mux::scrollback_filter::tests::snapshot_strip_removes_leading_zero_and_non_digit_prefixed_launches
+      - mux::scrollback_filter::tests::strip_and_remap_removes_leading_zero_and_non_digit_prefixed_launches
+      - mux::scrollback_filter::tests::build_snapshot_bytes_funnel_strips_leading_zero_viewer_launch
+      - mux::scrollback_filter::tests::every_strip_entry_point_keeps_non_launch_and_overflowed_osc_bodies
+    red_confirmed: true
+    red_reason: >-
+      On the unmodified strip: `body "0777;emterm;markdown;begin" must be
+      stripped on ring write` (left held the launch bytes, right was
+      `beforeafter`), the same for the snapshot strip and strip-and-remap, and
+      the build_snapshot_bytes funnel test failed with `snapshot must not carry
+      a viewer launch`. The keep-side test
+      (every_strip_entry_point_keeps_non_launch_and_overflowed_osc_bodies)
+      passed before and after: it pins the behavior the change must not alter.
+      All pre-existing scrollback_filter tests pass unchanged; the only edit to
+      that file is an added `use crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS;`
+      line, because the production module no longer imports the name the
+      existing `strip_matches_replayable_viewer_kinds_ssot` test reaches
+      through `use super::*`.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round2_task0001_viewer_launch_predicate_selects_deliverable_launches_in_all_forms
+      - mux::ipc::pty_spawn::client_parity_scan::tests::reconstruct_osc_number_and_data_drops_only_the_first_semicolon
+      - mux::ipc::pty_spawn::client_parity_scan::tests::reconstruct_osc_number_and_data_leading_zeros_accumulate_normally
+      - mux::ipc::pty_spawn::client_parity_scan::tests::reconstruct_osc_number_and_data_overflow_never_panics_and_yields_no_route
+      - mux::ipc::pty_spawn::client_parity_scan::tests::color_query_predicate_matches_client_osc_number_and_theme_rules
+    red_confirmed: false
+    red_reason: >-
+      The delivery-side recovery already matched term_core (leading zeros,
+      non-digit bytes before the first `;`) and the predicate already excluded
+      image and agent-status, so the new predicate test passed on the code as I
+      inherited it, and again after moving both entry points onto the shared
+      layer. The criterion is a refactor with no observable change to the
+      delivery truth tables; no red state occurred for this change. The
+      existing reconstruct_* tests and the gui-gated theme-oracle test pass
+      unchanged.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round2_a93dffe3_leading_zero_viewer_launch_reaches_the_client_once
+    red_confirmed: true
+    red_reason: >-
+      On the pre-fix sources: `assertion left == right failed: launch
+      "\u{1b}]0777;emterm;markdown;begin\u{7}" must be stripped from the ring,
+      left: 1 right: 0` (the leading-zero launch survived the ring strip and
+      the replacement delivered it again, so it arrived twice).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+      src-tauri/Cargo.toml --no-default-features` (passes, no warnings), the
+      `--lib` run (passes), a review of osc_identify.rs (its only import is
+      crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS; nothing from mux::ipc,
+      nothing gui-gated), and `git diff` showing the agent-status feed scanner
+      and the passthrough scanner files untouched. The check's failure was not
+      observed before implementation, so no red is claimed. Search of the test
+      sources by path and by basename (osc_identify, scrollback_filter,
+      client_parity_scan) found scrollback_filter/tests.rs, the
+      client_parity_scan tests and pty_spawn/tests.rs, which exercise strip and
+      delivery behavior; none of them detects an import-layering or feature-gate
+      violation, so no existing test covers this criterion.
