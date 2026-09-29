@@ -1,0 +1,32 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: "Document-only task; no existing test reads .claude/rules/ (searched src-tauri, crates, plugins, scripts, test and the root *.test.ts by both the path and the basename test-docs-records; the only hits are comments naming other rule files). Executed check `test -f .claude/rules/test-docs-records.md` was observed to fail before the file was created (file absent); the name-prefix check (no project- / core- prefix) and `git status --short` (only this file added under .claude/rules/) pass after."
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: "Executed key-term grep (acceptance_tests, successor) against the absent .claude/rules/test-docs-records.md was observed to fail before the file was created. The policy and scope wording (follow-current-names, successor-only, deletion and predecessor feature-docs prose outside) has no automated check; it was verified by reading the file."
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: "Executed key-term grep (acceptance_tests) against the absent .claude/rules/test-docs-records.md was observed to fail before the file was created. That the update duty falls on the renaming feature has no automated check; it was verified by reading the file."
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: "Executed key-term grep (supersede, red_reason) against the absent .claude/rules/test-docs-records.md was observed to fail before the file was created. That the note is a YAML comment naming the superseding SPEC and FR IDs and that red_reason stays unchanged has no automated check; it was verified by reading the file."
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: "Executed key-term grep (reviews/roundN.yaml) against the absent .claude/rules/test-docs-records.md was observed to fail before the file was created. That the renaming feature's SPEC, reviews/roundN.yaml and own tests.yaml are named as kept verbatim has no automated check; it was verified by reading the file."
+  AC-6:
+    tests: []
+    red_confirmed: true
+    red_reason: "Executed key-term grep (--list, --lib) against the absent .claude/rules/test-docs-records.md was observed to fail before the file was created. After creation the command the rule names (CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --list) was run once from the project root: exit 0, 3823 lines ending in ': test'. The requirement that each updated name appears as a test has no automated check beyond that run; it was verified by reading the file."
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "The outcome is `git diff --stat` / `git status --short` showing only the new rule file (plus this tests.yaml, which is exempt); at the base revision the diff is empty, so the check passes vacuously and no red state exists for it. No existing test covers it (same search as AC-1). Verified after implementation: git status shows only .claude/rules/test-docs-records.md and this file; nothing under src-tauri/, crates/, build configuration, or outside the repository was written."
