@@ -1,0 +1,43 @@
+round: 1
+executed_at: "2026-09-29T21:15:40+09:00"
+scope:
+  review_mode: diff
+  base_commit: 64e841cb579b646c9b1e696b018b9dc1a3c13233
+  head_commit: 32a3c8e71a9c9d8eda0eaf8dc2f7c40fbaaa0a2f
+  changed_files:
+    - .claude/rules/test-docs-records.md
+    - test-docs/notification-body-markup-escape/task0001.tests.yaml
+    - test-docs/notification-summary-markup-escape/task0001.tests.yaml
+    - test-docs/test-docs-rename-tracking/task0001.tests.yaml
+    - test-docs/test-docs-rename-tracking/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: skipped, skip_reason: "rate_limited"}
+  - {run_id: "spec#1", perspective: spec, role: primary, source: codex, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "Three completed runs (comprehensive#0, security#0, spec#1) reported no findings; spec#0 (litellm) skipped as rate_limited and spec#1 covers spec. Evaluator independently confirmed FR1/FR2 path replacements resolve to existing #[test] fns, FR4 string-and-comment-only edit (YAML data equal after mapping), FR3 supersede comments cite correct FR IDs, FR6/NFR3 rule file content and naming, and NFR1 scope confinement. Trivial wording note (not a finding): the rule file calls the listing command the '--lib unit-test command from core-commands.md / core-build-location.md' while those files show it without --lib; the exact command follows, so no operational ambiguity."
+  recommended_action: "complete"
+  action_rationale: "No findings from any dispatched perspective; evaluator inspection confirmed all SPEC acceptance criteria checkable without running cargo."
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-test-docs-rename-tracking-20260929T121526Z.md

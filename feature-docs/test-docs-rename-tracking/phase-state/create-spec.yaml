@@ -1,0 +1,86 @@
+schema_version: 1
+feature: test-docs-rename-tracking
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 9b736d2e98e42b5b8c5ca289240e7671aff52a74
+last_input_digest: sha256:a2d62b71f4587b32bf75aec4e04dec252f0518021898136e667b991660a2c01e
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-09-29T20:55:00+09:00'
+    questions:
+    - question_id: requirement.record-policy
+      status: answered
+    - question_id: requirement.rule-artifact
+      status: answered
+    - question_id: requirement.body-yaml-scope
+      status: answered
+    - question_id: requirement.supersede-note-form
+      status: answered
+    - question_id: requirement.supersede-note-coverage
+      status: answered
+    - question_id: design-step
+      status: answered
+answers:
+  requirement.record-policy:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-29T20:58:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - follow_current_names
+    resolution_note: 'Codex (codex harness, 1 turn) recommended follow_current_names
+      citing stale-test-name-refs FR1/FR5/FR6 precedent; orchestrator agrees: restores
+      verify traceability and supersede notes explain history. Not chosen: freeze_with_mapping.'
+  requirement.rule-artifact:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-29T20:58:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - project_rule
+    resolution_note: 'Codex recommended project_rule: project-specific operation belongs
+      in .claude/rules/ and keeps the change inside this repository/worktree. Not
+      chosen: plugin_template, both (cross-repository write).'
+  requirement.body-yaml-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-29T20:58:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - include_spillover
+    resolution_note: 'Codex recommended include_spillover: body-markup-escape yaml
+      lines 19-21 carry the same stale names; stale-test-name-refs FR3 also covered
+      unlisted same-kind refs. Not chosen: ticket_listed_only.'
+  requirement.supersede-note-form:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-29T20:58:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - yaml_comment
+    resolution_note: 'Codex recommended yaml_comment: red_reason is a pre-implementation
+      observation record (implementer.md), and no tooling re-serializes test-docs
+      yaml (comments would be lost only by a future safe_load round-trip). Not chosen:
+      append_to_red_reason.'
+  requirement.supersede-note-coverage:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-29T20:58:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - all_inverted_acs
+    resolution_note: 'Codex recommended all_inverted_acs: summary AC-2/AC-5 and body
+      AC-4 all reference fetch-failure behavior changed by fail-closed SPEC FR1/FR3.
+      Not chosen: ticket_ac2_only.'
+  design-step:
+    packet_id: create-spec-q0001
+    answered_at: '2026-09-29T20:58:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    resolution_note: 'batch-policies.yaml create-spec.design-step -> decide_autonomously
+      (worker recommends skip: documentation-only change)'

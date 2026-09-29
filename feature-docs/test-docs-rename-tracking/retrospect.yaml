@@ -1,0 +1,40 @@
+feature: test-docs-rename-tracking
+collected_at: "2026-09-29T21:21:37+09:00"
+session_ids: [01a0ed1c-055a-7514-b2c1-dc33a77483a7]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: reduced
+    rationale: "Final read (description_plus_code) placed the change in bucket 0/1 (p0=0.56, p1=0.42): wording/rule change across two test-docs records plus one rule file, no logic or test change."
+    bases:
+      - basis: description_only
+        score: {type: score, score: 0.26, confidence: 0.74, probabilities: {"0": 0.75, "1": 0.24, "2": 0.01, "3": 0.0}}
+        observed_at: "2026-09-29T20:31:00+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 0.48, confidence: 0.52, probabilities: {"0": 0.56, "1": 0.42, "2": 0.02, "3": 0.0}}
+        observed_at: "2026-09-29T20:35:00+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - test-docs/notification-summary-markup-escape/task0001.tests.yaml
+        - test-docs/notification-markup-fail-closed/task0001.tests.yaml
+        - test/README.md
+      changed_lines_approx: 4
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      work_still_required: true
+      test_change_kind: none
+      body_change_kind: wording_or_rule_addition
+      change_containment: multiple_modules
+      changes_external_contract: false
+      changes_behavior: false
+follow_up_drafts: []
+lessons_candidates:
+  - "pre_survey_estimate.files_expected (new fail-closed yaml, test/README.md) differed from the adopted plan (both old markup-escape yaml records + new .claude/rules/test-docs-records.md): the freeze-vs-follow policy decision determined the file set, which a pre-survey cannot predict."
+  - "Review spec#0 (litellm muse-spark) skipped as rate_limited; chain fallback to codex covered it."
