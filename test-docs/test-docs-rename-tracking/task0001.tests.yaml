@@ -1,0 +1,37 @@
+task_id: task0001
+baseline_failures: []          # 4a: `cargo test --lib` clean before any change (3820 passed, 0 failed, 3 ignored); `bun test` clean (402 pass, 0 fail)
+final_failures: []             # re-executed after the edit: `cargo test --lib` 3820 passed, 0 failed, 3 ignored; `bun test` 402 pass, 0 fail
+acceptance_tests:
+  # Test Notes: no Rust test is added or changed (test code is out of scope, NFR1). Each criterion is checked by a
+  # command-level check run against the record files. `tests: []` below means "no Rust/bun test covers this criterion";
+  # a search of the repository outside test-docs/feature-docs by relative path and by basename
+  # (task0001.tests.yaml, notification-summary-markup-escape, notification-body-markup-escape) found no test that
+  # reads either record (the only hits are doc comments in unrelated test files).
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: "Command-level check (parse the summary record, compare each AC's tests list with the base list after applying the replacement map, count current-path entries) run against the base revision 449453ae: FAIL — entries at base lines 14, 33, 34, 35 still held the stale paths, current-path count in the summary record was 0 (want 4)."
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: "Command-level check (parse the body record, compare AC-4's first three entries with the mapped current paths and the fourth with the base entry) run against the base revision 449453ae: FAIL — AC-4's tests list still held the three body_markup_confirmed_* stale paths."
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: "Command-level check (every acceptance_tests[].tests entry in both records compared with the four stale paths) run against the base revision 449453ae: FAIL — 7 entries equalled a stale path (summary AC-2 x1, summary AC-5 x3, body AC-4 x3); 16 of 23 entries passed."
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: "Two command-level checks run against the base revision 449453ae. (1) The 15 distinct paths of both records compared with the output of `cargo test --lib -- --list` (3823 tests): FAIL — the four stale paths were absent (MISSING callbacks::tests::summary_markup_escape::failed_capability_fetch_leaves_the_title_unchanged and the three body_markup_confirmed_* paths). (2) A filtered `cargo test --lib callbacks::tests::body_markup_escape::body_markup_confirmed_is_false_on_fetch_failure` ran 0 tests (\"running 0 tests ... 3823 filtered out\") and exited 0. After the edit: all 15 paths are listed, and a filtered `--lib` run of each of the four current names reports `running 1 test` / `1 passed; 0 failed; 3822 filtered out`."
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: "Command-level check (comment-only lines inside each AC block, joined and searched for feature-docs/notification-markup-fail-closed/SPEC.md, FR1/FR3 and \"superseded\"; other blocks must carry no reference to notification-markup-fail-closed) run against the base revision 449453ae: FAIL — summary AC-2, summary AC-5 and body AC-4 had no note (3 of 13 sub-checks failed); after the edit the 3 target blocks carry the note and the 10 other blocks carry none."
+  AC-6:
+    tests: []
+    red_confirmed: true
+    red_reason: "Command-level check (yaml.safe_load equality with the base data after substituting the mapped strings, difflib line-level diff classified into mapped-path replacements and comment-only insertions, trailing newline, replaced-line count == 7) run against the base revision 449453ae: FAIL — parsed data did not equal the base data with the seven substitutions applied (both records) and the replaced-line total was 0 (want 7); the sub-checks that only assert the absence of other differences passed vacuously at base because the diff was empty. After the edit: all 12 sub-checks pass."
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "Scope criterion on the diff (`git diff --name-only` against the base revision plus untracked files must contain only the two record files, the exempt task tests.yaml path excepted). The check passes at the base revision because an empty diff touches nothing, and it can only be made to fail by making an out-of-scope change, which this task must not do. No existing test covers it (no test reads the record files). Verified after the edit: changed files are exactly the two records."
