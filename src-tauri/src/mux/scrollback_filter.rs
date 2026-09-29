@@ -6,12 +6,7 @@
 //! layer (`mux::ipc::reattach`) for it; both depend on this shared module
 //! instead.
 
-use crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS;
-
-/// The OSC 777 `<kind>` token for agent-status reports (SPEC FR1/FR4).
-/// Kept as a named constant so the strip predicate and the extraction scan
-/// ([`AgentStatusOscScanner`]) share one literal.
-const AGENT_STATUS_OSC_KIND: &str = "agent-status";
+use crate::mux::osc_identify::{OscIdentity, identify_osc, recover_osc};
 
 /// Remove rich-content viewer launch sequences from a completed byte run so a
 /// reattach / window-switch snapshot replays plain-text history WITHOUT
@@ -27,8 +22,13 @@ const AGENT_STATUS_OSC_KIND: &str = "agent-status";
 ///
 /// Removed:
 /// - OSC 777 viewer launch: `ESC ] 777 ; emterm ; <kind> ; …` (BEL or ST
-///   terminated) where `<kind>` is one of [`REPLAYABLE_VIEWER_KINDS`]
-///   (`markdown` / `image` / `json` / `yaml`). `<kind> == fold` (fold marks)
+///   terminated) where `<kind>` is one of
+///   [`crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS`]
+///   (`markdown` / `image` / `json` / `yaml` / `html`). The OSC number and
+///   data are recovered the way the client's parser reconstructs them
+///   ([`crate::mux::osc_identify`]), so a leading-zero number (`0777;…`) or
+///   non-digit bytes before the first `;` (`777emterm;;markdown;…`) are
+///   stripped like the canonical spelling. `<kind> == fold` (fold marks)
 ///   and any other `<kind>` (status-bar, …) are KEPT. There is no `resize`
 ///   kind any more (task0004 round-4 rework D1'): dimensions travel
 ///   structurally alongside the payload
@@ -39,7 +39,9 @@ const AGENT_STATUS_OSC_KIND: &str = "agent-status";
 /// - SIXEL DCS: `ESC P <params> q …  ESC \` (only DCS whose final byte is
 ///   `q`; a DCS whose *data* merely contains `q`, e.g. DECRQSS, is KEPT).
 /// - emterm Markdown OSC 9999: `ESC ] 9999 ; emterm-md ; …` (BEL or ST
-///   terminated). `ESC ] 9999 ; emterm-mux ; …` (mux control) is KEPT.
+///   terminated; recovered the same way). `ESC ] 9999 ; emterm-mux ; …`
+///   (mux control) is KEPT.
+/// - OSC 777 agent-status reports (`ESC ] 777 ; emterm ; agent-status ; …`).
 /// - CSI device queries that `crates/term_core/src/csi_dispatch.rs` answers
 ///   with a response, so a snapshot replay never makes the GUI synthesize a
 ///   stale reply: DSR / CPR (`ESC[5n`, `ESC[6n`), DA1 / DA2 (`ESC[c`,
@@ -292,27 +294,25 @@ fn dcs_is_sixel(body: &[u8]) -> bool {
 /// Decide whether an OSC body (the bytes between `ESC ]` and the terminator)
 /// is a replayable rich-content launch sequence that must be stripped.
 ///
+/// The body is identified through the shared recovery
+/// ([`crate::mux::osc_identify`]) — the same number and data the client's
+/// parser reconstructs — rather than by matching a byte prefix. The strip
+/// selection is: a viewer launch of every kind (image included), a Markdown
+/// launch, and an agent-status report (SPEC FR4: the OSC report itself is
+/// never replayed — the daemon resyncs current state out-of-band after a
+/// snapshot). Fold marks, mux control, every other kind and number, and an
+/// overflowed number are kept.
+///
 /// Identical for the write path and the snapshot path (task0004 round-4
 /// rework D1' — see [`strip_pty_output_for_scrollback_write`]'s doc
 /// comment): there is no more `resize` kind to conditionally strip.
 fn is_replayable_osc_body(body: &[u8]) -> bool {
-    // OSC 777 viewer launch: `777;emterm;<kind>;…`. Strip only the viewer
-    // kinds and `agent-status` (SPEC FR4: the OSC report itself is never
-    // replayed — the daemon resyncs current state out-of-band after a
-    // snapshot); keep `fold` (fold marks) and any other kind (status-bar, …).
-    if let Some(rest) = body.strip_prefix(b"777;emterm;") {
-        let kind = rest.split(|&c| c == b';').next().unwrap_or(rest);
-        if kind == AGENT_STATUS_OSC_KIND.as_bytes() {
-            return true;
-        }
-        return REPLAYABLE_VIEWER_KINDS.iter().any(|k| kind == k.as_bytes());
+    match identify_osc(&recover_osc(body)) {
+        OscIdentity::ViewerLaunch(_)
+        | OscIdentity::MarkdownLaunch
+        | OscIdentity::AgentStatusReport => true,
+        OscIdentity::NotIdentified => false,
     }
-    // emterm Markdown OSC 9999: `9999;emterm-md;…`. Keep `emterm-mux;` (mux
-    // control) and anything else.
-    if body.starts_with(b"9999;emterm-md;") || body == b"9999;emterm-md" {
-        return true;
-    }
-    false
 }
 
 /// A matched (strippable) CSI device query: where scanning resumes, and any

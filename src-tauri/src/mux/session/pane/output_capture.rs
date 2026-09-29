@@ -48,6 +48,20 @@ pub struct OutputCapture {
 struct BoundaryEntry {
     sender: mpsc::Sender<PtyOutputChunk>,
     boundary: u64,
+    /// The incomplete construct (UTF-8 partial, awaiting designator, cut CSI)
+    /// the snapshot recorded at `boundary` left the client parser in, or
+    /// `None` (mux-suppressed-output-round2-fixes task0004, FR8).
+    construct: Option<Vec<u8>>,
+}
+
+/// The answer of a covered query: the chunk number is covered by the
+/// destination's recorded boundary, and `construct` is the incomplete
+/// construct (bytes) the covering snapshot left the client parser in —
+/// present only when the chunk number equals the recorded boundary
+/// (mux-suppressed-output-round2-fixes task0004, FR8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoveredBoundary {
+    pub construct: Option<Vec<u8>>,
 }
 
 impl OutputCapture {
@@ -101,17 +115,47 @@ impl OutputCapture {
     /// prunes closed senders (THREAT-MODEL TM-4), so the record holds
     /// entries only for live senders.
     pub fn record_boundary(&self, sender: &mpsc::Sender<PtyOutputChunk>, boundary: u64) {
+        self.record_boundary_with_construct(sender, boundary, None);
+    }
+
+    /// [`Self::record_boundary`] together with the incomplete construct the
+    /// recorded snapshot leaves the client parser in (`None` = none).
+    pub fn record_boundary_with_construct(
+        &self,
+        sender: &mpsc::Sender<PtyOutputChunk>,
+        boundary: u64,
+        construct: Option<Vec<u8>>,
+    ) {
         let mut entries = self.boundary.lock().unwrap();
         prune_closed(&mut entries);
-        upsert_max(&mut entries, sender, boundary);
+        upsert_max(&mut entries, sender, boundary, construct);
     }
 
     /// Whether `number` is covered by a boundary already recorded for
     /// `sender` — "same channel" identity (`Sender::same_channel`), not a
     /// value comparison. `false` when no entry exists for `sender`.
     pub fn is_boundary_covered(&self, sender: &mpsc::Sender<PtyOutputChunk>, number: u64) -> bool {
+        self.boundary_cover(sender, number).is_some()
+    }
+
+    /// [`Self::is_boundary_covered`] plus the construct: `Some` when
+    /// `number` is covered, carrying the recorded construct only when
+    /// `number` equals the recorded boundary.
+    pub fn boundary_cover(
+        &self,
+        sender: &mpsc::Sender<PtyOutputChunk>,
+        number: u64,
+    ) -> Option<CoveredBoundary> {
         let entries = self.boundary.lock().unwrap();
-        is_covered(&entries, sender, number)
+        cover(&entries, sender, number)
+    }
+
+    /// Test-only: whether neither the capture exclusion nor the boundary
+    /// exclusion is currently held by anyone. Lets a test prove that a piece
+    /// of work runs outside both (task0004: the trailing-construct decider).
+    #[cfg(test)]
+    pub fn exclusions_are_free(&self) -> bool {
+        self.last_captured.try_lock().is_ok() && self.boundary.try_lock().is_ok()
     }
 
     /// Hold the boundary exclusion for the duration of the returned guard.
@@ -132,6 +176,54 @@ impl Default for OutputCapture {
     }
 }
 
+/// Test-only observation of the caller's lock state at the moment the
+/// trailing-construct decider runs (task0004 AC-2: the decider runs outside
+/// the capture exclusion and the boundary exclusion). Created by
+/// [`OutputCapture::probe_decider_exclusions`].
+#[cfg(test)]
+pub struct DeciderProbe {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    free: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(test)]
+impl DeciderProbe {
+    /// Remove the hook and return `(decider calls observed, whether both
+    /// exclusions were free at every one of them)`.
+    pub fn finish(self) -> (usize, bool) {
+        use std::sync::atomic::Ordering;
+        crate::mux::snapshot_tail::ENTRY_HOOK.with(|hook| *hook.borrow_mut() = None);
+        (
+            self.calls.load(Ordering::SeqCst),
+            self.free.load(Ordering::SeqCst),
+        )
+    }
+}
+
+#[cfg(test)]
+impl OutputCapture {
+    /// Install, on THIS thread, a hook that records whether neither
+    /// exclusion of `self` is held each time the decider is entered.
+    pub fn probe_decider_exclusions(self: &std::sync::Arc<Self>) -> DeciderProbe {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let free = Arc::new(AtomicBool::new(true));
+        let capture = self.clone();
+        let hook_calls = calls.clone();
+        let hook_free = free.clone();
+        crate::mux::snapshot_tail::ENTRY_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                hook_calls.fetch_add(1, Ordering::SeqCst);
+                if !capture.exclusions_are_free() {
+                    hook_free.store(false, Ordering::SeqCst);
+                }
+            }));
+        });
+        DeciderProbe { calls, free }
+    }
+}
+
 /// A held boundary exclusion (see [`OutputCapture::hold_boundary`]).
 pub struct BoundaryGuard<'a> {
     entries: MutexGuard<'a, Vec<BoundaryEntry>>,
@@ -141,45 +233,89 @@ impl BoundaryGuard<'_> {
     /// Same semantics as [`OutputCapture::is_boundary_covered`], without
     /// releasing the held exclusion.
     pub fn is_covered(&self, sender: &mpsc::Sender<PtyOutputChunk>, number: u64) -> bool {
-        is_covered(&self.entries, sender, number)
+        self.cover(sender, number).is_some()
+    }
+
+    /// Same semantics as [`OutputCapture::boundary_cover`], without
+    /// releasing the held exclusion: the covered decision and the construct
+    /// are read under the same hold.
+    pub fn cover(
+        &self,
+        sender: &mpsc::Sender<PtyOutputChunk>,
+        number: u64,
+    ) -> Option<CoveredBoundary> {
+        cover(&self.entries, sender, number)
     }
 
     /// Same semantics as [`OutputCapture::record_boundary`], without
     /// releasing the held exclusion.
     pub fn record(&mut self, sender: &mpsc::Sender<PtyOutputChunk>, boundary: u64) {
+        self.record_with_construct(sender, boundary, None);
+    }
+
+    /// Same semantics as [`OutputCapture::record_boundary_with_construct`],
+    /// without releasing the held exclusion.
+    pub fn record_with_construct(
+        &mut self,
+        sender: &mpsc::Sender<PtyOutputChunk>,
+        boundary: u64,
+        construct: Option<Vec<u8>>,
+    ) {
         prune_closed(&mut self.entries);
-        upsert_max(&mut self.entries, sender, boundary);
+        upsert_max(&mut self.entries, sender, boundary, construct);
     }
 }
 
-fn is_covered(
+fn cover(
     entries: &[BoundaryEntry],
     sender: &mpsc::Sender<PtyOutputChunk>,
     number: u64,
-) -> bool {
+) -> Option<CoveredBoundary> {
     entries
         .iter()
         .find(|e| e.sender.same_channel(sender))
-        .is_some_and(|e| e.boundary >= number)
+        .filter(|e| e.boundary >= number)
+        .map(|e| CoveredBoundary {
+            // The construct describes the state the snapshot left the
+            // client in AFTER the boundary chunk; it says nothing about an
+            // earlier covered chunk.
+            construct: if e.boundary == number {
+                e.construct.clone()
+            } else {
+                None
+            },
+        })
 }
 
 fn prune_closed(entries: &mut Vec<BoundaryEntry>) {
     entries.retain(|e| !e.sender.is_closed());
 }
 
+/// Record `(boundary, construct)` for `sender`:
+/// - no entry yet: insert;
+/// - higher boundary: replaces both values;
+/// - equal boundary: keeps the construct when identical, otherwise sets it
+///   to none (conflicting information falls back to the pre-feature
+///   re-send);
+/// - lower boundary: leaves the entry unchanged.
 fn upsert_max(
     entries: &mut Vec<BoundaryEntry>,
     sender: &mpsc::Sender<PtyOutputChunk>,
     boundary: u64,
+    construct: Option<Vec<u8>>,
 ) {
     if let Some(existing) = entries.iter_mut().find(|e| e.sender.same_channel(sender)) {
         if boundary > existing.boundary {
             existing.boundary = boundary;
+            existing.construct = construct;
+        } else if boundary == existing.boundary && existing.construct != construct {
+            existing.construct = None;
         }
     } else {
         entries.push(BoundaryEntry {
             sender: sender.clone(),
             boundary,
+            construct,
         });
     }
 }

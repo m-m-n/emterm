@@ -20,6 +20,12 @@
 //!   in the read BEFORE this suppressed chunk (the reader's retained
 //!   window, FR6).
 //!
+//! - **FR8** (mux-suppressed-output-round2-fixes task0004): when the
+//!   destination's covering snapshot already left the client parser holding
+//!   the very tail this builder would append (a cut UTF-8 character,
+//!   `ESC (` / `ESC )`, or a cut CSI), that tail is not sent a second time
+//!   — see [`SuppressedReplacementRequest::snapshot_trailing_construct`].
+//!
 //! [`build_suppressed_replacement`] answers both by handing `window` (the
 //! stream bytes before this chunk) and `chunk` to
 //! [`super::client_parity_scan::scan`], which walks them as one continuous
@@ -41,56 +47,25 @@
 
 use std::ops::Range;
 
-use super::client_parity_scan::{
-    self, ScanItemKind, ScanOutcome, is_color_query, is_viewer_launch,
-    reconstruct_osc_number_and_data,
-};
+use super::client_parity_scan::{self, ScanItemKind, ScanOutcome};
+use crate::mux::snapshot_tail::is_awaiting_designator;
 
-/// A sequence that was held in the write filter's pending run before this
-/// read and reached its terminator inside this read (mux-suppressed-output-
-/// round2-fixes FR6), mapped to chunk coordinates by the reader.
-#[derive(Debug, Clone, Copy)]
-pub(in crate::mux) struct CarriedOverCompletion<'a> {
-    /// The complete sequence bytes, from its opening `ESC` through its
-    /// terminator.
-    pub(in crate::mux) bytes: &'a [u8],
-    /// Position just past the terminator, in chunk coordinates.
-    pub(in crate::mux) end: usize,
-}
+/// The ASCII charset designator byte sent ahead of the items when the client
+/// is waiting for a designator (FR8).
+const FILLER_DESIGNATOR: u8 = b'B';
 
-/// Every input of replacement assembly for one suppressed chunk (chunk
-/// coordinates throughout). See [`build_suppressed_replacement_for`].
-pub(in crate::mux) struct SuppressedReplacementRequest<'a> {
-    /// The suppressed chunk's raw bytes (before any stripping).
-    pub(in crate::mux) chunk: &'a [u8],
-    /// The byte ranges of `chunk` that were fed toward the scrollback ring
-    /// this read (main-buffer content; alternate-screen ranges and removed
-    /// switch sequences are NOT included), ascending.
-    pub(in crate::mux) ring_written_ranges: &'a [Range<usize>],
-    /// [`super::write_filter::ScrollbackWriteFilter::pending`]'s contents
-    /// taken right after this chunk was fed to the filter.
-    pub(in crate::mux) pending_after: &'a [u8],
-    /// The stream bytes immediately preceding `chunk` (the reader's retained
-    /// window, up to [`client_parity_scan::RETAINED_WINDOW_BYTES`]), as it
-    /// stood BEFORE this chunk arrived.
-    pub(in crate::mux) window: &'a [u8],
-    /// The sequence carried over in pending that completed in this read, if
-    /// any (FR6). Absent for the four-parameter form.
-    pub(in crate::mux) carried_over_completion: Option<CarriedOverCompletion<'a>>,
-}
-
-/// Build the FR1/FR3/FR5/FR6/FR7/FR9 replacement payload for a suppressed
-/// chunk from the four base inputs — the "carried-over completion absent"
-/// form of [`build_suppressed_replacement_for`].
+/// Build the FR1/FR3/FR6/FR7/FR9 replacement payload for a suppressed chunk.
 ///
 /// - `chunk`: the suppressed chunk's raw bytes (before any stripping).
 /// - `ring_written_ranges`: the byte ranges of `chunk` that were fed toward
 ///   the scrollback ring this read (the reader's `live_spans` /
 ///   `main_spans` — main-buffer content; alternate-screen spans are NOT
-///   included). Used to decide which OSC color queries are absent from the
-///   snapshot (one inside these ranges survived into the ring byte-for-byte,
-///   so re-delivering it would duplicate what the snapshot already carries)
-///   and whether the chunk's last byte lies in a ring-written span (D4).
+///   included). Used to decide whether the chunk's last byte lies in a
+///   ring-written span and how much of the write filter's pending run this
+///   chunk contributed (D4). It does NOT decide which items are delivered:
+///   a color query, like a CSI query, is delivered whether or not its bytes
+///   survived into the ring (round-2 FR2), because the snapshot is replayed
+///   with its responses discarded.
 /// - `pending_after`: [`super::write_filter::ScrollbackWriteFilter::pending`]'s
 ///   contents taken right after this chunk was fed to the filter. Never
 ///   empty unless nothing is currently held back.
@@ -101,7 +76,9 @@ pub(in crate::mux) struct SuppressedReplacementRequest<'a> {
 ///
 /// Returns `Q ++ T`, which may be empty (see the module doc's TM-2 note —
 /// an empty result must never itself become an empty `PtyOutput` chunk).
-#[cfg_attr(not(test), allow(dead_code))]
+///
+/// No snapshot trailing construct is known here (the FR8 rule never
+/// applies); use [`build_suppressed_replacement_for`] to supply one.
 pub(in crate::mux) fn build_suppressed_replacement(
     chunk: &[u8],
     ring_written_ranges: &[Range<usize>],
@@ -113,19 +90,42 @@ pub(in crate::mux) fn build_suppressed_replacement(
         ring_written_ranges,
         pending_after,
         window,
-        carried_over_completion: None,
+        snapshot_trailing_construct: None,
     })
 }
 
-/// Build the replacement payload for one suppressed chunk from a full
-/// [`SuppressedReplacementRequest`]: queries and viewer launches in
-/// raw-stream order (ascending chunk end position), then the tail.
+/// One value carrying every input of replacement assembly for one
+/// suppressed chunk (mux-suppressed-output-round2-fixes IMPLEMENTATION.md
+/// Shared Components, D2). The four base fields are exactly the parameters
+/// of [`build_suppressed_replacement`]; the trailing fields are owned by the
+/// tasks that introduced them.
+pub(in crate::mux) struct SuppressedReplacementRequest<'a> {
+    /// The suppressed chunk's raw bytes.
+    pub chunk: &'a [u8],
+    /// The ring-written ranges of `chunk`, ascending, in chunk coordinates.
+    pub ring_written_ranges: &'a [Range<usize>],
+    /// The write filter's pending bytes right after this read.
+    pub pending_after: &'a [u8],
+    /// The retained window preceding `chunk`.
+    pub window: &'a [u8],
+    /// Snapshot trailing construct (task0004, FR8): absent, or the bytes of
+    /// the incomplete construct the destination's covering snapshot left the
+    /// client parser in. Applies only to a tail found by the client-parity
+    /// scan, never to the write filter's pending-run tail.
+    pub snapshot_trailing_construct: Option<&'a [u8]>,
+}
+
+/// [`build_suppressed_replacement`] over a full request.
 pub(in crate::mux) fn build_suppressed_replacement_for(
     request: &SuppressedReplacementRequest<'_>,
 ) -> Vec<u8> {
-    let chunk = request.chunk;
-    let ring_written_ranges = request.ring_written_ranges;
-    let pending_after = request.pending_after;
+    let SuppressedReplacementRequest {
+        chunk,
+        ring_written_ranges,
+        pending_after,
+        window,
+        snapshot_trailing_construct,
+    } = *request;
     if chunk.is_empty() {
         return Vec::new();
     }
@@ -142,136 +142,99 @@ pub(in crate::mux) fn build_suppressed_replacement_for(
         .is_some_and(|r| r.end == chunk.len());
 
     if !pending_after.is_empty() && chunk_ends_in_ring_written {
-        // D4 rule 1 / FR5: nothing is extracted from the chunk bytes pending
-        // will re-deliver (TM-1). Those are exactly the last
-        // min(pending, fed) bytes of the concatenated ring-written ranges;
-        // exclude the chunk-coordinate pieces that make them up — never the
-        // gaps (alternate-screen ranges, removed switch sequences) between
-        // ranges — and walk the whole chunk so items around them survive.
-        let fed_len: usize = ring_written_ranges
-            .iter()
-            .map(|r| r.end.saturating_sub(r.start))
-            .sum();
-        let contribution = pending_after.len().min(fed_len);
-        let excluded = excluded_pieces(ring_written_ranges, contribution);
-        let outcome = client_parity_scan::scan(request.window, chunk, &excluded);
-        let mut out = assemble_items(
-            &outcome,
-            ring_written_ranges,
-            request.carried_over_completion.as_ref(),
-        );
+        // D4 rule 1: nothing is extracted from the chunk bytes pending will
+        // re-deliver (TM-1) — compute how much of this chunk's own
+        // ring-written contribution was swallowed into it, and stop the
+        // item scan there.
+        let to_write_len: usize = ring_written_ranges.iter().map(|r| r.end - r.start).sum();
+        let contribution = pending_after.len().min(to_write_len);
+        let scan_limit = if contribution == 0 {
+            chunk.len()
+        } else {
+            tail_exclusion_start(ring_written_ranges, contribution)
+        };
+        let outcome = client_parity_scan::scan(window, chunk, scan_limit);
+        let mut out = assemble_items(&outcome);
         out.extend_from_slice(pending_after);
         out
     } else {
-        let outcome = client_parity_scan::scan(request.window, chunk, &[]);
-        let mut out = assemble_items(
-            &outcome,
-            ring_written_ranges,
-            request.carried_over_completion.as_ref(),
-        );
-        if let Some(tail_range) = outcome.tail.clone() {
-            let tail_bytes = &outcome.combined[tail_range];
-            if outcome.tail_strip_c0 {
-                out.extend(strip_c0(tail_bytes));
-            } else {
-                out.extend_from_slice(tail_bytes);
+        let outcome = client_parity_scan::scan(window, chunk, chunk.len());
+        let mut out = assemble_items(&outcome);
+        let tail: Vec<u8> = match outcome.tail.clone() {
+            Some(tail_range) => {
+                let tail_bytes = &outcome.combined[tail_range];
+                if outcome.tail_strip_c0 {
+                    strip_c0(tail_bytes).collect()
+                } else {
+                    tail_bytes.to_vec()
+                }
             }
+            None => Vec::new(),
+        };
+
+        // FR8: the destination's covering snapshot left the client parser
+        // holding exactly this tail. Re-sending it would double the
+        // construct (a second `ESC (` would be taken as the designator and
+        // printed), so it is omitted — see `carried_tail_output`.
+        let already_carried = !tail.is_empty()
+            && snapshot_trailing_construct.is_some_and(|construct| construct == tail.as_slice());
+        if already_carried {
+            return carried_tail_output(out, tail);
         }
+        out.extend_from_slice(&tail);
         out
     }
 }
 
-/// One reportable item, keyed by where it ends in chunk coordinates.
-struct EmittedItem {
-    /// Position just past the item's last byte, in chunk coordinates.
-    chunk_end: usize,
-    bytes: Vec<u8>,
-}
-
-/// Assemble the byte output for every reportable item, in raw-stream order
-/// (ascending chunk end position):
-/// - CSI device queries: from any region, C0 control bytes removed (FR3) —
-///   their effect already took place via the snapshot.
-/// - Color queries: only when the completing byte lies OUTSIDE
-///   `ring_written_ranges` (one inside it already survives byte-for-byte in
-///   the snapshot); the whole OSC, terminator included, verbatim.
-/// - Viewer launches: from any region, the whole sequence verbatim.
-/// - The carried-over completion (FR6), when it is a color query or a
-///   deliverable viewer launch, verbatim — unless a scan item ends at the
-///   same chunk position: that is the same sequence, re-detected through the
-///   retained window, and is emitted once. Items with identical content but
-///   different end positions are distinct and all emitted.
-fn assemble_items(
-    outcome: &ScanOutcome,
-    ring_written_ranges: &[Range<usize>],
-    carried: Option<&CarriedOverCompletion<'_>>,
-) -> Vec<u8> {
-    let mut items: Vec<EmittedItem> = Vec::new();
-    for item in &outcome.items {
-        let chunk_start = item.range.start.saturating_sub(outcome.boundary);
-        let chunk_end = item.range.end - outcome.boundary;
-        match item.kind {
-            ScanItemKind::ColorQuery => {
-                if overlaps_ranges(chunk_start, chunk_end, ring_written_ranges) {
-                    continue;
-                }
-                items.push(EmittedItem {
-                    chunk_end,
-                    bytes: outcome.combined[item.range.clone()].to_vec(),
-                });
-            }
-            ScanItemKind::ViewerLaunch => {
-                items.push(EmittedItem {
-                    chunk_end,
-                    bytes: outcome.combined[item.range.clone()].to_vec(),
-                });
-            }
-            ScanItemKind::CsiQuery => {
-                items.push(EmittedItem {
-                    chunk_end,
-                    bytes: strip_c0(&outcome.combined[item.range.clone()]).collect(),
-                });
-            }
-        }
+/// The replacement for a chunk whose tail the client already holds (FR8):
+/// `items` is the assembled query / launch output, `tail` the tail the
+/// snapshot carried.
+///
+/// - no items: nothing is sent (the caller never turns an empty result into
+///   an empty `PtyOutput` chunk);
+/// - items and an awaiting-designator tail: one filler designator byte, the
+///   items, then the tail. The client's pending designator slot absorbs the
+///   filler, the items parse intact, and the re-sent `ESC (` / `ESC )`
+///   restores the slot for the next chunk's first byte;
+/// - items and a UTF-8 or CSI tail: the items, then the tail. The items'
+///   leading ESC silently ends a UTF-8 partial and aborts a CSI, and the tail
+///   restores the state.
+fn carried_tail_output(items: Vec<u8>, tail: Vec<u8>) -> Vec<u8> {
+    if items.is_empty() {
+        return Vec::new();
     }
-
-    if let Some(carried) = carried {
-        if is_deliverable_osc(carried.bytes) && !items.iter().any(|i| i.chunk_end == carried.end) {
-            items.push(EmittedItem {
-                chunk_end: carried.end,
-                bytes: carried.bytes.to_vec(),
-            });
-            // Scan items are already ascending; a stable sort places the
-            // carried item by its end position and keeps ties in scan order.
-            items.sort_by_key(|i| i.chunk_end);
-        }
+    let mut out = Vec::with_capacity(1 + items.len() + tail.len());
+    if is_awaiting_designator(&tail) {
+        out.push(FILLER_DESIGNATOR);
     }
-
-    let mut out = Vec::new();
-    for item in items {
-        out.extend_from_slice(&item.bytes);
-    }
+    out.extend_from_slice(&items);
+    out.extend_from_slice(&tail);
     out
 }
 
-/// Whether a carried-over sequence is one this builder delivers: a complete
-/// OSC (`ESC ] body BEL|ST`) that is a color query or a deliverable viewer
-/// launch. DCS/APC sequences and every other OSC are not — the body is
-/// recovered through the same delivery-side entry points the scan uses.
-fn is_deliverable_osc(bytes: &[u8]) -> bool {
-    if bytes.len() < 3 || bytes[0] != 0x1b || bytes[1] != b']' {
-        return false;
+/// Assemble the byte output for every reportable item, in stream order
+/// (Rule 1 of the task plan's "Replacement builder" design):
+/// - CSI device queries: from any region, C0 control bytes removed (FR3) —
+///   their effect already took place via the snapshot.
+/// - Color queries: from any region — inside a ring-written range, outside
+///   it, or across a range edge — the whole OSC, terminator included,
+///   verbatim (round-2 FR2). The snapshot is replayed with its responses
+///   discarded, so a query that survived into the ring is never answered
+///   through the snapshot; this is the same treatment CSI queries get.
+/// - Viewer launches: from any region, the whole sequence verbatim.
+fn assemble_items(outcome: &ScanOutcome) -> Vec<u8> {
+    let mut out = Vec::new();
+    for item in &outcome.items {
+        match item.kind {
+            ScanItemKind::ColorQuery | ScanItemKind::ViewerLaunch => {
+                out.extend_from_slice(&outcome.combined[item.range.clone()]);
+            }
+            ScanItemKind::CsiQuery => {
+                out.extend(strip_c0(&outcome.combined[item.range.clone()]));
+            }
+        }
     }
-    let last = bytes.len() - 1;
-    let body_end = if bytes[last] == 0x07 {
-        last
-    } else if bytes[last] == b'\\' && bytes.len() >= 4 && bytes[last - 1] == 0x1b {
-        last - 1
-    } else {
-        return false;
-    };
-    let osc = reconstruct_osc_number_and_data(&bytes[2..body_end]);
-    is_color_query(&osc) || is_viewer_launch(&osc)
+    out
 }
 
 /// Filter out C0 control bytes (0x00-0x1A, 0x1C-0x1F) from `bytes` — never
@@ -285,33 +248,20 @@ fn strip_c0(bytes: &[u8]) -> impl Iterator<Item = u8> + '_ {
 }
 
 /// Given `ranges` (ascending, non-overlapping byte ranges of some buffer)
-/// whose concatenation is the fed stream, return — in the ORIGINAL buffer's
-/// coordinates, ascending — the pieces that make up the trailing
-/// `contribution` bytes of that concatenation (FR5). `contribution` is
-/// clamped by the caller to the ranges' total length; a smaller total simply
-/// yields every non-empty range. Empty ranges contribute no piece.
-fn excluded_pieces(ranges: &[Range<usize>], contribution: usize) -> Vec<Range<usize>> {
+/// whose concatenation is `to_write`, return the position in the ORIGINAL
+/// buffer's coordinates where the trailing `contribution`-byte suffix of
+/// that concatenation begins. `contribution` must be `<= ` the ranges'
+/// total length (the caller clamps it with `.min(to_write_len)`).
+fn tail_exclusion_start(ranges: &[Range<usize>], contribution: usize) -> usize {
     let mut remaining = contribution;
-    let mut pieces = Vec::new();
     for r in ranges.iter().rev() {
-        if remaining == 0 {
-            break;
+        let len = r.end - r.start;
+        if len >= remaining {
+            return r.end - remaining;
         }
-        let len = r.end.saturating_sub(r.start);
-        if len == 0 {
-            continue;
-        }
-        let take = len.min(remaining);
-        pieces.push(r.end - take..r.end);
-        remaining -= take;
+        remaining -= len;
     }
-    pieces.reverse();
-    pieces
-}
-
-/// Whether `[start, end)` overlaps any range in `ranges`.
-fn overlaps_ranges(start: usize, end: usize, ranges: &[Range<usize>]) -> bool {
-    ranges.iter().any(|r| start < r.end && end > r.start)
+    0
 }
 
 #[cfg(test)]
@@ -387,12 +337,15 @@ mod tests {
     }
 
     #[test]
-    fn osc_color_query_inside_ring_written_ranges_is_not_redelivered() {
+    fn osc_color_query_inside_ring_written_ranges_is_redelivered_once() {
+        // Round-2 FR2 (behavior changed on purpose, SPEC AC-8): a main-buffer
+        // span is written toward the ring, but the snapshot is replayed with
+        // its responses discarded, so a color query that survived into the
+        // ring is never answered through the snapshot. The replacement
+        // delivers it once, exactly like a CSI query.
         let chunk = b"\x1b]11;?\x07";
-        // Main-buffer span: written toward the ring, so it already survives
-        // in the snapshot byte-for-byte (D7) — must not be duplicated.
         let result = build(chunk, &[0..chunk.len()], &[]);
-        assert!(result.is_empty());
+        assert_eq!(result, chunk);
     }
 
     #[test]
@@ -1087,182 +1040,390 @@ mod tests {
         }
     }
 
-    // ---- mux-suppressed-output-round2-fixes FR5/FR6: excluded pieces and the
-    // carried-over completion ----
+    // ---- round 2 (mux-suppressed-output-round2-fixes) ----
 
-    fn build_with_carried(
+    const ESC: u8 = 0x1b;
+
+    /// The responses a live client queues after being fed `bytes`: term_core
+    /// with the theme's OSC responder installed when the `gui` feature
+    /// provides one (color queries produce no response without it).
+    fn client_responses(bytes: &[u8]) -> Vec<u8> {
+        use term_core::terminal_core::TerminalCore;
+        let mut core = TerminalCore::new(80, 24, 1_000);
+        #[cfg(feature = "gui")]
+        {
+            use crate::callbacks::{NativeCallbackState, ThemeColorResponder};
+            use crate::render::theme::Theme;
+            use parking_lot::Mutex;
+            use std::sync::Arc;
+
+            let theme = Arc::new(Mutex::new(Theme::default()));
+            let state = Arc::new(Mutex::new(NativeCallbackState::default()));
+            core.osc_responder = Some(Box::new(ThemeColorResponder::new(theme, state)));
+        }
+        core.process_pty_data_fully(bytes);
+        core.take_response()
+    }
+
+    /// A window of exactly [`client_parity_scan::RETAINED_WINDOW_BYTES`]:
+    /// `prefix` then `fill` bytes.
+    fn full_window(prefix: &[u8], fill: u8) -> Vec<u8> {
+        assert!(prefix.len() <= client_parity_scan::RETAINED_WINDOW_BYTES);
+        let mut window = prefix.to_vec();
+        window.resize(client_parity_scan::RETAINED_WINDOW_BYTES, fill);
+        assert_eq!(window.len(), client_parity_scan::RETAINED_WINDOW_BYTES);
+        window
+    }
+
+    /// AC-2 (FR1, TS-1, TM-1; regression test for review round 2 finding
+    /// `ecc48041b65a5380`): an ESC that can sit in a charset designator slot
+    /// is never a restart position for a full retained window. Each case
+    /// below is a stream on which the live client consumes that ESC as a
+    /// designator byte, so it never starts the query-shaped bytes that
+    /// follow; the replacement must be empty and a client fed it (plus a
+    /// BEL) must queue no response.
+    #[test]
+    fn round2_ecc48041_designator_slot_esc_is_never_a_window_restart_position() {
+        // (label, stream bytes BEFORE the retained window, window, chunk)
+        type Case = (String, Vec<u8>, Vec<u8>, Vec<u8>);
+        let mut cases: Vec<Case> = vec![
+            (
+                "ESC ( ESC ]10; + 249 spaces, chunk `?` BEL".to_string(),
+                Vec::new(),
+                full_window(&[ESC, b'(', ESC, b']', b'1', b'0', b';'], b' '),
+                b"?\x07".to_vec(),
+            ),
+            (
+                "ESC ( ESC [ + 252 NULs, chunk `c`".to_string(),
+                Vec::new(),
+                full_window(&[ESC, b'(', ESC, b'['], 0x00),
+                b"c".to_vec(),
+            ),
+        ];
+        // The chain form, with both parities. The pre-fix scan walked every
+        // other ESC of a chain as a real start; which ESCs the live client
+        // treats as designator bytes depends on the stream before the
+        // window, so an even chain is preceded by `ESC (` (its first ESC is
+        // then a designator byte) to keep the final ESC in a designator slot.
+        for pairs in [1usize, 2, 3, 60, 61] {
+            let before: Vec<u8> = if pairs % 2 == 0 {
+                vec![ESC, b'(']
+            } else {
+                Vec::new()
+            };
+            let chain: Vec<u8> = [ESC, b'('].repeat(pairs);
+
+            let mut osc_prefix = chain.clone();
+            osc_prefix.extend_from_slice(&[ESC, b']', b'1', b'0', b';']);
+            cases.push((
+                format!("{pairs}x `ESC (` chain then ESC ]10;, chunk `?` BEL"),
+                before.clone(),
+                full_window(&osc_prefix, b' '),
+                b"?\x07".to_vec(),
+            ));
+
+            let mut csi_prefix = chain;
+            csi_prefix.extend_from_slice(&[ESC, b'[']);
+            cases.push((
+                format!("{pairs}x `ESC (` chain then ESC [ + NULs, chunk `c`"),
+                before,
+                full_window(&csi_prefix, 0x00),
+                b"c".to_vec(),
+            ));
+        }
+
+        for (label, before, window, chunk) in cases {
+            // Premise: the live client, fed the raw stream, answers nothing.
+            let mut raw = before;
+            raw.extend_from_slice(&window);
+            raw.extend_from_slice(&chunk);
+            raw.push(0x07);
+            assert!(
+                client_responses(&raw).is_empty(),
+                "case {label}: the raw stream must produce no response in the client"
+            );
+
+            let replacement = build_suppressed_replacement(&chunk, &[], &[], &window);
+            assert!(
+                replacement.is_empty(),
+                "case {label}: a designator-slot ESC must never restart the scan, got {:?}",
+                String::from_utf8_lossy(&replacement)
+            );
+            let mut delivered = replacement;
+            delivered.push(0x07);
+            assert!(
+                client_responses(&delivered).is_empty(),
+                "case {label}: the client must queue no response"
+            );
+        }
+    }
+
+    /// AC-3 (FR1 positive): a full window that holds a decidable ESC is
+    /// scanned from there and the color query is delivered exactly once.
+    #[test]
+    fn full_window_with_a_decidable_esc_delivers_the_color_query_once() {
+        let window = full_window(&[b'x', ESC, b']', b'1', b'0', b';'], b' ');
+        let chunk = b"?\x07".to_vec();
+        let result = build_suppressed_replacement(&chunk, &[], &[], &window);
+        let mut expected = window[1..].to_vec();
+        expected.extend_from_slice(&chunk);
+        assert_eq!(result, expected);
+    }
+
+    /// AC-3 (FR1): a window shorter than the cap is scanned from its start.
+    #[test]
+    fn short_window_is_scanned_from_its_start_even_when_it_begins_with_esc() {
+        let window = [ESC, b']', b'1', b'0', b';', b' ', b' '];
+        let chunk = b"?\x07".to_vec();
+        let result = build_suppressed_replacement(&chunk, &[], &[], &window);
+        let mut expected = window.to_vec();
+        expected.extend_from_slice(&chunk);
+        assert_eq!(result, expected);
+    }
+
+    /// AC-4 (FR2, builder level): a color query completed in the chunk is
+    /// included verbatim exactly once whether it lies inside a ring-written
+    /// range, outside it, or across a range edge.
+    #[test]
+    fn color_query_is_included_once_whatever_its_ring_written_overlap() {
+        // `A ESC ] 1 1 ; ? BEL B`: the query occupies bytes 1..8.
+        let chunk = b"A\x1b]11;?\x07B";
+        let query = b"\x1b]11;?\x07";
+        let layouts: [(&str, Vec<Range<usize>>); 6] = [
+            ("inside a range", vec![0..chunk.len()]),
+            ("outside every range", vec![]),
+            ("range ends inside the query", vec![0..4]),
+            ("range starts inside the query", vec![5..chunk.len()]),
+            ("straddled by two ranges", vec![0..4, 6..chunk.len()]),
+            ("ranges on both sides only", vec![0..1, 8..9]),
+        ];
+        for (label, ranges) in layouts {
+            let result = build(chunk, &ranges, &[]);
+            assert_eq!(result, query, "layout {label}: exactly one verbatim copy");
+        }
+    }
+
+    /// AC-4 (FR2): queries, color queries and viewer launches come out in
+    /// stream order whatever the ring-written layout, each exactly once.
+    #[test]
+    fn color_queries_keep_stream_order_with_csi_queries_and_viewer_launches() {
+        let items: [&[u8]; 5] = [
+            b"\x1b[6n",
+            b"\x1b]11;?\x07",
+            b"\x1b]777;emterm;markdown;begin;id=1\x07",
+            b"\x1b]10;?\x1b\\",
+            b"\x1b[c",
+        ];
+        // Plain text between the items is never part of the replacement.
+        let mut chunk = Vec::new();
+        let mut expected = Vec::new();
+        for item in items {
+            chunk.extend_from_slice(b"text");
+            chunk.extend_from_slice(item);
+            expected.extend_from_slice(item);
+        }
+        // The whole chunk, none of it, and ranges cutting through items.
+        let layouts: [Vec<Range<usize>>; 4] = [
+            vec![0..chunk.len()],
+            vec![],
+            vec![2..14, 20..chunk.len()],
+            vec![0..4, 8..13, 30..44],
+        ];
+        for ranges in layouts {
+            let result = build(&chunk, &ranges, &[]);
+            assert_eq!(result, expected, "ring-written ranges {ranges:?}");
+        }
+    }
+
+    /// AC-4 (FR2): a color query that completed inside the retained window
+    /// already reached the client in an earlier read and is not included.
+    #[test]
+    fn color_query_completed_inside_the_window_is_not_included() {
+        let window = b"prefix\x1b]11;?\x07".to_vec();
+        let chunk = b"plain text".to_vec();
+        for ranges in [vec![0..chunk.len()], vec![]] {
+            let result = build_suppressed_replacement(&chunk, &ranges, &[], &window);
+            assert!(result.is_empty(), "ring-written ranges {ranges:?}");
+        }
+        // A query that STARTED in the window and completes in the chunk is.
+        let window = b"prefix\x1b]11;".to_vec();
+        let chunk = b"?\x07".to_vec();
+        let result = build_suppressed_replacement(&chunk, &[0..chunk.len()], &[], &window);
+        assert_eq!(result, b"\x1b]11;?\x07");
+    }
+
+    // ---- FR8 (mux-suppressed-output-round2-fixes task0004): the snapshot
+    // trailing construct ----
+
+    /// Build with a snapshot trailing construct and a retained window.
+    fn build_fr8(
+        window: &[u8],
         chunk: &[u8],
         ring_written_ranges: &[Range<usize>],
         pending: &[u8],
-        window: &[u8],
-        carried: Option<(&[u8], usize)>,
+        construct: Option<&[u8]>,
     ) -> Vec<u8> {
         build_suppressed_replacement_for(&SuppressedReplacementRequest {
             chunk,
             ring_written_ranges,
             pending_after: pending,
             window,
-            carried_over_completion: carried
-                .map(|(bytes, end)| CarriedOverCompletion { bytes, end }),
+            snapshot_trailing_construct: construct,
         })
     }
 
-    const SHORT_LAUNCH: &[u8] = b"\x1b]777;emterm;markdown;begin;id=short\x07";
+    #[test]
+    fn fr8_awaiting_designator_tail_equal_to_the_construct_with_no_items_is_omitted() {
+        let chunk = b"abc\x1b(";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b("));
+        assert!(
+            result.is_empty(),
+            "the client already holds `ESC (`: nothing to re-send, got {result:?}"
+        );
+        let chunk = b"abc\x1b)";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b)"));
+        assert!(
+            result.is_empty(),
+            "the client already holds `ESC )`: nothing to re-send, got {result:?}"
+        );
+    }
 
     #[test]
-    fn excluded_pieces_are_the_trailing_contribution_split_across_ranges() {
-        let ranges = [0..5, 25..26];
-        assert_eq!(excluded_pieces(&ranges, 0), Vec::<Range<usize>>::new());
-        assert_eq!(excluded_pieces(&ranges, 1), vec![25..26]);
-        assert_eq!(excluded_pieces(&ranges, 2), vec![4..5, 25..26]);
-        assert_eq!(excluded_pieces(&ranges, 6), vec![0..5, 25..26]);
+    fn fr8_utf8_tail_equal_to_the_construct_with_no_items_is_omitted() {
+        let mut chunk = b"abc".to_vec();
+        chunk.extend_from_slice(&[0xe4, 0xb8]);
+        let result = build_fr8(&[], &chunk, &[0..chunk.len()], &[], Some(&[0xe4, 0xb8]));
+        assert!(result.is_empty(), "got {result:?}");
+    }
+
+    #[test]
+    fn fr8_csi_tail_equal_to_the_construct_with_no_items_is_omitted() {
+        let chunk = b"abc\x1b[3";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b[3"));
+        assert!(result.is_empty(), "got {result:?}");
+    }
+
+    #[test]
+    fn fr8_csi_tail_is_compared_after_c0_removal() {
+        // The decider's construct has C0 removed; the builder's tail is
+        // compared after its own C0 removal, so a CR inside the cut CSI
+        // does not defeat the match.
+        let chunk = b"abc\x1b[1\r;";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b[1;"));
+        assert!(result.is_empty(), "got {result:?}");
+        // The raw (C0 included) form is a different byte string: unchanged.
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b[1\r;"));
+        assert_eq!(result, b"\x1b[1;");
+    }
+
+    #[test]
+    fn fr8_tail_starting_in_the_window_is_compared_as_a_whole() {
+        // The cut sequence began in the retained window and ends the chunk.
+        let window = b"ab\x1b[";
+        let chunk = b"3";
+        let result = build_fr8(window, chunk, &[0..chunk.len()], &[], Some(b"\x1b[3"));
+        assert!(result.is_empty(), "got {result:?}");
+        // A construct that is only a prefix of the tail is not equal.
+        let result = build_fr8(window, chunk, &[0..chunk.len()], &[], Some(b"\x1b["));
+        assert_eq!(result, b"\x1b[3");
+    }
+
+    #[test]
+    fn fr8_construct_absent_or_different_leaves_the_output_unchanged() {
+        let chunk = b"abc\x1b(";
+        let ranges = [0..chunk.len()];
+        assert_eq!(build_fr8(&[], chunk, &ranges, &[], None), b"\x1b(");
         assert_eq!(
-            excluded_pieces(&ranges, 100),
-            vec![0..5, 25..26],
-            "a contribution beyond the total yields every range"
-        );
-    }
-
-    #[test]
-    fn excluded_pieces_skip_empty_ranges_and_never_cover_gaps() {
-        let ranges = [0..3, 5..5, 7..9];
-        assert_eq!(excluded_pieces(&ranges, 4), vec![1..3, 7..9]);
-        assert!(excluded_pieces(&[], 3).is_empty());
-    }
-
-    #[test]
-    fn pending_spanning_two_ranges_keeps_the_alt_range_query_and_appends_the_pending_tail() {
-        // `ESC ] 2 ; x` (main) `ESC [?1049h` `ESC [6n` (alt) `ESC [?1049l` `y` (main)
-        let mut chunk = b"\x1b]2;x".to_vec();
-        chunk.extend_from_slice(b"\x1b[?1049h\x1b[6n\x1b[?1049l");
-        chunk.push(b'y');
-        let ranges = [0..5, 25..26];
-        let pending = b"\x1b]2;xy";
-        let out = build_with_carried(&chunk, &ranges, pending, &[], None);
-        assert_eq!(out, [&b"\x1b[6n"[..], &pending[..]].concat());
-    }
-
-    #[test]
-    fn carried_over_launch_whose_start_is_out_of_the_window_is_delivered() {
-        let end = SHORT_LAUNCH.len() - 12;
-        let mut chunk = SHORT_LAUNCH[12..].to_vec();
-        chunk.extend_from_slice(b"post");
-        let out = build_with_carried(
-            &chunk,
-            &[0..chunk.len()],
-            &[],
-            &[],
-            Some((SHORT_LAUNCH, end)),
-        );
-        assert_eq!(out, SHORT_LAUNCH);
-    }
-
-    #[test]
-    fn carried_over_launch_also_found_through_the_window_is_delivered_once() {
-        let end = SHORT_LAUNCH.len() - 12;
-        let mut chunk = SHORT_LAUNCH[12..].to_vec();
-        chunk.extend_from_slice(b"post");
-        let out = build_with_carried(
-            &chunk,
-            &[0..chunk.len()],
-            &[],
-            &SHORT_LAUNCH[..12],
-            Some((SHORT_LAUNCH, end)),
+            build_fr8(&[], chunk, &ranges, &[], Some(b"\x1b)")),
+            b"\x1b("
         );
         assert_eq!(
-            out, SHORT_LAUNCH,
-            "same end position means the same sequence"
+            build_fr8(&[], chunk, &ranges, &[], Some(b"\x1b[3")),
+            b"\x1b("
+        );
+        // Wrapper form (no construct) is the same as an absent construct.
+        assert_eq!(build(chunk, &ranges, &[]), b"\x1b(");
+        let mut utf8 = b"abc".to_vec();
+        utf8.extend_from_slice(&[0xe4, 0xb8]);
+        assert_eq!(
+            build_fr8(&[], &utf8, &[0..utf8.len()], &[], Some(&[0xe4])),
+            vec![0xe4, 0xb8]
         );
     }
 
     #[test]
-    fn a_launch_with_identical_content_ending_elsewhere_is_a_different_sequence() {
-        let end = SHORT_LAUNCH.len() - 12;
-        let mut chunk = SHORT_LAUNCH[12..].to_vec();
-        chunk.extend_from_slice(SHORT_LAUNCH);
-        let out = build_with_carried(
-            &chunk,
-            &[0..chunk.len()],
-            &[],
-            &SHORT_LAUNCH[..12],
-            Some((SHORT_LAUNCH, end)),
+    fn fr8_designator_construct_with_a_csi_query_emits_filler_items_then_tail() {
+        let chunk = b"\x1b[6nabc\x1b(";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b("));
+        assert_eq!(
+            result, b"B\x1b[6n\x1b(",
+            "filler designator, the query, then the tail"
         );
-        assert_eq!(out, [SHORT_LAUNCH, SHORT_LAUNCH].concat());
+        let chunk = b"\x1b[cabc\x1b)";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b)"));
+        assert_eq!(result, b"B\x1b[c\x1b)");
     }
 
     #[test]
-    fn carried_over_launch_precedes_a_later_alternate_range_query() {
-        let end = SHORT_LAUNCH.len() - 12;
-        let mut chunk = SHORT_LAUNCH[12..].to_vec();
-        chunk.extend_from_slice(b"\x1b[?1049h\x1b[6n");
-        let out = build_with_carried(&chunk, &[0..end], &[], &[], Some((SHORT_LAUNCH, end)));
-        assert_eq!(out, [SHORT_LAUNCH, b"\x1b[6n"].concat());
+    fn fr8_designator_construct_with_an_alt_span_color_query_emits_filler_items_then_tail() {
+        // The color query lies outside the ring-written ranges (it was in an
+        // alternate-screen span), so it is re-delivered; `abc\x1b(` is the
+        // ring-written part.
+        let chunk = b"\x1b]11;?\x07abc\x1b(";
+        let start = b"\x1b]11;?\x07".len();
+        let result = build_fr8(&[], chunk, &[start..chunk.len()], &[], Some(b"\x1b("));
+        assert_eq!(result, b"B\x1b]11;?\x07\x1b(");
     }
 
     #[test]
-    fn carried_over_launch_and_the_pending_tail_are_both_delivered() {
-        let end = SHORT_LAUNCH.len() - 12;
-        let pending = b"\x1b]2;pa";
-        let mut chunk = SHORT_LAUNCH[12..].to_vec();
-        chunk.extend_from_slice(pending);
-        let out = build_with_carried(
-            &chunk,
-            &[0..chunk.len()],
-            pending,
-            &[],
-            Some((SHORT_LAUNCH, end)),
-        );
-        assert_eq!(out, [SHORT_LAUNCH, &pending[..]].concat());
+    fn fr8_designator_construct_with_a_viewer_launch_emits_filler_items_then_tail() {
+        let chunk = b"\x1b]9999;emterm-md;# hi\x07abc\x1b(";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b("));
+        assert_eq!(result, b"B\x1b]9999;emterm-md;# hi\x07\x1b(");
     }
 
     #[test]
-    fn carried_over_color_query_is_delivered_with_either_terminator() {
-        for query in [&b"\x1b]11;?\x07"[..], &b"\x1b]11;?\x1b\\"[..]] {
-            let split = 4;
-            let chunk = query[split..].to_vec();
-            let out = build_with_carried(
-                &chunk,
-                &[0..chunk.len()],
-                &[],
-                &[],
-                Some((query, chunk.len())),
-            );
-            assert_eq!(out, query, "query {query:?}");
-        }
+    fn fr8_designator_construct_that_differs_from_the_tail_gets_no_filler() {
+        let chunk = b"\x1b[6nabc\x1b(";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b)"));
+        assert_eq!(result, b"\x1b[6n\x1b(");
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], None);
+        assert_eq!(result, b"\x1b[6n\x1b(");
     }
 
     #[test]
-    fn carried_over_sequences_that_are_not_deliverable_are_dropped() {
-        let cases: [(&str, &[u8]); 5] = [
-            ("title OSC", b"\x1b]2;title\x07"),
-            ("DCS", b"\x1bPqabc\x1b\\"),
-            ("APC", b"\x1b_Gabc\x1b\\"),
-            (
-                "image launch",
-                b"\x1b]777;emterm;image;chunk;id=1;data=AA\x07",
-            ),
-            ("not an OSC at all", b"\x1b[6n"),
-        ];
-        for (name, seq) in cases {
-            let chunk = seq[3..].to_vec();
-            let out = build_with_carried(
-                &chunk,
-                &[0..chunk.len()],
-                &[],
-                &[],
-                Some((seq, chunk.len())),
-            );
-            assert!(out.is_empty(), "{name} must not be delivered: {out:?}");
-        }
+    fn fr8_utf8_construct_with_items_emits_items_then_tail_with_no_filler() {
+        let mut chunk = b"\x1b[6nabc".to_vec();
+        chunk.extend_from_slice(&[0xe4, 0xb8]);
+        let result = build_fr8(&[], &chunk, &[0..chunk.len()], &[], Some(&[0xe4, 0xb8]));
+        let mut expected = b"\x1b[6n".to_vec();
+        expected.extend_from_slice(&[0xe4, 0xb8]);
+        assert_eq!(result, expected);
     }
 
     #[test]
-    fn is_deliverable_osc_rejects_unterminated_and_degenerate_input() {
-        assert!(is_deliverable_osc(SHORT_LAUNCH));
-        assert!(!is_deliverable_osc(b""));
-        assert!(!is_deliverable_osc(b"\x1b]"));
-        assert!(!is_deliverable_osc(b"\x1b]11;?"));
-        assert!(!is_deliverable_osc(b"\x1b]11;?\\"));
-        assert!(!is_deliverable_osc(b"x]11;?\x07"));
+    fn fr8_csi_construct_with_items_emits_items_then_tail_with_no_filler() {
+        let chunk = b"\x1b[6nabc\x1b[3";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b[3"));
+        assert_eq!(result, b"\x1b[6n\x1b[3");
+    }
+
+    #[test]
+    fn fr8_pending_run_tail_is_never_affected_by_the_construct() {
+        // The tail comes from the write filter's pending run (D4 rule 1),
+        // so even a construct byte-equal to it changes nothing.
+        let pending = b"\x1b]9999;emterm-md;partial".to_vec();
+        let mut chunk = b"abc".to_vec();
+        chunk.extend_from_slice(&pending);
+        let ranges = [0..chunk.len()];
+        let with_construct = build_fr8(&[], &chunk, &ranges, &pending, Some(&pending));
+        let without = build_fr8(&[], &chunk, &ranges, &pending, None);
+        assert_eq!(with_construct, without);
+        assert_eq!(with_construct, pending);
+        // A pending run that equals an `ESC (` construct is likewise re-sent.
+        let chunk = b"abc\x1b(";
+        let ranges = [0..chunk.len()];
+        let result = build_fr8(&[], chunk, &ranges, b"\x1b(", Some(b"\x1b("));
+        assert_eq!(result, b"\x1b(");
     }
 }

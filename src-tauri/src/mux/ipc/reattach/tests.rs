@@ -1365,3 +1365,131 @@ async fn collect_reattach_data_records_boundary_and_send_reattach_data_admits_sn
          bytes and segments"
     );
 }
+
+// ── mux-suppressed-output-round2-fixes task0004 (FR8): the visible
+//    reattach records the construct of the payload it returns ─────────────
+
+/// AC-3 / AC-6: a deliverable visible reattach records, together with the
+/// boundary, the construct decided from the payload `collect_reattach_data`
+/// returns. That payload ends in the trailing screen-switch sequence, so the
+/// recorded construct is none for every tail kind the ring ends in, and the
+/// returned bytes are byte-identical to the assembly function's output.
+#[tokio::test]
+async fn collect_reattach_data_records_the_construct_of_the_payload_it_returns() {
+    for (name, ring_bytes) in [
+        ("cut utf-8", [b"abc".as_slice(), &[0xe4, 0xb8]].concat()),
+        ("esc paren", [b"abc".as_slice(), &[0x1b, b'(']].concat()),
+        ("cut csi", [b"abc".as_slice(), &[0x1b, b'[', b'3']].concat()),
+    ] {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (old_tx, _old_rx) = mpsc::channel::<PtyOutputChunk>(16);
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(old_tx)));
+        let session_id;
+        let output_capture;
+        let expected;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+            let pane = make_test_pane_with_target(1, target);
+            pane.scrollback.lock().unwrap().write(&ring_bytes);
+            pane.shadow_parser.lock().unwrap().process(&ring_bytes);
+            output_capture = pane.output_capture.clone();
+            expected = {
+                let (ring, segments, wrapped) = pane
+                    .scrollback
+                    .lock()
+                    .unwrap()
+                    .read_segments_with_wrap_state();
+                let (screen, alt, dims) = {
+                    let parser = pane.shadow_parser.lock().unwrap();
+                    let (rows, cols) = parser.screen().size();
+                    let alt = parser.screen().alternate_screen();
+                    let screen = if alt || wrapped {
+                        parser.screen().contents_formatted()
+                    } else {
+                        Vec::new()
+                    };
+                    (screen, alt, (cols, rows))
+                };
+                crate::mux::snapshot_bytes::build_snapshot_bytes_for_ring(
+                    &ring, &segments, &screen, alt, wrapped, dims, 10_000,
+                )
+            };
+            m.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+        }
+        assert!(
+            expected.0.ends_with(b"\x1b[?1049l"),
+            "{name}: test prerequisite: a reattach main snapshot ends in the switch sequence"
+        );
+
+        let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+        let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+        let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+        let data =
+            collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true, 10_000)
+                .await;
+        let (_, bytes, segments) = data[0].clone();
+        assert_eq!(bytes, expected.0, "{name}: payload bytes unchanged");
+        assert_eq!(segments, expected.1, "{name}: payload segments unchanged");
+
+        assert_eq!(
+            output_capture
+                .boundary_cover(&new_tx, 0)
+                .map(|c| c.construct),
+            Some(crate::mux::snapshot_tail::trailing_construct_bytes(&bytes)),
+            "{name}: the construct of the returned payload is recorded with the boundary"
+        );
+        assert_eq!(
+            output_capture
+                .boundary_cover(&new_tx, 0)
+                .map(|c| c.construct),
+            Some(None),
+            "{name}: a payload ending in the switch sequence carries nothing"
+        );
+    }
+}
+
+/// AC-2: the visible reattach decides the construct outside the capture
+/// exclusion and the boundary exclusion.
+#[tokio::test]
+async fn collect_reattach_data_decides_the_construct_outside_both_exclusions() {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (old_tx, _old_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(old_tx)));
+    let session_id;
+    let output_capture;
+    {
+        let mut m = mgr.lock().await;
+        session_id = m.create_session("default".to_string());
+        let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+        let pane = make_test_pane_with_target(1, target);
+        pane.scrollback.lock().unwrap().write(b"abc\x1b(");
+        output_capture = pane.output_capture.clone();
+        m.get_session_mut(session_id)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+    }
+    let probe = output_capture.probe_decider_exclusions();
+    let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let data =
+        collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true, 10_000).await;
+    let (calls, free) = probe.finish();
+    assert_eq!(data.len(), 1);
+    assert!(calls >= 1, "the decider must run on the reattach path");
+    assert!(
+        free,
+        "the decider must run with neither the capture exclusion nor the boundary exclusion held"
+    );
+}

@@ -661,11 +661,19 @@ pub(super) async fn handle_request_pane_snapshot(
     // (never for a chunk it lost a coalesce to). This is what lets the PTY
     // reader suppress every already-captured chunk this snapshot already
     // covers, instead of re-delivering it a second time after the snapshot.
+    //
+    // mux-suppressed-output-round2-fixes task0004 (FR8): the incomplete
+    // construct this snapshot leaves the client parser in is decided here,
+    // from the payload exactly as it was assembled (outside the capture
+    // exclusion — released above), and travels with the boundary so it is
+    // recorded together with it — on the fast path, or when the deferred
+    // flush / fair-permit front item records the boundary.
+    let trailing_construct = crate::mux::snapshot_tail::trailing_construct_bytes(&snapshot);
     crate::mux::session::pane::enqueue_pane_output_chunk(
         pane_output_tx,
         PtyOutputChunk::snapshot(pane_id, encoded_snapshot),
         deferred_output,
-        Some((output_capture, boundary)),
+        Some((output_capture, boundary, trailing_construct)),
     );
 
     // SPEC FR4/FR5 (task0003 AC-5): the on-demand snapshot just enqueued had

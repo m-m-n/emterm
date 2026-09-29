@@ -346,7 +346,11 @@ pub(in crate::mux::ipc) async fn flush_deferred_output(
                 match pane_output_tx.try_send(chunk) {
                     Ok(()) => {
                         if let (Some(commit), Some(guard)) = (&commit, guard.as_mut()) {
-                            guard.record(pane_output_tx, commit.boundary);
+                            guard.record_with_construct(
+                                pane_output_tx,
+                                commit.boundary,
+                                commit.construct.clone(),
+                            );
                         }
                     }
                     Err(mpsc::error::TrySendError::Full(chunk)) => {
@@ -454,7 +458,11 @@ pub(in crate::mux::ipc) async fn apply_fair_permit_to_front_deferred_item(
                 .map(|output_capture| output_capture.hold_boundary());
             let _ = permit.send(chunk);
             if let (Some(commit), Some(guard)) = (&commit, guard.as_mut()) {
-                guard.record(pane_output_tx, commit.boundary);
+                guard.record_with_construct(
+                    pane_output_tx,
+                    commit.boundary,
+                    commit.construct.clone(),
+                );
             }
         }
         DeferredOutputItem::VisibilityResume(pane_id) => {
