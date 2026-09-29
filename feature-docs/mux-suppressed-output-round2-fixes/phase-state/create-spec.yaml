@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-suppressed-output-round2-fixes
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 492a24e9e4442632aa2490ba9319a9d681931c22
 last_input_digest: sha256:dd3b0c23dc9cea43782b083ee6ef5b7a2fb1ea1361bd65dc29b68535c9e2a947
