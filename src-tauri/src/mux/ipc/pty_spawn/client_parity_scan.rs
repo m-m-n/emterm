@@ -75,7 +75,7 @@ pub(in crate::mux) struct ScanItem {
 /// Result of [`scan`]: the combined buffer that was walked, where the
 /// suppressed chunk begins within it, every qualifying item (in stream
 /// order), and the trailing incomplete construct, if scanning reached the
-/// limit without resolving one.
+/// end of the chunk without resolving one (and no piece was excluded).
 pub(in crate::mux) struct ScanOutcome {
     /// `window[s..] ++ chunk` (see the module doc).
     pub(in crate::mux) combined: Vec<u8>,
@@ -86,7 +86,8 @@ pub(in crate::mux) struct ScanOutcome {
     /// (`range.end <= boundary`) already reached the client in an earlier
     /// read and is never reported here.
     pub(in crate::mux) items: Vec<ScanItem>,
-    /// The trailing incomplete construct at the scan limit, if any. May
+    /// The trailing incomplete construct at the end of the chunk, if any
+    /// (always `None` when [`scan`] was given excluded pieces). May
     /// start before `boundary` (a sequence that began in the window and is
     /// STILL incomplete at the chunk's end, FR6).
     pub(in crate::mux) tail: Option<Range<usize>>,
@@ -99,27 +100,39 @@ pub(in crate::mux) struct ScanOutcome {
 /// Scan a suppressed chunk for FR6/FR7/FR9 items and an FR1/FR3/FR6 tail.
 ///
 /// `window` is the retained stream bytes preceding `chunk` (reader-local,
-/// up to [`RETAINED_WINDOW_BYTES`]). `limit_in_chunk` bounds how far into
-/// `chunk` the scan is allowed to look (`<= chunk.len()`); passing anything
-/// less than `chunk.len()` disables tail discovery for this call (FR4: used
-/// when the write filter's pending run — not this scan — owns the tail, so
-/// the bytes it will re-deliver must never also be found here).
+/// up to [`RETAINED_WINDOW_BYTES`]). `excluded` is a set of chunk-coordinate
+/// pieces (ascending, non-overlapping) the write filter's pending run
+/// occupies (mux-suppressed-output-round2-fixes FR5): the scan walks the
+/// WHOLE chunk — so items in the gaps between the pieces (alternate-screen
+/// ranges, removed switch sequences) are still found — but never reports an
+/// item that overlaps a piece, and reports no tail when any piece is
+/// excluded, because the pending run itself is the tail then (the bytes it
+/// will re-deliver must never also be found here). An empty `excluded`
+/// disables neither: items and the tail are discovered over the whole chunk.
 ///
 /// Contract (NFR5/TM-2): a single forward pass, work proportional to
-/// `window.len() + chunk.len()`; never panics.
-pub(in crate::mux) fn scan(window: &[u8], chunk: &[u8], limit_in_chunk: usize) -> ScanOutcome {
+/// `window.len() + chunk.len()` (plus one pass over `excluded` per reported
+/// item); never panics.
+pub(in crate::mux) fn scan(window: &[u8], chunk: &[u8], excluded: &[Range<usize>]) -> ScanOutcome {
     let s = derive_prefix_start(window);
     let mut combined = Vec::with_capacity((window.len() - s) + chunk.len());
     combined.extend_from_slice(&window[s..]);
     let boundary = combined.len();
     combined.extend_from_slice(chunk);
 
-    let limit = boundary + limit_in_chunk.min(chunk.len());
-    let (raw_items, tail_start, tail_strip_c0) = scan_view(&combined, limit);
+    let detect_tail = excluded.is_empty();
+    let (raw_items, tail_start, tail_strip_c0) = scan_view(&combined, detect_tail);
 
     let items = raw_items
         .into_iter()
-        .filter(|item| item.range.end > boundary)
+        .filter(|item| {
+            item.range.end > boundary
+                && !overlaps_excluded(
+                    item.range.start.saturating_sub(boundary),
+                    item.range.end - boundary,
+                    excluded,
+                )
+        })
         .collect();
     let tail = tail_start.map(|start| start..combined.len());
 
@@ -130,6 +143,12 @@ pub(in crate::mux) fn scan(window: &[u8], chunk: &[u8], limit_in_chunk: usize) -
         tail,
         tail_strip_c0,
     }
+}
+
+/// Whether the chunk-coordinate span `[start, end)` overlaps any excluded
+/// piece.
+fn overlaps_excluded(start: usize, end: usize, excluded: &[Range<usize>]) -> bool {
+    excluded.iter().any(|p| start < p.end && end > p.start)
 }
 
 /// FR6 "Full window" / D2 "stream shorter than N": pick the offset within
@@ -287,17 +306,17 @@ fn utf8_tail_start_at_end(view: &[u8]) -> Option<usize> {
     None
 }
 
-/// Single forward pass over `combined[..limit]` (FR2), classifying every
-/// completed OSC/CSI as a reportable item when it qualifies (FR7/FR9), and
-/// reporting the trailing incomplete construct when the walk reaches
-/// `limit` without resolving one AND `limit == combined.len()` (tail
-/// discovery is disabled when the caller bounded `limit` below the buffer's
-/// end — FR4's pending exclusion).
+/// Single forward pass over `combined` (FR2), classifying every completed
+/// OSC/CSI as a reportable item when it qualifies (FR7/FR9), and reporting
+/// the trailing incomplete construct when the walk reaches the buffer's end
+/// without resolving one AND `detect_tail` is set (tail discovery is
+/// disabled when the write filter's pending run owns the tail — FR5's
+/// pending exclusion).
 ///
 /// Returns `(items, tail_start, tail_strip_c0)`.
-fn scan_view(combined: &[u8], limit: usize) -> (Vec<ScanItem>, Option<usize>, bool) {
-    let detect_tail = limit == combined.len();
-    let view = &combined[..limit];
+fn scan_view(combined: &[u8], detect_tail: bool) -> (Vec<ScanItem>, Option<usize>, bool) {
+    let limit = combined.len();
+    let view = combined;
     let mut items = Vec::new();
     let mut pos = 0usize;
     let mut tail_start: Option<usize> = None;
@@ -879,7 +898,7 @@ mod tests {
 
         let chunk = b"\x1b]10;?\x07\x1b[6n";
         for window in [&all_esc, &all_paren, &alternating] {
-            let outcome = scan(window, chunk, chunk.len());
+            let outcome = scan(window, chunk, &[]);
             assert_eq!(outcome.combined.len() - outcome.boundary, chunk.len());
         }
     }
@@ -894,7 +913,7 @@ mod tests {
         let window = full_window(&[b'x', ESC, b']', b'1', b'0', b';'], b' ');
         let chunk = b"?\x07";
         assert_eq!(derive_prefix_start(&window), 1);
-        let outcome = scan(&window, chunk, chunk.len());
+        let outcome = scan(&window, chunk, &[]);
         assert_eq!(
             outcome.items.len(),
             1,
@@ -916,9 +935,45 @@ mod tests {
         // never restart at offset 0, a short one holds the whole stream.
         let window = [ESC, b']', b'1', b'0', b';', b' ', b' '];
         let chunk = b"?\x07";
-        let outcome = scan(&window, chunk, chunk.len());
+        let outcome = scan(&window, chunk, &[]);
         assert_eq!(outcome.items.len(), 1);
         assert_eq!(outcome.items[0].kind, ScanItemKind::ColorQuery);
         assert_eq!(outcome.items[0].range.start, 0);
+    }
+
+    // ---- mux-suppressed-output-round2-fixes FR5: excluded pieces ----
+
+    #[test]
+    fn scan_skips_an_item_overlapping_an_excluded_piece_and_keeps_the_others() {
+        let chunk = b"\x1b[6n\x1b[c";
+        let outcome = scan(&[], chunk, &[0..4]);
+        assert_eq!(
+            outcome.items,
+            vec![ScanItem {
+                kind: ScanItemKind::CsiQuery,
+                range: 4..7
+            }]
+        );
+    }
+
+    #[test]
+    fn scan_finds_an_item_in_the_gap_between_two_excluded_pieces() {
+        // `ESC ] 2 ; x`, `ESC [ 6 n`, `y`: the pieces are the two main ranges.
+        let chunk = b"\x1b]2;x\x1b[6ny";
+        let outcome = scan(&[], chunk, &[0..5, 9..10]);
+        assert_eq!(
+            outcome.items,
+            vec![ScanItem {
+                kind: ScanItemKind::CsiQuery,
+                range: 5..9
+            }]
+        );
+    }
+
+    #[test]
+    fn scan_reports_no_tail_when_a_piece_is_excluded_and_a_tail_otherwise() {
+        let chunk = b"ok\x1b[3";
+        assert_eq!(scan(&[], chunk, &[]).tail, Some(2..chunk.len()));
+        assert_eq!(scan(&[], chunk, &[2..chunk.len()]).tail, None);
     }
 }
