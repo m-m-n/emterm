@@ -1,8 +1,18 @@
 task_id: task0004
+# Refreshed after conflict cycle 1: merging the parent (task0001 and task0002
+# already merged there) and adopting its suppressed_output.rs changed what
+# this branch inherits. The parent side and this task's change were
+# reintegrated in one tree and the project test command was run on it:
+# 3911 passed / 0 failed / 3 ignored. That run shows no failing test, so
+# nothing inherited from the parent is red. The parent-only suite was not
+# run separately (this task's other files already call the FR8 builder, so
+# the parent side alone does not exist as a compilable tree in this
+# worktree). Before the merge the pre-adoption inheritance was 3820 passed /
+# 0 failed / 3 ignored.
 baseline_failures: []
-# Actually re-executed after the implementation (project test command,
-# 3873 passed / 0 failed / 3 ignored). Baseline before the work was
-# 3820 passed / 0 failed / 3 ignored; the difference is the 53 tests added.
+# Actually re-executed after the parent-side adoption and the
+# re-implementation of the FR8 change on top of it (project test command,
+# 3911 passed / 0 failed / 3 ignored); `--no-default-features` check exit 0.
 final_failures: []
 acceptance_tests:
   AC-1:
@@ -177,7 +187,8 @@ acceptance_tests:
     red_confirmed: false
     red_reason: >-
       The criterion is verified by the `--lib` test run (every existing
-      test unchanged; it ended with 3873 passed and 0 failed) and by
+      test unchanged; the run on the merged tree ended with 3911 passed and
+      0 failed) and by
       `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features`
       (exit 0, no warnings), which compiles the new module, declared
       without a feature gate, in the CLI-only build. No failure of either

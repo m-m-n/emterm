@@ -164,9 +164,9 @@ tasks:
     - NFR1
     - NFR5
     - NFR6
-    status: pending
+    status: merged
     notes: null
-    branch: null
+    branch: em-workflow/mux-suppressed-output-round2-fixes/task0001
   task0002:
     title: Window restart exclusion, main-screen color queries, decision table
     plan: tasks/task0002.md
@@ -186,9 +186,9 @@ tasks:
     - FR9
     - NFR4
     - NFR5
-    status: pending
+    status: merged
     notes: null
-    branch: null
+    branch: em-workflow/mux-suppressed-output-round2-fixes/task0002
   task0003:
     title: Write-filter parity, pending exclusion and carried-over completions
     plan: tasks/task0003.md
@@ -211,9 +211,9 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mux-suppressed-output-round2-fixes/task0003
   task0004:
     title: Do not re-send a tail the snapshot already carried
     plan: tasks/task0004.md
@@ -247,9 +247,9 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mux-suppressed-output-round2-fixes/task0004
 review:
   status: pending
   rounds_completed: 0
