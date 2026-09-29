@@ -42,6 +42,7 @@
 
 use std::ops::Range;
 
+use crate::mux::osc_identify::{OscIdentity, RecoveredOsc, identify_osc, recover_osc};
 use crate::mux::scrollback_filter::scan_csi_device_query;
 
 /// FR6/D2: the number of bytes of PTY stream the reader retains from before
@@ -394,37 +395,16 @@ fn scan_view(combined: &[u8], limit: usize) -> (Vec<ScanItem>, Option<usize>, bo
 /// `u16` (as-06) — term_core's own arithmetic can wrap or panic there, so no
 /// route can be reliably established; this reconstruction never panics
 /// regardless (all arithmetic is saturating/checked).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::mux) struct ReconstructedOsc {
-    pub(in crate::mux) number: Option<u16>,
-    pub(in crate::mux) data: String,
-}
+///
+/// The reconstruction itself lives in the shared OSC identification layer
+/// ([`crate::mux::osc_identify`]) that the scrollback strip also uses
+/// (mux-suppressed-output-round2-fixes FR7); this is the delivery side's
+/// name for it.
+pub(in crate::mux) type ReconstructedOsc = RecoveredOsc;
 
+/// Delivery-side name for [`recover_osc`] (see [`ReconstructedOsc`]).
 pub(in crate::mux) fn reconstruct_osc_number_and_data(body: &[u8]) -> ReconstructedOsc {
-    let mut acc: u32 = 0;
-    let mut overflowed = false;
-    let mut done = false;
-    let mut data = Vec::with_capacity(body.len());
-    for &b in body {
-        if !done {
-            if b.is_ascii_digit() {
-                acc = acc.saturating_mul(10).saturating_add(u32::from(b - b'0'));
-                if acc > u16::MAX as u32 {
-                    overflowed = true;
-                }
-                continue;
-            }
-            if b == b';' {
-                done = true;
-                continue;
-            }
-        }
-        data.push(b);
-    }
-    let number = if overflowed { None } else { Some(acc as u16) };
-    let data = String::from_utf8(data)
-        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
-    ReconstructedOsc { number, data }
+    recover_osc(body)
 }
 
 /// FR2 (h)/as-01: whether the theme would answer this OSC dispatch with at
@@ -481,23 +461,21 @@ fn osc_default_color_has_query_item(data: &str, osc_number: u16) -> bool {
 /// actually opens a child window for, or a complete OSC 9999
 /// `emterm-md[;...]`.
 ///
+/// The delivery side's selection over the shared identification
+/// ([`identify_osc`]): every viewer launch except `image`, and Markdown
+/// launches. Never an agent-status report, never a not-identified OSC.
+///
 /// D3 finding: `image` is excluded even though it is listed in the
 /// viewer-kind SSOT ([`crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS`]) — the
 /// GUI's `ViewerRouter::route` treats it as a reserved, not-yet-implemented
 /// no-op (`src-tauri/src/viewer/mod.rs`, the `"image"` arm), so it never
 /// opens a viewer window. The `agent-status` kind is handled by the daemon
-/// itself and is not in the SSOT at all, so it is excluded structurally.
+/// itself and is not a viewer launch, so it is excluded by its identity.
 pub(in crate::mux) fn is_viewer_launch(osc: &ReconstructedOsc) -> bool {
-    match osc.number {
-        Some(777) => {
-            let Some(rest) = osc.data.strip_prefix("emterm;") else {
-                return false;
-            };
-            let kind = rest.split(';').next().unwrap_or(rest);
-            kind != "image" && crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS.contains(&kind)
-        }
-        Some(9999) => osc.data == "emterm-md" || osc.data.starts_with("emterm-md;"),
-        _ => false,
+    match identify_osc(osc) {
+        OscIdentity::ViewerLaunch(kind) => kind != "image",
+        OscIdentity::MarkdownLaunch => true,
+        OscIdentity::AgentStatusReport | OscIdentity::NotIdentified => false,
     }
 }
 
@@ -525,6 +503,148 @@ mod tests {
         // never reliably establish a route — never a fabricated query.
         let osc = reconstruct_osc_number_and_data(b"999999999;?");
         assert_eq!(osc.number, None);
+    }
+
+    // ---- round-2 task0001 (FR7): delivery-side viewer-launch predicate ----
+
+    fn launch_predicate(body: &[u8]) -> bool {
+        is_viewer_launch(&reconstruct_osc_number_and_data(body))
+    }
+
+    /// AC-4: true for every viewer kind except `image` (canonical,
+    /// leading-zero and non-digit-prefixed forms) and for Markdown launches;
+    /// false for `image`, agent-status and everything not identified.
+    #[test]
+    fn round2_task0001_viewer_launch_predicate_selects_deliverable_launches_in_all_forms() {
+        for &kind in crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS {
+            let forms = [
+                format!("777;emterm;{kind};x"),
+                format!("777;emterm;{kind}"),
+                format!("0777;emterm;{kind};x"),
+                format!("777emterm;;{kind};x"),
+            ];
+            for body in forms {
+                assert_eq!(
+                    launch_predicate(body.as_bytes()),
+                    kind != "image",
+                    "body {body:?}"
+                );
+            }
+        }
+        for body in [
+            "9999;emterm-md",
+            "9999;emterm-md;x",
+            "09999;emterm-md;x",
+            "09999;emterm-md",
+        ] {
+            assert!(launch_predicate(body.as_bytes()), "body {body:?}");
+        }
+        for body in [
+            "777;emterm;agent-status;x",
+            "0777;emterm;agent-status;x",
+            "777;emterm;fold;x",
+            "9999;emterm-mux;x",
+            "9999;emterm-mdx",
+            "777;other;x",
+            "778;emterm;markdown;x",
+            "70000;emterm;markdown;x",
+            "10;?",
+        ] {
+            assert!(!launch_predicate(body.as_bytes()), "body {body:?}");
+        }
+    }
+
+    fn count_occurrences(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
+    }
+
+    /// Ring-written bytes of a chunk the way the reader produces them: the
+    /// write filter's strip over the main-buffer span.
+    fn ring_bytes(chunk: &[u8], ring_written: &std::ops::Range<usize>) -> Vec<u8> {
+        crate::mux::scrollback_filter::strip_pty_output_for_scrollback_write(
+            &chunk[ring_written.clone()],
+        )
+    }
+
+    /// AC-5 (TS-7, registry): a viewer launch written with a leading-zero
+    /// number reaches the client exactly once — absent from the ring bytes
+    /// the snapshot is assembled from, present once in the replacement.
+    #[test]
+    fn round2_a93dffe3_leading_zero_viewer_launch_reaches_the_client_once() {
+        use crate::mux::ipc::pty_spawn::suppressed_output::build_suppressed_replacement;
+
+        // Main-screen chunks: the whole chunk is ring-written.
+        for launch in [
+            b"\x1b]0777;emterm;markdown;begin\x07".as_slice(),
+            b"\x1b]09999;emterm-md;begin\x1b\\".as_slice(),
+        ] {
+            let mut chunk = b"before".to_vec();
+            chunk.extend_from_slice(launch);
+            chunk.extend_from_slice(b"after");
+            let ring_written = 0..chunk.len();
+
+            let in_ring = count_occurrences(&ring_bytes(&chunk, &ring_written), launch);
+            let in_replacement = count_occurrences(
+                &build_suppressed_replacement(&chunk, &[ring_written], &[], &[]),
+                launch,
+            );
+            assert_eq!(
+                in_ring,
+                0,
+                "launch {:?} must be stripped from the ring",
+                String::from_utf8_lossy(launch)
+            );
+            assert_eq!(
+                in_replacement,
+                1,
+                "launch {:?} must be delivered once",
+                String::from_utf8_lossy(launch)
+            );
+            assert_eq!(in_ring + in_replacement, 1);
+        }
+
+        // Alternate-screen range: nothing of the launch is ring-written, the
+        // replacement delivers it once.
+        for launch in [
+            b"\x1b]0777;emterm;markdown;begin\x07".as_slice(),
+            b"\x1b]09999;emterm-md;begin\x1b\\".as_slice(),
+        ] {
+            let mut chunk = b"main\x1b[?1049h".to_vec();
+            let main_end = chunk.len();
+            chunk.extend_from_slice(launch);
+            chunk.extend_from_slice(b"alt text");
+            let ring_written = 0..main_end;
+
+            let in_ring = count_occurrences(&ring_bytes(&chunk, &ring_written), launch);
+            let in_replacement = count_occurrences(
+                &build_suppressed_replacement(&chunk, &[ring_written], &[], &[]),
+                launch,
+            );
+            assert_eq!(in_ring, 0);
+            assert_eq!(
+                in_replacement,
+                1,
+                "alternate-screen launch {:?} must be delivered once",
+                String::from_utf8_lossy(launch)
+            );
+        }
+
+        // Image launch: stripped from the ring, never delivered.
+        let launch = b"\x1b]0777;emterm;image;begin\x07".as_slice();
+        let mut chunk = b"before".to_vec();
+        chunk.extend_from_slice(launch);
+        chunk.extend_from_slice(b"after");
+        let ring_written = 0..chunk.len();
+        let in_ring = count_occurrences(&ring_bytes(&chunk, &ring_written), launch);
+        let in_replacement = count_occurrences(
+            &build_suppressed_replacement(&chunk, &[ring_written], &[], &[]),
+            launch,
+        );
+        assert_eq!(in_ring, 0, "image launch must be stripped from the ring");
+        assert_eq!(in_replacement, 0, "image launch is never delivered");
     }
 
     /// AC-1 (FR2 (g)/(h), as-04): [`is_color_query`] must agree with the

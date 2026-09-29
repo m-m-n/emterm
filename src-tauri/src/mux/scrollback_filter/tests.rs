@@ -1,4 +1,5 @@
 use super::*;
+use crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS;
 
 // ── agent-status strip (task0003 AC-3) ───────────────────────────────
 
@@ -662,4 +663,148 @@ fn remap_multiple_offsets_across_multiple_stripped_sequences() {
             3 + 3 + 1, // inside CCC: "AAABBB" + 1 byte into CCC
         ]
     );
+}
+
+// ── shared OSC identification on the strip side (round-2 task0001, FR7) ──
+
+/// OSC bodies the strip must remove although they are not the canonical
+/// `777;emterm;<kind>;…` / `9999;emterm-md…` spelling: a leading-zero number
+/// or non-digit bytes before the first `;` still reach the client's parser as
+/// the same OSC number and data (NFR1 exception).
+const NON_CANONICAL_STRIPPED_BODIES: &[&[u8]] = &[
+    b"0777;emterm;markdown;begin",
+    b"09999;emterm-md;begin",
+    b"777emterm;;markdown;begin",
+    b"0777;emterm;image;begin",
+    b"0777;emterm;agent-status;v=1;state=idle",
+    b"0000000000777;emterm;json;begin",
+    b"0777;emterm;yaml",
+    b"0777;emterm;html;begin",
+    b"09999;emterm-md",
+];
+
+/// OSC bodies the strip must keep byte-for-byte.
+const KEPT_BODIES: &[&[u8]] = &[
+    b"777;emterm;fold;start;1",
+    b"0777;emterm;fold;start;1",
+    b"9999;emterm-mux;state;1",
+    b"09999;emterm-mux;state;1",
+    b"9999;emterm-mdx",
+    b"777;emterm;status-bar;line",
+    b"0777;emterm;status-bar;line",
+    b"777;other;x",
+    b"778;emterm;markdown;begin",
+    // u16 overflow (as-06): no route can be established, so nothing is
+    // identified and nothing is stripped.
+    b"65536;emterm;markdown;begin",
+    b"70000;emterm;markdown;begin",
+    b"99999;emterm-md;begin",
+];
+
+fn osc(body: &[u8], terminator: &[u8]) -> Vec<u8> {
+    let mut out = b"\x1b]".to_vec();
+    out.extend_from_slice(body);
+    out.extend_from_slice(terminator);
+    out
+}
+
+/// AC-3: the ring-write strip removes every non-canonical spelling of a viewer
+/// launch, Markdown launch or agent-status report, with either terminator.
+#[test]
+fn ring_write_strip_removes_leading_zero_and_non_digit_prefixed_launches() {
+    for body in NON_CANONICAL_STRIPPED_BODIES {
+        for terminator in [b"\x07".as_slice(), b"\x1b\\".as_slice()] {
+            let mut input = b"before".to_vec();
+            input.extend_from_slice(&osc(body, terminator));
+            input.extend_from_slice(b"after");
+            assert_eq!(
+                strip_pty_output_for_scrollback_write(&input),
+                b"beforeafter",
+                "body {:?} must be stripped on ring write",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+}
+
+/// AC-3: the snapshot strip removes the same set.
+#[test]
+fn snapshot_strip_removes_leading_zero_and_non_digit_prefixed_launches() {
+    for body in NON_CANONICAL_STRIPPED_BODIES {
+        for terminator in [b"\x07".as_slice(), b"\x1b\\".as_slice()] {
+            let mut input = b"before".to_vec();
+            input.extend_from_slice(&osc(body, terminator));
+            input.extend_from_slice(b"after");
+            assert_eq!(
+                strip_replayable_rich_content(&input),
+                b"beforeafter",
+                "body {:?} must be stripped on snapshot assembly",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+}
+
+/// AC-3: the strip-and-remap entry point (used by snapshot byte assembly)
+/// removes the same set and keeps a watch offset after it aligned.
+#[test]
+fn strip_and_remap_removes_leading_zero_and_non_digit_prefixed_launches() {
+    for body in NON_CANONICAL_STRIPPED_BODIES {
+        let mut input = b"before".to_vec();
+        input.extend_from_slice(&osc(body, b"\x07"));
+        let after_offset = input.len();
+        input.extend_from_slice(b"after");
+        let (out, remapped) = strip_rich_content_and_remap(&input, &[after_offset]);
+        assert_eq!(
+            out,
+            b"beforeafter",
+            "body {:?}",
+            String::from_utf8_lossy(body)
+        );
+        assert_eq!(remapped, vec![b"before".len()]);
+    }
+}
+
+/// AC-3: a full `build_snapshot_bytes` product built from a scrollback holding
+/// a leading-zero viewer launch contains no trace of the launch.
+#[test]
+fn build_snapshot_bytes_funnel_strips_leading_zero_viewer_launch() {
+    use crate::mux::snapshot_bytes::build_snapshot_bytes;
+    let mut scrollback = b"prompt$ ".to_vec();
+    scrollback.extend_from_slice(&osc(b"0777;emterm;markdown;begin", b"\x07"));
+    scrollback.extend_from_slice(&osc(b"09999;emterm-md;begin", b"\x1b\\"));
+    scrollback.extend_from_slice(b"done");
+    let (out, _segments) = build_snapshot_bytes(&scrollback, &[], b"", false, (80, 24));
+    assert!(
+        !out.windows(b"emterm".len()).any(|w| w == b"emterm"),
+        "snapshot must not carry a viewer launch: {out:?}"
+    );
+    assert!(out.windows(b"prompt".len()).any(|w| w == b"prompt"));
+    assert!(out.windows(b"done".len()).any(|w| w == b"done"));
+}
+
+/// AC-3: fold marks, mux control, other kinds and overflowed numbers are kept
+/// by every strip entry point.
+#[test]
+fn every_strip_entry_point_keeps_non_launch_and_overflowed_osc_bodies() {
+    for body in KEPT_BODIES {
+        for terminator in [b"\x07".as_slice(), b"\x1b\\".as_slice()] {
+            let mut input = b"L".to_vec();
+            input.extend_from_slice(&osc(body, terminator));
+            input.extend_from_slice(b"R");
+            let label = String::from_utf8_lossy(body);
+            assert_eq!(
+                strip_pty_output_for_scrollback_write(&input),
+                input,
+                "body {label:?} must be kept on ring write"
+            );
+            assert_eq!(
+                strip_replayable_rich_content(&input),
+                input,
+                "body {label:?} must be kept on snapshot assembly"
+            );
+            let (out, _) = strip_rich_content_and_remap(&input, &[]);
+            assert_eq!(out, input, "body {label:?} must be kept by strip-and-remap");
+        }
+    }
 }
