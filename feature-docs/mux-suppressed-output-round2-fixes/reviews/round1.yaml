@@ -1,0 +1,220 @@
+round: 1
+executed_at: '2026-09-29T23:05:00+09:00'
+scope:
+  review_mode: diff
+  base_commit: e7f0278b17c44e4a70813841ef9bfb03690ff2c7
+  head_commit: b00e6901f064d551c9b4735c6d0d43bf3dd0f996
+  changed_files:
+  - src-tauri/src/mux/ipc/handlers/attach.rs
+  - src-tauri/src/mux/ipc/handlers/mod.rs
+  - src-tauri/src/mux/ipc/handlers/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/ipc/reattach.rs
+  - src-tauri/src/mux/ipc/reattach/tests.rs
+  - src-tauri/src/mux/mod.rs
+  - src-tauri/src/mux/osc_identify.rs
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/scrollback_filter/tests.rs
+  - src-tauri/src/mux/session/pane/output_capture.rs
+  - src-tauri/src/mux/session/pane/output_queue.rs
+  - src-tauri/src/mux/session/pane/output_target.rs
+  - src-tauri/src/mux/session/pane/tests.rs
+  - src-tauri/src/mux/snapshot_tail.rs
+  - test-docs/mux-suppressed-output-round2-fixes/task0001.tests.yaml
+  - test-docs/mux-suppressed-output-round2-fixes/task0002.tests.yaml
+  - test-docs/mux-suppressed-output-round2-fixes/task0003.tests.yaml
+  - test-docs/mux-suppressed-output-round2-fixes/task0004.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: review_data_too_large
+- run_id: performance#1
+  perspective: performance
+  role: primary
+  source: codex
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: review_data_too_large
+- run_id: architecture#1
+  perspective: architecture
+  role: primary
+  source: codex
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: skipped
+  skip_reason: review_data_too_large
+- run_id: spec#1
+  perspective: spec
+  role: primary
+  source: codex
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: 973af79f520bdaa5
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  line: 304
+  title: 削除された画面切り替えで閉じた OSC が未終端のまま ring に書かれ、スナップショット再生後の BEL で色問い合わせが成立する
+  description: cut の分岐（304-310行）は pending を空にするが、切り替え位置で閉じた OSC を終端なしのまま strip に通して ring に書く。main 画面で ring が未ラップの表示復帰スナップショットは ring の末尾をそのまま再生するので、ESC ]11;? / ESC [?47h / ESC [?47l を抑止すると、クライアントは OSC の途中で止まる。置換出力は空になり、次の読み込みの BEL が 11;? を完成させて応答が出る。回帰テスト round2_b600645f_removed_screen_switch_closes_the_pending_string（tests.rs:7020）はチャンク末尾の空白でこれを隠している。AC-2、AC-3、TM-1 に反する。
+  suggestion: 'cut で閉じた未完了の OSC/DCS/APC は、ring でもクライアントと同じく中断済みとして扱える形で書く（例: 閉じた文字列のバイトを ring に書かない）。空白なしの ESC ]11;? と 47/1047/1049 の切り替え対、後続 BEL の組み合わせで応答が出ない回帰テストを追加する。'
+  sources:
+  - codex:spec
+  confidence: 80
+  resolution: unresolved
+  resolution_reason: 'medium: outside the auto-fix candidate gate (critical/high only)'
+- stable_id: 195916fd94088018
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  line: 323
+  title: 指定文字待ちの状態が strip に渡らないので、分割位置で出力が変わる（FR3 の分割不変条件違反）
+  description: scan_boundary は ESC ( の直後の ESC を指定文字として消費するが、strip_pty_output_for_scrollback_write はこの状態を追わない。ESC ( ESC [6n を一括投入すると出力は ESC ( になり、3バイト目の直後で分割すると全バイトが出る。FR3/AC-5 の分割不変条件に反する。既存のコーパスには指定文字の位置にある完結した除去対象が無いので検出されない。
+  suggestion: scan_boundary が確定した指定文字の位置（または呼び出し開始時の待機状態）を strip に渡し、strip 側でその ESC を制御列の開始として扱わない。ESC ( ESC [6n と ESC ( ESC ]777;emterm;markdown;x BEL をコーパスに加え、全分割位置と1バイトずつで比較する。
+  sources:
+  - codex:spec
+  confidence: 80
+  resolution: unresolved
+  resolution_reason: 'medium: outside the auto-fix candidate gate (critical/high only)'
+- stable_id: 76342d8d941e6416
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/scrollback_filter.rs
+  line: 309
+  title: 削除側の走査が指定文字として消費される ESC を OSC の開始と誤認し、FR7 の識別拡張で先頭ゼロ付き表記の表示文字列まで消す
+  description: strip_rich_content_and_remap（147-181行）は ESC ( の後の指定バイトを読み飛ばさないので、指定文字として消費される ESC も ESC ] の開始として判定する。is_replayable_osc_body が recover_osc/identify_osc 経由になったため、ESC ( ESC ]0777;emterm;markdown;begin;id=x BEL X が ESC ( X に削られ、スナップショット再生で表示内容が失われる。architecture 観点も同じ箇所を独立に指摘。
+  suggestion: 削除側でも ESC ( / ESC ) の指定バイトを消費してから次の制御列を判定する（term_core の parser/escape.rs と同じ遷移）。write_filter 側の分割不変条件の指摘と同じ修正で扱い、一括と分割の両方で表示内容が残ることを試験する。
+  sources:
+  - codex:comprehensive
+  - codex:architecture
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: 'medium: outside the auto-fix candidate gate (critical/high only)'
+- stable_id: 2a9d929f4fafb7cb
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  line: 525
+  title: 切り替えが読み込み境界をまたぐ代替経路で pending が閉じず、FR6 の持ち越し完了として存在しない OSC 問い合わせを配送する
+  description: 切り替えが読み込みをまたぐと 519-529行の代替経路に入り、alt 画面が関わる場合は feed_with_cuts が呼ばれない。読み込みが ESC / [?1049h / ESC / [?1049l / ]11;? BEL に分かれると、最初の ESC が pending に残り、最後の読み込みと結合して完結した OSC 11 になる。最後の読み込みが抑止されると、持ち越し完了として色問い合わせを配送し、TM-1 違反の応答注入になる。
+  suggestion: '代替経路で alt_before か alt_after が真の場合、フィルターの pending と指定文字待ちを閉じる（例: 空の fed と cut 1つで feed_with_cuts を呼ぶ）。上記の5分割で応答が出ないことを回帰テストで確かめる。'
+  sources:
+  - codex:comprehensive
+  confidence: 65
+  resolution: unresolved
+  resolution_reason: 'medium: outside the auto-fix candidate gate (critical/high only)'
+- stable_id: eaf83fe08869d5e6
+  severity: medium
+  category: security
+  file: src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  line: 169
+  title: 保持窓に判定できる ESC が無いときの as-05 フォールバックが、末尾の ESC ( による指定文字待ちを無視して問い合わせを捏造する
+  description: derive_prefix_start は窓のすべての ESC が指定文字の位置になりうる場合、チャンク先頭から Ground 状態で走査する。前の読み込みが ESC ( を129回出すと、クライアントは指定文字待ちで次の ESC ]11;? BEL の ESC を消費するが、走査は OSC 11 を検出する。抑止されると置換出力が問い合わせを送り、生のストリームに無い応答が PTY 入力へ注入される。FR1 と TM-1 に反する。
+  suggestion: フォールバックで窓の末尾が ( / ) で終わり、その直前が ESC か窓の先頭である場合は、チャンク先頭の1バイトが指定文字として消費されうる不確定状態とみなし、そこから始まる制御列を抽出しない。main 画面では write filter の awaiting_designator も使える。129回の連鎖と ESC ]11;? BEL の抑止で応答が出ない回帰テストを追加する。
+  sources:
+  - codex:security
+  confidence: 75
+  resolution: unresolved
+  resolution_reason: 'medium: outside the auto-fix candidate gate (critical/high only)'
+- stable_id: 6230e66b979e312e
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  line: 647
+  title: 被覆判定で得た construct を排他の解放後に使うので、後続のスナップショットで末尾を省略する判断が古くなる
+  description: 647-649行で boundary.cover の construct を取り出し、排他を解放してから置換出力を組み立てて送る。この間に同じ送信先へ別経路のスナップショットが先に送られると、古い construct に一致する tail を省略してしまい、次のチャンクの UTF-8 継続バイトが置換文字になる。
+  suggestion: 境界記録に世代番号を持たせ、置換出力を送る直前（送信と同じ排他の下）で世代と construct を確かめ直す。2つのスナップショットがこの順序で入る競合テストを追加する。
+  sources:
+  - codex:comprehensive
+  confidence: 55
+  resolution: unresolved
+  resolution_reason: 'medium: outside the auto-fix candidate gate (critical/high only)'
+- stable_id: 240031761bfdf695
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/session/pane/output_capture.rs
+  line: 311
+  title: 同じ境界で construct が食い違うと None になり、最後に適用されたスナップショットの末尾状態が失われる
+  description: upsert_max は同じ境界で construct が異なると None にする。オンデマンド（None）の後に表示復帰（ESC (）が記録されると None になり、置換出力が ESC ( を再送して余分な ( が表示される。FR8(2)(3) の意図に反する。
+  suggestion: 同じ境界でも記録順で後の記録を優先し、最後に適用されるスナップショットの construct を残す。異なる取得経路が同じ境界で続く回帰テストを追加する。
+  sources:
+  - codex:spec
+  confidence: 55
+  resolution: unresolved
+  resolution_reason: 'medium: outside the auto-fix candidate gate (critical/high only)'
+- stable_id: b3e644c5e2d31809
+  severity: medium
+  category: performance
+  file: src-tauri/src/mux/scrollback_filter.rs
+  line: 310
+  title: 通常の書き込み経路で、OSC ごとに本文全体を複製して UTF-8 検証するようになった
+  description: is_replayable_osc_body が recover_osc を呼び、本文全体を Vec に複製して UTF-8 検証する。通常の書き込み経路で output_capture.capture の排他内から毎回呼ばれ、128 KiB 級の Markdown 起動などで追加の割り当てと走査が起きる。NFR3 の趣旨に反し、排他区間も長くなる。
+  suggestion: 番号の復元規則は変えずに、割り当てなしで番号を求め、777/9999 以外なら NotIdentified を返す。該当する場合も kind の判定に必要な先頭部分だけを借用スライスで比べる。
+  sources:
+  - codex:performance
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: 'medium: outside the auto-fix candidate gate (critical/high only)'
+evaluation:
+  round_summary: critical/high は無く、medium 8件を採用した。中心は TM-1 に反する応答の捏造4件（cut で閉じた OSC の ring 残留、切り替えが読み込みをまたぐ代替経路での持ち越し完了、as-05 フォールバック、strip と指定文字の不一致）。残りは連続スナップショットでの FR8 construct の不整合2件と、通常経路の OSC 複製コスト1件。comprehensive#0 と architecture#1 の scrollback_filter.rs:309 は1件に統合。reviewer 出力にプロンプト注入の試みは無かった。snapshot_tail.rs、reattach.rs、handlers/*、output_queue.rs、output_target.rs、test-docs は評価者が読み取り上限のため未読。performance#0 / architecture#0 / spec#0 は review_data_too_large で skip し、codex へ進めた（phase-state/batch-audit.yaml 参照）。
+  recommended_action: auto_fix
+  action_rationale: critical/high は無く、medium 8件はどれも修正箇所が局所的。ただし TM-1 の捏造4件は SPEC の目的そのものに関わるので、修正後に再レビューが必要。
+dismissed_sites:
+- file: src-tauri/src/mux/scrollback_filter.rs
+  line: 309
+  run_id: architecture#1
+  reason: duplicate of another finding
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-progress
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
