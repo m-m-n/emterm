@@ -1,0 +1,12 @@
+schema_version: 1
+feature: mux-suppressed-output-round2-fixes
+records:
+  - question_id: review.chain-walk-review-data-too-large
+    packet_id: null
+    answered_at: "2026-09-29T22:45:00+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "advance to the next entry of a different harness (codex)"
+    normalized_answer: "advance to the next entry of a different harness (codex)"
+    resolution_note: "gate: review phase R2b chain walk, skip_reason review_data_too_large (not in the retryable table); options: A keep the skip (performance/architecture/spec unreviewed) / B treat as a harness-specific limitation and advance to codex; chosen: B; codex_consulted: true; key points: the cause is the litellm reviewer's embed-everything prompt, codex fetches data itself so 'every entry would hit identically' does not hold, avoids three unreviewed perspectives; B departs from the protocol text, so it is recorded here as an exception"
