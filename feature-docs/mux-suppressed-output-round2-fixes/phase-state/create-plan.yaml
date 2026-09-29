@@ -37,7 +37,7 @@ artifacts:
   produced_by: create-plan-run-0001
 patches:
 - patch_id: create-plan-run-0001-p0001
-  status: validated
+  status: applied
   base_input_digest: sha256:b19354ebabbd3054a4c62b220eb75a62584957dc0ae42654053632002fbe741c
   base_workflow_blob: 082ac9bffd7f3eb7b77d2e038955e066965ebf5b
 progress_fingerprint: null
