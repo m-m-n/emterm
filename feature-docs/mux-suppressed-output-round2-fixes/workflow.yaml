@@ -149,7 +149,7 @@ workflow:
     discretionary: []
     cross_validation: true
 - id: verify
-  status: pending
+  status: in_progress
   result: null
   failed_items: []
 - id: retrospect
