@@ -1,6 +1,6 @@
 task_id: task0003
 baseline_failures: []
-final_failures: [] # re-executed after implementation (3874 passed, 0 failed, 3 ignored); baseline was 3820 passed, 0 failed, 3 ignored
+final_failures: [] # re-executed after the parent-side adoption and re-implementation (3965 passed, 0 failed, 3 ignored); the refreshed baseline on the parent was 3911 passed, 0 failed, 3 ignored
 acceptance_tests:
   AC-1:
     tests:
@@ -11,7 +11,7 @@ acceptance_tests:
       - mux::ipc::pty_spawn::tests::split_invariance_includes_the_awaiting_flag
     red_confirmed: true
     red_reason: >-
-      Run against the pre-fix production files, the registry test failed with
+      Run against the parent's production files without this task's change, the registry test failed with
       "fed in two calls split right after `ESC (`, the emitted bytes must equal
       the single-call result" (left [27, 40]), and the split-invariance test
       with "split at 2 for ESC ( ESC ]11;?tail: emitted bytes differ from a
@@ -31,7 +31,7 @@ acceptance_tests:
       - mux::ipc::pty_spawn::tests::cuts_are_derived_from_the_main_buffer_span_list
     red_confirmed: true
     red_reason: >-
-      Run against the pre-fix production files, the registry test failed with
+      Run against the parent's production files without this task's change, the registry test failed with
       'form "ESC[?47h": no replacement may be sent for the closed OSC; only
       the BEL read reaches the client as PtyOutput' (left
       [[27, 93, 49, 49, 59, 63, 32], [7]], the joined OSC was re-sent), and
@@ -55,7 +55,7 @@ acceptance_tests:
       - mux::ipc::pty_spawn::client_parity_scan::tests::scan_reports_no_tail_when_a_piece_is_excluded_and_a_tail_otherwise
     red_confirmed: true
     red_reason: >-
-      Run against the pre-fix production files, the registry test failed with
+      Run against the parent's production files without this task's change, the registry test failed with
       "the alternate-range query is delivered once, then the pending run as
       the tail" (left [27, 93, 50, 59, 120, 121]: the query was dropped) and
       the reader-level test with "CSI 6n once and no tail" (left
@@ -90,7 +90,7 @@ acceptance_tests:
       - mux::ipc::pty_spawn::suppressed_output::tests::is_deliverable_osc_rejects_unterminated_and_degenerate_input
     red_confirmed: true
     red_reason: >-
-      Run against the pre-fix production files, the registry test failed with
+      Run against the parent's production files without this task's change, the registry test failed with
       "the launch must be delivered exactly once" (left 0, the start is out of
       the retained window and the filter's completion was never reported).
       The reader-level tests failed on delivery counts, chunk kinds and
@@ -114,13 +114,14 @@ acceptance_tests:
       - mux::ipc::pty_spawn::tests::fr6_long_color_query_stream_matches_the_reference_over_split_positions
     red_confirmed: true
     red_reason: >-
-      Run against the pre-fix production files, each sweep failed at a
-      concrete split. FR3 "split at 5 and 6: response bytes differ from the
+      Run against the parent's production files without this task's change
+      (integration with task0001, task0002 and task0004 merged), each sweep
+      failed at a concrete split. FR3 "split at 5 and 6: response bytes differ from the
       reference" (the client answered an OSC 11 query the reference never
       saw). FR4 "split at 1 and 26: response bytes differ from the
       reference". FR5 "split at 1 and 25: response presence differs from the
       reference". FR6 launch "split at 300 and 349: the launch must reach the
-      client exactly once" (left 0). FR6 color query "split at 4 and 313:
+      client exactly once" (left 0). FR6 color query "split at 300 and 313:
       response bytes differ from the reference" (left []).
   AC-6:
     tests:
@@ -129,7 +130,7 @@ acceptance_tests:
       - mux::ipc::pty_spawn::tests::overflow_with_cuts_flushes_without_a_report
     red_confirmed: true
     red_reason: >-
-      Run against the pre-fix production files, the designator-chain test
+      Run against the parent's production files without this task's change, the designator-chain test
       failed with "split at 59999" (emitted bytes differed from a single
       feed). The two overflow tests read the awaiting flag and the cut-aware
       report, and failed to compile on the pre-fix files (no method named
@@ -147,7 +148,7 @@ acceptance_tests:
       Invariant guard, not a red-to-green criterion: the verifiable outcome
       is the unchanged existing suite plus the `--no-default-features` cargo
       check after implementation. The suite was green before any edit
-      (baseline 3820 passed, 0 failed, 3 ignored), so no failing state exists
+      (baseline 3911 passed, 0 failed, 3 ignored on the merged parent), so no failing state exists
       to observe. The existing tests live inline in
       src-tauri/src/mux/ipc/pty_spawn/tests.rs (no separate test directory or
       file for this module exists).

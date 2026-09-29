@@ -6818,9 +6818,7 @@ fn r2_snapshot_reproduces_prefix(run: &SuppressedRun, stream: &[u8], l: usize) -
 /// Split `stream` into three non-empty reads at every pair of `positions`
 /// (each strictly between 0 and `stream.len()`), suppress the middle read,
 /// and compare the client with the reference:
-/// - the responses, unless `responses_comparable(k, l)` says the pair is
-///   outside this task (a color query wholly inside a suppressed chunk is
-///   main-screen color-query inclusion, task0002);
+/// - the responses;
 /// - the screen and cursor, when the stand-in snapshot itself reproduces the
 ///   reference's screen for its prefix (see [`r2_snapshot_reproduces_prefix`]).
 ///
@@ -6830,7 +6828,6 @@ fn r2_sweep_three_reads(
     stream: &[u8],
     positions: &[usize],
     exact_responses: bool,
-    responses_comparable: impl Fn(usize, usize) -> bool,
     check: impl Fn(&SuppressedRun, &[Vec<u8>], &str),
 ) {
     let mut runs = 0usize;
@@ -6845,9 +6842,7 @@ fn r2_sweep_three_reads(
             ];
             let ctx = format!("{name}: split at {k} and {l}");
             let run = run_reader_with_suppressed_reads(&chunks, &[1]);
-            if responses_comparable(k, l) {
-                assert_r2_responses_match(&run, &chunks, exact_responses, &ctx);
-            }
+            assert_r2_responses_match(&run, &chunks, exact_responses, &ctx);
             if r2_snapshot_reproduces_prefix(&run, stream, l) {
                 assert_r2_screen_matches(&run, &chunks, &ctx);
                 screens += 1;
@@ -7324,16 +7319,9 @@ fn consecutive_suppressed_chunks_deliver_a_carried_launch_once_after_each_snapsh
 fn fr3_designator_stream_matches_the_reference_over_split_positions() {
     let stream: &[u8] = b"pre\x1b(\x1b]11;?\x07post";
     let positions: Vec<usize> = (1..stream.len()).collect();
-    r2_sweep_three_reads(
-        "FR3",
-        stream,
-        &positions,
-        true,
-        |_k, _l| true,
-        |run, _chunks, ctx| {
-            assert_eq!(run.ring, stream, "{ctx}: the ring holds the raw stream");
-        },
-    );
+    r2_sweep_three_reads("FR3", stream, &positions, true, |run, _chunks, ctx| {
+        assert_eq!(run.ring, stream, "{ctx}: the ring holds the raw stream");
+    });
 }
 
 /// AC-5 (FR4; TS-4), varied split positions: an OSC closed by a removed
@@ -7346,19 +7334,12 @@ fn fr4_removed_switch_stream_matches_the_reference_over_split_positions() {
     let stream: &[u8] = b"A\x1b]11;?\x1b[?1049halt\x1b[?1049l\x07C";
     let inside = r2_offsets_inside_screen_switches(stream);
     let positions: Vec<usize> = (1..stream.len()).filter(|p| !inside.contains(p)).collect();
-    r2_sweep_three_reads(
-        "FR4",
-        stream,
-        &positions,
-        true,
-        |_k, _l| true,
-        |run, _chunks, ctx| {
-            assert_eq!(
-                run.ring, b"A\x1b]11;?\x07C",
-                "{ctx}: the ring is the concatenation of the main-buffer spans"
-            );
-        },
-    );
+    r2_sweep_three_reads("FR4", stream, &positions, true, |run, _chunks, ctx| {
+        assert_eq!(
+            run.ring, b"A\x1b]11;?\x07C",
+            "{ctx}: the ring is the concatenation of the main-buffer spans"
+        );
+    });
 }
 
 /// AC-5 (FR5; TS-5), varied split positions: the alternate-range query sits
@@ -7368,14 +7349,7 @@ fn fr5_alt_range_query_stream_matches_the_reference_over_split_positions() {
     let stream: &[u8] = b"\x1b]2;x\x1b[?1049h\x1b[6n\x1b[?1049lyz";
     let inside = r2_offsets_inside_screen_switches(stream);
     let positions: Vec<usize> = (1..stream.len()).filter(|p| !inside.contains(p)).collect();
-    r2_sweep_three_reads(
-        "FR5",
-        stream,
-        &positions,
-        false,
-        |_k, _l| true,
-        |_run, _chunks, _ctx| {},
-    );
+    r2_sweep_three_reads("FR5", stream, &positions, false, |_run, _chunks, _ctx| {});
 }
 
 /// AC-5 (FR6; TS-6), varied split positions: a launch longer than the
@@ -7392,24 +7366,17 @@ fn fr6_long_launch_stream_matches_the_reference_over_split_positions() {
     positions.extend([last - 8, last - 6, last - 5, last - 4, last - 2, last - 1]);
     positions.sort_unstable();
     positions.dedup();
-    r2_sweep_three_reads(
-        "FR6",
-        &stream,
-        &positions,
-        true,
-        |_k, _l| true,
-        |run, _chunks, ctx| {
-            assert_eq!(
-                r2_count(&run.pty_output_bytes(), &launch),
-                1,
-                "{ctx}: the launch must reach the client exactly once"
-            );
-            assert_eq!(
-                run.ring, b"prepost",
-                "{ctx}: the launch is stripped from the ring"
-            );
-        },
-    );
+    r2_sweep_three_reads("FR6", &stream, &positions, true, |run, _chunks, ctx| {
+        assert_eq!(
+            r2_count(&run.pty_output_bytes(), &launch),
+            1,
+            "{ctx}: the launch must reach the client exactly once"
+        );
+        assert_eq!(
+            run.ring, b"prepost",
+            "{ctx}: the launch is stripped from the ring"
+        );
+    });
 }
 
 /// AC-5 (FR6; TS-6), varied split positions, color-query counterpart: the
@@ -7430,10 +7397,6 @@ fn fr6_long_color_query_stream_matches_the_reference_over_split_positions() {
         &stream,
         &positions,
         true,
-        // The query starts at 3 and ends (BEL included) at `3 + query.len()`;
-        // one wholly inside the suppressed read is main-screen color-query
-        // inclusion (task0002), not a carried-over completion.
-        |k, l| !(k <= 3 && l >= 3 + query.len()),
         |_run, _chunks, _ctx| {},
     );
 }
@@ -8567,6 +8530,7 @@ mod fr8_snapshot_tail {
                 pending_after: &[],
                 window: &[],
                 snapshot_trailing_construct: construct.as_deref(),
+                carried_over_completion: None,
             });
             assert!(
                 replacement.is_empty(),
