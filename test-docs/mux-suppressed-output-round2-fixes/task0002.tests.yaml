@@ -1,0 +1,112 @@
+task_id: task0002
+baseline_failures:             # cargo test --lib, before any change: 3819 passed; 1 failed; 3 ignored
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+final_failures: []             # cargo test --lib, last re-run after implementation: 3841 passed; 0 failed; 3 ignored. Across the re-runs the PTY-dependent baseline failure did not reproduce, and one earlier re-run failed once on mux::inherited_pty::tests::dropping_the_adapter_closes_the_owned_descriptor (a file-descriptor-number race between concurrently running PTY tests, code this task does not touch); the next verbatim re-run passed
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_derive_prefix_start_never_returns_offset_zero
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_derive_prefix_start_excludes_esc_at_offset_one_after_an_introducer_at_offset_zero
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_derive_prefix_start_excludes_an_esc_in_a_designator_slot_past_offset_one
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_derive_prefix_start_keeps_esc_that_is_not_in_a_designator_slot
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_derive_prefix_start_excludes_every_esc_of_a_designator_chain
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_derive_prefix_start_fallback_is_unchanged_when_no_esc_qualifies
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_derive_prefix_start_scans_a_short_window_from_its_start
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_degenerate_full_windows_complete_without_panicking
+    red_confirmed: true
+    red_reason: >
+      Observed by running the new tests before derive_prefix_start was
+      changed. ac1_derive_prefix_start_excludes_an_esc_in_a_designator_slot_past_offset_one
+      failed (left: 2, right: 256: the ESC at offset 2 after `ESC (` was
+      selected as the restart position);
+      ac1_derive_prefix_start_excludes_every_esc_of_a_designator_chain,
+      ac1_derive_prefix_start_fallback_is_unchanged_when_no_esc_qualifies,
+      ac1_derive_prefix_start_keeps_esc_that_is_not_in_a_designator_slot
+      (left: 2, right: 4) and ac1_degenerate_full_windows_complete_without_panicking
+      (alternating window, left: 2, right: 256) failed the same way. The
+      offset-zero, offset-one-after-introducer and short-window tests
+      already passed before the change: they pin behavior that pre-existed
+      and is kept.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::suppressed_output::tests::round2_ecc48041_designator_slot_esc_is_never_a_window_restart_position
+    red_confirmed: true
+    red_reason: >
+      Observed before the change: the case `ESC ( ESC ]10;` + 249 spaces
+      with chunk `?` BEL failed with "a designator-slot ESC must never
+      restart the scan, got ESC ]10; <spaces> ? BEL" (a color query was
+      fabricated from a designator-slot ESC). The test drives the
+      four-parameter build_suppressed_replacement and a term_core client.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac3_scan_starts_at_a_decidable_esc_in_a_full_window
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac3_scan_of_a_short_window_starts_at_its_first_byte
+      - mux::ipc::pty_spawn::suppressed_output::tests::full_window_with_a_decidable_esc_delivers_the_color_query_once
+      - mux::ipc::pty_spawn::suppressed_output::tests::short_window_is_scanned_from_its_start_even_when_it_begins_with_esc
+    red_confirmed: false
+    red_reason: >
+      These are positive controls for behavior that pre-existed and is
+      kept: scanning starts at a decidable ESC of a full window, and a
+      window shorter than 256 bytes is scanned from its start. All four
+      passed before any implementation existed, so no red state occurred
+      for this criterion. Existing tests that also detect the behavior:
+      full_window_with_no_decidable_esc_falls_back_to_ground and
+      query_split_across_window_and_chunk_is_answered_once.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::suppressed_output::tests::color_query_is_included_once_whatever_its_ring_written_overlap
+      - mux::ipc::pty_spawn::suppressed_output::tests::color_queries_keep_stream_order_with_csi_queries_and_viewer_launches
+      - mux::ipc::pty_spawn::suppressed_output::tests::color_query_completed_inside_the_window_is_not_included
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc_color_query_inside_ring_written_ranges_is_redelivered_once
+    red_confirmed: true
+    red_reason: >
+      Observed before the change: color_query_is_included_once_whatever_its_ring_written_overlap
+      failed at layout "inside a range" (left: [], right: the query bytes
+      `ESC ]11;? BEL`); color_queries_keep_stream_order_with_csi_queries_and_viewer_launches
+      failed for ring-written range [0..75] (the color queries were
+      missing from the replacement);
+      color_query_completed_inside_the_window_is_not_included failed on its
+      second half (a query that started in the window and completed in a
+      ring-written chunk was dropped); osc_color_query_inside_ring_written_ranges_is_redelivered_once
+      failed (left: [], right: the query bytes).
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::round2_dd56f398_main_screen_color_query_is_answered_once_after_the_snapshot
+    red_confirmed: true
+    red_reason: >
+      Observed before the change: the test failed with "real assembly +
+      builder: the main-screen color query was answered 0 times after the
+      snapshot, expected exactly once". After the first green run, the
+      pre-fix suppressed_output.rs (git HEAD version, FR1 fix kept) was
+      put back and the suite re-run: all four flows (real assembly +
+      builder, visible reattach, on-demand snapshot, visibility restore)
+      reported "answered 0 times ... expected exactly once" and "got []".
+      The fixed file was then restored and the suite re-run green.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc_color_query_inside_ring_written_ranges_is_redelivered_once
+      - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
+      - mux::ipc::pty_spawn::tests::on_demand_snapshot_redelivers_alt_screen_and_main_screen_color_queries_once
+    red_confirmed: true
+    red_reason: >
+      Observed before the change: each of the three renamed tests with the
+      updated expectation failed (osc_color_query_inside_ring_written_ranges_is_redelivered_once:
+      left: [], right: the query bytes; the two reader tests: left: [],
+      right: `ESC ]11;? BEL` for the main-screen chunk). The remaining part
+      of the criterion, that every other existing test passes unchanged and
+      the --lib run and the --no-default-features cargo check pass, is a
+      suite-level and build-level outcome that was green before and after
+      (no red state for that part); the diff touches only these three
+      existing tests.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::round2_decisions_md_has_one_resolved_row_per_finding_with_its_registry_test
+      - mux::ipc::pty_spawn::tests::round2_decisions_md_lists_the_behavior_changing_tests_and_they_exist_under_their_new_names
+      - mux::ipc::pty_spawn::tests::round2_decisions_md_states_that_round2_yaml_was_not_modified
+    red_confirmed: true
+    red_reason: >
+      Observed before DECISIONS.md existed: all three document-contract
+      tests failed with "cannot read .../feature-docs/mux-suppressed-output-round2-fixes/DECISIONS.md:
+      No such file or directory". The part of the criterion that
+      round2.yaml is unchanged in the task's diff has no test; it is
+      checked with git diff (the file is not in the diff).
