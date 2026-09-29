@@ -1,0 +1,86 @@
+feature_name: test-docs-rename-tracking
+business_objectives:
+  - "Make the old test-docs records of notification-summary-markup-escape and notification-body-markup-escape point at tests that exist, so re-running verify on them no longer matches 0 tests and exits green."
+  - "Mark the acceptance criteria whose fetch-failure behavior was inverted by notification-markup-fail-closed (fail-closed SPEC FR1/FR3), so current code is not read as violating them."
+  - "Fix the policy for cross-feature test renames: follow current names, not freeze. Record it as a project rule in .claude/rules/ so later features can apply it."
+functional_requirements:
+  - id: FR1
+    title: Update stale test paths in the summary-markup-escape record
+    statement: "In test-docs/notification-summary-markup-escape/task0001.tests.yaml, replace the 4 stale test paths with their current names, in place and in the same list order: line 14 `callbacks::tests::summary_markup_escape::failed_capability_fetch_leaves_the_title_unchanged` -> `callbacks::tests::summary_markup_escape::failed_capability_fetch_escapes_both_title_and_body_in_the_same_call`; line 33 `callbacks::tests::body_markup_escape::body_markup_confirmed_is_true_only_for_a_successful_list_containing_it` -> `callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_false_when_present_in_a_successful_list`; line 34 `callbacks::tests::body_markup_escape::body_markup_confirmed_is_false_when_absent_from_a_successful_list` -> `callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_true_only_for_a_successful_list_without_it`; line 35 `callbacks::tests::body_markup_escape::body_markup_confirmed_is_false_on_fetch_failure` -> `callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_false_on_fetch_failure`."
+    status: resolved
+    tbd_reason: null
+  - id: FR2
+    title: Update the same stale test paths in the body-markup-escape record (spillover)
+    statement: "In test-docs/notification-body-markup-escape/task0001.tests.yaml, AC-4 lines 19-21, apply the same 3 body_markup_escape replacements as FR1 (containing_it -> is_false_when_present_in_a_successful_list; absent_from -> is_true_only_for_a_successful_list_without_it; on_fetch_failure -> body_markup_absence_confirmed_is_false_on_fetch_failure), in place and in the same list order."
+    status: resolved
+    tbd_reason: null
+  - id: FR3
+    title: Supersede notes as YAML comments on every inverted AC
+    statement: "Add a YAML comment inside the block of each AC whose fetch-failure expectation was inverted: summary-markup-escape AC-2 and AC-5, and body-markup-escape AC-4. Each comment says that the fetch-failure expectation (title/body left unescaped when get_capabilities() fails) is superseded by feature-docs/notification-markup-fail-closed/SPEC.md FR1/FR3 (fail-closed: escape on fetch failure). The listed current test pins that new behavior. Existing keys stay as they are, including red_confirmed and red_reason."
+    status: resolved
+    tbd_reason: null
+  - id: FR4
+    title: String-and-comment-only edit
+    statement: "Edits to the two records only replace test-path strings (FR1/FR2) and add comment lines (FR3). Every other line, key, value, and list order stays byte-identical. After parsing, each record equals its base-revision data except for the replaced test-path strings."
+    status: resolved
+    tbd_reason: null
+  - id: FR5
+    title: Every listed test path resolves to a real test
+    statement: "Every test path in the acceptance_tests[].tests lists of the two updated records matches at least one test in the src-tauri --lib test list. No path is a 0-match filter."
+    status: resolved
+    tbd_reason: null
+  - id: FR6
+    title: Project rule for cross-feature test renames
+    statement: "Add one new file under .claude/rules/ that sets the follow-current-names policy for test-docs records. (1) When a feature renames a test that an earlier feature's test-docs/*/taskNNNN.tests.yaml lists, that feature updates those acceptance_tests[].tests entries to the current name. (2) When the rename comes with a behavior change that inverts an earlier AC's expectation, it adds a YAML comment supersede note in that AC's block. The note names the superseding SPEC and FR, and red_reason stays unchanged. (3) The renaming feature's own records that document the rename stay verbatim: its SPEC, its reviews/roundN.yaml and its own tests.yaml. (4) Each updated name must match at least 1 test in the project's cargo test listing."
+    status: resolved
+    tbd_reason: null
+non_functional_requirements:
+  - id: NFR1
+    title: Scope confinement
+    statement: "Nothing under src-tauri/src/, crates/, or build configuration is modified, and the test-docs schema is not changed (keys and structure are unchanged; comments are not schema). Changes are limited to the two records of FR1/FR2, the rule file of FR6, and this feature's own feature-docs/test-docs."
+    status: resolved
+    tbd_reason: null
+  - id: NFR2
+    title: Audit-trail integrity
+    statement: "notification-markup-fail-closed's own records stay verbatim: SPEC.md, reviews/round1.yaml (including finding 03533374d9cc5821 with its line: 14 reference) and test-docs/notification-markup-fail-closed/task0001.tests.yaml, including its historical mention of `body_markup_confirmed`. red_reason values in the updated records are not rewritten."
+    status: resolved
+    tbd_reason: null
+  - id: NFR3
+    title: Rule placement within this repository
+    statement: "The policy is recorded only in this project's .claude/rules/. No file in the em-workflow plugin repository (templates or references) is written. The rule file name is a noun describing its content, with no project- prefix and no core- prefix."
+    status: resolved
+    tbd_reason: null
+acceptance_criteria:
+  - {id: AC-1, statement: "The 4 lines named in FR1 (summary record lines 14, 33, 34, 35) carry the current test paths in the stated mapping.", requirements: [FR1]}
+  - {id: AC-2, statement: "Body record AC-4 lines 19-21 carry the current body_markup_absence_confirmed_* paths in the stated mapping.", requirements: [FR2]}
+  - {id: AC-3, statement: "No acceptance_tests[].tests entry in either updated record contains any of the 4 old test paths.", requirements: [FR1, FR2]}
+  - {id: AC-4, statement: "Every test path listed in both updated records appears in `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --list`.", requirements: [FR5]}
+  - {id: AC-5, statement: "Summary AC-2, summary AC-5 and body AC-4 each have a YAML comment in their block. The comment says their fetch-failure expectation is superseded by notification-markup-fail-closed SPEC FR1/FR3.", requirements: [FR3]}
+  - {id: AC-6, statement: "Both records still parse as YAML. Their parsed data equals the base-revision data except for the replaced test-path strings: red_confirmed, red_reason, baseline_failures, final_failures, task_id and list order are unchanged.", requirements: [FR4, NFR2]}
+  - {id: AC-7, statement: "A new .claude/rules/ file states the four policy elements of FR6.", requirements: [FR6, NFR3]}
+  - {id: AC-8, statement: "`git diff --stat` against the base revision lists only the two records, the new rule file, and this feature's feature-docs/test-docs paths. No src-tauri/src/ or notification-markup-fail-closed file is changed.", requirements: [NFR1, NFR2]}
+test_scenarios:
+  - {id: TS-1, kind: manual-command, statement: "Grep test-docs/notification-summary-markup-escape/ and test-docs/notification-body-markup-escape/ for the 4 old test paths. Confirm no acceptance_tests list entry matches.", verifies: [AC-3]}
+  - {id: TS-2, kind: cargo-test, statement: "Run `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --list`. Confirm that every test path from both records, with the `: test` suffix, appears in the output.", verifies: [AC-1, AC-2, AC-4]}
+  - {id: TS-3, kind: cargo-test, statement: "Run each of the 4 new names through a filtered run: `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib <name>`. Each run must report at least 1 test run, not `0 passed; 0 failed; N filtered out`.", verifies: [AC-4]}
+  - {id: TS-4, kind: manual-command, statement: "Parse both records at the base revision and at HEAD with a YAML safe loader and compare. The only differences are the replaced test-path strings.", verifies: [AC-6]}
+  - {id: TS-5, kind: manual-command, statement: "Inspect the 3 AC blocks: summary AC-2, summary AC-5, body AC-4. Each has a comment citing notification-markup-fail-closed SPEC FR1/FR3.", verifies: [AC-5]}
+  - {id: TS-6, kind: manual-command, statement: "Read the new .claude/rules/ file and confirm it states the 4 FR6 policy elements.", verifies: [AC-7]}
+  - {id: TS-7, kind: manual-command, statement: "Run `git diff --stat <base>..HEAD` and confirm the change set is within the declared paths.", verifies: [AC-8]}
+edge_cases:
+  - "Predicate polarity flipped with the rename (body_markup_confirmed -> body_markup_absence_confirmed). The mapping follows the capability case (present / absent / fetch failure), not the true/false wording: containing_it -> is_false_when_present, absent_from -> is_true_only_..._without_it."
+  - "The current test that replaces summary AC-2's fetch-failure entry pins the opposite behavior of AC-2's original expectation. The FR3 supersede note is what keeps this readable."
+  - "Adding comment lines shifts line numbers in the summary record. round1.yaml finding 03533374d9cc5821 (line: 14) and the ticket's line references stay as historical records and are not updated (NFR2)."
+  - "YAML comments would be lost if a tool ever parses and re-writes the file (a safe_load round-trip). No current tooling re-writes test-docs YAML (assumption A-4)."
+  - "Only the fetch-failure entries of summary AC-2 are inverted. Its two Ok-without-body-markup entries still hold, so the note must be scoped to fetch-failure behavior."
+assumptions:
+  - {assumption_id: A-1, statement: "PR #39 (notification-markup-fail-closed) is merged at the base revision. src-tauri/src/callbacks/tests.rs already defines all 4 current names (lines 762, 756, 773, 897), so no test-source change is needed.", reason: "Observed in tests.rs at the dispatch base; ticket 制約・前提.", impact: low, reversible: true, related_question_ids: []}
+  - {assumption_id: A-2, statement: "The policy is follow_current_names. Updated records list current names, and inverted ACs get supersede notes. No mapping table is added to the fail-closed record.", reason: "Answer to requirement.record-policy (batch, Codex consultation).", impact: medium, reversible: true, related_question_ids: [requirement.record-policy]}
+  - {assumption_id: A-3, statement: "The edit covers the summary record (4 lines) and the spillover in the body record (AC-4 lines 19-21). Supersede notes go on summary AC-2, summary AC-5 and body AC-4.", reason: "Answers to requirement.body-yaml-scope (include_spillover) and requirement.supersede-note-coverage (all_inverted_acs).", impact: low, reversible: true, related_question_ids: [requirement.body-yaml-scope, requirement.supersede-note-coverage]}
+  - {assumption_id: A-4, statement: "Supersede notes are YAML comments, and red_reason is left as the pre-implementation observation record. No tooling re-writes test-docs YAML, so the comments last.", reason: "Answer to requirement.supersede-note-form (yaml_comment).", impact: low, reversible: true, related_question_ids: [requirement.supersede-note-form]}
+  - {assumption_id: A-5, statement: "The policy artifact is one new file under this project's .claude/rules/ (e.g. test-docs-records.md). The em-workflow plugin template is not changed.", reason: "Answer to requirement.rule-artifact (project_rule); the exact file name is the planner's choice within NFR3.", impact: low, reversible: true, related_question_ids: [requirement.rule-artifact]}
+  - {assumption_id: A-6, statement: "The rule and this change cover test-docs records (acceptance_tests[].tests lists). Prose mentions of old names in earlier features' feature-docs (SPEC/tasks/VERIFICATION) are outside this feature's scope.", reason: "The ticket's goal and acceptance criteria are stated for test-docs records. Earlier features' feature-docs were not supplied as reference-scan targets. The fail-closed SPEC A2 treats feature-docs as per-feature snapshots.", impact: low, reversible: true, related_question_ids: [requirement.body-yaml-scope]}
+  - {assumption_id: A-7, statement: "The rule covers renames that have a successor test. Deleting a test with no successor is not covered.", reason: "The ticket asks for an operating rule for cross-feature test renames only.", impact: low, reversible: true, related_question_ids: [requirement.rule-artifact]}
+design_step:
+  status: skipped
+  skipped_reason: "Documentation-only change: string replacement and comments in two test-docs records plus one .claude/rules/ file. There is no UI, module, data model or interface to design (design-step gate resolved decide_autonomously)."
