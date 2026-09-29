@@ -1,11 +1,11 @@
 schema_version: 1
 feature: test-docs-rename-tracking
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: 9b736d2e98e42b5b8c5ca289240e7671aff52a74
-last_input_digest: sha256:8c161820a4875f5bea35a1af1ea1a47c8f5ec6608d4f6e7de3d26508b0235a33
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:a2d62b71f4587b32bf75aec4e04dec252f0518021898136e667b991660a2c01e
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: answered
