@@ -25,7 +25,9 @@ mod client_parity_scan;
 mod suppressed_output;
 mod write_filter;
 
-use suppressed_output::build_suppressed_replacement;
+use suppressed_output::{
+    CarriedOverCompletion, SuppressedReplacementRequest, build_suppressed_replacement_for,
+};
 use write_filter::*;
 
 /// FR6/NFR3: the reader's retained window — the last up to
@@ -45,6 +47,60 @@ fn advance_retained_window(window: &[u8], chunk: &[u8]) -> Vec<u8> {
     new_window.extend_from_slice(&window[start..]);
     new_window.extend_from_slice(chunk);
     new_window
+}
+
+/// FR4 (mux-suppressed-output-round2-fixes): the fed-coordinate positions
+/// where extraction removed a 47/1047/1049 `h`/`l` sequence, derived from
+/// the main-buffer span list `extract_main_buffer_bytes` returned for a
+/// chunk of `chunk_len` bytes. The client saw each removed sequence's `ESC`;
+/// the write filter did not, so it closes its held construct at every cut
+/// ([`ScrollbackWriteFilter::feed_with_cuts`]):
+/// - a cut at fed 0 when the first span starts after chunk offset 0;
+/// - a cut at every boundary between consecutive spans (the total length of
+///   the preceding spans);
+/// - a cut at the fed end when the last span ends before the chunk end.
+///
+/// Empty spans are valid and yield repeated positions. A single walk of the
+/// span list (no pass over the chunk bytes); a chunk without a switch
+/// sequence has one full-chunk span (or none) and yields no cuts, without
+/// allocating.
+fn cuts_from_main_spans(spans: &[std::ops::Range<usize>], chunk_len: usize) -> Vec<usize> {
+    let (Some(first), Some(last)) = (spans.first(), spans.last()) else {
+        return Vec::new();
+    };
+    let mut cuts = Vec::new();
+    if first.start > 0 {
+        cuts.push(0);
+    }
+    let mut fed = 0usize;
+    for (idx, span) in spans.iter().enumerate() {
+        fed += span.end.saturating_sub(span.start);
+        if idx + 1 < spans.len() {
+            cuts.push(fed);
+        }
+    }
+    if last.end < chunk_len {
+        cuts.push(fed);
+    }
+    cuts
+}
+
+/// FR6: map the fed offset just past a carried-over sequence's terminator to
+/// the position just past it in chunk coordinates — the span containing the
+/// terminator's final byte (fed offset `fed_end - 1`) supplies
+/// `span.start + offset within the span`, then one is added. `None` when the
+/// offset does not fall inside the spans.
+fn chunk_end_of_fed_prefix(spans: &[std::ops::Range<usize>], fed_end: usize) -> Option<usize> {
+    let last_fed = fed_end.checked_sub(1)?;
+    let mut fed_before = 0usize;
+    for span in spans {
+        let len = span.end.saturating_sub(span.start);
+        if last_fed < fed_before + len {
+            return Some(span.start + (last_fed - fed_before) + 1);
+        }
+        fed_before += len;
+    }
+    None
 }
 
 /// Shared per-pane stateful passthrough scanner. Lives outside the buffer
@@ -387,7 +443,7 @@ pub(in crate::mux) fn pty_reader_loop(
                 // chunk's main-buffer byte ranges) is returned out of the
                 // step for the FR8 side effects below and for the FR9/FR10
                 // replacement builder if this chunk ends up suppressed.
-                let ((title_changed, live_spans), chunk_number) = output_capture.capture(|| {
+                let ((title_changed, live_spans, carried_over), chunk_number) = output_capture.capture(|| {
                     // Feed the shadow parser (OSC title + alt-screen state)
                     // FIRST, in a single lock scope, so the scrollback write
                     // below can be gated on the alt-screen state.
@@ -450,24 +506,42 @@ pub(in crate::mux) fn pty_reader_loop(
                     // so a later reattach can replay pre-detach history.
                     let (main_bytes, scan_alt, main_spans) =
                         extract_main_buffer_bytes(data, alt_before);
-                    let (to_write, live_spans): (&[u8], Vec<std::ops::Range<usize>>) =
-                        if scan_alt == alt_after {
-                            (&main_bytes, main_spans)
+                    // FR4: cuts (the removed switch sequences) exist only on
+                    // this non-fallback path; the fallback keeps its
+                    // pre-existing behavior and derives none.
+                    let (to_write, live_spans, cuts): (
+                        &[u8],
+                        Vec<std::ops::Range<usize>>,
+                        Vec<usize>,
+                    ) = if scan_alt == alt_after {
+                        let cuts = cuts_from_main_spans(&main_spans, data.len());
+                        (&main_bytes, main_spans, cuts)
+                    } else {
+                        // The scan ended in a different buffer than the
+                        // authoritative shadow parser: a toggle straddled this
+                        // read boundary or used an unrecognized form. Fall back to
+                        // the conservative whole-chunk gate so we never emit a
+                        // partial toggle sequence into scrollback.
+                        if !alt_before && !alt_after {
+                            (data, vec![0..data.len()], Vec::new())
                         } else {
-                            // The scan ended in a different buffer than the
-                            // authoritative shadow parser: a toggle straddled this
-                            // read boundary or used an unrecognized form. Fall back to
-                            // the conservative whole-chunk gate so we never emit a
-                            // partial toggle sequence into scrollback.
-                            if !alt_before && !alt_after {
-                                (data, vec![0..data.len()])
-                            } else {
-                                (&[], Vec::new())
-                            }
-                        };
-                    if !to_write.is_empty() {
-                        let (attribution_dims, filtered) =
-                            scrollback_filter.feed(to_write, (read_cols, read_rows));
+                            (&[], Vec::new(), Vec::new())
+                        }
+                    };
+                    // An empty fed range with a cut still runs the filter
+                    // (a chunk starting with a switch to the alternate
+                    // screen must close what the filter holds).
+                    let mut carried_over = None;
+                    if !to_write.is_empty() || !cuts.is_empty() {
+                        let FeedOutcome {
+                            dims: attribution_dims,
+                            bytes: filtered,
+                            carried,
+                        } = scrollback_filter.feed_with_cuts(
+                            to_write,
+                            (read_cols, read_rows),
+                            &cuts,
+                        );
                         if !filtered.is_empty() {
                             scrollback.lock().unwrap().attribute_write(
                                 attribution_dims.0,
@@ -475,8 +549,9 @@ pub(in crate::mux) fn pty_reader_loop(
                                 &filtered,
                             );
                         }
+                        carried_over = carried;
                     }
-                    (title_changed, live_spans)
+                    (title_changed, live_spans, carried_over)
                 });
 
                 // P2 (test builds only): after the capture step, before this
@@ -635,6 +710,7 @@ pub(in crate::mux) fn pty_reader_loop(
                             &scrollback_filter,
                             &live_spans,
                             &retained_window,
+                            carried_over.as_ref(),
                         );
                     }
                     ReaderForward::NeedsSlot(s, chunk) => {
@@ -674,6 +750,7 @@ pub(in crate::mux) fn pty_reader_loop(
                                         &scrollback_filter,
                                         &live_spans,
                                         &retained_window,
+                                        carried_over.as_ref(),
                                     );
                                 } else {
                                     // Keep output_target and the boundary
@@ -777,6 +854,7 @@ fn run_suppressed_pipeline(
     scrollback_filter: &ScrollbackWriteFilter,
     ring_written_ranges: &[std::ops::Range<usize>],
     retained_window: &[u8],
+    carried_over: Option<&CarriedCompletion>,
 ) {
     capture_passthrough(
         pane_id,
@@ -790,12 +868,22 @@ fn run_suppressed_pipeline(
     // Detached period's output.
     passthrough_scanner.lock().unwrap().discard_partial();
 
-    let replacement = build_suppressed_replacement(
-        data,
+    // FR6: this read's carried-over completion (never an earlier read's —
+    // the reader hands over only what THIS read's feed reported), mapped
+    // from fed to chunk coordinates. Runs only for a suppressed chunk.
+    let carried_over_completion = carried_over.and_then(|c| {
+        Some(CarriedOverCompletion {
+            bytes: c.bytes(),
+            end: chunk_end_of_fed_prefix(ring_written_ranges, c.fed_end())?,
+        })
+    });
+    let replacement = build_suppressed_replacement_for(&SuppressedReplacementRequest {
+        chunk: data,
         ring_written_ranges,
-        scrollback_filter.pending(),
-        retained_window,
-    );
+        pending_after: scrollback_filter.pending(),
+        window: retained_window,
+        carried_over_completion,
+    });
     if replacement.is_empty() {
         // TM-2: never turn an empty replacement into an empty `PtyOutput`
         // chunk — the client reads that as PTY exit.
