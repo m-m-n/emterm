@@ -88,7 +88,30 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Point the markup-escape test-docs records at current tests and mark superseded ACs"
+    plan: tasks/task0001.md
+    files:
+      - test-docs/notification-summary-markup-escape/task0001.tests.yaml
+      - test-docs/notification-body-markup-escape/task0001.tests.yaml
+    skills: []
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2]
+    status: pending
+    notes: null
+  task0002:
+    title: "Project rule: test-docs records follow cross-feature test renames"
+    plan: tasks/task0002.md
+    files:
+      - .claude/rules/test-docs-records.md
+    skills: []
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR6, NFR1, NFR3]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -102,64 +125,64 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-4]
   FR2:
     title: "Update the same stale test paths in the body-markup-escape record (spillover)"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-4]
   FR3:
     title: "Supersede notes as YAML comments on every inverted AC"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
   FR4:
     title: "String-and-comment-only edit"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4]
   FR5:
     title: "Every listed test path resolves to a real test"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2, TS-3]
   FR6:
     title: "Project rule for cross-feature test renames"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-6]
   NFR1:
     title: "Scope confinement"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002]
+    tests: [TS-7]
   NFR2:
     title: "Audit-trail integrity"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4, TS-7]
   NFR3:
     title: "Rule placement within this repository"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-6, TS-7]
 
 batch:
   review_rework_count: 0
