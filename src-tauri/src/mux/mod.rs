@@ -42,12 +42,18 @@ pub mod identity;
 #[cfg(unix)]
 pub mod inherited_pty;
 pub mod ipc;
+// task0001 (mux-suppressed-output-round2-fixes): shared OSC number recovery
+// and viewer-launch identification used by both the scrollback strip and the
+// suppressed-chunk delivery scan. Leaf module: depends on `crate::viewer_kinds`
+// only (never on `mux::ipc`, never on a `gui`-gated item).
+pub mod osc_identify;
 pub mod prefix;
 pub mod scrollback_buffer;
 pub mod scrollback_filter;
 pub mod session;
 pub mod snapshot;
 pub mod snapshot_bytes;
+pub mod snapshot_tail;
 pub mod tmux_conf;
 // `tmux_import` writes to `crate::settings_store` (GUI-only), so the submodule
 // itself is GUI-only. Its sole caller (`main.rs:run_gui`) is already gated on
