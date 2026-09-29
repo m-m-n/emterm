@@ -1,0 +1,236 @@
+schema_version: 1
+feature: mux-suppressed-output-round2-fixes
+created: '2026-09-29'
+base_branch: main
+goal: |
+  # mux: 抑止チャンクの副作用処理の review round 2 で残った medium 指摘 8 件の対応
+
+  Notion: https://www.notion.so/3e93509ec8ee815aa73de5aa018c551a  種別: バグ
+
+  ## 現象 (必須)
+  mux-suppressed-output-fixes（PR https://github.com/m-m-n/emterm/pull/109 ）の review round 2 で、medium 指摘 8 件が `unresolved` のまま残っている。
+  - 保持窓の再開位置に、文字集合指定の指定文字として消費される ESC を選び、存在しない問い合わせを作る（TM-1、ecc48041b65a5380）
+  - 主画面の色問い合わせを置換出力から外すが、snapshot 再生では応答が捨てられるので一度も応答されない（dd56f3984c74cde1）
+  - 書き込みフィルタが、読み取りをまたぐ文字集合指定の待ち状態を持ち越さない（TM-1、ae48e7cd98084c19）
+  - 画面切り替えで打ち切られた OSC を pending から再送し、元のストリームに無い問い合わせを作る（TM-1、b600645f1fa94686）
+  - pending による除外を元チャンクの区間ではなく 1 つの切り位置で行うため、間にある代替画面区間の問い合わせを落とす（f8b600bcc0ed55da）
+  - 保持窓（256 バイト）より長い主画面のビューア起動が抑止チャンクで完結すると、snapshot にも置換出力にも入らない（03ccd5c7702db8db）
+  - ビューア起動の判定（OSC 番号を数値として解釈）と scrollback の除去判定（文字列一致）が食い違い、先頭ゼロのビューア起動が二重に届く（a93dffe30438a693）
+  - リングが一周していない主画面の snapshot に残る未完了の尾部を、置換出力でもう一度送る（3eccc254dd278b33）
+
+  ## 再現手順 (必須)
+  1. mux の pane に出力を流し続ける
+  2. 上記の条件を含むチャンクの途中で snapshot 取得（タブ切替 / reattach）が走り、そのチャンクが抑止される
+  3. 問い合わせ応答・ビューア起動・表示が上記のとおりずれる
+
+  ## 期待する挙動 (必須)
+  抑止したチャンクの副作用処理が、抑止しなかった場合と同じ解析状態・同じ順序で行われる。
+
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  - [ ] 各 stable_id について、対応済みか・対応不要かを判断して記録する
+
+  ## 該当箇所 (任意)
+  - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  - 詳細: ブランチ em-workflow/mux-suppressed-output-fixes/integration の feature-docs/mux-suppressed-output-fixes/reviews/round2.yaml
+
+  ## 実害・発生条件 (任意)
+  snapshot 取得と 1 チャンクが重なったときにだけ起きる。
+
+  ## 追加指示（起動引数）
+  - 実装完了後、integration ブランチを remote に push し gh pr create で base_branch への PR を作る。integration ブランチはローカル・リモート両方に残す（base_branch へ自動マージしない）
+  - 不明点は Codex に相談し、比較的良いと判断した案を採用する
+  - その議論の内容を Notion に記録する
+parent_branch: em-workflow/mux-suppressed-output-round2-fixes/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.01
+      '2': 0.97
+      '3': 0.02
+    description_plus_code:
+      '0': 0.0
+      '1': 0.0
+      '2': 0.99
+      '3': 0.01
+  at: '2026-09-29T20:37:03+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - src-tauri/src/render/theme.rs
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: c02f4c5f44f70cf68525cc7a3782bcd007cf5c48
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI の変更が無い。変わるのは mux デーモン内部のバイト列処理とテストだけ。
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: 保持窓の再開位置から、指定文字の枠に入りうる ESC を除く（TM-1）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+  FR2:
+    title: 主画面の色問い合わせも置換出力に含める
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+  FR3:
+    title: 書き込みフィルタが、読み取りをまたぐ指定文字待ちの状態を持ち越す（TM-1）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-3
+  FR4:
+    title: 書き込みフィルタが、除いた画面切り替え列による打ち切りを反映する（TM-1）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-4
+  FR5:
+    title: pending による走査の除外を元チャンク上の区間に限る
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-5
+  FR6:
+    title: 書き込みフィルタで完結した持ち越し列を置換出力に渡す
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-6
+  FR7:
+    title: OSC 番号の復元とビューア起動の識別を共通の層で行う
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-7
+  FR8:
+    title: snapshot がすでに運んだ未完了の尾部を置換出力で再送しない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-8
+  FR9:
+    title: 判断の記録
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: 互換性（ワイヤ形式と snapshot のバイト列）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: ロック規律
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: reader 通常経路の負荷
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: セキュリティ（TM-1・TM-3）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: セキュリティ（TM-2）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-9
+  NFR6:
+    title: ビルドとプラットフォーム
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-10
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
