@@ -113,7 +113,7 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR6, NFR1, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/test-docs-rename-tracking/task0002
     notes: null
 
