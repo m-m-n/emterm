@@ -1,0 +1,208 @@
+schema_version: 1
+feature: test-docs-rename-tracking
+created: 2026-09-29
+base_branch: main
+goal: |
+  # テスト改名で前 feature の test-docs 記録が参照切れになる
+
+  Notion: https://www.notion.so/3ba3509ec8ee814e9e7aecc7314689ac
+  種別: 改善
+
+  ## やりたいこと（必須）
+  テスト改名で参照切れになった前 feature の test-docs 記録を追随させ、feature をまたぐテスト名変更時に記録を更新する運用を決める。
+
+  ## 背景・なぜ（必須）
+  fail-closed 化（PR https://github.com/m-m-n/emterm/pull/39 ）でテスト名を改名した結果、`test-docs/notification-summary-markup-escape/task0001.tests.yaml` が挙げる 4 件のテストパスが存在しなくなった。
+  - AC-2 の `summary_markup_escape::failed_capability_fetch_leaves_the_title_unchanged`（14 行目）
+  - AC-5 の `body_markup_escape::body_markup_confirmed_is_true_only_for_a_successful_list_containing_it` / `..._is_false_when_absent_from_a_successful_list` / `..._is_false_on_fetch_failure`（33〜35 行目）
+  この記録で verify を再実行すると該当テストが 0 件マッチになりトレーサビリティが切れる。加えて AC-2 の記述内容（失敗フェッチ → title 据え置き）は新 SPEC の FR1 が意図的に反転させた旧仕様であり、記録側にその旨が無いため、後から読むと現行コードが AC-2 に違反しているように見える。
+  - 検出元: PR #39 のレビュー round1、finding `03533374d9cc5821`（severity medium / category comprehensive）
+  - 記録: `feature-docs/notification-markup-fail-closed/reviews/round1.yaml`
+
+  ## 受け入れ条件 / 完了の定義（必須）
+  - [ ] test-docs 記録を「時点スナップショットとして凍結する」か「現行名へ追随させる」かの方針を決める
+  - [ ] 追随させる場合、旧 yaml のテストパスを現行名へ更新し、AC-2 に supersede 注記を追加する
+  - [ ] 凍結する場合、新 yaml 側に旧 feature の AC-2 / AC-5 テスト名の対応表を残して参照切れを追跡可能にする
+  - [ ] 決めた方針を今後の feature でも適用できる形（ルールまたはテンプレート）に落とす
+
+  ## スコープ外（任意）
+  - テストコード自体の変更
+  - test-docs のスキーマ変更
+
+  ## 制約・前提（任意）
+  - PR #39 がマージされた後の状態を前提に着手すること
+
+  ## 追加指示（起動引数）
+  - 実装完了後、integration ブランチを remote へ push し、gh pr create で base_branch への PR を作成する。integration ブランチはローカル・リモート両方に残す（自動マージしない）
+  - 不明点は Codex に相談し、比較して良いと判断した案を採用する
+  - その議論内容を Notion に記録する
+parent_branch: em-workflow/test-docs-rename-tracking/integration
+tier: reduced
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only: {"0": 0.75, "1": 0.24, "2": 0.01, "3": 0.0}
+    description_plus_code: {"0": 0.56, "1": 0.42, "2": 0.02, "3": 0.0}
+  at: "2026-09-29T20:36:00+09:00"
+  reductions: [REQUIREMENTS.md, design]
+
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    webview-ts:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: "bunx biome check ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 1a4f31c6d95f9150d0d0ea5e40af9aeeb5457149
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Documentation-only change: string replacement and comments in two test-docs records plus one .claude/rules/ file. There is no UI, module, data model or interface to design (design-step gate resolved decide_autonomously); also subtracted by the reduced tier."
+  - id: create-plan
+    artifacts: [VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 3cb578a41cc8f5c5c454fa050c38fe4674097e59
+  - id: implement
+    status: completed
+    completed_at_commit: a871752c47d1829e51adecdfd291cd22bfd1d330
+    base_commit: 64e841cb579b646c9b1e696b018b9dc1a3c13233
+  - id: review
+    status: completed
+    completed_at_commit: 7a01cfba013d6a1b375439e78863a61d994391da
+  - id: verify
+    status: completed
+    completed_at_commit: 20b13293ffecff288c2a78003fce02dda3cb634f
+    result: pass
+    failed_items: []
+    summary: "build (cargo check / bun build) ok; cargo test --lib 3820 passed; bun test 402 passed; cargo fmt --check / biome check clean; TS-1..TS-7 pass (TS-5/TS-6 inspected by orchestrator); no excluded requirements"
+  - id: retrospect
+    status: completed
+    completed_at_commit: 9cadc641eeb22e0e5961cc2d3099ab41d886e0bd
+
+tasks:
+  task0001:
+    title: "Point the markup-escape test-docs records at current tests and mark superseded ACs"
+    plan: tasks/task0001.md
+    files:
+      - test-docs/notification-summary-markup-escape/task0001.tests.yaml
+      - test-docs/notification-body-markup-escape/task0001.tests.yaml
+    skills: []
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2]
+    status: merged
+    branch: em-workflow/test-docs-rename-tracking/task0001
+    notes: null
+  task0002:
+    title: "Project rule: test-docs records follow cross-feature test renames"
+    plan: tasks/task0002.md
+    files:
+      - .claude/rules/test-docs-records.md
+    skills: []
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR6, NFR1, NFR3]
+    status: merged
+    branch: em-workflow/test-docs-rename-tracking/task0002
+    notes: null
+
+review:
+  status: completed
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary: []
+    cross_validation: false
+  rounds_completed: 1
+  perspectives: [comprehensive, security, spec]
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Update stale test paths in the summary-markup-escape record"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-4]
+  FR2:
+    title: "Update the same stale test paths in the body-markup-escape record (spillover)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-4]
+  FR3:
+    title: "Supersede notes as YAML comments on every inverted AC"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-5]
+  FR4:
+    title: "String-and-comment-only edit"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-4]
+  FR5:
+    title: "Every listed test path resolves to a real test"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-2, TS-3]
+  FR6:
+    title: "Project rule for cross-feature test renames"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS-6]
+  NFR1:
+    title: "Scope confinement"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002]
+    tests: [TS-7]
+  NFR2:
+    title: "Audit-trail integrity"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-4, TS-7]
+  NFR3:
+    title: "Rule placement within this repository"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS-6, TS-7]
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
