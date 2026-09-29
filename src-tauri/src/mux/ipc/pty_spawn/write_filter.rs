@@ -38,7 +38,7 @@ use crate::mux::session::pane::AgentStatusFeedItem;
 /// pending bytes verbatim to the ring. Sized comfortably above one
 /// `emterm markdown|json|yaml` chunk (128 KiB payload, ~172 KiB after base64
 /// framing) so the common case never trips it.
-const SCROLLBACK_FILTER_PENDING_CAP: usize = 512 * 1024;
+pub(super) const SCROLLBACK_FILTER_PENDING_CAP: usize = 512 * 1024;
 
 /// Stateful stream filter that strips viewer-launch rich content (OSC 777
 /// emterm-{markdown,image,json,yaml} / Kitty APC / SIXEL DCS / OSC 9999
@@ -80,6 +80,52 @@ pub(in crate::mux) struct ScrollbackWriteFilter {
     /// `0e3f8378913e1f4a`). See [`Self::feed`]'s doc for the attribution
     /// rationale.
     pending_started_dims: Option<(u16, u16)>,
+    /// Client-parity "awaiting designator" state (mux-suppressed-output-
+    /// round2-fixes FR3): the fed stream ended right after `ESC (` / `ESC )`
+    /// outside any string, so the client's parser consumes the FIRST byte of
+    /// the next feed as the charset designator — even when it is an `ESC`.
+    /// Kept apart from `pending`: nothing is held for a designator, so
+    /// `pending` is always empty while this is set.
+    awaiting_designator: bool,
+}
+
+/// A sequence whose opening `ESC` was held in `pending` when a feed started
+/// and that reached its terminator (BEL for OSC, or ST) inside that feed,
+/// before any cut (mux-suppressed-output-round2-fixes FR6). Recorded by the
+/// boundary scan the feed already runs; carries the scanned run by move, so
+/// the non-suppressed reader path pays no copy for it.
+pub(in crate::mux) struct CarriedCompletion {
+    /// The raw run the boundary scan walked (`old pending ++ fed head`);
+    /// only `run[..end]` is the sequence.
+    run: Vec<u8>,
+    /// One past the terminator's last byte within `run`.
+    end: usize,
+    /// Fed offset just past the terminator.
+    fed_end: usize,
+}
+
+impl CarriedCompletion {
+    /// The complete sequence bytes, from its opening `ESC` through its
+    /// terminator.
+    pub(in crate::mux) fn bytes(&self) -> &[u8] {
+        &self.run[..self.end]
+    }
+
+    /// Fed offset just past the sequence's terminator.
+    pub(in crate::mux) fn fed_end(&self) -> usize {
+        self.fed_end
+    }
+}
+
+/// Result of one [`ScrollbackWriteFilter::feed_with_cuts`] call.
+pub(in crate::mux) struct FeedOutcome {
+    /// The dims to attribute `bytes` to (see [`ScrollbackWriteFilter::feed`]).
+    pub(in crate::mux) dims: (u16, u16),
+    /// Bytes safe to write to the scrollback ring right now.
+    pub(in crate::mux) bytes: Vec<u8>,
+    /// The carried-over completion of THIS call, if any. Never populated
+    /// when the call took the overflow flush.
+    pub(in crate::mux) carried: Option<CarriedCompletion>,
 }
 
 impl ScrollbackWriteFilter {
@@ -87,6 +133,7 @@ impl ScrollbackWriteFilter {
         Self {
             pending: Vec::new(),
             pending_started_dims: None,
+            awaiting_designator: false,
         }
     }
 
@@ -137,61 +184,189 @@ impl ScrollbackWriteFilter {
         chunk: &[u8],
         current_dims: (u16, u16),
     ) -> ((u16, u16), Vec<u8>) {
-        if chunk.is_empty() {
-            return (current_dims, Vec::new());
+        let outcome = self.feed_with_cuts(chunk, current_dims, &[]);
+        (outcome.dims, outcome.bytes)
+    }
+
+    /// Cut-aware feed (mux-suppressed-output-round2-fixes FR3/FR4/FR6): like
+    /// [`Self::feed`], but `cuts` lists — ascending, possibly repeating, each
+    /// between 0 and `fed.len()` inclusive — the fed-coordinate positions
+    /// where extraction REMOVED a screen-switch sequence (47/1047/1049 `h`/
+    /// `l`) from the raw chunk. The client saw that sequence's `ESC`; this
+    /// filter did not. At each cut the filter does what the client did at
+    /// that `ESC`:
+    ///
+    /// - an in-progress OSC/DCS/APC string, or a held lone `ESC`, is closed
+    ///   and emitted through the existing strip, exactly as an ESC-aborted
+    ///   string is today;
+    /// - the awaiting-designator flag is cleared (the client consumed the
+    ///   switch's `ESC` as the designator, as-08);
+    ///
+    /// and processing continues from ground with the next fed byte. An empty
+    /// `fed` with a non-empty `cuts` still closes whatever is held.
+    ///
+    /// **Postcondition.** After every call, `pending` holds only the single
+    /// incomplete string — or lone `ESC` — at the end of the fed stream
+    /// after its last cut; never a sequence closed by a cut, nor any byte
+    /// after one.
+    ///
+    /// **Carried-over completion.** When the sequence whose opening `ESC`
+    /// was held in `pending` at the start of the call reaches its terminator
+    /// inside the call, before any cut, the outcome reports it (recorded by
+    /// the boundary scan itself — no extra pass). Nothing is reported when
+    /// that sequence is aborted, closed by a cut, or still incomplete, nor
+    /// when the call took the overflow flush.
+    ///
+    /// **Overflow.** Past [`SCROLLBACK_FILTER_PENDING_CAP`] the run is
+    /// flushed exactly as [`Self::feed`] documents; afterwards `pending` is
+    /// empty and the awaiting-designator flag equals the client-parity state
+    /// at the end of the flushed run (one bounded pass, overflow path only).
+    pub(in crate::mux) fn feed_with_cuts(
+        &mut self,
+        fed: &[u8],
+        current_dims: (u16, u16),
+        cuts: &[usize],
+    ) -> FeedOutcome {
+        if fed.is_empty() && cuts.is_empty() {
+            return FeedOutcome {
+                dims: current_dims,
+                bytes: Vec::new(),
+                carried: None,
+            };
         }
         let had_carry_over = !self.pending.is_empty();
         let attribution_dims = if had_carry_over {
             self.pending_started_dims.unwrap_or(current_dims)
         } else {
-            // Fresh start: remember these dims in case `chunk` itself
+            // Fresh start: remember these dims in case `fed` itself
             // leaves an unterminated introducer pending past this call.
             self.pending_started_dims = Some(current_dims);
             current_dims
         };
-        self.pending.extend_from_slice(chunk);
 
-        if self.pending.len() > SCROLLBACK_FILTER_PENDING_CAP {
-            log::warn!(
-                "scrollback write filter: pending exceeded {} bytes, flushing early",
-                SCROLLBACK_FILTER_PENDING_CAP
-            );
-            let pending = std::mem::take(&mut self.pending);
-            self.pending_started_dims = None;
-            return (
-                attribution_dims,
-                strip_pty_output_for_scrollback_write(&pending),
-            );
+        let mut out: Vec<u8> = Vec::new();
+        let mut carried: Option<CarriedCompletion> = None;
+        let mut overflowed = false;
+        // True while `pending` still holds exactly the run this call started
+        // with (nothing drained, closed or flushed).
+        let mut pending_untouched = true;
+        let mut seg_start = 0usize;
+        let segment_count = cuts.len() + 1;
+        for seg_no in 0..segment_count {
+            let is_last = seg_no + 1 == segment_count;
+            let seg_end = if is_last {
+                fed.len()
+            } else {
+                cuts[seg_no].min(fed.len()).max(seg_start)
+            };
+            let seg = &fed[seg_start..seg_end];
+            seg_start = seg_end;
+
+            let carry_len_before = self.pending.len();
+            self.pending.extend_from_slice(seg);
+            if self.pending.is_empty() {
+                // Nothing held and nothing fed in this segment; a cut still
+                // ends the client's designator wait.
+                if !is_last {
+                    self.awaiting_designator = false;
+                }
+                continue;
+            }
+            // The first byte after `ESC (` / `ESC )` is the designator,
+            // consumed unconditionally — it can only be the first byte of
+            // the run, because the flag implies an empty `pending`.
+            let skip = if carry_len_before == 0 && self.awaiting_designator {
+                1
+            } else {
+                0
+            };
+
+            if self.pending.len() > SCROLLBACK_FILTER_PENDING_CAP {
+                log::warn!(
+                    "scrollback write filter: pending exceeded {} bytes, flushing early",
+                    SCROLLBACK_FILTER_PENDING_CAP
+                );
+                overflowed = true;
+                pending_untouched = false;
+                let run = std::mem::take(&mut self.pending);
+                // Client-parity flag at the end of the flushed run; a cut
+                // after this segment clears it again anyway.
+                self.awaiting_designator = if is_last {
+                    scan_boundary(&run, skip, false).awaiting_designator
+                } else {
+                    false
+                };
+                out.extend_from_slice(&strip_pty_output_for_scrollback_write(&run));
+                continue;
+            }
+
+            let scan = scan_boundary(&self.pending, skip, carry_len_before > 0);
+            if !is_last {
+                // A cut follows: the client's ESC closes whatever is open,
+                // so the whole run is emitted and nothing is held.
+                pending_untouched = false;
+                self.awaiting_designator = false;
+                let run = std::mem::take(&mut self.pending);
+                out.extend_from_slice(&strip_pty_output_for_scrollback_write(&run));
+                if carried.is_none() {
+                    if let Some(end) = scan.carried_end {
+                        carried = Some(CarriedCompletion {
+                            end,
+                            fed_end: end.saturating_sub(carry_len_before),
+                            run,
+                        });
+                    }
+                }
+                continue;
+            }
+
+            self.awaiting_designator = scan.awaiting_designator;
+            if scan.boundary == 0 {
+                continue;
+            }
+            pending_untouched = false;
+            let strippable: Vec<u8> = self.pending.drain(..scan.boundary).collect();
+            out.extend_from_slice(&strip_pty_output_for_scrollback_write(&strippable));
+            if let Some(end) = scan.carried_end {
+                carried = Some(CarriedCompletion {
+                    end,
+                    fed_end: end.saturating_sub(carry_len_before),
+                    run: strippable,
+                });
+            }
         }
 
-        let boundary = find_safe_boundary(&self.pending);
-        if boundary == 0 {
-            return (attribution_dims, Vec::new());
-        }
-        let strippable: Vec<u8> = self.pending.drain(..boundary).collect();
         if self.pending.is_empty() {
             self.pending_started_dims = None;
-        } else {
+        } else if !(had_carry_over && pending_untouched) {
             // D7''' (round-6 rework, review round-5 finding
             // `fd379025e1900e9f`): a PARTIAL drain (some bytes drained,
-            // some retained) leaves a tail that is definitely part of
-            // THIS `feed` call's own `chunk` — an unterminated introducer
-            // this read's own bytes left behind, not the earlier run
-            // `pending_started_dims` still names. Leaving it unchanged
-            // (the pre-fix behavior) meant a LATER flush of that tail
-            // attributed it to whichever dims started the OLDEST
-            // still-pending run, even after multiple reads' worth of
-            // content had flowed through in between — the exact
-            // misattribution round-4's fix (this same field) closed for
-            // the full-drain case. Update it to `current_dims` so the
+            // some retained) — or a cut that closed the earlier run — leaves
+            // a tail that is definitely part of THIS call's own `fed`
+            // bytes: an unterminated introducer this read's own bytes left
+            // behind, not the earlier run `pending_started_dims` still
+            // names. Leaving it unchanged (the pre-fix behavior) meant a
+            // LATER flush of that tail attributed it to whichever dims
+            // started the OLDEST still-pending run, even after multiple
+            // reads' worth of content had flowed through in between — the
+            // exact misattribution round-4's fix (this same field) closed
+            // for the full-drain case. Update it to `current_dims` so the
             // retained tail is attributed to the read that actually
             // produced it.
             self.pending_started_dims = Some(current_dims);
         }
-        (
-            attribution_dims,
-            strip_pty_output_for_scrollback_write(&strippable),
-        )
+        FeedOutcome {
+            dims: attribution_dims,
+            bytes: out,
+            carried: if overflowed { None } else { carried },
+        }
+    }
+
+    /// Test / diagnostic: whether the client would consume the next fed
+    /// byte as a charset designator (see the field's doc).
+    #[cfg(test)]
+    pub(in crate::mux) fn awaiting_designator(&self) -> bool {
+        self.awaiting_designator
     }
 
     /// Number of bytes currently held in `pending` (test / diagnostic).
@@ -211,7 +386,7 @@ impl ScrollbackWriteFilter {
     /// task0002 (mux-suppressed-output-fixes) postcondition: after every
     /// [`Self::feed`] call, this is either empty, or starts at the `ESC`
     /// that opens the single OSC/DCS/APC string — or the lone trailing
-    /// `ESC` — still INCOMPLETE (see [`find_safe_boundary`]'s doc for
+    /// `ESC` — still INCOMPLETE (see [`scan_boundary`]'s doc for
     /// incomplete vs aborted) at the end of the fed main-buffer stream, and
     /// holds exactly that sequence's bytes: never a closed (complete or
     /// ESC-aborted) sequence, and never any byte after one. The only
@@ -223,9 +398,19 @@ impl ScrollbackWriteFilter {
 }
 
 /// Find the position of the first still-INCOMPLETE strip-target introducer
-/// (or lone trailing ESC) in `bytes`. If every strip-target sequence in
-/// `bytes` is either closed or genuinely absent, returns `bytes.len()` —
-/// everything is safe to emit.
+/// (or lone trailing ESC) in `bytes`, scanning from `start`. If every
+/// strip-target sequence in `bytes` is either closed or genuinely absent,
+/// the boundary is `bytes.len()` — everything is safe to emit.
+///
+/// `start` is 1 exactly when the client is awaiting a charset designator:
+/// `bytes[0]` is then that designator, consumed unconditionally (even when
+/// it is an `ESC`), and scanning resumes right after it (FR3).
+///
+/// `carried_candidate` is true when `bytes` begins with bytes held in
+/// `pending` from an earlier read: the construct that opens at index 0 is
+/// then a carried-over sequence, and when it completes the scan records the
+/// index just past its terminator ([`BoundaryScan::carried_end`]) — the
+/// FR6 report, made inside this single pass.
 ///
 /// task0002 (mux-suppressed-output-fixes, FR1/FR2/FR5): this scan follows
 /// the SAME transition rules `term_core`'s parser applies (see
@@ -258,49 +443,63 @@ impl ScrollbackWriteFilter {
 ///   is ALWAYS consumed as the designator — even if it is itself an `ESC` —
 ///   and never re-examined as a fresh introducer (mirrors
 ///   `escape_charset`'s unconditional dispatch). Three bytes are consumed as
-///   one unit when all three are present; if the chunk ends right after `(`
+///   one unit when all three are present; if the buffer ends right after `(`
 ///   / `)` with no designator byte yet, nothing is held for it (not an
-///   OSC/DCS/APC/lone-ESC shape the pending contract allows) and the scan
-///   simply ends.
+///   OSC/DCS/APC/lone-ESC shape the pending contract allows), the scan ends,
+///   and [`BoundaryScan::awaiting_designator`] is set so the caller consumes
+///   the next feed's first byte as the designator (FR3).
 /// - A lone `ESC` as the very last byte: held (see "Incomplete" above) —
 ///   it may still turn out to introduce a string once the next byte arrives.
 /// - Any other `ESC <byte>` (CSI `[`, two-byte dispatches like `X` / `^`,
 ///   etc.): a complete, non-string escape. Not a strip target, not held —
 ///   the scan just steps past both bytes.
-fn find_safe_boundary(bytes: &[u8]) -> usize {
+fn scan_boundary(bytes: &[u8], start: usize, carried_candidate: bool) -> BoundaryScan {
     let n = bytes.len();
-    let mut i = 0;
+    let mut i = start.min(n);
+    let mut carried_end: Option<usize> = None;
     while i < n {
         if bytes[i] != 0x1b {
             i += 1;
             continue;
         }
         let intro_start = i;
+        let carried_here = carried_candidate && intro_start == 0;
+        let incomplete = |carried_end| BoundaryScan {
+            boundary: intro_start,
+            awaiting_designator: false,
+            carried_end,
+        };
         if i + 1 >= n {
             // Lone trailing ESC: incomplete, held whole (1 byte).
-            return intro_start;
+            return incomplete(carried_end);
         }
         match bytes[i + 1] {
-            b'_' => {
-                // APC. Only Kitty (ESC _ G) is a strip target — but even a
-                // non-Kitty APC is still an APC and needs an ESC \ terminator
-                // before its body is safe to emit; without one, we cannot tell
-                // where its body ends. Same tail-buffer rule either way.
+            b'_' | b'P' => {
+                // APC / DCS. Only Kitty (ESC _ G) is a strip target — but
+                // even a non-Kitty APC is still an APC and needs an ESC \
+                // terminator before its body is safe to emit; without one,
+                // we cannot tell where its body ends. Same tail-buffer rule
+                // either way.
                 match find_st(bytes, i + 2) {
-                    StringScanResult::Complete(end) => i = end,
+                    StringScanResult::Complete(end) => {
+                        if carried_here {
+                            carried_end = Some(end);
+                        }
+                        i = end;
+                    }
                     StringScanResult::Aborted(abort_pos) => i = abort_pos,
-                    StringScanResult::Incomplete => return intro_start,
+                    StringScanResult::Incomplete => return incomplete(carried_end),
                 }
             }
-            b'P' => match find_st(bytes, i + 2) {
-                StringScanResult::Complete(end) => i = end,
-                StringScanResult::Aborted(abort_pos) => i = abort_pos,
-                StringScanResult::Incomplete => return intro_start,
-            },
             b']' => match find_osc_end(bytes, i + 2) {
-                StringScanResult::Complete(end) => i = end,
+                StringScanResult::Complete(end) => {
+                    if carried_here {
+                        carried_end = Some(end);
+                    }
+                    i = end;
+                }
                 StringScanResult::Aborted(abort_pos) => i = abort_pos,
-                StringScanResult::Incomplete => return intro_start,
+                StringScanResult::Incomplete => return incomplete(carried_end),
             },
             0x1b => {
                 // ESC ESC: the first ESC is superseded; re-evaluate starting
@@ -311,15 +510,41 @@ fn find_safe_boundary(bytes: &[u8]) -> usize {
                 // Charset designation: the next byte is ALWAYS the
                 // designator, consumed unconditionally (even if it is an
                 // ESC) — never a fresh introducer. If it isn't available yet
-                // there is nothing left in this buffer to hold for it.
-                if i + 2 < n { i += 3 } else { i = n }
+                // there is nothing to hold for it, but the client IS now
+                // awaiting it: the next feed's first byte is the designator
+                // (FR3).
+                if i + 2 < n {
+                    i += 3;
+                } else {
+                    return BoundaryScan {
+                        boundary: n,
+                        awaiting_designator: true,
+                        carried_end,
+                    };
+                }
             }
             _ => {
                 i += 2;
             }
         }
     }
-    n
+    BoundaryScan {
+        boundary: n,
+        awaiting_designator: false,
+        carried_end,
+    }
+}
+
+/// Result of [`scan_boundary`].
+struct BoundaryScan {
+    /// Position of the first still-incomplete string / lone ESC, or the
+    /// buffer length when nothing is held.
+    boundary: usize,
+    /// The buffer ends right after `ESC (` / `ESC )` outside any string.
+    awaiting_designator: bool,
+    /// Index just past the terminator of the carried-over sequence that
+    /// completed inside this buffer, if any (see `carried_candidate`).
+    carried_end: Option<usize>,
 }
 
 /// Outcome of scanning for an OSC/DCS/APC string's terminator (see

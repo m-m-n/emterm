@@ -5052,11 +5052,14 @@ async fn visible_reattach_redelivers_device_queries_once_in_order_and_never_from
 }
 
 /// AC-4 (FR9; TS-9), reader level, visible-reattach path: "Alternate-screen
-/// color query" bullet. A color query inside an alternate-screen span of a
-/// suppressed chunk is re-delivered exactly once; a color query in the same
-/// kind of chunk that reached the ring (main-buffer) is NOT re-delivered.
+/// color query" bullet, changed on purpose by mux-suppressed-output-round2-fixes
+/// FR2 (SPEC AC-8). A color query inside an alternate-screen span of a
+/// suppressed chunk is re-delivered exactly once, and so is a color query in
+/// the same kind of chunk that reached the ring (main-buffer): the snapshot
+/// is replayed with its responses discarded, so a query that survived into
+/// the ring is never answered through the snapshot.
 #[tokio::test]
-async fn visible_reattach_redelivers_an_alt_screen_color_query_but_not_one_that_reached_the_ring() {
+async fn visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once() {
     let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
         reason: DetachReason::NetworkDetach,
         owner: None,
@@ -5117,12 +5120,13 @@ async fn visible_reattach_redelivers_an_alt_screen_color_query_but_not_one_that_
         received[0].data, b"\x1b]11;?\x07",
         "the alt-screen color query must be re-delivered exactly once"
     );
-    assert!(
-        received[1].data.is_empty(),
-        "the main-buffer color query already reached the ring via the \
-         snapshot, so nothing must be sent for that chunk beyond EOF"
+    assert_eq!(
+        received[1].data, b"\x1b]11;?\x07",
+        "the main-buffer color query reached the ring, but the snapshot's \
+         replay discards responses, so it must be re-delivered exactly once too"
     );
-    assert_eq!(received.len(), 2);
+    assert!(received[2].data.is_empty(), "EOF chunk must follow");
+    assert_eq!(received.len(), 3);
 }
 
 /// AC-4 (FR9; TS-9), reader level, on-demand path (production
@@ -5316,10 +5320,10 @@ async fn suppressed_queries_arrive_after_snapshot_in_order_once_each() {
 
 /// AC-4 (FR9; TS-9), reader level, on-demand path: the on-demand
 /// counterpart of
-/// `visible_reattach_redelivers_an_alt_screen_color_query_but_not_one_that_reached_the_ring`.
+/// `visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once`
+/// (changed on purpose by mux-suppressed-output-round2-fixes FR2, SPEC AC-8).
 #[tokio::test]
-async fn on_demand_snapshot_redelivers_an_alt_screen_color_query_but_not_one_that_reached_the_ring()
-{
+async fn on_demand_snapshot_redelivers_alt_screen_and_main_screen_color_queries_once() {
     let pane_id: PaneId = 53;
     let (requester_tx, mut requester_rx) = mpsc::channel::<PtyOutputChunk>(16);
     let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(
@@ -5397,12 +5401,592 @@ async fn on_demand_snapshot_redelivers_an_alt_screen_color_query_but_not_one_tha
         non_snapshot[0].data, b"\x1b]11;?\x07",
         "the alt-screen color query must be re-delivered exactly once"
     );
-    assert!(
-        non_snapshot[1].data.is_empty(),
-        "the main-buffer color query already reached the ring, so nothing \
-         must be sent for that chunk beyond EOF"
+    assert_eq!(
+        non_snapshot[1].data, b"\x1b]11;?\x07",
+        "the main-buffer color query reached the ring, but the snapshot's \
+         replay discards responses, so it must be re-delivered exactly once too"
     );
-    assert_eq!(non_snapshot.len(), 2);
+    assert!(non_snapshot[2].data.is_empty(), "EOF chunk must follow");
+    assert_eq!(non_snapshot.len(), 3);
+}
+
+// ── mux-suppressed-output-round2-fixes task0002: main-screen color queries
+//    (FR2, review finding `dd56f3984c74cde1`) ─────────────────────────────
+
+/// A term_core client wired with the real theme's OSC responder — the
+/// model of what the GUI does with a color query.
+#[cfg(feature = "gui")]
+fn themed_client(cols: u16, rows: u16) -> term_core::terminal_core::TerminalCore {
+    use crate::callbacks::{NativeCallbackState, ThemeColorResponder};
+    use crate::render::theme::Theme;
+    use parking_lot::Mutex as PLMutex;
+
+    let theme = Arc::new(PLMutex::new(Theme::default()));
+    let state = Arc::new(PLMutex::new(NativeCallbackState::default()));
+    let mut client = term_core::terminal_core::TerminalCore::new(cols, rows, 10_000);
+    client.osc_responder = Some(Box::new(ThemeColorResponder::new(theme, state)));
+    client
+}
+
+/// Decode a `Snapshot`-kind chunk's wire-encoded bytes into the payload and
+/// the replay segments `reset_and_replay_segments` takes.
+#[cfg(feature = "gui")]
+fn decode_snapshot_for_replay(data: &[u8]) -> (Vec<u8>, Vec<ReplaySegment>) {
+    let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(data);
+    let replay = segments
+        .iter()
+        .map(|s| ReplaySegment {
+            offset: s.offset,
+            cols: s.cols,
+            rows: s.rows,
+        })
+        .collect();
+    (content.to_vec(), replay)
+}
+
+/// What one snapshot path delivered to the destination around a suppressed
+/// main-screen chunk.
+#[cfg(feature = "gui")]
+struct SnapshotFlow {
+    /// The snapshot's replayable bytes.
+    payload: Vec<u8>,
+    /// The snapshot's replay segments.
+    segments: Vec<ReplaySegment>,
+    /// The data of every chunk the destination received after the snapshot,
+    /// in order, EOF excluded.
+    after: Vec<Vec<u8>>,
+}
+
+/// The client model of a snapshot path: the snapshot is applied with
+/// `reset_and_replay_segments` and every response it produced is discarded
+/// (as the GUI does), then the delivered chunks are fed in order. Returns
+/// the responses queued after the snapshot.
+#[cfg(feature = "gui")]
+fn responses_after_snapshot(flow: &SnapshotFlow) -> Vec<u8> {
+    let mut client = themed_client(80, 24);
+    client.reset_and_replay_segments(&flow.payload, &flow.segments);
+    let _discarded_replay_responses = client.take_response();
+    for chunk in &flow.after {
+        client.process_pty_data_fully(chunk);
+    }
+    client.take_response()
+}
+
+/// The number of OSC 11 responses in `responses`.
+#[cfg(feature = "gui")]
+fn osc11_response_count(responses: &[u8]) -> usize {
+    let prefix = b"\x1b]11;";
+    responses
+        .windows(prefix.len())
+        .filter(|w| *w == prefix)
+        .count()
+}
+
+/// Spawn `pty_reader_loop` against `pane` exactly as it is — unlike
+/// [`spawn_reader_with_chunks`] this leaves the pane's `output_target`
+/// (`Detached` for the visibility-restore scenario) untouched.
+#[cfg(feature = "gui")]
+fn spawn_reader_leaving_target_untouched(
+    pane: &MuxPane,
+    chunks: Vec<Vec<u8>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn({
+        let output_target = pane.output_target.clone();
+        let shadow_parser = pane.shadow_parser.clone();
+        let cwd = pane.cwd.clone();
+        let title = pane.title.clone();
+        let title_sender = pane.title_sender.clone();
+        let notification_sender = pane.notification_sender.clone();
+        let agent_status_report_sender = pane.agent_status_report_sender.clone();
+        let raw_passthrough = pane.raw_passthrough.clone();
+        let passthrough_scanner = pane.passthrough_scanner.clone();
+        let scrollback = pane.scrollback.clone();
+        let dims = pane.dims.clone();
+        let output_capture = pane.output_capture.clone();
+        let pane_id = pane.id;
+        move || {
+            pty_reader_loop(
+                pane_id,
+                Box::new(ScriptedReader::new(chunks)),
+                output_target,
+                shadow_parser,
+                cwd,
+                title,
+                title_sender,
+                notification_sender,
+                agent_status_report_sender,
+                raw_passthrough,
+                passthrough_scanner,
+                scrollback,
+                dims,
+                Arc::new(StdMutex::new(None)),
+                output_capture,
+            );
+        }
+    })
+}
+
+/// Visible-reattach path (production `collect_reattach_data`): the reader is
+/// paused at P2 on `chunk` (a main-screen chunk), the reattach snapshot
+/// covers it, and the reader's suppression decision delivers whatever the
+/// replacement carries.
+#[cfg(feature = "gui")]
+async fn main_screen_flow_via_visible_reattach(pane_id: PaneId, chunk: &[u8]) -> SnapshotFlow {
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::NetworkDetach,
+        owner: None,
+    }));
+    let pane = MuxPane::new_test(pane_id, 80, 24, output_target);
+    let output_capture = pane.output_capture.clone();
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) =
+        spawn_reader_with_chunks_in_session(pane, vec![chunk.to_vec()]).await;
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the main-screen chunk");
+
+    let (new_tx, mut new_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+    let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+    let data = crate::mux::ipc::reattach::collect_reattach_data(
+        &mgr, session_id, &new_tx, &title_tx, kick_tx, true, 10_000,
+    )
+    .await;
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let (_pane_id, payload, segments) = data.into_iter().next().expect("one pane's snapshot");
+    let mut after = Vec::new();
+    while let Ok(c) = new_rx.try_recv() {
+        if !c.data.is_empty() {
+            after.push(c.data);
+        }
+    }
+    SnapshotFlow {
+        payload,
+        segments: to_replay_segments(&segments),
+        after,
+    }
+}
+
+/// On-demand path (production `handle_request_pane_snapshot`).
+#[cfg(feature = "gui")]
+async fn main_screen_flow_via_on_demand_snapshot(pane_id: PaneId, chunk: &[u8]) -> SnapshotFlow {
+    let (requester_tx, mut requester_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(
+        requester_tx.clone(),
+    )));
+    let pane = MuxPane::new_test(pane_id, 80, 24, output_target);
+    let output_capture = pane.output_capture.clone();
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let (mgr, session_id, handle) =
+        spawn_reader_with_chunks_in_session(pane, vec![chunk.to_vec()]).await;
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the main-screen chunk");
+
+    let req = mux_ipc::protocol::MuxMessage {
+        msg_type: mux_ipc::protocol::MessageType::RequestPaneSnapshot,
+        pane_id,
+        payload: Vec::new(),
+    };
+    let mut deferred = crate::mux::session::pane::DeferredOutputQueue::new();
+    crate::mux::ipc::handlers::handle_request_pane_snapshot(
+        &req,
+        session_id,
+        &mgr,
+        &requester_tx,
+        &mut deferred,
+        10_000,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = requester_rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(
+        received[0].kind,
+        crate::mux::session::pane::ChunkKind::Snapshot,
+        "the on-demand snapshot itself must arrive first"
+    );
+    let (payload, segments) = decode_snapshot_for_replay(&received[0].data);
+    let after = received[1..]
+        .iter()
+        .filter(|c| !c.data.is_empty())
+        .map(|c| c.data.clone())
+        .collect();
+    SnapshotFlow {
+        payload,
+        segments,
+        after,
+    }
+}
+
+/// Visibility-restore path (production `resume_pane_with_permit`): a hidden
+/// (`Detached { HiddenByVisibility }`) pane whose reader is paused at P2 on
+/// `chunk` is made visible again.
+#[cfg(feature = "gui")]
+fn main_screen_flow_via_visibility_restore(pane_id: PaneId, chunk: &[u8]) -> SnapshotFlow {
+    use crate::mux::session::pane::{AnyPermit, ResumeOutcome, resume_pane_with_permit};
+
+    let (new_tx, mut new_rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+        reason: DetachReason::HiddenByVisibility,
+        owner: Some(new_tx.clone()),
+    }));
+    let pane = MuxPane::new_test(pane_id, 80, 24, output_target);
+    let output_capture = pane.output_capture.clone();
+    let (arrived_rx, release_tx) = output_capture.p2.arm();
+    let handle = spawn_reader_leaving_target_untouched(&pane, vec![chunk.to_vec()]);
+    arrived_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader must reach P2 on the main-screen chunk");
+
+    let permit = new_tx.try_reserve().expect("a slot in the fresh channel");
+    let outcome = resume_pane_with_permit(&pane, &new_tx, AnyPermit::Borrowed(permit), 10_000);
+    assert!(
+        matches!(outcome, ResumeOutcome::Resumed),
+        "the hidden pane must resume"
+    );
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = new_rx.try_recv() {
+        received.push(c);
+    }
+    assert_eq!(
+        received[0].kind,
+        crate::mux::session::pane::ChunkKind::Snapshot,
+        "the visibility-restore snapshot itself must arrive first"
+    );
+    let (payload, segments) = decode_snapshot_for_replay(&received[0].data);
+    let after = received[1..]
+        .iter()
+        .filter(|c| !c.data.is_empty())
+        .map(|c| c.data.clone())
+        .collect();
+    SnapshotFlow {
+        payload,
+        segments,
+        after,
+    }
+}
+
+/// AC-5 (FR2, TS-2; regression test for review round 2 finding
+/// `dd56f3984c74cde1`): on the main screen, a suppressed chunk holding
+/// `ESC ]11;?` BEL is followed by the snapshot (the real assembly output,
+/// applied with `reset_and_replay_segments`, responses discarded) and then
+/// the replacement output, and the client answers exactly once. Checked
+/// without the reader (real snapshot assembly + the replacement builder),
+/// then through the reader for visible reattach, on-demand snapshot and
+/// visibility restore.
+#[cfg(feature = "gui")]
+#[tokio::test]
+async fn round2_dd56f398_main_screen_color_query_is_answered_once_after_the_snapshot() {
+    let query: &[u8] = b"\x1b]11;?\x07";
+
+    // Reference: the raw stream fed once is answered once.
+    let mut reference = themed_client(80, 24);
+    reference.process_pty_data_fully(query);
+    assert_eq!(
+        osc11_response_count(&reference.take_response()),
+        1,
+        "premise: the client answers the raw color query once"
+    );
+
+    // Without the reader: the ring and the shadow parser hold the chunk (a
+    // main-screen chunk is written toward the ring), the snapshot is the
+    // real assembly output, and the replacement is the real builder's.
+    let model_flow = {
+        let output_target: SharedOutputTarget = Arc::new(StdMutex::new(
+            PaneOutputTarget::Connected(mpsc::channel(1).0),
+        ));
+        let pane = MuxPane::new_test(70, 80, 24, output_target);
+        pane.scrollback.lock().unwrap().write(query);
+        pane.shadow_parser.lock().unwrap().process(query);
+        let (scrollback_data, scrollback_segments, ring_wrapped) = pane
+            .scrollback
+            .lock()
+            .unwrap()
+            .read_segments_with_wrap_state();
+        let (screen_data, alt_screen, current_dims) = {
+            let parser = pane.shadow_parser.lock().unwrap();
+            let screen = parser.screen();
+            let (rows, cols) = screen.size();
+            (
+                screen.contents_formatted(),
+                screen.alternate_screen(),
+                (cols, rows),
+            )
+        };
+        let (payload, segments) = crate::mux::snapshot_bytes::build_snapshot_bytes_for_ring(
+            &scrollback_data,
+            &scrollback_segments,
+            &screen_data,
+            alt_screen,
+            ring_wrapped,
+            current_dims,
+            10_000,
+        );
+        let replacement =
+            suppressed_output::build_suppressed_replacement(query, &[0..query.len()], &[], &[]);
+        SnapshotFlow {
+            payload,
+            segments: to_replay_segments(&segments),
+            after: if replacement.is_empty() {
+                Vec::new()
+            } else {
+                vec![replacement]
+            },
+        }
+    };
+
+    let flows = [
+        ("real assembly + builder", model_flow),
+        (
+            "visible reattach",
+            main_screen_flow_via_visible_reattach(71, query).await,
+        ),
+        (
+            "on-demand snapshot",
+            main_screen_flow_via_on_demand_snapshot(72, query).await,
+        ),
+        (
+            "visibility restore",
+            main_screen_flow_via_visibility_restore(73, query),
+        ),
+    ];
+    // Every flow is judged (no early abort) so a failure names all of them.
+    let mut failures = Vec::new();
+    for (label, flow) in &flows {
+        let responses = responses_after_snapshot(flow);
+        let answered = osc11_response_count(&responses);
+        if answered != 1 {
+            failures.push(format!(
+                "{label}: the main-screen color query was answered {answered} times \
+                 after the snapshot, expected exactly once"
+            ));
+        }
+        if flow.after != vec![query.to_vec()] {
+            failures.push(format!(
+                "{label}: expected only the replacement's copy of the query after \
+                 the snapshot, got {:?}",
+                flow.after
+                    .iter()
+                    .map(|c| String::from_utf8_lossy(c).into_owned())
+                    .collect::<Vec<_>>()
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+// ── mux-suppressed-output-round2-fixes task0002: DECISIONS.md contract
+//    (FR9, AC-7) ─────────────────────────────────────────────────────────
+
+/// The round-2 decision table, read at run time from the repository's
+/// `feature-docs/mux-suppressed-output-round2-fixes/DECISIONS.md` (found
+/// from `CARGO_MANIFEST_DIR`).
+fn round2_decisions_md() -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("feature-docs")
+        .join("mux-suppressed-output-round2-fixes")
+        .join("DECISIONS.md");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+}
+
+/// The lines of `doc` under the `## <heading>` heading, up to the next
+/// `## ` heading.
+fn round2_decisions_section<'a>(doc: &'a str, heading: &str) -> Vec<&'a str> {
+    let marker = format!("## {heading}");
+    doc.lines()
+        .skip_while(|l| l.trim_end() != marker)
+        .skip(1)
+        .take_while(|l| !l.starts_with("## "))
+        .collect()
+}
+
+/// The data rows of the table in `lines`: each row's trimmed cells, the
+/// header row and the `|---|` separator excluded.
+fn round2_decisions_table_rows(lines: &[&str]) -> Vec<Vec<String>> {
+    lines
+        .iter()
+        .filter(|l| l.starts_with('|') && !l.contains("---"))
+        .map(|l| {
+            l.trim()
+                .trim_matches('|')
+                .split('|')
+                .map(|c| c.trim().to_string())
+                .collect::<Vec<String>>()
+        })
+        .skip(1)
+        .collect()
+}
+
+/// IMPLEMENTATION.md "Regression test registry": `(stable_id, requirement,
+/// file, test name)` in the order FR1 through FR8.
+const ROUND2_REGISTRY: [(&str, &str, &str, &str); 8] = [
+    (
+        "ecc48041b65a5380",
+        "FR1",
+        "src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs",
+        "round2_ecc48041_designator_slot_esc_is_never_a_window_restart_position",
+    ),
+    (
+        "dd56f3984c74cde1",
+        "FR2",
+        "src-tauri/src/mux/ipc/pty_spawn/tests.rs",
+        "round2_dd56f398_main_screen_color_query_is_answered_once_after_the_snapshot",
+    ),
+    (
+        "ae48e7cd98084c19",
+        "FR3",
+        "src-tauri/src/mux/ipc/pty_spawn/tests.rs",
+        "round2_ae48e7cd_awaiting_designator_is_carried_across_feeds",
+    ),
+    (
+        "b600645f1fa94686",
+        "FR4",
+        "src-tauri/src/mux/ipc/pty_spawn/tests.rs",
+        "round2_b600645f_removed_screen_switch_closes_the_pending_string",
+    ),
+    (
+        "f8b600bcc0ed55da",
+        "FR5",
+        "src-tauri/src/mux/ipc/pty_spawn/tests.rs",
+        "round2_f8b600bc_pending_exclusion_keeps_alt_screen_queries",
+    ),
+    (
+        "03ccd5c7702db8db",
+        "FR6",
+        "src-tauri/src/mux/ipc/pty_spawn/tests.rs",
+        "round2_03ccd5c7_carried_over_viewer_launch_is_delivered_once",
+    ),
+    (
+        "a93dffe30438a693",
+        "FR7",
+        "src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs",
+        "round2_a93dffe3_leading_zero_viewer_launch_reaches_the_client_once",
+    ),
+    (
+        "3eccc254dd278b33",
+        "FR8",
+        "src-tauri/src/mux/ipc/pty_spawn/tests.rs",
+        "round2_3eccc254_visibility_restore_does_not_resend_a_tail_the_snapshot_carried",
+    ),
+];
+
+/// The tests whose expectation changed on purpose (SPEC AC-8): `(old name,
+/// new name, file)`.
+const ROUND2_BEHAVIOR_CHANGING_TESTS: [(&str, &str, &str); 3] = [
+    (
+        "osc_color_query_inside_ring_written_ranges_is_not_redelivered",
+        "osc_color_query_inside_ring_written_ranges_is_redelivered_once",
+        "src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs",
+    ),
+    (
+        "visible_reattach_redelivers_an_alt_screen_color_query_but_not_one_that_reached_the_ring",
+        "visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once",
+        "src-tauri/src/mux/ipc/pty_spawn/tests.rs",
+    ),
+    (
+        "on_demand_snapshot_redelivers_an_alt_screen_color_query_but_not_one_that_reached_the_ring",
+        "on_demand_snapshot_redelivers_alt_screen_and_main_screen_color_queries_once",
+        "src-tauri/src/mux/ipc/pty_spawn/tests.rs",
+    ),
+];
+
+/// AC-7 (FR9): the decision table has exactly eight rows, one per
+/// stable_id in the order FR1 through FR8, each with the requirement, the
+/// verdict "resolved", a rationale, and the registry test's file and name.
+#[test]
+fn round2_decisions_md_has_one_resolved_row_per_finding_with_its_registry_test() {
+    let doc = round2_decisions_md();
+    let section = round2_decisions_section(&doc, "Decision table");
+    let rows = round2_decisions_table_rows(&section);
+    assert_eq!(rows.len(), 8, "expected eight rows: {rows:?}");
+    for (row, (stable_id, requirement, file, test)) in rows.iter().zip(ROUND2_REGISTRY) {
+        assert_eq!(
+            row.len(),
+            5,
+            "row for {stable_id} must have 5 columns (stable_id, requirement, \
+             verdict, rationale, regression test): {row:?}"
+        );
+        assert_eq!(row[0], stable_id, "rows must follow the order FR1..FR8");
+        assert_eq!(row[1], requirement, "requirement of {stable_id}");
+        assert_eq!(row[2], "resolved", "verdict of {stable_id}");
+        assert!(
+            !row[3].is_empty(),
+            "row for {stable_id} must carry a rationale"
+        );
+        assert!(
+            row[4].contains(file) && row[4].contains(test),
+            "row for {stable_id} must cite the registry file {file:?} and test \
+             {test:?}: {}",
+            row[4]
+        );
+    }
+}
+
+/// AC-7 (FR9, SPEC AC-8): the tests whose expectation changed on purpose
+/// are listed with old name, new name and file, and the new names are
+/// defined in the source while the old ones are gone.
+#[test]
+fn round2_decisions_md_lists_the_behavior_changing_tests_and_they_exist_under_their_new_names() {
+    let doc = round2_decisions_md();
+    let section = round2_decisions_section(&doc, "Behavior-changing tests");
+    let rows = round2_decisions_table_rows(&section);
+    assert_eq!(rows.len(), 3, "expected three rows: {rows:?}");
+    for (row, (old, new, file)) in rows.iter().zip(ROUND2_BEHAVIOR_CHANGING_TESTS) {
+        assert!(
+            row.len() >= 4,
+            "row must have old name, new name, file and reason: {row:?}"
+        );
+        assert!(row[0].contains(old), "old name {old:?} in {row:?}");
+        assert!(row[1].contains(new), "new name {new:?} in {row:?}");
+        assert!(row[2].contains(file), "file {file:?} in {row:?}");
+        assert!(!row[3].is_empty(), "reason in {row:?}");
+        assert!(
+            registry_test_name_is_defined_in_crate_source(new),
+            "the renamed test {new:?} must be defined in the source"
+        );
+        assert!(
+            !registry_test_name_is_defined_in_crate_source(old),
+            "the old test name {old:?} must no longer be defined"
+        );
+    }
+}
+
+/// AC-7 (FR9): the document states that round2.yaml was not modified.
+#[test]
+fn round2_decisions_md_states_that_round2_yaml_was_not_modified() {
+    let doc = round2_decisions_md();
+    assert!(
+        doc.lines().any(|l| l
+            .contains("feature-docs/mux-suppressed-output-fixes/reviews/round2.yaml")
+            && l.contains("was not modified")),
+        "DECISIONS.md must state that round2.yaml was not modified"
+    );
+}
+
+/// AC-2, AC-5 (registry): the two registry tests this task owns are
+/// defined under exactly the pinned names.
+#[test]
+fn round2_task0002_registry_tests_are_defined_under_their_pinned_names() {
+    for (_, requirement, _, test) in ROUND2_REGISTRY {
+        if requirement == "FR1" || requirement == "FR2" {
+            assert!(
+                registry_test_name_is_defined_in_crate_source(test),
+                "{requirement}'s registry test {test:?} must be defined in the source"
+            );
+        }
+    }
 }
 
 /// AC-5 (FR10; TS-10), "Cut CSI": under the AC-3 conditions (Detached pane,
@@ -5943,6 +6527,1510 @@ async fn destination_takeover_through_collect_reattach_data_binds_suppression_to
     }
 }
 
+// ── mux-suppressed-output-round2-fixes task0003: write-filter parity,
+//    pending exclusion and carried-over completions (AC-1 through AC-7) ─────
+//
+// BEGIN round2 task0003 tests: entry points that exist before this feature
+// (the reader harness, the four-parameter builder, the existing `feed`).
+
+use super::suppressed_output::build_suppressed_replacement;
+
+type R2ChunkKind = crate::mux::session::pane::ChunkKind;
+
+const R2_COLS: u16 = 80;
+const R2_ROWS: u16 = 24;
+
+/// What the destination received from one scripted reader run in which the
+/// chosen reads were covered by a stand-in on-demand snapshot.
+struct SuppressedRun {
+    /// Every chunk the destination received, in delivery order (snapshots
+    /// and the EOF chunk included).
+    received: Vec<PtyOutputChunk>,
+    /// `(payload, segments)` of each stand-in snapshot, in delivery order.
+    snapshots: Vec<(Vec<u8>, Vec<(usize, u16, u16)>)>,
+    /// The scrollback ring's bytes once the run is over.
+    ring: Vec<u8>,
+}
+
+impl SuppressedRun {
+    /// The non-empty `PtyOutput` chunk bodies, in delivery order.
+    fn pty_output(&self) -> Vec<Vec<u8>> {
+        self.received
+            .iter()
+            .filter(|c| c.kind == R2ChunkKind::PtyOutput && !c.data.is_empty())
+            .map(|c| c.data.clone())
+            .collect()
+    }
+
+    /// Every delivered `PtyOutput` byte, concatenated in delivery order.
+    fn pty_output_bytes(&self) -> Vec<u8> {
+        self.pty_output().concat()
+    }
+}
+
+fn r2_count(haystack: &[u8], needle: &[u8]) -> usize {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return 0;
+    }
+    haystack
+        .windows(needle.len())
+        .filter(|w| *w == needle)
+        .count()
+}
+
+/// While the reader is paused at P2 (after read `i`'s capture step), build
+/// the same snapshot an on-demand request would and deliver it to `tx`,
+/// recording its boundary — so the reader's own forward decision for read
+/// `i` finds it covered and runs the replacement pipeline instead.
+fn r2_send_stand_in_snapshot(
+    pane: &MuxPane,
+    tx: &mpsc::Sender<PtyOutputChunk>,
+) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
+    let (
+        (scrollback_data, scrollback_segments, ring_wrapped, screen_data, alt_screen, current_dims),
+        boundary,
+    ) = pane.output_capture.captured_read(|| {
+        let (scrollback_data, scrollback_segments, ring_wrapped) = pane
+            .scrollback
+            .lock()
+            .unwrap()
+            .read_segments_with_wrap_state();
+        let (screen_data, alt_screen, current_dims) = {
+            let parser = pane.shadow_parser.lock().unwrap();
+            let screen = parser.screen();
+            let (rows, cols) = screen.size();
+            (
+                screen.contents_formatted(),
+                screen.alternate_screen(),
+                (cols, rows),
+            )
+        };
+        (
+            scrollback_data,
+            scrollback_segments,
+            ring_wrapped,
+            screen_data,
+            alt_screen,
+            current_dims,
+        )
+    });
+    let (payload, segments) = crate::mux::snapshot_bytes::build_snapshot_bytes_for_ring(
+        &scrollback_data,
+        &scrollback_segments,
+        &screen_data,
+        alt_screen,
+        ring_wrapped,
+        current_dims,
+        10_000,
+    );
+    let encoded = crate::mux::session::pane::encode_snapshot_segments(&payload, &segments);
+    tx.try_send(PtyOutputChunk::snapshot(pane.id, encoded))
+        .expect("the stand-in snapshot must fit in the capacity-16 channel");
+    pane.output_capture.record_boundary(tx, boundary);
+    (payload, segments)
+}
+
+/// Drive `chunks` through the production reader (one read per chunk, every
+/// chunk non-empty). The reads whose index is in `suppressed` are each
+/// covered by a stand-in snapshot taken while the reader is paused at P2 on
+/// that read, so the read is suppressed and its replacement output is built
+/// by the production pipeline.
+fn run_reader_with_suppressed_reads(chunks: &[Vec<u8>], suppressed: &[usize]) -> SuppressedRun {
+    let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(
+        mpsc::channel(16).0,
+    )));
+    let pane = MuxPane::new_test(90, R2_COLS, R2_ROWS, output_target);
+    let output_capture = pane.output_capture.clone();
+    let total = chunks.len();
+
+    let (mut arrived_rx, mut release_tx) = output_capture.p2.arm();
+    let (handle, tx, mut rx) = spawn_reader_with_chunks(&pane, chunks.to_vec());
+
+    let mut snapshots = Vec::new();
+    for i in 0..total {
+        arrived_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the reader must reach P2");
+        // Re-arm while the reader is still blocked inside the old hit(): P2
+        // disarms itself after one hit.
+        let next = (i + 1 < total).then(|| output_capture.p2.arm());
+        if suppressed.contains(&i) {
+            snapshots.push(r2_send_stand_in_snapshot(&pane, &tx));
+        }
+        release_tx.send(()).unwrap();
+        if let Some((a, r)) = next {
+            arrived_rx = a;
+            release_tx = r;
+        }
+    }
+    handle.join().unwrap();
+
+    let mut received = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        received.push(c);
+    }
+    let ring = pane.scrollback.lock().unwrap().read_all();
+    SuppressedRun {
+        received,
+        snapshots,
+        ring,
+    }
+}
+
+/// A GUI-shaped client model: the theme's color responder is wired when the
+/// `gui` feature is on.
+fn r2_client() -> term_core::terminal_core::TerminalCore {
+    use term_core::terminal_core::TerminalCore;
+    #[allow(unused_mut)]
+    let mut core = TerminalCore::new(R2_COLS, R2_ROWS, 10_000);
+    #[cfg(feature = "gui")]
+    {
+        use crate::callbacks::{NativeCallbackState, ThemeColorResponder};
+        use crate::render::theme::Theme;
+        use parking_lot::Mutex as PLMutex;
+        let theme = Arc::new(PLMutex::new(Theme::default()));
+        let state = Arc::new(PLMutex::new(NativeCallbackState::default()));
+        core.osc_responder = Some(Box::new(ThemeColorResponder::new(theme, state)));
+    }
+    core
+}
+
+/// The client as the GUI drives it: every snapshot through
+/// `reset_and_replay_segments` with its responses discarded, every
+/// `PtyOutput` chunk through `process_pty_data_fully`. Returns the client and
+/// every response it produced from `PtyOutput` bytes.
+fn r2_client_view(run: &SuppressedRun) -> (term_core::terminal_core::TerminalCore, Vec<u8>) {
+    let mut client = r2_client();
+    let mut responses = Vec::new();
+    let mut snapshots = run.snapshots.iter();
+    for chunk in &run.received {
+        match chunk.kind {
+            R2ChunkKind::Snapshot => {
+                let (payload, segments) = snapshots.next().expect("a recorded snapshot");
+                client.reset_and_replay_segments(payload, &to_replay_segments(segments));
+                let _discarded = client.take_response();
+            }
+            R2ChunkKind::PtyOutput => {
+                if !chunk.data.is_empty() {
+                    client.process_pty_data_fully(&chunk.data);
+                    responses.extend(client.take_response());
+                }
+            }
+        }
+    }
+    (client, responses)
+}
+
+/// A reference client fed the whole raw stream once, and the responses it
+/// produced.
+fn r2_reference(chunks: &[Vec<u8>]) -> (term_core::terminal_core::TerminalCore, Vec<u8>) {
+    let mut reference = r2_client();
+    reference.process_pty_data_fully(&chunks.concat());
+    let responses = reference.take_response();
+    (reference, responses)
+}
+
+/// AC-5 oracle, response part: the responses the [`r2_client_view`] client
+/// produced equal the reference's (or, when `exact` is false, agree on
+/// presence only: a cursor-position answer legitimately differs by where the
+/// cursor is when the query arrives).
+fn assert_r2_responses_match(run: &SuppressedRun, chunks: &[Vec<u8>], exact: bool, ctx: &str) {
+    let (_client, client_responses) = r2_client_view(run);
+    let (_reference, reference_responses) = r2_reference(chunks);
+    if exact {
+        assert_eq!(
+            client_responses, reference_responses,
+            "{ctx}: response bytes differ from the reference"
+        );
+    } else {
+        assert_eq!(
+            client_responses.is_empty(),
+            reference_responses.is_empty(),
+            "{ctx}: response presence differs from the reference"
+        );
+    }
+}
+
+/// AC-5 oracle, screen part: screen, cursor and displayed characters of the
+/// [`r2_client_view`] client equal the reference's. No continuation byte or
+/// U+FFFD may be displayed.
+fn assert_r2_screen_matches(run: &SuppressedRun, chunks: &[Vec<u8>], ctx: &str) {
+    let (client, _responses) = r2_client_view(run);
+    let (reference, _reference_responses) = r2_reference(chunks);
+    for r in 0..R2_ROWS {
+        let line = client.get_line_text(r);
+        assert!(
+            !line.contains('\u{FFFD}'),
+            "{ctx}: row {r} displays U+FFFD: {line:?}"
+        );
+        assert_eq!(
+            line.trim_end(),
+            reference.get_line_text(r).trim_end(),
+            "{ctx}: row {r} differs from the reference"
+        );
+    }
+    assert_eq!(
+        client.get_cursor_row(),
+        reference.get_cursor_row(),
+        "{ctx}: cursor row"
+    );
+    assert_eq!(
+        client.get_cursor_col(),
+        reference.get_cursor_col(),
+        "{ctx}: cursor col"
+    );
+}
+
+/// AC-5 oracle: responses and screen both.
+fn assert_r2_client_matches_reference(
+    run: &SuppressedRun,
+    chunks: &[Vec<u8>],
+    exact_responses: bool,
+    ctx: &str,
+) {
+    assert_r2_screen_matches(run, chunks, ctx);
+    assert_r2_responses_match(run, chunks, exact_responses, ctx);
+}
+
+/// Whether the stand-in snapshot of `run` (taken after the first `l` bytes of
+/// `stream`) reproduces the screen and cursor a reference client shows for
+/// that prefix. When it does not, the difference comes from a part of the
+/// pipeline this task leaves alone, not from the write filter or the
+/// replacement assembly: the ring stays the concatenation of the main-buffer
+/// spans (IMPLEMENTATION.md D4, so a string a removed switch closed is open
+/// again in the ring's replay), the client model has no separate alternate
+/// buffer, and the snapshot trailing-construct rule belongs to task0004.
+/// The screen comparison of everything that follows is not meaningful then.
+fn r2_snapshot_reproduces_prefix(run: &SuppressedRun, stream: &[u8], l: usize) -> bool {
+    let (payload, segments) = &run.snapshots[0];
+    let mut client = r2_client();
+    client.reset_and_replay_segments(payload, &to_replay_segments(segments));
+    let _discarded = client.take_response();
+    let mut reference = r2_client();
+    reference.process_pty_data_fully(&stream[..l]);
+    let _discarded = reference.take_response();
+    client.get_cursor_row() == reference.get_cursor_row()
+        && client.get_cursor_col() == reference.get_cursor_col()
+        && (0..R2_ROWS)
+            .all(|r| client.get_line_text(r).trim_end() == reference.get_line_text(r).trim_end())
+}
+
+/// Split `stream` into three non-empty reads at every pair of `positions`
+/// (each strictly between 0 and `stream.len()`), suppress the middle read,
+/// and compare the client with the reference:
+/// - the responses;
+/// - the screen and cursor, when the stand-in snapshot itself reproduces the
+///   reference's screen for its prefix (see [`r2_snapshot_reproduces_prefix`]).
+///
+/// Every run is then handed to `check`.
+fn r2_sweep_three_reads(
+    name: &str,
+    stream: &[u8],
+    positions: &[usize],
+    exact_responses: bool,
+    check: impl Fn(&SuppressedRun, &[Vec<u8>], &str),
+) {
+    let mut runs = 0usize;
+    let mut screens = 0usize;
+    for (a, &k) in positions.iter().enumerate() {
+        for &l in &positions[a + 1..] {
+            assert!(0 < k && k < l && l < stream.len());
+            let chunks = vec![
+                stream[..k].to_vec(),
+                stream[k..l].to_vec(),
+                stream[l..].to_vec(),
+            ];
+            let ctx = format!("{name}: split at {k} and {l}");
+            let run = run_reader_with_suppressed_reads(&chunks, &[1]);
+            assert_r2_responses_match(&run, &chunks, exact_responses, &ctx);
+            if r2_snapshot_reproduces_prefix(&run, stream, l) {
+                assert_r2_screen_matches(&run, &chunks, &ctx);
+                screens += 1;
+            }
+            check(&run, &chunks, &ctx);
+            runs += 1;
+        }
+    }
+    assert!(runs > 0, "{name}: the sweep must run at least once");
+    assert!(
+        screens > 0,
+        "{name}: at least one run must compare the screen"
+    );
+}
+
+/// A viewer launch longer than the 256-byte retained window: its start is
+/// out of the window once the run before the terminator exceeds it.
+fn r2_long_launch() -> Vec<u8> {
+    let mut v = b"\x1b]777;emterm;markdown;chunk;id=r2;seq=0;data=".to_vec();
+    v.extend(std::iter::repeat_n(b'A', 300));
+    v.push(0x07);
+    v
+}
+
+/// A short viewer launch (its start stays inside the retained window).
+fn r2_short_launch() -> Vec<u8> {
+    b"\x1b]777;emterm;markdown;begin;id=short\x07".to_vec()
+}
+
+/// A color query with a long payload: `?` first (the queried item), then a
+/// 300-byte second item, so the start is out of the retained window.
+fn r2_long_color_query() -> Vec<u8> {
+    let mut v = b"\x1b]11;?;".to_vec();
+    v.extend(std::iter::repeat_n(b'x', 300));
+    v.push(0x07);
+    v
+}
+
+/// The offsets strictly inside a 47/1047/1049 `h`/`l` sequence of `stream`
+/// (a read boundary there splits the sequence itself, which the reader
+/// handles on its pre-existing fallback path).
+fn r2_offsets_inside_screen_switches(stream: &[u8]) -> Vec<usize> {
+    let patterns: [&[u8]; 6] = [
+        b"\x1b[?1049h",
+        b"\x1b[?1049l",
+        b"\x1b[?1047h",
+        b"\x1b[?1047l",
+        b"\x1b[?47h",
+        b"\x1b[?47l",
+    ];
+    let mut inside = Vec::new();
+    for pat in patterns {
+        for pos in 0..stream.len().saturating_sub(pat.len() - 1) {
+            if stream[pos..].starts_with(pat) {
+                inside.extend(pos + 1..pos + pat.len());
+            }
+        }
+    }
+    inside
+}
+
+/// AC-1 (FR3, TM-1, registry): `ESC ( ESC ]11;?tail` — the `ESC` right after
+/// `ESC (` is the charset designator, never an OSC introducer. Split right
+/// after `ESC (`, the filter must emit the same bytes and leave the same
+/// (empty) pending as when fed whole; through the reader (second read
+/// suppressed, then the replacement output, then BEL) no color-query
+/// response may be produced. The same body fails on the pre-fix code, where
+/// the second feed's designator `ESC` opens a held OSC that the
+/// replacement re-sends and the BEL then completes.
+#[test]
+fn round2_ae48e7cd_awaiting_designator_is_carried_across_feeds() {
+    let input: &[u8] = b"\x1b(\x1b]11;?tail";
+
+    let mut whole = ScrollbackWriteFilter::new();
+    let (_dims, whole_out) = whole.feed(input, (80, 24));
+    let mut split = ScrollbackWriteFilter::new();
+    let (_dims, out1) = split.feed(&input[..2], (80, 24));
+    let (_dims, out2) = split.feed(&input[2..], (80, 24));
+    let mut combined = out1;
+    combined.extend_from_slice(&out2);
+    assert_eq!(
+        combined, whole_out,
+        "fed in two calls split right after `ESC (`, the emitted bytes must \
+         equal the single-call result"
+    );
+    assert_eq!(split.pending(), whole.pending());
+    assert!(
+        split.pending().is_empty(),
+        "the designator-consumed ESC opens nothing to hold"
+    );
+
+    // `?tail` is not a query item, so the second form (a bare `?`) is the one
+    // whose mis-parse a client would answer.
+    for osc in [&b"\x1b]11;?tail"[..], &b"\x1b]11;?"[..]] {
+        let chunks = vec![b"\x1b(".to_vec(), osc.to_vec(), b"\x07".to_vec()];
+        let run = run_reader_with_suppressed_reads(&chunks, &[1]);
+        assert_eq!(
+            run.pty_output(),
+            vec![chunks[0].clone(), chunks[2].clone()],
+            "osc {:?}: the suppressed read's replacement must be empty \
+             (nothing to re-send from the designator-consumed ESC), so only \
+             the two forwarded reads reach the client as PtyOutput",
+            String::from_utf8_lossy(osc)
+        );
+        assert_r2_client_matches_reference(&run, &chunks, true, "AC-1 reader level");
+    }
+}
+
+/// AC-1 companion (FR3, split invariance): for inputs mixing designator
+/// chains, strings, lone ESCs and UTF-8, feeding the input split at EVERY
+/// position — and one byte at a time — emits the same concatenated bytes and
+/// leaves the same pending as a single feed.
+#[test]
+fn write_filter_split_invariance_holds_for_designator_chains_strings_lone_esc_and_utf8() {
+    let corpus: Vec<Vec<u8>> = vec![
+        b"\x1b(\x1b]11;?tail".to_vec(),
+        b"\x1b(\x1b(\x1b]0;x\x07z".to_vec(),
+        b"\x1b)\x1b]11;?\x1b\\rest".to_vec(),
+        b"\x1b(\x1b\x1b]0;t\x07".to_vec(),
+        b"a\x1b]0;s\x1b(\x1bXb".to_vec(),
+        b"\x1b(\x1b(\x1b(\x1b(\x1b".to_vec(),
+        b"plain\x1b".to_vec(),
+        b"x\x1b\x1b(".to_vec(),
+        b"\x1b(".to_vec(),
+        "日本語\x1b(0\x1b]0;タイトル\x07終".as_bytes().to_vec(),
+        "日\x1b(\x1b]0;本\x1b\\語\x1b".as_bytes().to_vec(),
+        b"\x1b(0\x1b]777;emterm;markdown;chunk;x=1".to_vec(),
+        b"\x1b[31mred\x1b(B\x1b]11;?\x07\x1b(".to_vec(),
+    ];
+
+    for input in &corpus {
+        let mut whole = ScrollbackWriteFilter::new();
+        let (_dims, whole_out) = whole.feed(input, (80, 24));
+        let whole_pending = whole.pending().to_vec();
+
+        for split in 0..=input.len() {
+            let mut filter = ScrollbackWriteFilter::new();
+            let (_dims, out1) = filter.feed(&input[..split], (80, 24));
+            let (_dims, out2) = filter.feed(&input[split..], (80, 24));
+            let mut combined = out1;
+            combined.extend_from_slice(&out2);
+            assert_eq!(
+                combined, whole_out,
+                "split at {split} for {input:?}: emitted bytes differ from a single feed"
+            );
+            assert_eq!(
+                filter.pending(),
+                whole_pending.as_slice(),
+                "split at {split} for {input:?}: pending differs from a single feed"
+            );
+        }
+
+        let mut bytewise = ScrollbackWriteFilter::new();
+        let mut combined = Vec::new();
+        for b in input {
+            let (_dims, out) = bytewise.feed(std::slice::from_ref(b), (80, 24));
+            combined.extend_from_slice(&out);
+        }
+        assert_eq!(
+            combined, whole_out,
+            "byte-at-a-time feed of {input:?} must emit the single-feed bytes"
+        );
+        assert_eq!(bytewise.pending(), whole_pending.as_slice());
+    }
+}
+
+/// AC-2 (FR4, TM-1, registry): on the main screen a suppressed chunk holds
+/// `ESC ]11;?`, a removed screen switch pair and one space. The client's
+/// parser closed the OSC at the switch's `ESC`, so nothing may be held for
+/// it: the replacement is empty and a BEL sent afterwards produces no
+/// response. The 1047 and 1049 forms behave the same. The same body fails
+/// on the pre-fix code, where the filter joins the two ring-written pieces
+/// into one held OSC and the replacement re-sends it.
+#[test]
+fn round2_b600645f_removed_screen_switch_closes_the_pending_string() {
+    for (enter, leave) in [
+        (&b"\x1b[?47h"[..], &b"\x1b[?47l"[..]),
+        (&b"\x1b[?1047h"[..], &b"\x1b[?1047l"[..]),
+        (&b"\x1b[?1049h"[..], &b"\x1b[?1049l"[..]),
+    ] {
+        let mut first = b"\x1b]11;?".to_vec();
+        first.extend_from_slice(enter);
+        first.extend_from_slice(leave);
+        first.push(b' ');
+        let chunks = vec![first, b"\x07".to_vec()];
+        let run = run_reader_with_suppressed_reads(&chunks, &[0]);
+        assert_eq!(
+            run.pty_output(),
+            vec![b"\x07".to_vec()],
+            "form {:?}: no replacement may be sent for the closed OSC; only \
+             the BEL read reaches the client as PtyOutput",
+            String::from_utf8_lossy(enter)
+        );
+        // Only the responses are compared with the reference: the ring is
+        // the concatenation of the main-buffer spans (D4), so its replay
+        // swallows the space into the still-open OSC, a display difference
+        // this task deliberately leaves alone.
+        assert_r2_responses_match(&run, &chunks, true, "AC-2 reader level");
+    }
+}
+
+/// AC-3 (FR5, registry): the builder is given ring-written ranges whose
+/// pending suffix spans two ranges around an alternate-screen range holding
+/// `ESC [6n` (the shape the pre-fix filter produced). The query is
+/// delivered once, and nothing inside the excluded pieces is reported. The
+/// same body fails on the pre-fix code, where the single cut position drops
+/// the query.
+#[test]
+fn round2_f8b600bc_pending_exclusion_keeps_alt_screen_queries() {
+    let mut chunk = b"\x1b]2;x".to_vec(); // 0..5, main
+    chunk.extend_from_slice(b"\x1b[?1049h"); // 5..13, removed
+    chunk.extend_from_slice(b"\x1b[6n"); // 13..17, alternate screen
+    chunk.extend_from_slice(b"\x1b[?1049l"); // 17..25, removed
+    chunk.push(b'y'); // 25..26, main
+    let ranges = vec![0..5, 25..26];
+    let pending = b"\x1b]2;xy".to_vec();
+
+    let result = build_suppressed_replacement(&chunk, &ranges, &pending, &[]);
+    let mut expected = b"\x1b[6n".to_vec();
+    expected.extend_from_slice(&pending);
+    assert_eq!(
+        result, expected,
+        "the alternate-range query is delivered once, then the pending run \
+         as the tail"
+    );
+    assert_eq!(r2_count(&result, b"\x1b[6n"), 1);
+}
+
+/// AC-4 (FR6, TM-1, registry): an OSC 777 emterm markdown launch longer than
+/// 256 bytes is split across reads and the completing read is suppressed.
+/// The launch is delivered exactly once, after the snapshot. The same body
+/// fails on the pre-fix code, where the start is out of the retained window
+/// and the write filter's completion is never reported (zero deliveries).
+#[test]
+fn round2_03ccd5c7_carried_over_viewer_launch_is_delivered_once() {
+    let launch = r2_long_launch();
+    let cut = launch.len() - 10;
+    let mut read0 = b"pre".to_vec();
+    read0.extend_from_slice(&launch[..cut]);
+    let mut read1 = launch[cut..].to_vec();
+    read1.extend_from_slice(b"post");
+    let chunks = vec![read0.clone(), read1];
+
+    let run = run_reader_with_suppressed_reads(&chunks, &[1]);
+    assert_eq!(
+        r2_count(&run.pty_output_bytes(), &launch),
+        1,
+        "the launch must be delivered exactly once"
+    );
+    let kinds: Vec<R2ChunkKind> = run.received.iter().map(|c| c.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            R2ChunkKind::PtyOutput,
+            R2ChunkKind::Snapshot,
+            R2ChunkKind::PtyOutput,
+            R2ChunkKind::PtyOutput
+        ],
+        "read 0 raw, the snapshot, the launch as the replacement, then EOF"
+    );
+    assert_eq!(run.received[2].data, launch);
+    assert!(run.received[3].data.is_empty(), "EOF chunk");
+    assert_eq!(
+        run.ring, b"prepost",
+        "the launch never reaches the ring (stripped when it completed)"
+    );
+    assert_r2_client_matches_reference(&run, &chunks, true, "AC-4 registry");
+}
+
+/// AC-3 (FR5; TS-5), reader level (a): a main-screen chunk `ESC ]2;x`,
+/// `ESC [?1049h`, `ESC [6n`, `ESC [?1049l`, `y`. The OSC is closed by the
+/// removed switch, so pending is empty: CSI 6n is delivered once and no
+/// tail is sent.
+#[test]
+fn removed_switch_between_main_ranges_delivers_the_alt_query_once_and_sends_no_tail() {
+    let chunk = b"\x1b]2;x\x1b[?1049h\x1b[6n\x1b[?1049ly".to_vec();
+    let chunks = vec![chunk];
+    let run = run_reader_with_suppressed_reads(&chunks, &[0]);
+    assert_eq!(
+        run.pty_output(),
+        vec![b"\x1b[6n".to_vec()],
+        "CSI 6n once and no tail"
+    );
+    assert_eq!(run.ring, b"\x1b]2;xy");
+    // Responses only: the ring replay (D4: concatenated spans) keeps the OSC
+    // open over `y`, a display difference this task leaves alone.
+    assert_r2_responses_match(&run, &chunks, false, "AC-3 (a)");
+}
+
+/// AC-3 (FR5; TS-5), reader level (b): a genuinely incomplete sequence
+/// remains in the last main range. Only it becomes the tail; the preceding
+/// alternate-range query and launch are delivered.
+#[test]
+fn incomplete_sequence_in_the_last_main_range_is_the_only_tail() {
+    let launch = r2_short_launch();
+    let mut chunk = b"abc\x1b[?1049h\x1b[6n".to_vec();
+    chunk.extend_from_slice(&launch);
+    chunk.extend_from_slice(b"\x1b[?1049ldef");
+    let partial = b"\x1b]9999;emterm-md;partial".to_vec();
+    chunk.extend_from_slice(&partial);
+    let chunks = vec![chunk];
+    let run = run_reader_with_suppressed_reads(&chunks, &[0]);
+
+    let mut expected = b"\x1b[6n".to_vec();
+    expected.extend_from_slice(&launch);
+    expected.extend_from_slice(&partial);
+    assert_eq!(
+        run.pty_output(),
+        vec![expected],
+        "the alternate-range query and launch, then only the incomplete \
+         sequence as the tail"
+    );
+    assert_r2_client_matches_reference(&run, &chunks, false, "AC-3 (b)");
+}
+
+/// AC-4 (FR6; dedup, TM-1): a short launch whose start is inside the
+/// retained window, split across reads the same way, is found both by the
+/// scan (through the window) and by the write filter's carried-over report —
+/// and is delivered exactly once.
+#[test]
+fn short_launch_started_in_the_window_is_delivered_once_not_twice() {
+    let launch = r2_short_launch();
+    let mut read0 = b"pre".to_vec();
+    read0.extend_from_slice(&launch[..12]);
+    let mut read1 = launch[12..].to_vec();
+    read1.extend_from_slice(b"post");
+    let chunks = vec![read0, read1];
+    let run = run_reader_with_suppressed_reads(&chunks, &[1]);
+
+    assert_eq!(r2_count(&run.pty_output_bytes(), &launch), 1);
+    assert_eq!(run.received[2].data, launch);
+    assert_eq!(run.received.len(), 4);
+    assert_r2_client_matches_reference(&run, &chunks, true, "short launch dedup");
+}
+
+/// AC-4 (FR6): two launches with identical content but different end
+/// positions are two sequences — the carried one and the one found by the
+/// scan are both delivered.
+#[test]
+fn two_identical_content_launches_are_delivered_twice() {
+    let launch = r2_long_launch();
+    let cut = launch.len() - 10;
+    let mut read0 = b"pre".to_vec();
+    read0.extend_from_slice(&launch[..cut]);
+    let mut read1 = launch[cut..].to_vec();
+    read1.extend_from_slice(&launch);
+    read1.extend_from_slice(b"post");
+    let chunks = vec![read0, read1];
+    let run = run_reader_with_suppressed_reads(&chunks, &[1]);
+
+    let mut both = launch.clone();
+    both.extend_from_slice(&launch);
+    assert_eq!(
+        run.received[2].data, both,
+        "the carried launch, then the identical launch found in the chunk"
+    );
+    assert_eq!(r2_count(&run.pty_output_bytes(), &launch), 2);
+    assert_r2_client_matches_reference(&run, &chunks, true, "two identical launches");
+}
+
+/// AC-4 (FR6): the carried launch, an alternate-range query and an
+/// alternate-range launch are delivered in raw-stream order.
+#[test]
+fn carried_launch_and_alternate_range_items_follow_the_raw_stream_order() {
+    let launch = r2_long_launch();
+    let short = r2_short_launch();
+    let cut = launch.len() - 10;
+    let mut read0 = b"pre".to_vec();
+    read0.extend_from_slice(&launch[..cut]);
+    let mut read1 = launch[cut..].to_vec();
+    read1.extend_from_slice(b"\x1b[?1049h\x1b[6n");
+    read1.extend_from_slice(&short);
+    read1.extend_from_slice(b"\x1b[?1049lpost");
+    let chunks = vec![read0, read1];
+    let run = run_reader_with_suppressed_reads(&chunks, &[1]);
+
+    let mut expected = launch.clone();
+    expected.extend_from_slice(b"\x1b[6n");
+    expected.extend_from_slice(&short);
+    assert_eq!(run.received[2].data, expected);
+    assert_eq!(run.received.len(), 4);
+    assert_r2_client_matches_reference(&run, &chunks, false, "raw-stream order");
+}
+
+/// AC-4 (FR6): a color query whose start is out of the retained window and
+/// that completes in the suppressed chunk is answered once.
+#[test]
+fn carried_color_query_completing_in_the_suppressed_chunk_is_answered_once() {
+    let query = r2_long_color_query();
+    let cut = query.len() - 10;
+    let mut read0 = b"pre".to_vec();
+    read0.extend_from_slice(&query[..cut]);
+    let mut read1 = query[cut..].to_vec();
+    read1.extend_from_slice(b"post");
+    let chunks = vec![read0, read1];
+    let run = run_reader_with_suppressed_reads(&chunks, &[1]);
+
+    assert_eq!(run.received[2].data, query);
+    assert_eq!(r2_count(&run.pty_output_bytes(), &query), 1);
+    assert_r2_client_matches_reference(&run, &chunks, true, "carried color query");
+    #[cfg(feature = "gui")]
+    {
+        let (_client, responses) = r2_client_view(&run);
+        assert!(
+            !responses.is_empty(),
+            "the theme must have answered the carried query"
+        );
+    }
+}
+
+/// AC-4 (FR6): a carried launch that completes in the main range of a chunk
+/// which ends on the alternate screen is delivered once (the pending run is
+/// not the tail there).
+#[test]
+fn carried_launch_completing_before_a_chunk_ending_on_the_alt_screen_is_delivered_once() {
+    let launch = r2_long_launch();
+    let cut = launch.len() - 10;
+    let mut read0 = b"pre".to_vec();
+    read0.extend_from_slice(&launch[..cut]);
+    let mut read1 = launch[cut..].to_vec();
+    read1.extend_from_slice(b"post\x1b[?1049halt");
+    let chunks = vec![read0, read1];
+    let run = run_reader_with_suppressed_reads(&chunks, &[1]);
+
+    assert_eq!(r2_count(&run.pty_output_bytes(), &launch), 1);
+    assert_eq!(run.received[2].data, launch);
+    assert_eq!(run.received.len(), 4, "read 0, snapshot, launch, EOF");
+    // The snapshot is an alternate-screen one; the client model has no
+    // separate alternate buffer, so only the responses are compared.
+    assert_r2_responses_match(&run, &chunks, true, "launch before alt end");
+}
+
+/// AC-4 (FR6): consecutive suppressed chunks deliver once after each
+/// snapshot, each with its own report (a report never outlives its read).
+#[test]
+fn consecutive_suppressed_chunks_deliver_a_carried_launch_once_after_each_snapshot() {
+    let launch = r2_long_launch();
+    let cut = launch.len() - 10;
+    let mut p1 = b"one".to_vec();
+    p1.extend_from_slice(&launch[..cut]);
+    let mut c1 = launch[cut..].to_vec();
+    c1.extend_from_slice(b"-1-");
+    let mut p2 = b"two".to_vec();
+    p2.extend_from_slice(&launch[..cut]);
+    let mut c2 = launch[cut..].to_vec();
+    c2.extend_from_slice(b"-2-");
+    let chunks = vec![p1, c1, p2, c2];
+    let run = run_reader_with_suppressed_reads(&chunks, &[1, 3]);
+
+    let kinds: Vec<R2ChunkKind> = run.received.iter().map(|c| c.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            R2ChunkKind::PtyOutput, // p1 raw
+            R2ChunkKind::Snapshot,
+            R2ChunkKind::PtyOutput, // launch (replacement of c1)
+            R2ChunkKind::PtyOutput, // p2 raw
+            R2ChunkKind::Snapshot,
+            R2ChunkKind::PtyOutput, // launch (replacement of c2)
+            R2ChunkKind::PtyOutput, // EOF
+        ]
+    );
+    assert_eq!(run.received[2].data, launch);
+    assert_eq!(run.received[5].data, launch);
+    assert_eq!(r2_count(&run.pty_output_bytes(), &launch), 2);
+    assert_r2_client_matches_reference(&run, &chunks, true, "consecutive suppressed chunks");
+}
+
+/// AC-5 (FR3; TS-3), varied split positions: `pre ESC ( ESC ]11;? BEL post`
+/// — the designator-consumed ESC never opens an OSC (so the BEL is a plain
+/// bell and nothing is answered), wherever the reads split and whichever
+/// read the snapshot suppresses.
+#[test]
+fn fr3_designator_stream_matches_the_reference_over_split_positions() {
+    let stream: &[u8] = b"pre\x1b(\x1b]11;?\x07post";
+    let positions: Vec<usize> = (1..stream.len()).collect();
+    r2_sweep_three_reads("FR3", stream, &positions, true, |run, _chunks, ctx| {
+        assert_eq!(run.ring, stream, "{ctx}: the ring holds the raw stream");
+    });
+}
+
+/// AC-5 (FR4; TS-4), varied split positions: an OSC closed by a removed
+/// screen switch, alternate-screen content, the switch back and a BEL that
+/// must stay a plain bell (nothing is answered). Splits inside a switch
+/// sequence itself take the pre-existing fallback path and are not part of
+/// this sweep.
+#[test]
+fn fr4_removed_switch_stream_matches_the_reference_over_split_positions() {
+    let stream: &[u8] = b"A\x1b]11;?\x1b[?1049halt\x1b[?1049l\x07C";
+    let inside = r2_offsets_inside_screen_switches(stream);
+    let positions: Vec<usize> = (1..stream.len()).filter(|p| !inside.contains(p)).collect();
+    r2_sweep_three_reads("FR4", stream, &positions, true, |run, _chunks, ctx| {
+        assert_eq!(
+            run.ring, b"A\x1b]11;?\x07C",
+            "{ctx}: the ring is the concatenation of the main-buffer spans"
+        );
+    });
+}
+
+/// AC-5 (FR5; TS-5), varied split positions: the alternate-range query sits
+/// between two main ranges around a removed switch pair.
+#[test]
+fn fr5_alt_range_query_stream_matches_the_reference_over_split_positions() {
+    let stream: &[u8] = b"\x1b]2;x\x1b[?1049h\x1b[6n\x1b[?1049lyz";
+    let inside = r2_offsets_inside_screen_switches(stream);
+    let positions: Vec<usize> = (1..stream.len()).filter(|p| !inside.contains(p)).collect();
+    r2_sweep_three_reads("FR5", stream, &positions, false, |_run, _chunks, _ctx| {});
+}
+
+/// AC-5 (FR6; TS-6), varied split positions: a launch longer than the
+/// retained window, split anywhere. Whichever read is suppressed, the
+/// launch reaches the client exactly once.
+#[test]
+fn fr6_long_launch_stream_matches_the_reference_over_split_positions() {
+    let launch = r2_long_launch();
+    let mut stream = b"pre".to_vec();
+    stream.extend_from_slice(&launch);
+    stream.extend_from_slice(b"post");
+    let last = stream.len();
+    let mut positions: Vec<usize> = vec![1, 3, 4, 5, 20, 46, 47, 48, 60, 120, 200, 300];
+    positions.extend([last - 8, last - 6, last - 5, last - 4, last - 2, last - 1]);
+    positions.sort_unstable();
+    positions.dedup();
+    r2_sweep_three_reads("FR6", &stream, &positions, true, |run, _chunks, ctx| {
+        assert_eq!(
+            r2_count(&run.pty_output_bytes(), &launch),
+            1,
+            "{ctx}: the launch must reach the client exactly once"
+        );
+        assert_eq!(
+            run.ring, b"prepost",
+            "{ctx}: the launch is stripped from the ring"
+        );
+    });
+}
+
+/// AC-5 (FR6; TS-6), varied split positions, color-query counterpart: the
+/// long-payload color query is answered exactly as the reference answers it.
+#[test]
+fn fr6_long_color_query_stream_matches_the_reference_over_split_positions() {
+    let query = r2_long_color_query();
+    let mut stream = b"pre".to_vec();
+    stream.extend_from_slice(&query);
+    stream.extend_from_slice(b"post");
+    let last = stream.len();
+    let mut positions: Vec<usize> = vec![1, 3, 4, 5, 9, 12, 100, 250, 300];
+    positions.extend([last - 8, last - 6, last - 5, last - 2, last - 1]);
+    positions.sort_unstable();
+    positions.dedup();
+    r2_sweep_three_reads(
+        "FR6 color query",
+        &stream,
+        &positions,
+        true,
+        |_run, _chunks, _ctx| {},
+    );
+}
+
+/// AC-6 (TM-1, TM-2, NFR3): long designator chains scan in linear time, stay
+/// split-invariant and never panic.
+#[test]
+fn long_designator_chains_are_linear_and_split_invariant() {
+    // `ESC ( ESC` repeated: every ESC after the first pair is a designator.
+    let chain: Vec<u8> = std::iter::repeat_n(*b"\x1b(\x1b", 20_000)
+        .flatten()
+        .collect();
+    let start = std::time::Instant::now();
+    let mut whole = ScrollbackWriteFilter::new();
+    let (_dims, whole_out) = whole.feed(&chain, (80, 24));
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "a long designator chain must scan in linear time; took {:?}",
+        start.elapsed()
+    );
+    assert!(whole.pending().is_empty());
+
+    for split in [1usize, 2, 3, 4, 5, 30_001, 59_999] {
+        let mut filter = ScrollbackWriteFilter::new();
+        let (_dims, out1) = filter.feed(&chain[..split], (80, 24));
+        let (_dims, out2) = filter.feed(&chain[split..], (80, 24));
+        let mut combined = out1;
+        combined.extend_from_slice(&out2);
+        assert_eq!(combined, whole_out, "split at {split}");
+        assert_eq!(filter.pending(), whole.pending(), "split at {split}");
+    }
+}
+
+/// AC-6 (TM-1, TM-2, NFR3): a 60 KB chunk of repeated switch sequences with
+/// incomplete introducers between them finishes within the budget, never
+/// panics, and never turns an empty replacement into an empty chunk.
+#[test]
+fn repeated_switch_sequences_with_incomplete_introducers_finish_within_budget() {
+    let unit: Vec<u8> = [
+        &b"\x1b]"[..],
+        &b"\x1b[?1049h"[..],
+        &b"\x1b]"[..],
+        &b"\x1b[?1049l"[..],
+    ]
+    .concat();
+    let mut chunk = Vec::new();
+    while chunk.len() + unit.len() <= 60_000 {
+        chunk.extend_from_slice(&unit);
+    }
+    let chunks = vec![chunk.clone(), b"tail".to_vec()];
+    let start = std::time::Instant::now();
+    let run = run_reader_with_suppressed_reads(&chunks, &[0]);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "the adversarial chunk must finish within the budget; took {:?}",
+        start.elapsed()
+    );
+    for out in run.pty_output() {
+        assert!(
+            out.len() <= chunk.len() + 4,
+            "no output may exceed its input"
+        );
+    }
+    let empty_chunks = run
+        .received
+        .iter()
+        .filter(|c| c.kind == R2ChunkKind::PtyOutput && c.data.is_empty())
+        .count();
+    assert_eq!(
+        empty_chunks, 1,
+        "an empty replacement is never sent: the EOF chunk is the only empty PtyOutput"
+    );
+}
+
+/// AC-2 (FR4): the reader runs the cut-aware feed also when the fed range is
+/// empty but a cut exists — a chunk that starts with a switch to the
+/// alternate screen closes (and so releases to the ring) what the filter
+/// was holding.
+#[test]
+fn reader_closes_pending_at_a_chunk_that_starts_with_a_switch_to_the_alt_screen() {
+    let chunks = vec![b"\x1b]11;?".to_vec(), b"\x1b[?1049h alt".to_vec()];
+    let run = run_reader_with_suppressed_reads(&chunks, &[]);
+    assert_eq!(
+        run.ring, b"\x1b]11;?",
+        "the OSC the client's switch ESC closed is released to the ring"
+    );
+}
+
+/// AC-2 (FR4): the fallback path (the scan disagrees with the shadow parser
+/// about the alternate screen) derives no cuts and keeps its behavior: the
+/// whole-chunk gate still drops a chunk whose switch straddled the read
+/// boundary.
+#[test]
+fn fallback_path_derives_no_cuts_and_keeps_the_whole_chunk_gate() {
+    let chunks = vec![b"a\x1b[?10".to_vec(), b"49hxyz".to_vec()];
+    let run = run_reader_with_suppressed_reads(&chunks, &[]);
+    assert_eq!(
+        run.ring, b"a\x1b[?10",
+        "the straddling read is gated out of the ring as before"
+    );
+}
+
+// END round2 task0003 tests: pre-existing entry points.
+
+// BEGIN round2 task0003 tests: new entry points (cut-aware feed, awaiting
+// flag, carried-over report, cut and coordinate derivation).
+
+/// Shorthand for the cut-aware feed under fixed dims.
+fn r2_feed(filter: &mut ScrollbackWriteFilter, fed: &[u8], cuts: &[usize]) -> FeedOutcome {
+    filter.feed_with_cuts(fed, (80, 24), cuts)
+}
+
+/// The existing feed entry means "no cut in this read": same dims, same
+/// bytes, same pending, same flag.
+#[test]
+fn feed_with_no_cuts_is_the_existing_feed() {
+    let corpus: [&[u8]; 5] = [
+        b"plain",
+        b"a\x1b]0;t\x07b\x1b(",
+        b"\x1b]777;emterm;markdown;chunk;x=1",
+        b"\x1b(\x1b]11;?x",
+        b"end\x1b",
+    ];
+    for input in corpus {
+        let mut a = ScrollbackWriteFilter::new();
+        let (dims, bytes) = a.feed(input, (80, 24));
+        let mut b = ScrollbackWriteFilter::new();
+        let outcome = r2_feed(&mut b, input, &[]);
+        assert_eq!((dims, bytes), (outcome.dims, outcome.bytes));
+        assert_eq!(a.pending(), b.pending());
+        assert_eq!(a.awaiting_designator(), b.awaiting_designator());
+    }
+}
+
+/// AC-1 (FR3): the flag is set only when the fed stream ends right after
+/// `ESC (` / `ESC )` outside a string, and the next feed's first byte is
+/// consumed as the designator even when it is an ESC.
+#[test]
+fn awaiting_designator_is_set_after_esc_paren_and_consumes_the_next_byte() {
+    let mut f = ScrollbackWriteFilter::new();
+    let (_d, out) = f.feed(b"ab\x1b(", (80, 24));
+    assert_eq!(out, b"ab\x1b(".to_vec());
+    assert!(f.awaiting_designator());
+    assert!(f.pending().is_empty(), "nothing is held for a designator");
+
+    // The designator is an ESC: consumed, so it is neither held nor
+    // treated as an introducer.
+    let (_d, out) = f.feed(b"\x1b", (80, 24));
+    assert_eq!(out, b"\x1b".to_vec());
+    assert!(
+        f.pending().is_empty(),
+        "the designator ESC is not a lone ESC to hold"
+    );
+    assert!(!f.awaiting_designator());
+
+    // `ESC )` behaves the same way.
+    let (_d, out) = f.feed(b"\x1b)", (80, 24));
+    assert_eq!(out, b"\x1b)".to_vec());
+    assert!(f.awaiting_designator());
+    let (_d, out) = f.feed(b"\x1b]0;t\x07", (80, 24));
+    assert_eq!(
+        out,
+        b"\x1b]0;t\x07".to_vec(),
+        "ESC after `ESC )` is the designator; the rest is ordinary text"
+    );
+    assert!(f.pending().is_empty());
+    assert!(!f.awaiting_designator());
+}
+
+/// AC-1 (FR3): inside a held OSC/DCS/APC the same bytes are string data and
+/// set nothing.
+#[test]
+fn awaiting_designator_is_not_set_by_bytes_inside_a_held_string() {
+    for held in [
+        &b"\x1b]0;x("[..],
+        &b"\x1b]0;x)"[..],
+        &b"\x1bPq("[..],
+        &b"\x1b_G)"[..],
+    ] {
+        let mut f = ScrollbackWriteFilter::new();
+        let (_d, out) = f.feed(held, (80, 24));
+        assert!(out.is_empty(), "{held:?}: the incomplete string is held");
+        assert_eq!(f.pending(), held);
+        assert!(!f.awaiting_designator(), "{held:?}");
+    }
+
+    // An ESC that ABORTS the string is a fresh escape: `ESC (` after it is
+    // a real designation.
+    let mut f = ScrollbackWriteFilter::new();
+    let (_d, out) = f.feed(b"\x1b]0;x\x1b(", (80, 24));
+    assert_eq!(out, b"\x1b]0;x\x1b(".to_vec());
+    assert!(f.awaiting_designator());
+    assert!(f.pending().is_empty());
+}
+
+/// AC-1 companion (FR3): the awaiting flag matches at every split position
+/// (the flag itself is part of the invariant, not just the bytes).
+#[test]
+fn split_invariance_includes_the_awaiting_flag() {
+    let corpus: [&[u8]; 6] = [
+        b"\x1b(\x1b]11;?tail",
+        b"x\x1b(",
+        b"x\x1b)\x1b",
+        b"\x1b(\x1b(\x1b(",
+        b"a\x1b]0;s\x1b(",
+        "日\x1b(".as_bytes(),
+    ];
+    for input in corpus {
+        let mut whole = ScrollbackWriteFilter::new();
+        whole.feed(input, (80, 24));
+        for split in 0..=input.len() {
+            let mut f = ScrollbackWriteFilter::new();
+            f.feed(&input[..split], (80, 24));
+            f.feed(&input[split..], (80, 24));
+            assert_eq!(
+                f.awaiting_designator(),
+                whole.awaiting_designator(),
+                "split at {split} for {input:?}"
+            );
+        }
+    }
+}
+
+/// AC-2 (FR4): a cut closes an in-progress OSC and emits it through the
+/// existing strip; nothing closed by a cut stays in pending.
+#[test]
+fn a_cut_closes_an_in_progress_osc_and_pending_holds_no_closed_osc() {
+    let mut f = ScrollbackWriteFilter::new();
+    // `ESC ]11;?`, a removed switch pair (cut at 6), one space.
+    let outcome = r2_feed(&mut f, b"\x1b]11;? ", &[6]);
+    assert_eq!(outcome.bytes, b"\x1b]11;? ".to_vec());
+    assert!(
+        f.pending().is_empty(),
+        "the OSC closed by the cut is not held"
+    );
+    assert!(outcome.carried.is_none());
+
+    // A strip-target introducer closed by a cut is emitted verbatim (the
+    // strip only removes COMPLETE sequences, as for an ESC-aborted one).
+    let mut f = ScrollbackWriteFilter::new();
+    let fed = b"\x1b]777;emterm;markdown;chunk;x=1z";
+    let outcome = r2_feed(&mut f, fed, &[fed.len() - 1]);
+    assert_eq!(outcome.bytes, fed.to_vec());
+    assert!(f.pending().is_empty());
+}
+
+/// AC-2 (FR4): a held lone ESC before a removed switch is closed.
+#[test]
+fn a_cut_closes_a_held_lone_esc() {
+    let mut f = ScrollbackWriteFilter::new();
+    let outcome = r2_feed(&mut f, b"abc\x1b", &[4]);
+    assert_eq!(outcome.bytes, b"abc\x1b".to_vec());
+    assert!(f.pending().is_empty());
+
+    // Without the cut the same bytes hold the lone ESC.
+    let mut g = ScrollbackWriteFilter::new();
+    let outcome = r2_feed(&mut g, b"abc\x1b", &[]);
+    assert_eq!(outcome.bytes, b"abc".to_vec());
+    assert_eq!(g.pending(), b"\x1b".as_slice());
+}
+
+/// AC-2 (FR4): the awaiting-designator flag clears at a cut.
+#[test]
+fn a_cut_clears_the_awaiting_designator_flag() {
+    let mut f = ScrollbackWriteFilter::new();
+    let outcome = r2_feed(&mut f, b"\x1b(", &[2]);
+    assert_eq!(outcome.bytes, b"\x1b(".to_vec());
+    assert!(
+        !f.awaiting_designator(),
+        "cut at the fed end clears the flag"
+    );
+    // The next ESC is an introducer again.
+    let (_d, out) = f.feed(b"\x1b]11;?", (80, 24));
+    assert!(out.is_empty());
+    assert_eq!(f.pending(), b"\x1b]11;?".as_slice());
+
+    // A flag set by an earlier read is cleared by a cut at fed 0 too.
+    let mut g = ScrollbackWriteFilter::new();
+    g.feed(b"\x1b(", (80, 24));
+    assert!(g.awaiting_designator());
+    let outcome = r2_feed(&mut g, b"", &[0]);
+    assert!(outcome.bytes.is_empty());
+    assert!(!g.awaiting_designator());
+}
+
+/// AC-2 (FR4): an empty fed range with a cut still closes pending.
+#[test]
+fn an_empty_fed_range_with_a_cut_still_closes_pending() {
+    let mut f = ScrollbackWriteFilter::new();
+    let (_d, out) = f.feed(b"pre\x1b]11;?", (80, 24));
+    assert_eq!(out, b"pre".to_vec());
+    assert_eq!(f.pending(), b"\x1b]11;?".as_slice());
+
+    let outcome = r2_feed(&mut f, b"", &[0]);
+    assert_eq!(
+        outcome.bytes,
+        b"\x1b]11;?".to_vec(),
+        "the held OSC is closed by the cut and released"
+    );
+    assert!(f.pending().is_empty());
+    assert!(outcome.carried.is_none());
+
+    // A cut at fed 0 with bytes: the held run closes, then the fed bytes
+    // start from ground.
+    let mut g = ScrollbackWriteFilter::new();
+    g.feed(b"\x1b]11;?", (80, 24));
+    let outcome = r2_feed(&mut g, b"abc", &[0]);
+    assert_eq!(outcome.bytes, b"\x1b]11;?abc".to_vec());
+    assert!(g.pending().is_empty());
+}
+
+/// AC-2 (FR4, postcondition): after every feed, pending equals what a fresh
+/// filter would hold for the bytes after the last cut — never a sequence
+/// closed by a cut, nor any byte after one.
+#[test]
+fn pending_after_a_cut_equals_a_fresh_scan_of_the_bytes_after_the_last_cut() {
+    let corpus: [&[u8]; 7] = [
+        b"a\x1b]0;t\x1bPq\x1b_apc",
+        b"\x1b]11;?xy\x1b",
+        b"\x1b(\x1b]0;s\x07tail\x1b]",
+        b"\x1b\x1b]0;s",
+        b"\x1b]0;a\x07\x1b]0;b",
+        b"text\x1b(",
+        "日本\x1b]0;語".as_bytes(),
+    ];
+    for fed in corpus {
+        for first in 0..=fed.len() {
+            for second in first..=fed.len() {
+                let cuts = [first, second];
+                let mut f = ScrollbackWriteFilter::new();
+                let outcome = r2_feed(&mut f, fed, &cuts);
+                let mut fresh = ScrollbackWriteFilter::new();
+                fresh.feed(&fed[second..], (80, 24));
+                assert_eq!(
+                    f.pending(),
+                    fresh.pending(),
+                    "{fed:?} with cuts {cuts:?}: pending must be the incomplete string after the last cut"
+                );
+                assert_eq!(
+                    outcome.bytes,
+                    fed[..fed.len() - f.pending().len()].to_vec(),
+                    "{fed:?} with cuts {cuts:?}: everything else is emitted"
+                );
+                assert_eq!(f.awaiting_designator(), fresh.awaiting_designator());
+            }
+        }
+    }
+}
+
+/// AC-4 (FR6): a sequence held in pending that completes inside the feed is
+/// reported with its complete bytes and the fed offset just past its
+/// terminator.
+#[test]
+fn a_carried_over_sequence_completing_in_the_feed_is_reported() {
+    let mut f = ScrollbackWriteFilter::new();
+    let head = b"a\x1b]777;emterm;markdown;begin;id=1";
+    let (_d, out) = f.feed(head, (80, 24));
+    assert_eq!(out, b"a".to_vec());
+
+    let outcome = r2_feed(&mut f, b";x\x07tail", &[]);
+    let carried = outcome.carried.expect("the carried launch completed");
+    assert_eq!(
+        carried.bytes(),
+        b"\x1b]777;emterm;markdown;begin;id=1;x\x07"
+    );
+    assert_eq!(carried.fed_end(), 3, "just past the BEL at fed offset 2");
+    assert_eq!(
+        outcome.bytes,
+        b"tail".to_vec(),
+        "the complete launch is stripped from the emitted bytes"
+    );
+    assert!(f.pending().is_empty());
+
+    // ST terminator, DCS and APC.
+    for (held, fed, expected_end) in [
+        (&b"\x1b]0;t"[..], &b"i\x1b\\z"[..], 3usize),
+        (&b"\x1bPq"[..], &b"1\x1b\\"[..], 3),
+        (&b"\x1b_G"[..], &b"data\x1b\\"[..], 6),
+    ] {
+        let mut g = ScrollbackWriteFilter::new();
+        g.feed(held, (80, 24));
+        let outcome = r2_feed(&mut g, fed, &[]);
+        let carried = outcome.carried.expect("completed");
+        let mut whole = held.to_vec();
+        whole.extend_from_slice(&fed[..expected_end]);
+        assert_eq!(carried.bytes(), whole.as_slice());
+        assert_eq!(carried.fed_end(), expected_end);
+    }
+
+    // A held lone ESC that the next byte turns into an OSC.
+    let mut g = ScrollbackWriteFilter::new();
+    g.feed(b"x\x1b", (80, 24));
+    let outcome = r2_feed(&mut g, b"]0;t\x07", &[]);
+    let carried = outcome
+        .carried
+        .expect("the lone ESC opened an OSC that completed");
+    assert_eq!(carried.bytes(), b"\x1b]0;t\x07");
+    assert_eq!(carried.fed_end(), 5);
+}
+
+/// AC-4 (FR6): nothing is reported when the carried sequence is aborted,
+/// closed by a cut, or stays incomplete; a construct that opens in this feed
+/// is never "carried".
+#[test]
+fn nothing_is_reported_for_an_aborted_cut_or_incomplete_carried_sequence() {
+    // Aborted by ESC + non-backslash.
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b]0;t", (80, 24));
+    let outcome = r2_feed(&mut f, b"\x1b[31m", &[]);
+    assert!(outcome.carried.is_none());
+
+    // Closed by a cut before its terminator.
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b]0;t", (80, 24));
+    let outcome = r2_feed(&mut f, b"\x07abc", &[0]);
+    assert!(outcome.carried.is_none(), "the BEL lies after the cut");
+    assert!(f.pending().is_empty());
+
+    // Still incomplete.
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b]0;t", (80, 24));
+    let outcome = r2_feed(&mut f, b"more", &[]);
+    assert!(outcome.carried.is_none());
+    assert_eq!(f.pending(), b"\x1b]0;tmore".as_slice());
+
+    // A construct that opens (and completes) in this feed is not carried.
+    let mut f = ScrollbackWriteFilter::new();
+    let outcome = r2_feed(&mut f, b"\x1b]0;t\x07", &[]);
+    assert!(outcome.carried.is_none());
+
+    // A superseded held ESC: the string the SECOND ESC opens is new.
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b", (80, 24));
+    let outcome = r2_feed(&mut f, b"\x1b]0;t\x07", &[]);
+    assert!(outcome.carried.is_none());
+}
+
+/// AC-4 (FR6): a completion before a cut is reported; at most one exists per
+/// feed.
+#[test]
+fn a_completion_before_a_cut_is_reported_and_at_most_one_per_feed() {
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b]0;t", (80, 24));
+    let outcome = r2_feed(&mut f, b"\x07abc\x1b]0;u\x07", &[1]);
+    let carried = outcome
+        .carried
+        .expect("the terminator ends exactly at the cut: completed before it");
+    assert_eq!(carried.bytes(), b"\x1b]0;t\x07");
+    assert_eq!(carried.fed_end(), 1);
+
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b]0;t", (80, 24));
+    let outcome = r2_feed(&mut f, b"\x07\x1b]0;u\x07\x1b]0;v\x07", &[]);
+    let carried = outcome.carried.expect("the carried one");
+    assert_eq!(
+        carried.bytes(),
+        b"\x1b]0;t\x07",
+        "only the carried sequence is reported, not the later ones"
+    );
+}
+
+/// AC-4 / AC-6 (FR6, TM-2): a run flushed by the cap is never reported, and
+/// after the flush pending is empty.
+#[test]
+fn a_run_flushed_by_the_cap_never_reports_a_completion() {
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b]0;", (80, 24));
+    let mut fed = vec![b'q'; SCROLLBACK_FILTER_PENDING_CAP];
+    fed.push(0x07);
+    let outcome = r2_feed(&mut f, &fed, &[]);
+    assert!(!outcome.bytes.is_empty(), "the flush emits the run");
+    assert!(
+        outcome.carried.is_none(),
+        "the flushed run is never reported"
+    );
+    assert!(f.pending().is_empty());
+
+    // The same for a launch: the completed run is stripped and never
+    // reported.
+    let mut g = ScrollbackWriteFilter::new();
+    g.feed(b"\x1b]777;emterm;markdown;chunk;data=", (80, 24));
+    let mut fed = vec![b'A'; SCROLLBACK_FILTER_PENDING_CAP];
+    fed.push(0x07);
+    let outcome = r2_feed(&mut g, &fed, &[]);
+    assert!(outcome.carried.is_none());
+    assert!(g.pending().is_empty());
+}
+
+/// AC-6: a carried sequence near the cap is still reported when the run
+/// stays within it, and not once it exceeds it.
+#[test]
+fn a_carried_sequence_near_the_cap_is_reported_only_within_it() {
+    let intro = b"\x1b]0;".to_vec();
+    let fill = SCROLLBACK_FILTER_PENDING_CAP - intro.len() - 1;
+
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(&intro, (80, 24));
+    let (_d, out) = f.feed(&vec![b'z'; fill - 10], (80, 24));
+    assert!(out.is_empty());
+    let mut fed = vec![b'z'; 10];
+    fed.push(0x07);
+    let outcome = r2_feed(&mut f, &fed, &[]);
+    let carried = outcome
+        .carried
+        .expect("exactly at the cap is still within it");
+    assert_eq!(carried.bytes().len(), SCROLLBACK_FILTER_PENDING_CAP);
+    assert!(carried.bytes().starts_with(b"\x1b]0;"));
+    assert!(carried.bytes().ends_with(b"\x07"));
+
+    let mut g = ScrollbackWriteFilter::new();
+    g.feed(&intro, (80, 24));
+    g.feed(&vec![b'z'; fill - 10], (80, 24));
+    let mut fed = vec![b'z'; 11];
+    fed.push(0x07);
+    let outcome = r2_feed(&mut g, &fed, &[]);
+    assert!(outcome.carried.is_none(), "one byte past the cap flushes");
+    assert!(g.pending().is_empty());
+}
+
+/// AC-6 (TM-1, TM-2): after an overflow flush the awaiting flag equals the
+/// client-parity state at the end of the flushed run.
+#[test]
+fn overflow_flush_sets_the_awaiting_flag_from_the_end_of_the_flushed_run() {
+    let pad = vec![b'p'; SCROLLBACK_FILTER_PENDING_CAP + 1];
+
+    // The run ends inside the still-open OSC: no designator awaited.
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b]0;", (80, 24));
+    let outcome = r2_feed(&mut f, &pad, &[]);
+    assert!(f.pending().is_empty());
+    assert!(!f.awaiting_designator());
+    assert!(outcome.carried.is_none());
+
+    // The run ends right after `ESC (` (the ESC aborts the OSC): awaited.
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b]0;", (80, 24));
+    let mut fed = pad.clone();
+    fed.extend_from_slice(b"\x1b(");
+    r2_feed(&mut f, &fed, &[]);
+    assert!(f.pending().is_empty());
+    assert!(f.awaiting_designator());
+    // ... and the next feed's first byte is then the designator.
+    let (_d, out) = f.feed(b"\x1b", (80, 24));
+    assert_eq!(out, b"\x1b".to_vec());
+    assert!(f.pending().is_empty());
+
+    // The run ends after a complete designation: not awaited.
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b]0;", (80, 24));
+    let mut fed = pad;
+    fed.extend_from_slice(b"\x1b(\x1b");
+    r2_feed(&mut f, &fed, &[]);
+    assert!(f.pending().is_empty());
+    assert!(!f.awaiting_designator());
+}
+
+/// AC-6: an overflowing feed with cuts still flushes and reports nothing.
+#[test]
+fn overflow_with_cuts_flushes_without_a_report() {
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b]0;", (80, 24));
+    let mut fed = vec![b'q'; SCROLLBACK_FILTER_PENDING_CAP];
+    fed.push(0x07);
+    fed.extend_from_slice(b"tail");
+    let outcome = r2_feed(&mut f, &fed, &[SCROLLBACK_FILTER_PENDING_CAP + 1]);
+    assert!(outcome.carried.is_none());
+    assert!(f.pending().is_empty());
+    assert!(!f.awaiting_designator());
+}
+
+/// AC-2 (FR4): the reader derives cuts from the span list extraction
+/// returned.
+#[test]
+fn cuts_are_derived_from_the_main_buffer_span_list() {
+    // No toggle: one full span (or none) yields no cut.
+    assert!(cuts_from_main_spans(&[0..10], 10).is_empty());
+    assert!(cuts_from_main_spans(&[], 10).is_empty());
+
+    // First span starts after chunk offset 0.
+    assert_eq!(cuts_from_main_spans(&[8..10], 10), vec![0]);
+    // Boundary between consecutive spans: total length of the preceding
+    // spans (an empty span repeats the position).
+    assert_eq!(
+        cuts_from_main_spans(&[0..1, 13..13, 25..26], 26),
+        vec![1, 1]
+    );
+    // Last span ends before the chunk end.
+    assert_eq!(cuts_from_main_spans(&[0..3], 12), vec![3]);
+    assert_eq!(cuts_from_main_spans(&[0..0], 12), vec![0]);
+
+    // Through the real extraction: `ESC ]11;?`, `ESC [?47h`, `ESC [?47l`, ` `.
+    let chunk = b"\x1b]11;?\x1b[?47h\x1b[?47l ";
+    let (_bytes, _alt, spans) = extract_main_buffer_bytes(chunk, false);
+    assert_eq!(cuts_from_main_spans(&spans, chunk.len()), vec![6]);
+
+    // A chunk starting with a switch out of the alternate screen.
+    let chunk = b"\x1b[?1049lx";
+    let (_bytes, _alt, spans) = extract_main_buffer_bytes(chunk, true);
+    assert_eq!(cuts_from_main_spans(&spans, chunk.len()), vec![0]);
+
+    // A chunk starting with a switch INTO the alternate screen: the fed
+    // range is empty but a cut exists.
+    let chunk = b"\x1b[?1049h alt";
+    let (bytes, _alt, spans) = extract_main_buffer_bytes(chunk, false);
+    assert!(bytes.is_empty());
+    assert_eq!(cuts_from_main_spans(&spans, chunk.len()), vec![0]);
+
+    // A pure alternate-screen chunk removes nothing.
+    let chunk = b"only alt";
+    let (bytes, _alt, spans) = extract_main_buffer_bytes(chunk, true);
+    assert!(bytes.is_empty());
+    assert!(cuts_from_main_spans(&spans, chunk.len()).is_empty());
+}
+
+/// AC-4 (FR6): the fed offset of the terminator maps to chunk coordinates
+/// through the span list.
+#[test]
+fn a_fed_offset_maps_to_the_position_just_past_it_in_chunk_coordinates() {
+    let spans = vec![0..5, 25..26];
+    assert_eq!(chunk_end_of_fed_prefix(&spans, 1), Some(1));
+    assert_eq!(chunk_end_of_fed_prefix(&spans, 5), Some(5));
+    assert_eq!(
+        chunk_end_of_fed_prefix(&spans, 6),
+        Some(26),
+        "the terminator's final byte is the second span's only byte"
+    );
+    assert_eq!(chunk_end_of_fed_prefix(&spans, 0), None);
+    assert_eq!(chunk_end_of_fed_prefix(&spans, 7), None);
+    assert_eq!(chunk_end_of_fed_prefix(&[3..3, 7..9], 2), Some(9));
+    assert_eq!(chunk_end_of_fed_prefix(&[], 1), None);
+}
+
+// END round2 task0003 tests: new entry points.
+
 // ── End-to-end child reap (task0001 AC-1/AC-7; TS-7, TS-8, TS-9) ──────
 //
 // Uses the real spawn path (`spawn_pty`), builds a `MuxPane` directly
@@ -6053,5 +8141,606 @@ mod child_reap_e2e {
                 "pid {pid} must not remain unreaped"
             );
         }
+    }
+}
+
+// ── mux-suppressed-output-round2-fixes task0004 (FR8, finding
+//    `3eccc254dd278b33`): a tail the snapshot already carried is not
+//    re-sent ────────────────────────────────────────────────────────────
+
+mod fr8_snapshot_tail {
+    use super::*;
+    use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
+    use crate::mux::session::pane::{AnyPermit, ChunkKind, ResumeOutcome, resume_pane_with_permit};
+    use crate::mux::snapshot_tail::trailing_construct_bytes;
+    use term_core::terminal_core::TerminalCore;
+
+    const ESC: u8 = 0x1b;
+    const COLS: u16 = 80;
+    const ROWS: u16 = 24;
+
+    /// Answers `OSC 11 ; ?` with a fixed color report and nothing else, so a
+    /// test can count color-query answers without the gui theme.
+    struct FixedColorResponder;
+
+    impl term_core::OscResponder for FixedColorResponder {
+        fn respond(
+            &self,
+            code: u16,
+            payload: &str,
+            _terminator: term_core::OscTerminator,
+        ) -> Vec<Vec<u8>> {
+            if code == 11 && payload == "?" {
+                vec![b"\x1b]11;rgb:1111/2222/3333\x07".to_vec()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    fn new_core() -> TerminalCore {
+        let mut core = TerminalCore::new(COLS, ROWS, 10_000);
+        core.osc_responder = Some(Box::new(FixedColorResponder));
+        core
+    }
+
+    /// The client's view of a delivered snapshot chunk: replayed through
+    /// `reset_and_replay_segments`, its responses discarded (the client never
+    /// answers a snapshot's own queries).
+    fn apply_snapshot(core: &mut TerminalCore, chunk: &PtyOutputChunk) {
+        assert_eq!(chunk.kind, ChunkKind::Snapshot);
+        let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&chunk.data);
+        let replay: Vec<ReplaySegment> = segments
+            .iter()
+            .map(|s| ReplaySegment {
+                offset: s.offset,
+                cols: s.cols,
+                rows: s.rows,
+            })
+            .collect();
+        core.reset_and_replay_segments(content, &replay);
+        let _ = core.take_response();
+    }
+
+    /// Spawn `pty_reader_loop` on a background thread against `pane`, fed
+    /// `chunks`, WITHOUT touching the pane's output target (unlike
+    /// `spawn_reader_with_chunks`, which forces `Connected`).
+    fn spawn_reader_keeping_target(
+        pane: &MuxPane,
+        chunks: Vec<Vec<u8>>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn({
+            let output_target = pane.output_target.clone();
+            let shadow_parser = pane.shadow_parser.clone();
+            let cwd = pane.cwd.clone();
+            let title = pane.title.clone();
+            let title_sender = pane.title_sender.clone();
+            let notification_sender = pane.notification_sender.clone();
+            let agent_status_report_sender = pane.agent_status_report_sender.clone();
+            let raw_passthrough = pane.raw_passthrough.clone();
+            let passthrough_scanner = pane.passthrough_scanner.clone();
+            let scrollback = pane.scrollback.clone();
+            let dims = pane.dims.clone();
+            let output_capture = pane.output_capture.clone();
+            let pane_id = pane.id;
+            move || {
+                pty_reader_loop(
+                    pane_id,
+                    Box::new(ScriptedReader::new(chunks)),
+                    output_target,
+                    shadow_parser,
+                    cwd,
+                    title,
+                    title_sender,
+                    notification_sender,
+                    agent_status_report_sender,
+                    raw_passthrough,
+                    passthrough_scanner,
+                    scrollback,
+                    dims,
+                    Arc::new(StdMutex::new(None)),
+                    output_capture,
+                );
+            }
+        })
+    }
+
+    /// What the owner's channel received during a visibility restore that
+    /// landed between the first chunk's capture step and its forward
+    /// decision.
+    struct RestoreRun {
+        /// Everything received, in order (snapshot first, EOF last).
+        received: Vec<PtyOutputChunk>,
+    }
+
+    impl RestoreRun {
+        fn snapshot(&self) -> &PtyOutputChunk {
+            &self.received[0]
+        }
+
+        /// Non-snapshot chunks after the snapshot, EOF (empty) excluded.
+        fn forwarded(&self) -> Vec<Vec<u8>> {
+            self.received[1..]
+                .iter()
+                .filter(|c| !c.data.is_empty())
+                .map(|c| c.data.clone())
+                .collect()
+        }
+    }
+
+    /// Run the production visibility restore (`resume_pane_with_permit`) of
+    /// a main-screen pane while the reader is paused between `chunks[0]`'s
+    /// capture step and its forward decision (P2), then let the reader run
+    /// to EOF. `ring` replaces the pane's scrollback ring when given.
+    fn run_visibility_restore(
+        pane_id: PaneId,
+        ring: Option<ScrollbackRingBuffer>,
+        chunks: Vec<Vec<u8>>,
+    ) -> RestoreRun {
+        let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+        let output_target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                reason: DetachReason::HiddenByVisibility,
+                owner: Some(tx.clone()),
+            }));
+        let pane = MuxPane::new_test(pane_id, COLS, ROWS, output_target);
+        if let Some(ring) = ring {
+            *pane.scrollback.lock().unwrap() = ring;
+        }
+        let (arrived_rx, release_tx) = pane.output_capture.p2.arm();
+        let handle = spawn_reader_keeping_target(&pane, chunks);
+        arrived_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the reader must reach P2 on the first chunk");
+
+        let permit = tx.try_reserve().expect("capacity for the resume permit");
+        let outcome = resume_pane_with_permit(&pane, &tx, AnyPermit::Borrowed(permit), 10_000);
+        assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+        release_tx.send(()).unwrap();
+        handle.join().unwrap();
+
+        let mut received = Vec::new();
+        while let Ok(c) = rx.try_recv() {
+            received.push(c);
+        }
+        assert!(
+            received.len() >= 2,
+            "at least the snapshot and EOF must have been delivered"
+        );
+        assert!(
+            received.last().unwrap().data.is_empty(),
+            "the last chunk is the EOF marker"
+        );
+        RestoreRun { received }
+    }
+
+    fn assert_display_matches(client: &TerminalCore, reference: &TerminalCore, what: &str) {
+        for r in 0..ROWS {
+            let got = client.get_line_text(r);
+            assert_eq!(
+                got.trim_end(),
+                reference.get_line_text(r).trim_end(),
+                "{what}: row {r} mismatch"
+            );
+            assert!(
+                !got.contains('\u{fffd}'),
+                "{what}: row {r} shows a replacement character: {got:?}"
+            );
+        }
+        assert_eq!(
+            client.get_cursor_row(),
+            reference.get_cursor_row(),
+            "{what}: cursor row"
+        );
+        assert_eq!(
+            client.get_cursor_col(),
+            reference.get_cursor_col(),
+            "{what}: cursor col"
+        );
+    }
+
+    struct Split {
+        name: &'static str,
+        first: Vec<u8>,
+        second: Vec<u8>,
+        /// A character that must not appear in any client row (the
+        /// designator `(` the pre-fix re-send displays).
+        forbidden: Option<char>,
+    }
+
+    /// The three splits of AC-4: mid UTF-8, right after `ESC (`, and inside
+    /// an incomplete CSI.
+    fn splits() -> Vec<Split> {
+        vec![
+            Split {
+                name: "mid utf-8",
+                first: [b"abc".as_slice(), &[0xe4, 0xb8]].concat(),
+                second: [[0xad].as_slice(), b"def\r\n"].concat(),
+                forbidden: None,
+            },
+            Split {
+                name: "right after ESC (",
+                first: [b"abc".as_slice(), &[ESC, b'(']].concat(),
+                second: b"0lqk\x1b(B\r\nZ".to_vec(),
+                forbidden: Some('('),
+            },
+            Split {
+                name: "inside an incomplete csi",
+                first: [b"abc".as_slice(), &[ESC, b'[', b'3']].concat(),
+                second: b"1mred\x1b[0m\r\n".to_vec(),
+                forbidden: None,
+            },
+        ]
+    }
+
+    fn check_client_against_reference(run: &RestoreRun, split: &Split, what: &str) {
+        let mut client = new_core();
+        apply_snapshot(&mut client, run.snapshot());
+        for data in run.forwarded() {
+            client.process_pty_data_fully(&data);
+        }
+        let mut reference = new_core();
+        reference.process_pty_data_fully(&split.first);
+        reference.process_pty_data_fully(&split.second);
+        assert_display_matches(&client, &reference, what);
+        if let Some(forbidden) = split.forbidden {
+            for r in 0..ROWS {
+                assert!(
+                    !client.get_line_text(r).contains(forbidden),
+                    "{what}: row {r} must not display {forbidden:?}: {:?}",
+                    client.get_line_text(r)
+                );
+            }
+        }
+    }
+
+    /// AC-4 (registry, finding `3eccc254dd278b33`): visibility restore of a
+    /// main-screen pane, ring not wrapped, three splits. The first half is
+    /// suppressed. For every split the client's display, cursor and parsing of
+    /// the following chunk match a reference fed the raw stream, and the tail
+    /// the snapshot already carries is not re-sent (the second half is the
+    /// very next delivery). The `ESC (` split fails the display comparison on
+    /// the pre-fix code: the re-sent `ESC (` makes the client take the second
+    /// ESC as the designator and display a literal `(`, and the next chunk's
+    /// first byte is printed instead of selecting the charset.
+    #[test]
+    fn round2_3eccc254_visibility_restore_does_not_resend_a_tail_the_snapshot_carried() {
+        let runs: Vec<(Split, RestoreRun)> = splits()
+            .into_iter()
+            .enumerate()
+            .map(|(i, split)| {
+                let run = run_visibility_restore(
+                    200 + i as PaneId,
+                    None,
+                    vec![split.first.clone(), split.second.clone()],
+                );
+                (split, run)
+            })
+            .collect();
+        for (split, run) in &runs {
+            check_client_against_reference(run, split, split.name);
+        }
+        for (split, run) in &runs {
+            assert_eq!(
+                run.forwarded(),
+                vec![split.second.clone()],
+                "{}: nothing may be re-sent between the snapshot and the next chunk",
+                split.name
+            );
+        }
+    }
+
+    /// AC-4 companion: one split of the registry test's body, so a failure
+    /// names its split. The client comparison runs first, then the
+    /// "nothing re-sent" check.
+    fn check_split(pane_id: PaneId, index: usize) {
+        let split = splits().remove(index);
+        let run = run_visibility_restore(
+            pane_id,
+            None,
+            vec![split.first.clone(), split.second.clone()],
+        );
+        check_client_against_reference(&run, &split, split.name);
+        assert_eq!(
+            run.forwarded(),
+            vec![split.second.clone()],
+            "{}: nothing may be re-sent between the snapshot and the next chunk",
+            split.name
+        );
+    }
+
+    #[test]
+    fn visibility_restore_of_a_cut_utf8_tail_sends_nothing_between_snapshot_and_next_chunk() {
+        check_split(210, 0);
+    }
+
+    #[test]
+    fn visibility_restore_after_esc_paren_sends_nothing_and_the_next_chunk_selects_the_charset() {
+        check_split(211, 1);
+        let split = splits().remove(1);
+        let run =
+            run_visibility_restore(213, None, vec![split.first.clone(), split.second.clone()]);
+        let mut client = new_core();
+        apply_snapshot(&mut client, run.snapshot());
+        for data in run.forwarded() {
+            client.process_pty_data_fully(&data);
+        }
+        assert!(
+            client.get_line_text(0).contains('\u{250c}'),
+            "the first byte of the next chunk must select DEC line drawing: {:?}",
+            client.get_line_text(0)
+        );
+    }
+
+    #[test]
+    fn visibility_restore_of_a_cut_csi_tail_sends_nothing_between_snapshot_and_next_chunk() {
+        check_split(212, 2);
+    }
+
+    /// AC-4, second ring shape: ring wrapped with an EMPTY screen dump. The
+    /// shadow parser's dump is never empty in production, so this payload
+    /// shape is driven through the snapshot assembly function and the
+    /// replacement builder directly (task plan Test Notes), with the same
+    /// client/reference comparison.
+    #[test]
+    fn wrapped_ring_with_an_empty_dump_does_not_resend_a_tail_the_snapshot_carried() {
+        use crate::mux::ipc::pty_spawn::suppressed_output::{
+            SuppressedReplacementRequest, build_suppressed_replacement_for,
+        };
+        use crate::mux::snapshot_bytes::build_resume_snapshot_bytes_for_ring;
+
+        // Bytes that only move the cursor to column 0, so the ring may lose
+        // its head without changing the visible state.
+        let leading = vec![b'\r'; 20];
+        for split in splits() {
+            let first = [leading.as_slice(), &split.first].concat();
+            let mut ring = ScrollbackRingBuffer::new(16);
+            ring.write(&first);
+            let (ring_bytes, ring_segments, wrapped) = ring.read_segments_with_wrap_state();
+            assert!(
+                wrapped,
+                "{}: test prerequisite: the ring wrapped",
+                split.name
+            );
+            let (payload, segments) = build_resume_snapshot_bytes_for_ring(
+                &ring_bytes,
+                &ring_segments,
+                &[],
+                false,
+                true,
+                (COLS, ROWS),
+                10_000,
+            );
+            assert!(
+                payload.ends_with(&split.first[3..]),
+                "{}: the payload still ends in the ring's cut construct",
+                split.name
+            );
+            let construct = trailing_construct_bytes(&payload);
+            assert!(
+                construct.is_some(),
+                "{}: a construct is decided",
+                split.name
+            );
+
+            let replacement = build_suppressed_replacement_for(&SuppressedReplacementRequest {
+                chunk: &first,
+                ring_written_ranges: &[0..first.len()],
+                pending_after: &[],
+                window: &[],
+                snapshot_trailing_construct: construct.as_deref(),
+                carried_over_completion: None,
+            });
+            assert!(
+                replacement.is_empty(),
+                "{}: nothing is re-sent, got {replacement:?}",
+                split.name
+            );
+
+            let encoded = crate::mux::session::pane::encode_snapshot_segments(&payload, &segments);
+            let chunk = PtyOutputChunk::snapshot(1, encoded);
+            let mut client = new_core();
+            apply_snapshot(&mut client, &chunk);
+            client.process_pty_data_fully(&replacement);
+            client.process_pty_data_fully(&split.second);
+            let mut reference = new_core();
+            reference.process_pty_data_fully(&first);
+            reference.process_pty_data_fully(&split.second);
+            assert_display_matches(&client, &reference, split.name);
+        }
+    }
+
+    // ---- AC-5: a query coexisting with the tail ----
+
+    /// One tail kind: the bytes the suppressed chunk ends in, what the
+    /// replacement must carry for it, and the next chunk.
+    struct TailKind {
+        name: &'static str,
+        tail: Vec<u8>,
+        /// The designator case needs one filler byte first (the client's
+        /// pending designator slot absorbs it).
+        needs_filler: bool,
+        second: Vec<u8>,
+    }
+
+    fn tail_kinds() -> Vec<TailKind> {
+        vec![
+            TailKind {
+                name: "cut utf-8",
+                tail: vec![0xe4, 0xb8],
+                needs_filler: false,
+                second: [[0xad].as_slice(), b"def\r\n"].concat(),
+            },
+            TailKind {
+                name: "ESC (",
+                tail: vec![ESC, b'('],
+                needs_filler: true,
+                second: b"0lqk\x1b(B\r\nZ".to_vec(),
+            },
+            TailKind {
+                name: "incomplete csi",
+                tail: vec![ESC, b'[', b'3'],
+                needs_filler: false,
+                second: b"1mred\x1b[0m\r\n".to_vec(),
+            },
+        ]
+    }
+
+    /// `prefix` (holding one query) + `abc` + each tail kind, restored
+    /// through the reader. `item` is the query as the replacement carries it.
+    fn check_query_with_each_tail(pane_id_base: PaneId, prefix: &[u8], item: &[u8]) {
+        for (i, kind) in tail_kinds().into_iter().enumerate() {
+            let first = [prefix, b"abc".as_slice(), &kind.tail].concat();
+            let run = run_visibility_restore(
+                pane_id_base + i as PaneId,
+                None,
+                vec![first.clone(), kind.second.clone()],
+            );
+            let mut expected_replacement = Vec::new();
+            if kind.needs_filler {
+                expected_replacement.push(b'B');
+            }
+            expected_replacement.extend_from_slice(item);
+            expected_replacement.extend_from_slice(&kind.tail);
+            assert_eq!(
+                run.forwarded(),
+                vec![expected_replacement, kind.second.clone()],
+                "{}: the query and the tail, then the next chunk",
+                kind.name
+            );
+
+            let mut client = new_core();
+            apply_snapshot(&mut client, run.snapshot());
+            let mut client_responses = Vec::new();
+            for data in run.forwarded() {
+                client.process_pty_data_fully(&data);
+                client_responses.extend(client.take_response());
+            }
+            let mut reference = new_core();
+            let mut reference_responses = Vec::new();
+            for data in [&first, &kind.second] {
+                reference.process_pty_data_fully(data);
+                reference_responses.extend(reference.take_response());
+            }
+            assert!(
+                !reference_responses.is_empty(),
+                "{}: test prerequisite: the query is answered",
+                kind.name
+            );
+            assert_eq!(
+                client_responses, reference_responses,
+                "{}: the query must be answered exactly once, as on the reference",
+                kind.name
+            );
+            assert_display_matches(&client, &reference, kind.name);
+        }
+    }
+
+    /// AC-5: an alternate-screen color query (absent from the snapshot) and
+    /// each of the three tail kinds in one suppressed chunk.
+    #[test]
+    fn suppressed_chunk_with_a_color_query_and_each_tail_kind_answers_once_and_parses_on() {
+        check_query_with_each_tail(
+            220,
+            b"\x1b[?1049h\x1b]11;?\x07\x1b[?1049l",
+            b"\x1b]11;?\x07",
+        );
+    }
+
+    /// AC-5: a CSI device query and each of the three tail kinds in one
+    /// suppressed chunk.
+    #[test]
+    fn suppressed_chunk_with_a_csi_query_and_each_tail_kind_answers_once_and_parses_on() {
+        check_query_with_each_tail(230, b"\x1b[c", b"\x1b[c");
+    }
+
+    // ---- AC-6: shapes that keep the pre-feature re-send ----
+
+    /// AC-6 (as-03): a wrapped ring gets a dump block after the ring, so the
+    /// snapshot does not end in the cut construct; nothing is recorded and
+    /// the tail is re-sent as before.
+    #[test]
+    fn visibility_restore_of_a_wrapped_ring_with_a_dump_block_still_resends_the_tail() {
+        let first = [b"visible text\r\n".repeat(5), vec![ESC, b'(']].concat();
+        let second = b"0lqk\x1b(B\r\nZ".to_vec();
+        let run = run_visibility_restore(
+            240,
+            Some(ScrollbackRingBuffer::new(32)),
+            vec![first, second.clone()],
+        );
+        assert_eq!(
+            run.forwarded(),
+            vec![vec![ESC, b'('], second],
+            "the dump block ends the snapshot, so the tail is re-sent as before"
+        );
+    }
+
+    /// Run the reader over `chunks` for a `Connected(dest)` pane after
+    /// `record` has recorded boundaries, returning what `dest` received
+    /// (EOF excluded).
+    fn run_reader_with_records(
+        pane_id: PaneId,
+        chunks: Vec<Vec<u8>>,
+        record: impl FnOnce(&OutputCapture, &mpsc::Sender<PtyOutputChunk>),
+    ) -> Vec<Vec<u8>> {
+        let (dest, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+        let output_target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(dest.clone())));
+        let pane = MuxPane::new_test(pane_id, COLS, ROWS, output_target);
+        record(&pane.output_capture, &dest);
+        spawn_reader_keeping_target(&pane, chunks).join().unwrap();
+        let mut out = Vec::new();
+        while let Ok(c) = rx.try_recv() {
+            if !c.data.is_empty() {
+                out.push(c.data);
+            }
+        }
+        out
+    }
+
+    use crate::mux::session::pane::OutputCapture;
+
+    /// AC-6: with two destinations, each uses only its own record.
+    #[test]
+    fn a_suppressed_chunk_uses_only_the_construct_recorded_for_its_own_destination() {
+        let esc_paren = vec![ESC, b'('];
+        let first = [b"abc".as_slice(), &esc_paren].concat();
+
+        // The construct is recorded for ANOTHER destination only: this
+        // destination's own record has none, so the tail is re-sent.
+        let (other, _other_rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let got = run_reader_with_records(250, vec![first.clone()], |capture, dest| {
+            capture.record_boundary_with_construct(&other, 1, Some(esc_paren.clone()));
+            capture.record_boundary(dest, 1);
+        });
+        assert_eq!(got, vec![esc_paren.clone()]);
+
+        // Its own record carries the construct: the tail is omitted, and the
+        // other destination's record is not consulted.
+        let (other, _other_rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let got = run_reader_with_records(251, vec![first.clone()], |capture, dest| {
+            capture.record_boundary(&other, 1);
+            capture.record_boundary_with_construct(dest, 1, Some(esc_paren.clone()));
+        });
+        assert!(got.is_empty(), "nothing to send, got {got:?}");
+    }
+
+    /// AC-6: the construct applies only to the chunk numbered exactly at the
+    /// recorded boundary; an earlier covered chunk re-sends its tail.
+    #[test]
+    fn the_construct_applies_only_to_the_chunk_at_the_recorded_boundary() {
+        let esc_paren = vec![ESC, b'('];
+        let chunk1 = [b"abc".as_slice(), &esc_paren].concat();
+        let chunk2 = [b"xyz".as_slice(), &esc_paren].concat();
+        let got = run_reader_with_records(252, vec![chunk1, chunk2], |capture, dest| {
+            capture.record_boundary_with_construct(dest, 2, Some(esc_paren.clone()));
+        });
+        assert_eq!(
+            got,
+            vec![esc_paren.clone()],
+            "chunk 1 (below the boundary) re-sends its tail; chunk 2 (at the \
+             boundary) uses the construct and sends nothing"
+        );
     }
 }
