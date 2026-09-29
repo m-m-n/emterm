@@ -138,7 +138,12 @@ workflow:
   completed_at_commit: fa48ce713d38213ebb2c262a2b7852cbfea29bc5
   base_commit: e7f0278b17c44e4a70813841ef9bfb03690ff2c7
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: b00e6901f064d551c9b4735c6d0d43bf3dd0f996
+  rounds_completed: 1
+  perspectives: [comprehensive, security, performance, architecture, spec]
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
