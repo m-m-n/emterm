@@ -15,10 +15,15 @@ acceptance_tests:
     red_confirmed: true
     red_reason: "assertion failed: entity reference was split or missing: aaa...a< (stub escape_body_markup returned input unchanged, so the trailing '<' was never turned into '&lt;')"
   AC-4:
+    # Superseded (fetch-failure expectation only): the expectation that a failed
+    # get_capabilities() leaves the body unescaped is superseded by
+    # feature-docs/notification-markup-fail-closed/SPEC.md FR1/FR3 (fail-closed: escape on
+    # fetch failure). The listed test body_markup_absence_confirmed_is_false_on_fetch_failure
+    # pins the new behavior. The other entries in this block still hold as written.
     tests:
-      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_true_only_for_a_successful_list_containing_it
-      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_false_when_absent_from_a_successful_list
-      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_false_on_fetch_failure
+      - callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_false_when_present_in_a_successful_list
+      - callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_true_only_for_a_successful_list_without_it
+      - callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_false_on_fetch_failure
       - callbacks::tests::body_markup_escape::unconfirmed_capabilities_leave_the_body_unchanged
     red_confirmed: true
     red_reason: "body_markup_confirmed_is_false_when_absent_from_a_successful_list: assertion failed: !body_markup_confirmed(&absent); body_markup_confirmed_is_false_on_fetch_failure: assertion failed: !body_markup_confirmed(&failed) (stub body_markup_confirmed always returned true). body_markup_confirmed_is_true_only_for_a_successful_list_containing_it and unconfirmed_capabilities_leave_the_body_unchanged happened to pass against the stub by coincidence (stub=always-true / composed-decision-with-body-unchanged-branch-untouched); both were re-verified against the real implementation and still pass for the intended reason."

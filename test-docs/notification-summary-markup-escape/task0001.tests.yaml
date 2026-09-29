@@ -9,9 +9,14 @@ acceptance_tests:
     red_confirmed: true
     red_reason: "cannot find function `escape_for_send` in this scope (E0425) — the helper did not exist yet"
   AC-2:
+    # Superseded (fetch-failure expectation only): the expectation that a failed
+    # get_capabilities() leaves the title unescaped is superseded by
+    # feature-docs/notification-markup-fail-closed/SPEC.md FR1/FR3 (fail-closed: escape on
+    # fetch failure). The listed test failed_capability_fetch_escapes_both_title_and_body_in_the_same_call
+    # pins the new behavior. The other entries in this block still hold as written.
     tests:
       - callbacks::tests::summary_markup_escape::unconfirmed_capability_list_leaves_the_title_unchanged
-      - callbacks::tests::summary_markup_escape::failed_capability_fetch_leaves_the_title_unchanged
+      - callbacks::tests::summary_markup_escape::failed_capability_fetch_escapes_both_title_and_body_in_the_same_call
       - callbacks::tests::summary_markup_escape::unconfirmed_capability_list_leaves_the_body_unchanged_in_the_same_call
     red_confirmed: true
     red_reason: "cannot find function `escape_for_send` in this scope (E0425) — the helper did not exist yet"
@@ -26,13 +31,18 @@ acceptance_tests:
     red_confirmed: true
     red_reason: "cannot find function `escape_for_send` in this scope (E0425) — the helper did not exist yet"
   AC-5:
+    # Superseded (fetch-failure expectation only): the expectation that a failed
+    # get_capabilities() leaves the body unescaped is superseded by
+    # feature-docs/notification-markup-fail-closed/SPEC.md FR1/FR3 (fail-closed: escape on
+    # fetch failure). The listed test body_markup_absence_confirmed_is_false_on_fetch_failure
+    # pins the new behavior. The other entries in this block still hold as written.
     tests:
       - callbacks::tests::body_markup_escape::escape_body_markup_neutralizes_html_tags
       - callbacks::tests::body_markup_escape::escape_body_markup_double_escapes_a_preexisting_entity
       - callbacks::tests::body_markup_escape::escape_body_markup_after_sanitize_title_truncation_keeps_entity_intact
-      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_true_only_for_a_successful_list_containing_it
-      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_false_when_absent_from_a_successful_list
-      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_false_on_fetch_failure
+      - callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_false_when_present_in_a_successful_list
+      - callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_true_only_for_a_successful_list_without_it
+      - callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_false_on_fetch_failure
       - callbacks::tests::body_markup_escape::unconfirmed_capabilities_leave_the_body_unchanged
       - callbacks::tests::body_markup_escape::tab_activity_and_agent_bodies_are_both_escaped_when_confirmed
     red_confirmed: false
