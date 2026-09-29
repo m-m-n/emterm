@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: 492a24e9e4442632aa2490ba9319a9d681931c22
 last_input_digest: sha256:dd3b0c23dc9cea43782b083ee6ef5b7a2fb1ea1361bd65dc29b68535c9e2a947
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets: {}
 answers:
   req.fr8-tail-approach:
@@ -75,10 +75,16 @@ worker_runs:
   input_digest: sha256:cf047320dd7a4da2d7d44741faa214506c73c161ee72f1d19aaf2630288b0bf2
   output_digest: sha256:2a5d2b34daf8dbf1ea581b07c0df561cff9030aa9f743489ab095e2ea5d34aa7
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:dd3b0c23dc9cea43782b083ee6ef5b7a2fb1ea1361bd65dc29b68535c9e2a947
-  output_digest: null
-artifacts: []
+  output_digest: sha256:2ce32663ac259fa416ae82d5b76455113af5755f496315ce387e0e5ff12228a3
+artifacts:
+- path: feature-docs/mux-suppressed-output-round2-fixes/REQUIREMENTS.md
+  sha256: sha256:6cce839ce39e3b47473ffc83d30bb36e1ff5275e0b1f405e2fbe2fe04d67344b
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-suppressed-output-round2-fixes/SPEC.md
+  sha256: sha256:3207674cf6d27d02a071771a096a37c36b55c731859e2703b42291d33cc6c53f
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
