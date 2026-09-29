@@ -20,6 +20,12 @@
 //!   in the read BEFORE this suppressed chunk (the reader's retained
 //!   window, FR6).
 //!
+//! - **FR8** (mux-suppressed-output-round2-fixes task0004): when the
+//!   destination's covering snapshot already left the client parser holding
+//!   the very tail this builder would append (a cut UTF-8 character,
+//!   `ESC (` / `ESC )`, or a cut CSI), that tail is not sent a second time
+//!   — see [`SuppressedReplacementRequest::snapshot_trailing_construct`].
+//!
 //! [`build_suppressed_replacement`] answers both by handing `window` (the
 //! stream bytes before this chunk) and `chunk` to
 //! [`super::client_parity_scan::scan`], which walks them as one continuous
@@ -42,6 +48,11 @@
 use std::ops::Range;
 
 use super::client_parity_scan::{self, ScanItemKind, ScanOutcome};
+use crate::mux::snapshot_tail::is_awaiting_designator;
+
+/// The ASCII charset designator byte sent ahead of the items when the client
+/// is waiting for a designator (FR8).
+const FILLER_DESIGNATOR: u8 = b'B';
 
 /// Build the FR1/FR3/FR6/FR7/FR9 replacement payload for a suppressed chunk.
 ///
@@ -63,12 +74,56 @@ use super::client_parity_scan::{self, ScanItemKind, ScanOutcome};
 ///
 /// Returns `Q ++ T`, which may be empty (see the module doc's TM-2 note —
 /// an empty result must never itself become an empty `PtyOutput` chunk).
+///
+/// No snapshot trailing construct is known here (the FR8 rule never
+/// applies); use [`build_suppressed_replacement_for`] to supply one.
 pub(in crate::mux) fn build_suppressed_replacement(
     chunk: &[u8],
     ring_written_ranges: &[Range<usize>],
     pending_after: &[u8],
     window: &[u8],
 ) -> Vec<u8> {
+    build_suppressed_replacement_for(&SuppressedReplacementRequest {
+        chunk,
+        ring_written_ranges,
+        pending_after,
+        window,
+        snapshot_trailing_construct: None,
+    })
+}
+
+/// One value carrying every input of replacement assembly for one
+/// suppressed chunk (mux-suppressed-output-round2-fixes IMPLEMENTATION.md
+/// Shared Components, D2). The four base fields are exactly the parameters
+/// of [`build_suppressed_replacement`]; the trailing fields are owned by the
+/// tasks that introduced them.
+pub(in crate::mux) struct SuppressedReplacementRequest<'a> {
+    /// The suppressed chunk's raw bytes.
+    pub chunk: &'a [u8],
+    /// The ring-written ranges of `chunk`, ascending, in chunk coordinates.
+    pub ring_written_ranges: &'a [Range<usize>],
+    /// The write filter's pending bytes right after this read.
+    pub pending_after: &'a [u8],
+    /// The retained window preceding `chunk`.
+    pub window: &'a [u8],
+    /// Snapshot trailing construct (task0004, FR8): absent, or the bytes of
+    /// the incomplete construct the destination's covering snapshot left the
+    /// client parser in. Applies only to a tail found by the client-parity
+    /// scan, never to the write filter's pending-run tail.
+    pub snapshot_trailing_construct: Option<&'a [u8]>,
+}
+
+/// [`build_suppressed_replacement`] over a full request.
+pub(in crate::mux) fn build_suppressed_replacement_for(
+    request: &SuppressedReplacementRequest<'_>,
+) -> Vec<u8> {
+    let SuppressedReplacementRequest {
+        chunk,
+        ring_written_ranges,
+        pending_after,
+        window,
+        snapshot_trailing_construct,
+    } = *request;
     if chunk.is_empty() {
         return Vec::new();
     }
@@ -103,16 +158,56 @@ pub(in crate::mux) fn build_suppressed_replacement(
     } else {
         let outcome = client_parity_scan::scan(window, chunk, chunk.len());
         let mut out = assemble_items(&outcome, ring_written_ranges);
-        if let Some(tail_range) = outcome.tail.clone() {
-            let tail_bytes = &outcome.combined[tail_range];
-            if outcome.tail_strip_c0 {
-                out.extend(strip_c0(tail_bytes));
-            } else {
-                out.extend_from_slice(tail_bytes);
+        let tail: Vec<u8> = match outcome.tail.clone() {
+            Some(tail_range) => {
+                let tail_bytes = &outcome.combined[tail_range];
+                if outcome.tail_strip_c0 {
+                    strip_c0(tail_bytes).collect()
+                } else {
+                    tail_bytes.to_vec()
+                }
             }
+            None => Vec::new(),
+        };
+
+        // FR8: the destination's covering snapshot left the client parser
+        // holding exactly this tail. Re-sending it would double the
+        // construct (a second `ESC (` would be taken as the designator and
+        // printed), so it is omitted — see `carried_tail_output`.
+        let already_carried = !tail.is_empty()
+            && snapshot_trailing_construct.is_some_and(|construct| construct == tail.as_slice());
+        if already_carried {
+            return carried_tail_output(out, tail);
         }
+        out.extend_from_slice(&tail);
         out
     }
+}
+
+/// The replacement for a chunk whose tail the client already holds (FR8):
+/// `items` is the assembled query / launch output, `tail` the tail the
+/// snapshot carried.
+///
+/// - no items: nothing is sent (the caller never turns an empty result into
+///   an empty `PtyOutput` chunk);
+/// - items and an awaiting-designator tail: one filler designator byte, the
+///   items, then the tail. The client's pending designator slot absorbs the
+///   filler, the items parse intact, and the re-sent `ESC (` / `ESC )`
+///   restores the slot for the next chunk's first byte;
+/// - items and a UTF-8 or CSI tail: the items, then the tail. The items'
+///   leading ESC silently ends a UTF-8 partial and aborts a CSI, and the tail
+///   restores the state.
+fn carried_tail_output(items: Vec<u8>, tail: Vec<u8>) -> Vec<u8> {
+    if items.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(1 + items.len() + tail.len());
+    if is_awaiting_designator(&tail) {
+        out.push(FILLER_DESIGNATOR);
+    }
+    out.extend_from_slice(&items);
+    out.extend_from_slice(&tail);
+    out
 }
 
 /// Assemble the byte output for every reportable item, in stream order
@@ -949,5 +1044,180 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ---- FR8 (mux-suppressed-output-round2-fixes task0004): the snapshot
+    // trailing construct ----
+
+    /// Build with a snapshot trailing construct and a retained window.
+    fn build_fr8(
+        window: &[u8],
+        chunk: &[u8],
+        ring_written_ranges: &[Range<usize>],
+        pending: &[u8],
+        construct: Option<&[u8]>,
+    ) -> Vec<u8> {
+        build_suppressed_replacement_for(&SuppressedReplacementRequest {
+            chunk,
+            ring_written_ranges,
+            pending_after: pending,
+            window,
+            snapshot_trailing_construct: construct,
+        })
+    }
+
+    #[test]
+    fn fr8_awaiting_designator_tail_equal_to_the_construct_with_no_items_is_omitted() {
+        let chunk = b"abc\x1b(";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b("));
+        assert!(
+            result.is_empty(),
+            "the client already holds `ESC (`: nothing to re-send, got {result:?}"
+        );
+        let chunk = b"abc\x1b)";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b)"));
+        assert!(
+            result.is_empty(),
+            "the client already holds `ESC )`: nothing to re-send, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn fr8_utf8_tail_equal_to_the_construct_with_no_items_is_omitted() {
+        let mut chunk = b"abc".to_vec();
+        chunk.extend_from_slice(&[0xe4, 0xb8]);
+        let result = build_fr8(&[], &chunk, &[0..chunk.len()], &[], Some(&[0xe4, 0xb8]));
+        assert!(result.is_empty(), "got {result:?}");
+    }
+
+    #[test]
+    fn fr8_csi_tail_equal_to_the_construct_with_no_items_is_omitted() {
+        let chunk = b"abc\x1b[3";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b[3"));
+        assert!(result.is_empty(), "got {result:?}");
+    }
+
+    #[test]
+    fn fr8_csi_tail_is_compared_after_c0_removal() {
+        // The decider's construct has C0 removed; the builder's tail is
+        // compared after its own C0 removal, so a CR inside the cut CSI
+        // does not defeat the match.
+        let chunk = b"abc\x1b[1\r;";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b[1;"));
+        assert!(result.is_empty(), "got {result:?}");
+        // The raw (C0 included) form is a different byte string: unchanged.
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b[1\r;"));
+        assert_eq!(result, b"\x1b[1;");
+    }
+
+    #[test]
+    fn fr8_tail_starting_in_the_window_is_compared_as_a_whole() {
+        // The cut sequence began in the retained window and ends the chunk.
+        let window = b"ab\x1b[";
+        let chunk = b"3";
+        let result = build_fr8(window, chunk, &[0..chunk.len()], &[], Some(b"\x1b[3"));
+        assert!(result.is_empty(), "got {result:?}");
+        // A construct that is only a prefix of the tail is not equal.
+        let result = build_fr8(window, chunk, &[0..chunk.len()], &[], Some(b"\x1b["));
+        assert_eq!(result, b"\x1b[3");
+    }
+
+    #[test]
+    fn fr8_construct_absent_or_different_leaves_the_output_unchanged() {
+        let chunk = b"abc\x1b(";
+        let ranges = [0..chunk.len()];
+        assert_eq!(build_fr8(&[], chunk, &ranges, &[], None), b"\x1b(");
+        assert_eq!(
+            build_fr8(&[], chunk, &ranges, &[], Some(b"\x1b)")),
+            b"\x1b("
+        );
+        assert_eq!(
+            build_fr8(&[], chunk, &ranges, &[], Some(b"\x1b[3")),
+            b"\x1b("
+        );
+        // Wrapper form (no construct) is the same as an absent construct.
+        assert_eq!(build(chunk, &ranges, &[]), b"\x1b(");
+        let mut utf8 = b"abc".to_vec();
+        utf8.extend_from_slice(&[0xe4, 0xb8]);
+        assert_eq!(
+            build_fr8(&[], &utf8, &[0..utf8.len()], &[], Some(&[0xe4])),
+            vec![0xe4, 0xb8]
+        );
+    }
+
+    #[test]
+    fn fr8_designator_construct_with_a_csi_query_emits_filler_items_then_tail() {
+        let chunk = b"\x1b[6nabc\x1b(";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b("));
+        assert_eq!(
+            result, b"B\x1b[6n\x1b(",
+            "filler designator, the query, then the tail"
+        );
+        let chunk = b"\x1b[cabc\x1b)";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b)"));
+        assert_eq!(result, b"B\x1b[c\x1b)");
+    }
+
+    #[test]
+    fn fr8_designator_construct_with_an_alt_span_color_query_emits_filler_items_then_tail() {
+        // The color query lies outside the ring-written ranges (it was in an
+        // alternate-screen span), so it is re-delivered; `abc\x1b(` is the
+        // ring-written part.
+        let chunk = b"\x1b]11;?\x07abc\x1b(";
+        let start = b"\x1b]11;?\x07".len();
+        let result = build_fr8(&[], chunk, &[start..chunk.len()], &[], Some(b"\x1b("));
+        assert_eq!(result, b"B\x1b]11;?\x07\x1b(");
+    }
+
+    #[test]
+    fn fr8_designator_construct_with_a_viewer_launch_emits_filler_items_then_tail() {
+        let chunk = b"\x1b]9999;emterm-md;# hi\x07abc\x1b(";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b("));
+        assert_eq!(result, b"B\x1b]9999;emterm-md;# hi\x07\x1b(");
+    }
+
+    #[test]
+    fn fr8_designator_construct_that_differs_from_the_tail_gets_no_filler() {
+        let chunk = b"\x1b[6nabc\x1b(";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b)"));
+        assert_eq!(result, b"\x1b[6n\x1b(");
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], None);
+        assert_eq!(result, b"\x1b[6n\x1b(");
+    }
+
+    #[test]
+    fn fr8_utf8_construct_with_items_emits_items_then_tail_with_no_filler() {
+        let mut chunk = b"\x1b[6nabc".to_vec();
+        chunk.extend_from_slice(&[0xe4, 0xb8]);
+        let result = build_fr8(&[], &chunk, &[0..chunk.len()], &[], Some(&[0xe4, 0xb8]));
+        let mut expected = b"\x1b[6n".to_vec();
+        expected.extend_from_slice(&[0xe4, 0xb8]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn fr8_csi_construct_with_items_emits_items_then_tail_with_no_filler() {
+        let chunk = b"\x1b[6nabc\x1b[3";
+        let result = build_fr8(&[], chunk, &[0..chunk.len()], &[], Some(b"\x1b[3"));
+        assert_eq!(result, b"\x1b[6n\x1b[3");
+    }
+
+    #[test]
+    fn fr8_pending_run_tail_is_never_affected_by_the_construct() {
+        // The tail comes from the write filter's pending run (D4 rule 1),
+        // so even a construct byte-equal to it changes nothing.
+        let pending = b"\x1b]9999;emterm-md;partial".to_vec();
+        let mut chunk = b"abc".to_vec();
+        chunk.extend_from_slice(&pending);
+        let ranges = [0..chunk.len()];
+        let with_construct = build_fr8(&[], &chunk, &ranges, &pending, Some(&pending));
+        let without = build_fr8(&[], &chunk, &ranges, &pending, None);
+        assert_eq!(with_construct, without);
+        assert_eq!(with_construct, pending);
+        // A pending run that equals an `ESC (` construct is likewise re-sent.
+        let chunk = b"abc\x1b(";
+        let ranges = [0..chunk.len()];
+        let result = build_fr8(&[], chunk, &ranges, b"\x1b(", Some(b"\x1b("));
+        assert_eq!(result, b"\x1b(");
     }
 }

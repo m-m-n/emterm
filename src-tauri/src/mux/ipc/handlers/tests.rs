@@ -3460,3 +3460,369 @@ async fn reevaluate_agent_waiters_keeps_non_matching_waiter() {
         "non-matching waiter must remain registered"
     );
 }
+
+// ── mux-suppressed-output-round2-fixes task0004 (FR8): the on-demand
+//    snapshot path records the construct with the boundary ───────────────
+
+/// The recorded construct for `tx` at chunk number `number`: `None` when
+/// the number is not covered, `Some(construct)` when it is.
+fn recorded_construct(
+    capture: &crate::mux::session::pane::OutputCapture,
+    tx: &mpsc::Sender<PtyOutputChunk>,
+    number: u64,
+) -> Option<Option<Vec<u8>>> {
+    capture.boundary_cover(tx, number).map(|c| c.construct)
+}
+
+/// The on-demand assembly output for `pane`'s CURRENT ring and shadow state
+/// (the byte-identity oracle of AC-3).
+fn expected_on_demand_assembly(pane: &MuxPane) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
+    let (ring, segments, wrapped) = pane
+        .scrollback
+        .lock()
+        .unwrap()
+        .read_segments_with_wrap_state();
+    let (screen, alt, dims) = {
+        let parser = pane.shadow_parser.lock().unwrap();
+        let (rows, cols) = parser.screen().size();
+        let alt = parser.screen().alternate_screen();
+        let screen = if alt || wrapped {
+            parser.screen().contents_formatted()
+        } else {
+            Vec::new()
+        };
+        (screen, alt, (cols, rows))
+    };
+    build_snapshot_bytes_for_ring(&ring, &segments, &screen, alt, wrapped, dims, 10_000)
+}
+
+/// Connected pane 1 in a fresh session, seeded through `seed`.
+async fn on_demand_fixture(
+    seed: impl FnOnce(&MuxPane),
+) -> (
+    Arc<Mutex<SessionManager>>,
+    u32,
+    mpsc::Sender<PtyOutputChunk>,
+    mpsc::Receiver<PtyOutputChunk>,
+    Arc<crate::mux::session::pane::OutputCapture>,
+) {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (owned_tx, rx) = mpsc::channel::<PtyOutputChunk>(16);
+    let target: SharedOutputTarget =
+        Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+    let (session_id, capture) = {
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        add_pane(&mut m, sid, wid, 1, target);
+        let pane = get_pane(&m, sid, wid, 1);
+        seed(pane);
+        (sid, pane.output_capture.clone())
+    };
+    (mgr, session_id, owned_tx, rx, capture)
+}
+
+fn request_snapshot_message() -> MuxMessage {
+    MuxMessage {
+        msg_type: MessageType::RequestPaneSnapshot,
+        pane_id: 1,
+        payload: Vec::new(),
+    }
+}
+
+/// AC-3 / AC-6: an on-demand snapshot (immediate path) of a main-screen
+/// pane whose ring ends in each tail kind sends the byte-identical assembly
+/// output and records the construct decided from THAT payload — which ends
+/// in the trailing screen-switch sequence, so nothing is carried.
+#[tokio::test]
+async fn on_demand_snapshot_sends_the_assembly_bytes_and_records_the_construct_of_that_payload() {
+    for (name, ring_bytes) in [
+        ("cut utf-8", [b"abc".as_slice(), &[0xe4, 0xb8]].concat()),
+        ("esc paren", [b"abc".as_slice(), &[0x1b, b'(']].concat()),
+        ("cut csi", [b"abc".as_slice(), &[0x1b, b'[', b'3']].concat()),
+    ] {
+        let (mgr, session_id, owned_tx, mut rx, capture) = on_demand_fixture(|pane| {
+            pane.shadow_parser.lock().unwrap().process(&ring_bytes);
+            pane.scrollback.lock().unwrap().write(&ring_bytes);
+        })
+        .await;
+        let expected = {
+            let m = mgr.lock().await;
+            let pane = get_pane(&m, session_id, 1, 1);
+            expected_on_demand_assembly(pane)
+        };
+        assert!(
+            expected.0.ends_with(b"\x1b[?1049l"),
+            "{name}: test prerequisite: an on-demand main snapshot ends in the switch sequence"
+        );
+
+        let mut deferred = DeferredOutputQueue::new();
+        handle_request_pane_snapshot(
+            &request_snapshot_message(),
+            session_id,
+            &mgr,
+            &owned_tx,
+            &mut deferred,
+            10_000,
+        )
+        .await
+        .expect("handle_request_pane_snapshot");
+
+        let chunk = rx.try_recv().expect("snapshot chunk");
+        assert_eq!(chunk.kind, crate::mux::session::pane::ChunkKind::Snapshot);
+        assert_eq!(
+            chunk.data,
+            crate::mux::session::pane::encode_snapshot_segments(&expected.0, &expected.1),
+            "{name}: the bytes and the wire encoding are unchanged"
+        );
+        assert_eq!(
+            recorded_construct(&capture, &owned_tx, 0),
+            Some(crate::mux::snapshot_tail::trailing_construct_bytes(
+                &expected.0
+            )),
+            "{name}: the construct of the sent payload is recorded with the boundary"
+        );
+        assert_eq!(
+            recorded_construct(&capture, &owned_tx, 0),
+            Some(None),
+            "{name}: a payload ending in the switch sequence carries nothing"
+        );
+    }
+}
+
+/// AC-3 / AC-6: an on-demand snapshot of an alternate-screen pane sends the
+/// byte-identical assembly output and records none.
+#[tokio::test]
+async fn on_demand_alternate_screen_snapshot_records_none() {
+    let (mgr, session_id, owned_tx, mut rx, capture) = on_demand_fixture(|pane| {
+        pane.shadow_parser
+            .lock()
+            .unwrap()
+            .process(b"\x1b[?1049hTUI\x1b(");
+        pane.scrollback.lock().unwrap().write(b"history\r\n");
+    })
+    .await;
+    let expected = {
+        let m = mgr.lock().await;
+        expected_on_demand_assembly(get_pane(&m, session_id, 1, 1))
+    };
+    let mut deferred = DeferredOutputQueue::new();
+    handle_request_pane_snapshot(
+        &request_snapshot_message(),
+        session_id,
+        &mgr,
+        &owned_tx,
+        &mut deferred,
+        10_000,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+    let chunk = rx.try_recv().expect("snapshot chunk");
+    assert_eq!(
+        chunk.data,
+        crate::mux::session::pane::encode_snapshot_segments(&expected.0, &expected.1)
+    );
+    assert_eq!(recorded_construct(&capture, &owned_tx, 0), Some(None));
+}
+
+/// AC-3: the DEFERRED on-demand path (channel full) records nothing until
+/// the flush inserts the chunk, and then records the construct decided from
+/// the payload it carries.
+#[tokio::test]
+async fn deferred_on_demand_snapshot_records_the_construct_only_when_flushed() {
+    let (mgr, session_id, owned_tx, mut rx, capture) = on_demand_fixture(|pane| {
+        pane.scrollback.lock().unwrap().write(b"abc\x1b(");
+        pane.shadow_parser.lock().unwrap().process(b"abc\x1b(");
+    })
+    .await;
+    // Fill the channel so the snapshot is deferred.
+    for _ in 0..16 {
+        owned_tx
+            .try_send(PtyOutputChunk::pty_output(1, b"x".to_vec()))
+            .expect("fill the channel");
+    }
+    let expected = {
+        let m = mgr.lock().await;
+        expected_on_demand_assembly(get_pane(&m, session_id, 1, 1))
+    };
+    let mut deferred = DeferredOutputQueue::new();
+    handle_request_pane_snapshot(
+        &request_snapshot_message(),
+        session_id,
+        &mgr,
+        &owned_tx,
+        &mut deferred,
+        10_000,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+    assert_eq!(deferred.len(), 1, "the snapshot is deferred");
+    assert_eq!(
+        recorded_construct(&capture, &owned_tx, 0),
+        None,
+        "nothing is recorded before the chunk enters the channel"
+    );
+
+    while rx.try_recv().is_ok() {}
+    let visible_state = Arc::new(AtomicBool::new(true));
+    flush_deferred_output(
+        &mut deferred,
+        &owned_tx,
+        &mgr,
+        session_id,
+        &visible_state,
+        10_000,
+    )
+    .await;
+    let chunk = rx.try_recv().expect("the flushed snapshot");
+    assert_eq!(
+        chunk.data,
+        crate::mux::session::pane::encode_snapshot_segments(&expected.0, &expected.1)
+    );
+    assert_eq!(
+        recorded_construct(&capture, &owned_tx, 0),
+        Some(crate::mux::snapshot_tail::trailing_construct_bytes(
+            &expected.0
+        ))
+    );
+}
+
+/// AC-3: the deferred flush records the construct carried by the deferred
+/// boundary commit together with the boundary.
+#[tokio::test]
+async fn flush_deferred_output_records_the_deferred_construct_with_the_boundary() {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+    let capture = Arc::new(crate::mux::session::pane::OutputCapture::new());
+    let mut deferred = DeferredOutputQueue::new();
+    deferred.defer_chunk(
+        PtyOutputChunk::snapshot(1, b"S".to_vec()),
+        Some(crate::mux::session::pane::DeferredBoundaryCommit {
+            output_capture: capture.clone(),
+            boundary: 5,
+            construct: Some(vec![0x1b, b'(']),
+        }),
+    );
+    let visible_state = Arc::new(AtomicBool::new(true));
+    flush_deferred_output(&mut deferred, &owned_tx, &mgr, 0, &visible_state, 10_000).await;
+    assert!(rx.try_recv().is_ok(), "the chunk was flushed");
+    assert_eq!(
+        recorded_construct(&capture, &owned_tx, 5),
+        Some(Some(vec![0x1b, b'(']))
+    );
+    assert_eq!(
+        recorded_construct(&capture, &owned_tx, 4),
+        Some(None),
+        "an earlier covered chunk never uses the construct"
+    );
+}
+
+/// AC-3: the fair-permit path records the construct of the front deferred
+/// item together with the boundary.
+#[tokio::test]
+async fn apply_fair_permit_to_front_deferred_item_records_the_deferred_construct_with_the_boundary()
+{
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(1);
+    let permit = owned_tx
+        .clone()
+        .reserve_owned()
+        .await
+        .expect("reserve on a fresh channel must succeed");
+    let capture = Arc::new(crate::mux::session::pane::OutputCapture::new());
+    let mut deferred = DeferredOutputQueue::new();
+    deferred.defer_chunk(
+        PtyOutputChunk::snapshot(1, b"S".to_vec()),
+        Some(crate::mux::session::pane::DeferredBoundaryCommit {
+            output_capture: capture.clone(),
+            boundary: 7,
+            construct: Some(vec![0xe4, 0xb8]),
+        }),
+    );
+    let visible_state = Arc::new(AtomicBool::new(true));
+    apply_fair_permit_to_front_deferred_item(
+        &mut deferred,
+        permit,
+        &owned_tx,
+        &mgr,
+        0,
+        &visible_state,
+        10_000,
+    )
+    .await;
+    assert!(rx.try_recv().is_ok(), "the chunk was sent via the permit");
+    assert_eq!(
+        recorded_construct(&capture, &owned_tx, 7),
+        Some(Some(vec![0xe4, 0xb8]))
+    );
+}
+
+/// AC-3: a coalesced or evicted deferred chunk discards its construct with
+/// its boundary commit — only the newest chunk's construct is ever recorded.
+#[tokio::test]
+async fn a_coalesced_deferred_chunk_discards_the_construct_it_carried() {
+    let mgr = Arc::new(Mutex::new(SessionManager::new()));
+    let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+    let capture = Arc::new(crate::mux::session::pane::OutputCapture::new());
+    let mut deferred = DeferredOutputQueue::new();
+    deferred.defer_chunk(
+        PtyOutputChunk::snapshot(1, b"OLD".to_vec()),
+        Some(crate::mux::session::pane::DeferredBoundaryCommit {
+            output_capture: capture.clone(),
+            boundary: 3,
+            construct: Some(vec![0x1b, b'(']),
+        }),
+    );
+    deferred.defer_chunk(
+        PtyOutputChunk::snapshot(1, b"NEW".to_vec()),
+        Some(crate::mux::session::pane::DeferredBoundaryCommit {
+            output_capture: capture.clone(),
+            boundary: 4,
+            construct: None,
+        }),
+    );
+    assert_eq!(deferred.len(), 1, "the newer chunk replaced the older one");
+    let visible_state = Arc::new(AtomicBool::new(true));
+    flush_deferred_output(&mut deferred, &owned_tx, &mgr, 0, &visible_state, 10_000).await;
+    assert_eq!(rx.try_recv().unwrap().data, b"NEW");
+    assert_eq!(
+        recorded_construct(&capture, &owned_tx, 4),
+        Some(None),
+        "only the newest commit is applied, and it carries no construct"
+    );
+    assert_eq!(
+        recorded_construct(&capture, &owned_tx, 3),
+        Some(None),
+        "the discarded chunk's construct never applies"
+    );
+}
+
+/// AC-2: the on-demand handler decides the construct outside the capture
+/// exclusion and the boundary exclusion.
+#[tokio::test]
+async fn on_demand_snapshot_decides_the_construct_outside_both_exclusions() {
+    let (mgr, session_id, owned_tx, mut rx, capture) = on_demand_fixture(|pane| {
+        pane.scrollback.lock().unwrap().write(b"abc\x1b(");
+        pane.shadow_parser.lock().unwrap().process(b"abc\x1b(");
+    })
+    .await;
+    let probe = capture.probe_decider_exclusions();
+    let mut deferred = DeferredOutputQueue::new();
+    handle_request_pane_snapshot(
+        &request_snapshot_message(),
+        session_id,
+        &mgr,
+        &owned_tx,
+        &mut deferred,
+        10_000,
+    )
+    .await
+    .expect("handle_request_pane_snapshot");
+    let (calls, free) = probe.finish();
+    assert!(rx.try_recv().is_ok());
+    assert!(calls >= 1, "the decider must run on the on-demand path");
+    assert!(
+        free,
+        "the decider must run with neither the capture exclusion nor the boundary exclusion held"
+    );
+}

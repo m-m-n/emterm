@@ -266,6 +266,17 @@ pub(super) async fn collect_reattach_data(
                         ),
                     );
 
+                    // mux-suppressed-output-round2-fixes task0004 (FR8): the
+                    // incomplete construct the deliverable snapshot leaves
+                    // the client parser in, decided off the `output_target`
+                    // lock (and, as always, outside the capture exclusion)
+                    // and recorded together with the boundary below.
+                    let trailing_construct = if deliverable {
+                        crate::mux::snapshot_tail::trailing_construct_bytes(&combined)
+                    } else {
+                        None
+                    };
+
                     let mut target = pane.output_target.lock().unwrap();
                     let target_was = match &*target {
                         PaneOutputTarget::Connected(_) => "Connected",
@@ -296,8 +307,11 @@ pub(super) async fn collect_reattach_data(
                     // to `Connected` — no assembly, no encoding, no size
                     // check beyond the plain boolean computed above.
                     if deliverable {
-                        pane.output_capture
-                            .record_boundary(pane_output_tx, boundary);
+                        pane.output_capture.record_boundary_with_construct(
+                            pane_output_tx,
+                            boundary,
+                            trailing_construct,
+                        );
                     }
                     *target = PaneOutputTarget::Connected(pane_output_tx.clone());
                     drop(target);
