@@ -20,7 +20,7 @@ bases:
       '1': 0.24
       '2': 0.01
       '3': 0.0
-  observed_at: '2026-09-29T20:33:00+09:00'
+  observed_at: '2026-09-29T20:31:00+09:00'
 - basis: description_plus_code
   score:
     type: score
@@ -39,7 +39,7 @@ bases:
       '1': 0.42
       '2': 0.02
       '3': 0.0
-  observed_at: '2026-09-29T20:42:00+09:00'
+  observed_at: '2026-09-29T20:35:00+09:00'
 pre_survey_estimate:
   files_expected:
   - test-docs/notification-summary-markup-escape/task0001.tests.yaml
@@ -82,4 +82,4 @@ pre_survey_estimate:
   - 'test-docs/notification-body-markup-escape/task0001.tests.yaml:19,20,21: 同じ旧述語テスト名3件の参照切れが別featureにも残っている'
   - 'src-tauri/src/callbacks.rs:607,691: 現行の判定処理は実装済みで、対象の記録修正に伴う関数・依存関係・実行時動作の変更はない'
   - 'src-tauri/src/callbacks/tests.rs:756,762,773,897: covering_tests_existは既存動作テストの定義確認を表し、本調査ではテストを実行していない'
-decided_at: '2026-09-29T20:43:00+09:00'
+decided_at: '2026-09-29T20:36:00+09:00'
