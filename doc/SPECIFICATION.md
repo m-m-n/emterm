@@ -1373,6 +1373,57 @@ Response-producing CSI device queries (DA1/DA2, DSR, XTWINOPS size reports, DECR
 
 ---
 
+#### Mux Snapshot Output Boundary
+
+The daemon splits each pane's output at a single boundary shared by the shadow parser, the scrollback ring and snapshot capture, so output already contained in a snapshot is never applied a second time after tab switch, reattach or visibility resume.
+
+**Key Functionality:**
+- Each PTY read chunk gets a monotonically increasing per-pane sequence number (daemon-internal; not part of the snapshot bytes or the `mux_ipc` wire format, and not carried through hot upgrade)
+- Shadow-parser update, ring write and sequence assignment happen under one per-pane capture exclusion; all four snapshot paths (visible reattach, visibility resume, on-demand snapshot, deferred resume) read the ring, shadow state and last sequence under the same exclusion, so no chunk appears only in the shadow dump; `MuxPane::resize` records its dimension marker and resizes the shadow parser under it too
+- The last sequence a snapshot captured is recorded together with the destination that receives the snapshot; chunks at or below that sequence are not forwarded to that destination after the snapshot, including a chunk waiting in `blocking_send` on a full channel. Chunks above the boundary and the PTY-EOF empty chunk are always forwarded; no boundary is recorded when no snapshot is sent (size limit exceeded, hidden reattach)
+- A boundary recorded for one destination never suppresses forwarding to another destination
+- Lock order is `output_target` → capture exclusion → ring / shadow parser; no `blocking_send` while holding `output_target`; snapshot assembly, encoding and sending run outside the capture exclusion
+- Snapshot bytes and the `mux_ipc` wire format are unchanged
+
+**Side effects of a suppressed chunk:**
+- Only forwarding is suppressed; shadow update, ring write, title (OSC 0/2), agent-status, OSC 133 marks, OSC 7 cwd and probe logging run as for any other chunk
+- OSC 9 desktop notifications in the chunk fire exactly once through the same notification handling as the Detached path (never twice when an OSC 9 spans a suppressed and a following chunk)
+- Terminal queries (DSR, DA, color queries, ...) in the suppressed chunk that the snapshot bytes do not retain are re-sent once, after the snapshot and before the next chunk, in original order, as ordinary `PtyOutput` chunks; the client answers each once
+- A control sequence, UTF-8 character or write-filter pending candidate left incomplete at the end of the suppressed chunk is handled so its continuation in the next chunk is processed once by the client and never shown as text or a replacement character
+- Viewer launches (OSC 777 emterm markdown / json / yaml, OSC 9999 emterm-md) completed in the suppressed chunk are re-sent once after the snapshot; inline images (Kitty APC, SIXEL DCS) and OSC 777 image are not re-sent (known loss)
+
+---
+
+#### Mux Suppressed-Output Client Parity
+
+The replacement output for a suppressed chunk (queries, viewer launches, incomplete tail) and the scrollback write filter follow the same parse transitions as the client (`term_core` parser and the GUI theme's response generation), so the client reaches the same state as it would have without suppression.
+
+**Key Functionality:**
+- Scan transitions match the client: ESC inside OSC/DCS/APC aborts the string (or completes it with `ESC \`), `ESC X` / `ESC ^` start no string, `ESC (` / `ESC )` consume the next byte as a designator (even ESC), `ESC ESC` stays in Escape, C0 inside CSI executes and ESC aborts CSI, OSC numbers accumulate decimal digits up to the first `;`, color queries (OSC 4 / 10 / 11 / 12) are answered per `?` item
+- A trailing ESC in an OSC/DCS/APC body is treated as incomplete and retained from the sequence start; an incomplete CSI tail is re-sent without C0 controls
+- The reader's normal path only compares sequence numbers and keeps a bounded copy (256 bytes) of the previous chunk's tail; parsing, extraction and tail assembly run only for suppressed chunks; the scan is a single bounded pass that never panics, and an empty replacement output is never sent as an empty chunk
+- The tail retention window never restarts at an ESC that may sit in a designator slot; `ScrollbackWriteFilter` carries an awaiting-designator state across reads so split input yields the same emitted bytes and `pending` as a single call, and treats a removed screen-switch sequence (47 / 1047 / 1049) as closing an in-progress OSC/DCS/APC
+- Color queries completed in a main-screen (ring-written) range of a suppressed chunk are re-sent like CSI queries; the pending-based scan exclusion covers only the range of the original chunk that corresponds to `pending`, so queries and viewer launches in intervening alternate-screen ranges are delivered
+- Sequences carried over in the write filter's `pending` that complete inside the suppressed chunk (viewer launches, color queries) are handed over with their position in the original chunk and delivered once, in original order, regardless of the retention window length; identical distinct launches are each delivered
+- OSC number recovery and viewer-launch identification live in one layer independent of `mux::ipc` and the `gui` feature, shared by scrollback stripping and replacement-output extraction (leading-zero numbers such as `0777` / `09999` and non-digit prefixes before the first `;` are now stripped from ring and snapshot; numbers above u16 are not identified)
+- The boundary record carries the trailing parse state of the snapshot actually generated for that destination, so an incomplete tail the snapshot already left the client in (mid UTF-8, after `ESC (` / `ESC )`, incomplete CSI) is not re-sent; when queries coexist with such a tail, the leading query ESC is not consumed as a designator and subsequent chunks parse as in the raw stream
+- Visibility-resume snapshots restore the client's screen mode (main / alternate) to match the shadow parser at capture time; reattach and on-demand snapshot bytes are unchanged
+- `EvalResult::ResumeWithSnapshot` is removed; only `resume_pane_with_permit` moves a pane from Detached to Connected
+
+---
+
+#### Mux Bridge Scrollback-Capacity Resend
+
+The mux bridge remembers the last valid `ClientScrollbackCapacity` report and resends it after an upgrade-driven reconnect, so the new daemon connection keeps the reported probe capacity instead of falling back to the default 10,000 lines.
+
+**Key Functionality:**
+- Only a frame whose payload is exactly 4 bytes is stored as the last capacity; a length-invalid frame never overwrites the last valid value
+- Every `ClientScrollbackCapacity` frame is still forwarded to the daemon unchanged, including length-invalid ones
+- The bridge does not interpret the value (no clamping or substitution; 0 is stored as-is)
+- After `reconnect_and_reattach`, the stored body is resent to the new daemon connection
+
+---
+
 #### Mux Detached Pane Exit Reap
 
 Pane cleanup (reap) is performed whenever the PTY dies, regardless of attach state.
