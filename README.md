@@ -60,6 +60,8 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Fast window switching (tens of milliseconds), even for panes with large accumulated scrollback
   - Switching windows or typing in other panes stays responsive even while one pane is producing very high-volume output
   - Clean reattach: device-query response sequences (DA1/DSR/XTWINOPS/DECRPM) recorded in scrollback are stripped before replay, so detach → attach never types stray query text into the shell prompt
+  - No double-applied output on tab switch / reattach / visibility resume: output already contained in a snapshot is not forwarded again, and terminal queries and viewer launches inside the overlapping chunk are re-sent exactly once, so the screen and query responses match what they would have been without the overlap
+  - The mux bridge remembers the last valid scrollback-capacity report and resends it after an upgrade-driven reconnect
   - `emterm mux upgrade` replaces the running daemon in place via `execve` (Unix only): every pane's shell keeps running through the update, including alt-screen apps (e.g. Claude Code); `emterm mux attach` and `emterm mux` auto-recover a stale (protocol-mismatched) daemon via hot upgrade before falling back to a full respawn; the daemon also detects a binary update automatically on attach or mux start and self-upgrades, no manual `emterm mux upgrade` required
   - Windows support: Named Pipe IPC with daemon process detachment (survives terminal closure)
   - Included in the CLI-only build: `emterm mux --daemon` runs on headless SSH hosts without GUI dependencies
