@@ -3,19 +3,24 @@ feature: mux-suppressed-output-round3-fixes
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: ed74522be74f744638c7c8c4ee4d258eaaeb7751
-last_input_digest: sha256:328619ae2fc60f06d1e0852ffcaefe1be2634aec549c729caa5f2ed8edc8d379
-active_request_id: create-spec-run-0001
+base_revision: f065367631cc643c44872b3aef118edfe49b6500
+last_input_digest: sha256:5261871908bfa215038e0819a458b07d23638aede93fa278afe41e82a16c705e
+active_request_id: create-spec-run-0002
 packets: {}
 answers: {}
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: failed
   input_digest: sha256:328619ae2fc60f06d1e0852ffcaefe1be2634aec549c729caa5f2ed8edc8d379
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:5261871908bfa215038e0819a458b07d23638aede93fa278afe41e82a16c705e
   output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
-last_error: null
+last_error: 'create-spec-run-0001: session interrupted before the worker returned;
+  input digest changed on resume, re-dispatched as create-spec-run-0002'
