@@ -3,18 +3,74 @@ feature: mux-suppressed-output-round3-fixes
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: f065367631cc643c44872b3aef118edfe49b6500
+base_revision: b7aef35a76a43ccc121c0767d10c650a5a104d1e
 last_input_digest: sha256:5261871908bfa215038e0819a458b07d23638aede93fa278afe41e82a16c705e
 active_request_id: create-spec-run-0002
 packets: {}
-answers: {}
+answers:
+  req.fr1-closed-construct-handling:
+    packet_id: null
+    answered_at: '2026-10-01T19:58:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: (a) 切断で閉じた構成要素は開始の ESC から ring に書かない
+    normalized_answer: FR1 は、切断で閉じた未完の構成要素を開始の ESC から ring に書かないことで満たす。確定済みの前半は既存の除去を通して書く。終端（ST
+      等）を付け足す方式は採らない。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation,
+      orchestrator-opened after analyst run 0002 at the user''s launch instruction
+      to consult Codex on unclear points); Codex (codex harness, 1 turn) consulted;
+      Opus escalation: not run; options: (a) 開始 ESC から書かない [chosen] / (b) 終端を付け足す
+      [not chosen]; key points: 切断時の処理は未完の列も除去処理へ渡し終端の無い OSC が保存される。ST は正常終端なので中断された問い合わせを成立させうる'
+  req.fr2-fr3-shared-strip:
+    packet_id: null
+    answered_at: '2026-10-01T19:58:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: (a) 共通の除去処理で指定文字を消費し、書き込み側から待機状態を渡す
+    normalized_answer: FR2/FR3 は共通の除去処理（strip_rich_content_and_remap）で ESC ( / ESC
+      ) の指定文字を消費する一つの変更で満たす。書き込みフィルタは処理開始時の指定文字待ち状態を通常・切断・容量超過のすべての経路で除去処理へ渡し、指定文字のバイトと位置の対応を保つ。スナップショット側は初期状態なしで呼ぶ。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation,
+      orchestrator-opened after analyst run 0002 at the user''s launch instruction
+      to consult Codex on unclear points); Codex (codex harness, 1 turn) consulted;
+      Opus escalation: not run; options: (a) 共通処理で消費 [chosen] / (b) 書き込み側のみで前処理 [not
+      chosen]; key points: 共通処理なら書き込み時とスナップショット時を同じ規則で防げる。待機状態は通常・切断・容量超過の各経路へ渡す必要がある'
+  req.fr6-recheck-at-send:
+    packet_id: null
+    answered_at: '2026-10-01T19:58:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: (a) 境界記録に世代を付け、送信直前に再確認する
+    normalized_answer: FR6 は境界記録に世代（または同等の識別）を付け、置換出力の送信では排他の外で送信枠を確保した後、output_target
+      → 境界排他の順で取り直して記録を再確認し、末尾省略を決めて permit.send まで保持する。走査や通知処理は排他の外に置く。同じ境界の再記録にも世代を付け、置換出力が空になる場合も再確認の対象にする。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation,
+      orchestrator-opened after analyst run 0002 at the user''s launch instruction
+      to consult Codex on unclear points); Codex (codex harness, 1 turn) consulted;
+      Opus escalation: not run; options: (a) 世代付き再確認 [chosen] / (b) 被覆判定から送信まで排他を保持
+      [not chosen]; key points: 既存の NeedsSlot 送信と同じ形で NFR2 を守れる。同一境界の再記録と空の置換出力も再確認対象'
+  req.fr8-regression-test:
+    packet_id: null
+    answered_at: '2026-10-01T19:58:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: (a) テストビルド限定の割り当て計数＋従来処理との同値比較
+    normalized_answer: FR8 の再発検出は、テストビルド限定のスレッドローカルな割り当て計数と、identify_osc(&recover_osc(body))
+      との同値比較で行う。計数は新しい識別関数の呼び出しだけを対象にし、入力準備・比較用の復元・出力用 Vec を作る除去処理全体は計測の外に置く。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation,
+      orchestrator-opened after analyst run 0002 at the user''s launch instruction
+      to consult Codex on unclear points); Codex (codex harness, 1 turn) consulted;
+      Opus escalation: not run; options: (a) 割り当て計数＋同値比較 [chosen] / (b) 同値比較＋構造テスト
+      [not chosen]; key points: 現行の識別関数も &[u8] を受けて bool を返すので構造テストでは退行を検出できない。計測範囲は識別関数だけに絞る'
 worker_runs:
 - request_id: create-spec-run-0001
   status: failed
   input_digest: sha256:328619ae2fc60f06d1e0852ffcaefe1be2634aec549c729caa5f2ed8edc8d379
   output_digest: null
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:5261871908bfa215038e0819a458b07d23638aede93fa278afe41e82a16c705e
   output_digest: null
 artifacts: []
@@ -22,5 +78,4 @@ patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
-last_error: 'create-spec-run-0001: session interrupted before the worker returned;
-  input digest changed on resume, re-dispatched as create-spec-run-0002'
+last_error: null
