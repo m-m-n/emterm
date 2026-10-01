@@ -144,7 +144,111 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Allocation-free OSC identification on the write path
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/osc_identify.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR8
+    - NFR3
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
+  task0002:
+    title: 'Write-path client parity: closed constructs, designators, straddling switches'
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - NFR1
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
+  task0003:
+    title: Designator-aware as-05 fallback in the client-parity scan
+    plan: tasks/task0003.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round3_as05.rs
+    - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR5
+    - NFR4
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
+  task0004:
+    title: Generation-checked tail omission at send time; later record wins
+    plan: tasks/task0004.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round3_send_recheck.rs
+    - src-tauri/src/mux/session/pane/output_capture.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+    - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - test-docs/mux-suppressed-output-round2-fixes/task0004.tests.yaml
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    - input-handling
+    complexity: high
+    requirements:
+    - FR6
+    - FR7
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
+  task0005:
+    title: Decision table for the eight round-1 findings
+    plan: tasks/task0005.md
+    files:
+    - feature-docs/mux-suppressed-output-round3-fixes/DECISIONS.md
+    skills: []
+    domains: []
+    complexity: low
+    requirements:
+    - FR9
+    status: pending
+    notes: null
 review:
   status: pending
   rounds_completed: 0
@@ -154,106 +258,152 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-1
   FR2:
     title: The shared strip consumes charset designators, and the write filter passes its awaiting-designator
       state (review finding 195916fd94088018)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-2
   FR3:
     title: The strip side never takes a designator ESC as an introducer (review finding 76342d8d941e6416)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-3
   FR4:
     title: The read-boundary-straddling fallback path closes what the write filter holds (review finding
       2a9d929f4fafb7cb)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-4
   FR5:
     title: The as-05 fallback does not fabricate across an undecidable trailing `ESC (` (review finding
       eaf83fe08869d5e6)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0003
+    tests:
+    - TS-5
   FR6:
     title: Generation-checked tail-omission decision at send time (review finding 6230e66b979e312e)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0004
+    tests:
+    - TS-6
   FR7:
     title: At an equal boundary the later record wins (review finding 240031761bfdf695)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0004
+    tests:
+    - TS-7
   FR8:
     title: Allocation-free OSC identification on the normal write path (review finding b3e644c5e2d31809)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-8
   FR9:
     title: Record the decisions
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0005
+    tests:
+    - TS-11
   NFR1:
     title: Compatibility
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    - task0004
+    tests:
+    - TS-12
+    - TS-14
   NFR2:
     title: Lock discipline
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0004
+    tests:
+    - TS-13
   NFR3:
     title: Reader hot-path load
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    - task0004
+    tests:
+    - TS-8
+    - TS-15
   NFR4:
     title: Security (TM-1, TM-3)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    - task0003
+    - task0004
+    tests:
+    - TS-1
+    - TS-4
+    - TS-5
+    - TS-6
   NFR5:
     title: Security (TM-2)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    - task0004
+    tests:
+    - TS-9
   NFR6:
     title: Build and platforms
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    - task0004
+    tests:
+    - TS-10
