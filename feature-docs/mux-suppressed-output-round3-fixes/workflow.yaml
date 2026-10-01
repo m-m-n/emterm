@@ -252,7 +252,7 @@ tasks:
     complexity: low
     requirements:
     - FR9
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-suppressed-output-round3-fixes/task0005
     notes: null
 review:
