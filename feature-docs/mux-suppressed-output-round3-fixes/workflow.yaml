@@ -162,7 +162,8 @@ tasks:
     - NFR3
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-round3-fixes/task0001
     notes: null
   task0002:
     title: 'Write-path client parity: closed constructs, designators, straddling switches'
@@ -189,7 +190,8 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-round3-fixes/task0002
     notes: null
   task0003:
     title: Designator-aware as-05 fallback in the client-parity scan
@@ -208,7 +210,8 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-round3-fixes/task0003
     notes: null
   task0004:
     title: Generation-checked tail omission at send time; later record wins
@@ -236,7 +239,8 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-round3-fixes/task0004
     notes: null
   task0005:
     title: Decision table for the eight round-1 findings
@@ -248,7 +252,8 @@ tasks:
     complexity: low
     requirements:
     - FR9
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-round3-fixes/task0005
     notes: null
 review:
   status: pending
