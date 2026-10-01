@@ -3,9 +3,9 @@ feature: mux-suppressed-output-round3-fixes
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: b7aef35a76a43ccc121c0767d10c650a5a104d1e
-last_input_digest: sha256:5261871908bfa215038e0819a458b07d23638aede93fa278afe41e82a16c705e
-active_request_id: create-spec-run-0002
+base_revision: 1cf1ec5b17c3d048e5ffe4cbc80d23706cc9ec45
+last_input_digest: sha256:13b4221f3c084a11e47e8f2d8ce9b2f506dad5d6ece838e1a521babd4559b697
+active_request_id: create-spec-run-0003
 packets: {}
 answers:
   req.fr1-closed-construct-handling:
@@ -72,6 +72,10 @@ worker_runs:
 - request_id: create-spec-run-0002
   status: completed
   input_digest: sha256:5261871908bfa215038e0819a458b07d23638aede93fa278afe41e82a16c705e
+  output_digest: null
+- request_id: create-spec-run-0003
+  status: dispatched
+  input_digest: sha256:13b4221f3c084a11e47e8f2d8ce9b2f506dad5d6ece838e1a521babd4559b697
   output_digest: null
 artifacts: []
 patches: []
