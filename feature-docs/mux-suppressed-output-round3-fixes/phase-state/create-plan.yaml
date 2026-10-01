@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-suppressed-output-round3-fixes
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 127419c58610c168b178b8c9ecdfc322a4fcafeb
 last_input_digest: sha256:5e3f0a73be1d7e7ba684a3547cd2116a4a79abc30ba412ce06e4925b1277003a
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
