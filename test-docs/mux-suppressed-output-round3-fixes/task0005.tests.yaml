@@ -1,0 +1,56 @@
+task_id: task0005
+baseline_failures:             # cargo test --lib, before any change: 3964 passed; 1 failed; 3 ignored
+  - pty::tests::reader_routes_to_ring_buffer_when_paused
+final_failures: []             # cargo test --lib, re-run after the change: 3965 passed; 0 failed; 3 ignored. The baseline failure did not reproduce in this run. The change is a new document plus this record; no test reads either file.
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Documentation-only criterion. I searched src-tauri/src and
+      src-tauri/tests by the repository-relative path
+      `feature-docs/mux-suppressed-output-round3-fixes/DECISIONS.md` and by
+      the basename `DECISIONS.md`. The only hits read other features'
+      DECISIONS.md files (mux-suppressed-output-fixes and
+      mux-suppressed-output-round2-fixes), which are different files, so no
+      existing test covers this document. No executable check was
+      observed failing before the document existed. After writing it, a
+      one-off script outside the repository compared the rows with the
+      IMPLEMENTATION.md regression test registry as exact strings (eight
+      rows, the stable_id to FR mapping, verdict `resolved`, a non-empty
+      rationale, and the file and full test path cells) and reported no
+      mismatch.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Documentation-only criterion. The same path and basename search as
+      AC-1 found no existing test that reads this document. No executable
+      check was observed failing before the document existed. After
+      writing it, the same one-off script compared the nine changed-expectation
+      rows (old name, new name, file, reason) with the IMPLEMENTATION.md
+      changed-expectation registry as exact strings and reported no
+      mismatch; the section lists no other test.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Documentation-only criterion. I searched src-tauri/src and
+      src-tauri/tests by the path
+      `feature-docs/mux-suppressed-output-round2-fixes/reviews/round1.yaml`
+      and by the basename `round1.yaml`; the only hit is a doc comment in
+      output_queue.rs, not a test. No existing test covers it, and
+      no executable check was observed failing first. After writing, `git
+      diff --stat 4d25cbbc -- <that path>` against the task's base commit
+      printed nothing (the file is unchanged), and the document's closing
+      section states the file was not modified.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Documentation-only criterion about the diff's file set. The path and
+      basename search for DECISIONS.md found no existing test over the
+      changed file. No executable check was observed failing first. After
+      writing, `git status --short` showed only
+      `feature-docs/mux-suppressed-output-round3-fixes/DECISIONS.md`
+      as a change besides this record.
