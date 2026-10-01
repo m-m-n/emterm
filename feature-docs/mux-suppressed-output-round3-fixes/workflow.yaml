@@ -1,0 +1,259 @@
+schema_version: 1
+feature: mux-suppressed-output-round3-fixes
+created: '2026-10-01'
+base_branch: main
+goal: '# mux: 抑止チャンクの副作用処理の round2-fixes review で残った medium 指摘 8 件の対応
+
+
+  Notion: https://www.notion.so/3ea3509ec8ee8129b657c2bb0eaa0f4b  種別: バグ
+
+
+  ## 現象 (必須)
+
+  mux-suppressed-output-round2-fixes（PR https://github.com/m-m-n/emterm/pull/111 ）の review round 1 で、medium
+  指摘 8 件が `unresolved` のまま残っている。
+
+  - 削除された画面切り替えで閉じた OSC が未終端のまま ring に書かれ、スナップショット再生後の BEL で色問い合わせが成立する（973af79f520bdaa5）
+
+  - 指定文字待ちの状態が strip に渡らないので、分割位置で出力が変わる（FR3 の分割不変条件違反、195916fd94088018）
+
+  - 削除側の走査が指定文字として消費される ESC を OSC の開始と誤認し、FR7 の識別拡張で先頭ゼロ付き表記の表示文字列まで消す（76342d8d941e6416）
+
+  - 切り替えが読み込み境界をまたぐ代替経路で pending が閉じず、FR6 の持ち越し完了として存在しない OSC 問い合わせを配送する（2a9d929f4fafb7cb）
+
+  - 保持窓に判定できる ESC が無いときの as-05 フォールバックが、末尾の ESC ( による指定文字待ちを無視して問い合わせを捏造する（eaf83fe08869d5e6）
+
+  - 被覆判定で得た construct を排他の解放後に使うので、後続のスナップショットで末尾を省略する判断が古くなる（6230e66b979e312e）
+
+  - 同じ境界で construct が食い違うと None になり、最後に適用されたスナップショットの末尾状態が失われる（240031761bfdf695）
+
+  - 通常の書き込み経路で、OSC ごとに本文全体を複製して UTF-8 検証するようになった（性能、b3e644c5e2d31809）
+
+  ## 再現手順 (必須)
+
+  1. mux の pane に出力を流し続ける
+
+  2. 上記の条件を含むチャンクの途中で snapshot 取得（タブ切替 / reattach）が走り、そのチャンクが抑止される
+
+  3. 問い合わせ応答・ビューア起動・表示が上記のとおりずれる
+
+  ## 期待する挙動 (必須)
+
+  抑止したチャンクの副作用処理が、抑止しなかった場合と同じ解析状態・同じ順序で行われる。通常の書き込み経路に余計な複製・検証の負荷が無い。
+
+  ## 完了の定義 (必須)
+
+  - [ ] 再現手順で現象が起きない
+
+  - [ ] 再発を検出するテストがある
+
+  - [ ] 各 stable_id について、対応済みか・対応不要かを判断して記録する
+
+  ## 該当箇所 (任意)
+
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:304` / `:323`
+
+  - `src-tauri/src/mux/scrollback_filter.rs:309` / `:310`
+
+  - `src-tauri/src/mux/ipc/pty_spawn/mod.rs:525` / `:647`
+
+  - `src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs:169`
+
+  - `src-tauri/src/mux/session/pane/output_capture.rs:311`
+
+  - 詳細: ブランチ `em-workflow/mux-suppressed-output-round2-fixes/integration` の `feature-docs/mux-suppressed-output-round2-fixes/reviews/round1.yaml`
+
+  ## 実害・発生条件 (任意)
+
+  snapshot 取得と 1 チャンクが重なったときにだけ起きる（b3e644c5e2d31809 は通常経路の性能）。
+
+
+  ## 追加指示（起動引数）
+
+  - 実装完了後、integration ブランチを remote に push し gh pr create で base_branch への PR を作る。integration ブランチはローカル・リモート両方に残す（base_branch
+  へ自動マージしない）
+
+  - 不明点は Codex に相談し、比較的良いと判断した案を採用する。その議論内容を Notion に記録する
+
+  '
+parent_branch: em-workflow/mux-suppressed-output-round3-fixes/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.01
+      '2': 0.93
+      '3': 0.05
+    description_plus_code:
+      '0': 0.0
+      '1': 0.0
+      '2': 0.97
+      '3': 0.03
+  at: '2026-10-01T09:05:48+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 891470ba15be9e88c56dcd4fed89baa46bfbd823
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI の変更が無い。変わるのは mux デーモン内部のバイト列処理とテストだけ。
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: d7729d0d330edc30b6c978bc93be5dcf7a6f7f24
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: A construct closed by a removed screen switch is not written to the ring (review finding 973af79f520bdaa5)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: The shared strip consumes charset designators, and the write filter passes its awaiting-designator
+      state (review finding 195916fd94088018)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: The strip side never takes a designator ESC as an introducer (review finding 76342d8d941e6416)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: The read-boundary-straddling fallback path closes what the write filter holds (review finding
+      2a9d929f4fafb7cb)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: The as-05 fallback does not fabricate across an undecidable trailing `ESC (` (review finding
+      eaf83fe08869d5e6)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Generation-checked tail-omission decision at send time (review finding 6230e66b979e312e)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: At an equal boundary the later record wins (review finding 240031761bfdf695)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: Allocation-free OSC identification on the normal write path (review finding b3e644c5e2d31809)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR9:
+    title: Record the decisions
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Compatibility
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: Lock discipline
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Reader hot-path load
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Security (TM-1, TM-3)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: Security (TM-2)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: Build and platforms
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
