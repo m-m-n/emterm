@@ -106,6 +106,12 @@ fn braces() -> [u8; 2] {
 /// stream never produced. After the fix the ring holds the designator ESC,
 /// the client's responses equal the raw-stream reference's, and a later
 /// complete query is answered the same number of times in both.
+///
+/// round4 FR5 (task0005): the ESC of the `enter` form right after `ESC (` is
+/// that designator, so `enter` is not a switch sequence; extraction keeps the
+/// designator ESC and the rest of `enter` as printed text, and only `leave`
+/// is removed. The expected ring below holds the designator ESC and the
+/// text, and the cut the removed `leave` derives closes nothing.
 #[test]
 fn round4_48caec6f_awaiting_designator_at_a_cut_writes_the_consumed_esc() {
     let bel = b"\x07".to_vec();
@@ -114,9 +120,10 @@ fn round4_48caec6f_awaiting_designator_at_a_cut_writes_the_consumed_esc() {
         let form = String::from_utf8_lossy(enter).into_owned();
         // The task example up to the BEL.
         let open = [b"X\x1b(".as_slice(), enter, leave, b"\x1b(\x1b]11;?"].concat();
-        // The ring after the fix: the example without the removed switches,
-        // with the consumed designator ESC after the waiting `ESC (`.
-        let ring_of_open = b"X\x1b(\x1b\x1b(\x1b]11;?".to_vec();
+        // The ring after the fix: the example without the removed `leave`
+        // switch; `enter` is the designator ESC after the waiting `ESC (`
+        // plus printed text.
+        let ring_of_open = [b"X\x1b(".as_slice(), enter, b"\x1b(\x1b]11;?"].concat();
 
         // (layout name, reads, answers the raw stream gives)
         let layouts: Vec<(&str, Vec<Vec<u8>>, usize)> = vec![
@@ -741,11 +748,17 @@ fn round4_long_designator_chains_with_many_cuts_finish_within_the_budget() {
 /// AC-5 (TM-2, NFR3, NFR5): switch sequences following a waiting `ESC (` over
 /// many reads — both the recognized form (cuts) and the fallback form —
 /// finish within the budget and leave exactly one closing ESC per wait.
+///
+/// round4 FR5 (task0005): in the recognized form the first ESC of the next
+/// read is the designator, not a switch ESC. The ring keeps it and the text
+/// after it (`ESC [?1049h`) and removes only the `leave` switch, so no
+/// closing ESC is written and none is needed.
 #[test]
 fn round4_many_straddling_switches_after_a_waiting_designator_stay_within_the_budget() {
     let rounds = 400usize;
 
-    // Recognized form: the pair is removed and a cut at fed 0 closes the wait.
+    // Recognized form: the designator ESC and the printed `[?1049h` stay in
+    // the ring, the `leave` switch is removed.
     let mut chunks: Vec<Vec<u8>> = Vec::new();
     for _ in 0..rounds {
         chunks.push(b"x\x1b(".to_vec());
@@ -754,7 +767,11 @@ fn round4_many_straddling_switches_after_a_waiting_designator_stay_within_the_bu
     let start = std::time::Instant::now();
     let ring = run_reader_without_owner(chunks);
     assert!(start.elapsed() < BUDGET, "took {:?}", start.elapsed());
-    assert_same_bytes(&ring, &b"x\x1b(\x1b".repeat(rounds), "recognized form");
+    assert_same_bytes(
+        &ring,
+        &b"x\x1b(\x1b[?1049h".repeat(rounds),
+        "recognized form",
+    );
 
     // Fallback form: the shadow parser enters and leaves the alternate
     // screen on forms extraction does not recognize.
