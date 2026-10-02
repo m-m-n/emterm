@@ -1,0 +1,49 @@
+feature: mux-suppressed-output-round4-fixes
+collected_at: "2026-10-02T15:28:00+09:00"
+session_ids:
+  - 01a0fb4a-cf98-73e1-b9cc-6b3a9b713bfe
+  - 01a0fb0c-dd11-7143-9388-304c2a4db2f4
+signals:
+  review_critical_high: []
+  conflict_reworks:
+    - {task: task0001, retries: 1}
+    - {task: task0004, retries: 1}
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md (expected but not edited by the implementer; orchestrator applied the FR1 content)
+        - src-tauri/src/mux/ipc/pty_spawn/tests.rs (an extra D7 registry test changed)
+    - task: task0002
+      files:
+        - feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md (expected but not edited by the implementer; orchestrator applied the FR3 content)
+        - src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs (a test outside the changed-expectation registry changed its final cut assertion)
+    - task: task0004
+      files:
+        - src-tauri/src/mux/ipc/pty_spawn/tests.rs (existing test fallback_path_keeps_the_whole_chunk_gate changed its expectation)
+    - task: task0005
+      files:
+        - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs (plan deviation D4: an unclosed `h` form of 47/1049 in the designator slot stays outside the fix boundary)
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code read scored 1.88 (confidence 0.87, bucket 2 at 0.88): new logic across several modules of the mux pty_spawn write path"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.62, confidence: 0.59}
+        observed_at: "2026-10-02T13:06:00+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.88, confidence: 0.87}
+        observed_at: "2026-10-02T13:12:00+09:00"
+    pre_survey_estimate:
+      changed_lines_approx: 300
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      added_test_cases_approx: 8
+follow_up_drafts: []
+lessons_candidates:
+  - "Task plans listed feature-docs/**/DECISIONS.md in expected_files and acceptance criteria, but the implementer contract forbids editing feature-docs/** in task worktrees; the orchestrator had to paste each task's DECISIONS.md section after merge."
+  - "Review round 1 left medium finding 4c0ad9058a983648 (architecture, write_filter.rs: output-state contract uses the pre-strip scan result) unresolved; triage_filing filed nothing."
