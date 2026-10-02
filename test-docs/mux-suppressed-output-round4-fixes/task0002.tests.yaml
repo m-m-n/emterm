@@ -1,0 +1,110 @@
+task_id: task0002
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::on_demand_snapshot_redelivers_alt_screen_and_main_screen_color_queries_once
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+final_failures: [] # re-executed after the implementation (4035 passed, 0 failed, 3 ignored); the two baseline tests passed in every later full run
+# baseline: the `--lib` suite on the inherited files, run before any change:
+# 4016 passed, 2 failed, 3 ignored. The two failures ("the reader must reach P2
+# on the main-buffer chunk: Timeout" and a PTY echo read-back) did not recur in
+# any of the six later full runs.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_48caec6f_awaiting_designator_at_a_cut_writes_the_consumed_esc
+    red_confirmed: true
+    red_reason: >-
+      Run against the parent's write_filter.rs (the test present, the production file unchanged), the
+      registry test failed with "[?47h BEL in a later read, restore at read 0: the client's
+      responses equal the raw-stream reference's" (left `ESC ]11;rgb:1111/2222/3333 BEL`,
+      right []): the ring held `X ESC ( ESC ( ESC ]11;?`, the snapshot replay opened an OSC,
+      and the live BEL completed it into an answer the raw stream never produced.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_cut_in_the_same_call_after_a_waiting_esc_brace_writes_one_esc
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_each_waiting_segment_before_a_cut_writes_its_own_esc_once
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_cut_at_fed_zero_with_an_empty_range_after_an_earlier_wait_writes_one_esc
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_cut_at_fed_zero_with_a_non_empty_range_after_an_earlier_wait_writes_one_esc
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_cut_after_an_overflow_flush_that_ended_waiting_writes_one_esc
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_fallback_closing_after_a_waiting_esc_brace_leaves_the_esc_in_the_ring
+    red_confirmed: true
+    red_reason: >-
+      Run against the parent's write_filter.rs, all six failed on the missing ESC: the
+      same-call test with '"ab\u{1b}(": the waiting designator introducer is emitted, then one
+      ESC' (left [97, 98, 27, 40], right [97, 98, 27, 40, 27]); the segment test with left
+      [97, 27, 40, 98, 27, 41, 99], right [97, 27, 40, 27, 98, 27, 41, 27, 99]; the fed-0 tests
+      with left [] / right [27] and left [97, 98, 99] / right [27, 97, 98, 99]; the overflow
+      test with 'overflow then cut: bytes differ (got 524291 bytes, expected 524292)'; the
+      reader-level fallback test with 'the fallback closing writes the designator ESC and
+      nothing else for the chunk' (left [97, 98, 27, 40], right [97, 98, 27, 40, 27]). The
+      updated existing tests that pin the same behavior are listed under AC-6.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_a_complete_designation_before_a_cut_writes_no_extra_esc
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_a_run_ending_in_an_open_string_closed_by_the_cut_writes_no_extra_esc
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_a_cut_with_nothing_held_and_no_wait_writes_nothing
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_a_carried_designator_consumed_by_the_first_byte_writes_no_extra_esc_at_a_later_cut
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_overflow_flush_in_the_last_segment_writes_no_closing_esc
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_overflow_flush_then_a_cut_without_a_wait_writes_nothing_extra
+    red_confirmed: false
+    red_reason: >-
+      All six passed on the parent's write_filter.rs: they pin the cases in which nothing is
+      written, and the parent writes no closing ESC in any case, so no red state occurred for
+      this criterion. The existing `a_cut_closes_a_held_lone_esc`,
+      `a_cut_closes_an_in_progress_osc_and_pending_holds_no_closed_osc` and round3's
+      `a_cut_after_a_carried_designator_keeps_the_designator_esc` pin the same no-extra-write
+      cases and passed before and after the change. The new tests guard against the fix
+      writing an ESC where no designator is awaited.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_ec5_a_switch_in_the_designator_slot_never_fabricates_a_query
+    red_confirmed: true
+    red_reason: >-
+      Run against the parent's write_filter.rs, the test failed with "ESC ( then [?47h, restore
+      at read 1: the client's responses equal the raw-stream reference's" (left two OSC 11
+      answers, right one: the BEL completed the open OSC the snapshot replay left behind).
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_long_designator_chains_with_many_cuts_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_many_straddling_switches_after_a_waiting_designator_stay_within_the_budget
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_closing_writes_never_make_the_reader_send_an_empty_chunk
+    red_confirmed: true
+    red_reason: >-
+      Run against the parent's write_filter.rs, the first two failed on their byte
+      expectations: 'waiting segments: bytes differ (got 60000 bytes, expected 90000)' and
+      'recognized form: bytes differ (got 1200 bytes, expected 1600)'. The time-budget
+      assertions in them and the third test (no empty PtyOutput chunk other than EOF) passed
+      before the change: they are guards the parent already met, so no red state exists for
+      the budget and the empty-chunk clauses.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::a_cut_clears_the_awaiting_designator_flag
+      - mux::ipc::pty_spawn::tests::pending_after_a_cut_equals_a_fresh_scan_of_the_bytes_after_the_last_cut
+      - mux::ipc::pty_spawn::tests::round3_write_path::a_cut_drops_the_construct_from_its_opening_esc_on
+      - mux::ipc::pty_spawn::tests::round3_write_path::round3_195916fd_write_filter_output_is_split_invariant_across_a_designator_esc
+    red_confirmed: true
+    red_reason: >-
+      With the updated expectations in place and write_filter.rs restored to the parent's, all
+      four failed: `a_cut_clears_the_awaiting_designator_flag` with 'the waiting `ESC (` is
+      followed by one ESC at the cut' (left [27, 40], right [27, 40, 27]);
+      `pending_after_a_cut_equals_a_fresh_scan...` with 'the constructs closed by a cut are
+      not emitted' (left lacks the ESC after the waiting segment);
+      `a_cut_drops_the_construct_from_its_opening_esc_on` at its EC-2 part (left [97, 98, 27,
+      40], right [97, 98, 27, 40, 27]); `round3_195916fd...` at its final cut assertion (left
+      [27, 40], right [27, 40, 27]). The third is the round3 test the registry lists; the fourth
+      is a round3 test the registry does not list, whose cut expectation FR3 also changes (a
+      plan deviation, recorded in the report). The mod.rs fallback-comment clause, the two supersede notes (each listed
+      name was checked against the libtest output of the full run) and the DECISIONS.md clause
+      have no executable check that can be made to fail.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing `mux::ipc::pty_spawn::tests`
+      module (found by searching the test directory for `write_filter.rs`, `write_filter` and
+      `pty_spawn/mod.rs`, and for the bare filename `mod.rs` under pty_spawn) detects a
+      regression of the write filter and the reader; no red state occurred for this
+      criterion. The full `--lib` suite ended at 4035 passed, 0 failed, 3 ignored, and
+      `cargo check --manifest-path src-tauri/Cargo.toml --no-default-features` passed after the
+      change. That nothing under `crates/mux_ipc/` and no snapshot assembly code changed is a
+      property of the diff (`git diff --stat`) that no test measures.

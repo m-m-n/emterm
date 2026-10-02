@@ -289,9 +289,9 @@ fn round3_195916fd_write_filter_output_is_split_invariant_across_a_designator_es
         assert!(compared > 2);
         assert_eq!(
             one_out,
-            b"\x1b(".to_vec(),
-            "the segment before the cut is kept; what follows starts from ground \
-             and is stripped"
+            b"\x1b(\x1b".to_vec(),
+            "the segment before the cut is kept and followed by the designator ESC \
+             (round4 FR3); what follows starts from ground and is stripped"
         );
     }
 
@@ -447,20 +447,21 @@ fn a_cut_drops_the_construct_from_its_opening_esc_on() {
     assert_eq!(carried.bytes(), b"\x1b]0;t\x07");
     assert_eq!(carried.fed_end(), 1);
 
-    // EC-2: an awaiting-designator `ESC (` at a cut is still emitted and the
-    // flag is cleared.
+    // EC-2 (round4 FR3): an awaiting-designator `ESC (` at a cut is emitted,
+    // followed by one ESC, and the flag is cleared.
     let mut f = ScrollbackWriteFilter::new();
     let outcome = f.feed_with_cuts(b"ab\x1b(", DIMS, &[4]);
-    assert_eq!(outcome.bytes, b"ab\x1b(".to_vec());
+    assert_eq!(outcome.bytes, b"ab\x1b(\x1b".to_vec());
     assert!(f.pending().is_empty());
     assert!(!f.awaiting_designator());
 
-    // The same when the `ESC (` was fed by an earlier call.
+    // The same when the `ESC (` was fed by an earlier call: the cut writes the
+    // one ESC.
     let mut f = ScrollbackWriteFilter::new();
     f.feed(b"\x1b(", DIMS);
     assert!(f.awaiting_designator());
     let outcome = f.feed_with_cuts(b"", DIMS, &[0]);
-    assert!(outcome.bytes.is_empty());
+    assert_eq!(outcome.bytes, b"\x1b".to_vec());
     assert!(!f.awaiting_designator(), "the cut clears the awaiting flag");
 }
 
