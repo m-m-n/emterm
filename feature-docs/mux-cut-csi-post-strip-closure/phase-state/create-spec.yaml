@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-cut-csi-post-strip-closure
 phase: create-spec
-status: in_progress
+status: completed
 generation: 1
 base_revision: 52d6287be3af3127cc4e960ecaf2bf40a5e99b5b
 last_input_digest: sha256:72e36fa94040a92d46f7d92b88e67b101eeebeccf670af53d6a8b09c246cd6dc
