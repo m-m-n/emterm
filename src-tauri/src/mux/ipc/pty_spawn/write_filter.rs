@@ -97,9 +97,19 @@ pub(in crate::mux) struct ScrollbackWriteFilter {
     /// as they arrive, and only this O(1) state is carried. It can stand
     /// together with a non-empty `pending`: the held run then starts at an
     /// `ESC`, and the stream emitted before it is still inside the CSI that
-    /// `ESC` would abort once it is written. It is never set together with
-    /// `awaiting_designator`.
+    /// `ESC` would abort once it is written (with a held chain, the `ESC`
+    /// that heads the chain: the state is captured there, not at the chain's
+    /// last construct). It is never set together with `awaiting_designator`.
     csi: Option<CsiPhase>,
+    /// Chain bookkeeping (mux-suppressed-output-round4-fixes FR1): where the
+    /// LAST construct of the held chain starts, as an offset into `pending`.
+    /// `pending` holds a whole chain from its head (consecutive constructs
+    /// each closed by the `ESC` that opens the next, see
+    /// [`ScrollbackWriteFilter::feed_with_cuts`]); the links before the last
+    /// construct are settled, so the next scan resumes here instead of
+    /// re-walking them. `None` exactly when `pending` is empty; `Some(0)` for
+    /// a chain of one construct.
+    held_construct_start: Option<usize>,
 }
 
 /// The CSI sub-states of `term_core`'s parser (`csi_entry` / `csi_param`
@@ -131,8 +141,11 @@ pub(in crate::mux) const CSI_CLOSING: &[u8] = &[0x7f];
 /// the non-suppressed reader path pays no copy for it.
 pub(in crate::mux) struct CarriedCompletion {
     /// The raw run the boundary scan walked (`old pending ++ fed head`);
-    /// only `run[..end]` is the sequence.
+    /// only `run[start..end]` is the sequence.
     run: Vec<u8>,
+    /// Where the completed construct's opening `ESC` sits within `run`: the
+    /// held chain's last construct, not its head (FR1).
+    start: usize,
     /// One past the terminator's last byte within `run`.
     end: usize,
     /// Fed offset just past the terminator.
@@ -143,7 +156,7 @@ impl CarriedCompletion {
     /// The complete sequence bytes, from its opening `ESC` through its
     /// terminator.
     pub(in crate::mux) fn bytes(&self) -> &[u8] {
-        &self.run[..self.end]
+        &self.run[self.start..self.end]
     }
 
     /// Fed offset just past the sequence's terminator.
@@ -170,6 +183,7 @@ impl ScrollbackWriteFilter {
             pending_started_dims: None,
             awaiting_designator: false,
             csi: None,
+            held_construct_start: None,
         }
     }
 
@@ -236,7 +250,9 @@ impl ScrollbackWriteFilter {
     ///   and NOT written (round3 FR1): the bytes from its opening `ESC` on are
     ///   absent from the emitted bytes and no terminator is appended, so a
     ///   later BEL / ST in the ring can never complete what the client already
-    ///   closed. The settled bytes before it are emitted through the strip;
+    ///   closed. The same holds for the whole chain it closes (round4 FR1,
+    ///   see "Chains" below): the chain is dropped from its head. The settled
+    ///   bytes before it are emitted through the strip;
     /// - an `ESC (` / `ESC )` that ends the run, awaiting its designator, is
     ///   emitted whole with the rest (nothing is held for it, as-08) and is
     ///   followed by one ESC (round4 FR3, see "Awaiting designator" below);
@@ -245,20 +261,39 @@ impl ScrollbackWriteFilter {
     /// and processing continues from ground with the next fed byte. An empty
     /// `fed` with a non-empty `cuts` still closes whatever is held.
     ///
+    /// **Chains (mux-suppressed-output-round4-fixes FR1).** An OSC/DCS/APC
+    /// string aborted by an `ESC` that opens another construct, and the first
+    /// `ESC` of an `ESC ESC`, are closed by the `ESC` that follows them; they
+    /// are links, consecutive constructs each closed by the next one's
+    /// opening `ESC`. Those `ESC`s are the client's, not settled sequences:
+    /// a cut after the chain's last construct opens aborts the construct the
+    /// client is in, and a later BEL / ST must not complete any link of it
+    /// on replay. So `pending` holds the whole chain from its head, not only
+    /// its last construct. A chain ends — everything from its head is
+    /// settled and drains through the strip — on a completed string, on a
+    /// plain byte in ground, on a complete non-string escape (`ESC [`, a
+    /// two-byte dispatch) and on `ESC (` / `ESC )`. The scan of a carried
+    /// run resumes at the stored start of the chain's last construct
+    /// instead of re-walking the settled links, so a chain of any length
+    /// costs one pass over its bytes.
+    ///
     /// **Postcondition.** After every call, `pending` holds only the single
-    /// incomplete string — or lone `ESC` — at the end of the fed stream
-    /// after its last cut; never a sequence closed by a cut, nor any byte
-    /// after one. (A construct closed by a cut is not written either: it
-    /// leaves neither `pending` nor the emitted bytes.)
+    /// chain still open at the end of the fed stream after its last cut,
+    /// from its head, ending in the incomplete string — or lone `ESC` — it
+    /// is waiting on; never a construct closed by a cut, nor any byte after
+    /// one. (A chain closed by a cut is not written either: it leaves
+    /// neither `pending` nor the emitted bytes.)
     ///
     /// **Carried-over completion.** When the sequence whose opening `ESC`
-    /// was held in `pending` at the start of the call reaches its terminator
-    /// inside the call, before any cut, the outcome reports it (recorded by
-    /// the boundary scan itself — no extra pass). Nothing is reported when
-    /// that sequence is aborted, closed by a cut, or still incomplete, nor
-    /// when the call took the overflow flush. A completion always ends before
-    /// the construct a cut closes, so its bytes stay readable from the run
-    /// the report keeps.
+    /// was held in `pending` at the start of the call — the last construct of
+    /// the held chain — reaches its terminator inside the call, before any
+    /// cut, the outcome reports it (recorded by the boundary scan itself — no
+    /// extra pass): the report's bytes are that construct's, from its own
+    /// `ESC`, not the links before it. Nothing is reported when that
+    /// sequence is aborted, closed by a cut, or still incomplete, nor when
+    /// the call took the overflow flush. A completion always ends before the
+    /// construct a cut closes, so its bytes stay readable from the run the
+    /// report keeps.
     ///
     /// **Awaiting designator.** Every strip call receives, as its initial
     /// flag, whether the run it strips starts with a pending designator byte
@@ -288,21 +323,25 @@ impl ScrollbackWriteFilter {
     /// **CSI at a cut (mux-suppressed-output-round4-fixes FR4).** The client
     /// aborted any CSI it was inside at the removed switch's `ESC`. When the
     /// emitted stream ends inside a CSI at a cut — the CSI opened in this
-    /// call, or carried in from an earlier one, with a dropped construct
-    /// after it or none — one [`CSI_CLOSING`] write follows the emitted bytes,
-    /// on every path the designator `ESC` above is written on: a cut inside
-    /// the call, a cut at an empty segment (the reader's fallback closing
-    /// feeds an empty range with a cut at 0) and after an overflow flush that
-    /// a cut follows. Nothing is written when the CSI was completed or
+    /// call, or carried in from an earlier one, with a dropped construct or
+    /// chain after it or none — one [`CSI_CLOSING`] write follows the emitted
+    /// bytes, on every path the designator `ESC` above is written on: a cut
+    /// inside the call, a cut at an empty segment (the reader's fallback
+    /// closing feeds an empty range with a cut at 0) and after an overflow
+    /// flush that a cut follows. Nothing is written when the CSI was completed or
     /// cancelled before the cut, and never together with the designator `ESC`
     /// (an `ESC` that opens the designator wait aborts the CSI first). A CSI
     /// is never held: only its O(1) sub-state is carried to the next feed,
-    /// and the cut clears it.
+    /// and the cut clears it. The state is that of the emitted stream at the
+    /// head of the dropped chain: with `ESC[6 ESC ESC` the superseded first
+    /// `ESC` is a link of the chain, dropped with it, so the stream ends
+    /// inside the CSI and the cut closes it (round4 FR1 with FR4).
     ///
     /// **Overflow.** Past [`SCROLLBACK_FILTER_PENDING_CAP`] the run is
-    /// flushed exactly as [`Self::feed`] documents; afterwards `pending` is
-    /// empty and the awaiting-designator flag equals the client-parity state
-    /// at the end of the flushed run (one bounded pass, overflow path only).
+    /// flushed exactly as [`Self::feed`] documents, whole chain included;
+    /// afterwards `pending` is empty, no chain is held and the
+    /// awaiting-designator flag equals the client-parity state at the end of
+    /// the flushed run (one bounded pass, overflow path only).
     pub(in crate::mux) fn feed_with_cuts(
         &mut self,
         fed: &[u8],
@@ -363,13 +402,24 @@ impl ScrollbackWriteFilter {
                 }
                 continue;
             }
+            let carried_run = carry_len_before > 0;
             // The first byte after `ESC (` / `ESC )` is the designator,
             // consumed unconditionally — it can only be the first byte of
             // the run, because the flag implies an empty `pending`.
-            let skip = if carry_len_before == 0 && self.awaiting_designator {
+            let skip = if !carried_run && self.awaiting_designator {
                 1
             } else {
                 0
+            };
+            // Where the boundary scan starts. A held chain's links before its
+            // last construct are settled (closed by the `ESC` that opened the
+            // next one), so a carried run resumes at that construct's `ESC`
+            // (FR1); any other run starts at its first byte, or right after
+            // the designator it awaits.
+            let scan_start = if carried_run {
+                self.held_construct_start.unwrap_or(0)
+            } else {
+                skip
             };
 
             if self.pending.len() > SCROLLBACK_FILTER_PENDING_CAP {
@@ -379,6 +429,7 @@ impl ScrollbackWriteFilter {
                 );
                 overflowed = true;
                 pending_untouched = false;
+                self.held_construct_start = None;
                 let run = std::mem::take(&mut self.pending);
                 // Client-parity wait at the end of the flushed run (one
                 // bounded pass, overflow path only). In the last segment it
@@ -387,7 +438,7 @@ impl ScrollbackWriteFilter {
                 // the CSI state (round4 FR4): a run that ends in an
                 // incomplete construct is flushed whole, so its end is
                 // inside that construct, not inside a CSI.
-                let end = scan_boundary(&run, skip, false, self.csi);
+                let end = scan_boundary(&run, scan_start, carried_run, self.csi);
                 let awaiting_at_end = end.awaiting_designator;
                 let csi_at_end = if end.boundary == run.len() {
                     end.csi
@@ -414,7 +465,7 @@ impl ScrollbackWriteFilter {
                 continue;
             }
 
-            let scan = scan_boundary(&self.pending, skip, carry_len_before > 0, self.csi);
+            let scan = scan_boundary(&self.pending, scan_start, carried_run, self.csi);
             if !is_last {
                 // A cut follows: the client's ESC closes whatever is open.
                 // The single incomplete construct at the end of the run (an
@@ -427,9 +478,10 @@ impl ScrollbackWriteFilter {
                 // FR3).
                 pending_untouched = false;
                 self.awaiting_designator = false;
+                self.held_construct_start = None;
                 let mut run = std::mem::take(&mut self.pending);
                 // A completed carried-over sequence ends at or before the
-                // boundary, so it stays readable from `run[..end]`.
+                // boundary, so it stays readable from `run[start..end]`.
                 run.truncate(scan.boundary);
                 out.extend_from_slice(&strip_pty_output_for_scrollback_write_with_designator(
                     &run,
@@ -438,6 +490,7 @@ impl ScrollbackWriteFilter {
                 if carried.is_none() {
                     if let Some(end) = scan.carried_end {
                         carried = Some(CarriedCompletion {
+                            start: scan_start,
                             end,
                             fed_end: end.saturating_sub(carry_len_before),
                             run,
@@ -465,6 +518,10 @@ impl ScrollbackWriteFilter {
 
             self.awaiting_designator = scan.awaiting_designator;
             self.csi = scan.csi;
+            // The held chain's last construct, re-based to the pending that
+            // remains once the settled bytes before the chain head drain.
+            self.held_construct_start =
+                (scan.boundary < self.pending.len()).then(|| scan.construct_start - scan.boundary);
             if scan.boundary == 0 {
                 continue;
             }
@@ -476,6 +533,7 @@ impl ScrollbackWriteFilter {
             ));
             if let Some(end) = scan.carried_end {
                 carried = Some(CarriedCompletion {
+                    start: scan_start,
                     end,
                     fed_end: end.saturating_sub(carry_len_before),
                     run: strippable,
@@ -523,6 +581,13 @@ impl ScrollbackWriteFilter {
         self.csi
     }
 
+    /// Where the last construct of the held chain starts within `pending`
+    /// (test / diagnostic; see the field's doc).
+    #[cfg(test)]
+    pub(in crate::mux) fn held_construct_start(&self) -> Option<usize> {
+        self.held_construct_start
+    }
+
     /// Number of bytes currently held in `pending` (test / diagnostic).
     #[cfg(test)]
     pub(in crate::mux) fn pending_len(&self) -> usize {
@@ -537,34 +602,46 @@ impl ScrollbackWriteFilter {
     /// to re-deliver this filter's own held-back tail when a suppressed
     /// chunk's incomplete trailing run coincides with it.
     ///
-    /// task0002 (mux-suppressed-output-fixes) postcondition: after every
-    /// [`Self::feed`] call, this is either empty, or starts at the `ESC`
-    /// that opens the single OSC/DCS/APC string — or the lone trailing
-    /// `ESC` — still INCOMPLETE (see [`scan_boundary`]'s doc for
-    /// incomplete vs aborted) at the end of the fed main-buffer stream, and
-    /// holds exactly that sequence's bytes: never a closed (complete or
-    /// ESC-aborted) sequence, and never any byte after one. The only
-    /// exception is right after the [`SCROLLBACK_FILTER_PENDING_CAP`]
-    /// overflow flush, when it is always empty.
+    /// Postcondition (mux-suppressed-output-fixes task0002, widened to chains
+    /// by mux-suppressed-output-round4-fixes FR1): after every [`Self::feed`]
+    /// call, this is either empty, or holds the whole chain that is still
+    /// OPEN at the end of the fed main-buffer stream, from its head: the
+    /// consecutive constructs each closed by the `ESC` that opens the next
+    /// (an OSC/DCS/APC string aborted by an `ESC` that opens another
+    /// construct, a superseded first `ESC` of `ESC ESC`) up to the last one,
+    /// an OSC/DCS/APC string — or a lone trailing `ESC` — still INCOMPLETE
+    /// (see [`scan_boundary`]'s doc for incomplete vs aborted). A chain of
+    /// one construct is the single sequence of the earlier contract. It
+    /// never holds a settled sequence (complete, or closed by something that
+    /// is not the opening of another construct), and never any byte after
+    /// the chain. The only exception is right after the
+    /// [`SCROLLBACK_FILTER_PENDING_CAP`] overflow flush, when it is always
+    /// empty.
     pub(in crate::mux) fn pending(&self) -> &[u8] {
         &self.pending
     }
 }
 
-/// Find the position of the first still-INCOMPLETE strip-target introducer
-/// (or lone trailing ESC) in `bytes`, scanning from `start`. If every
-/// strip-target sequence in `bytes` is either closed or genuinely absent,
-/// the boundary is `bytes.len()` — everything is safe to emit.
+/// Find the head of the still-OPEN chain at the end of `bytes`, scanning from
+/// `start`: the position where the consecutive constructs leading to the
+/// last still-INCOMPLETE strip-target introducer (or lone trailing ESC)
+/// begin. If every strip-target sequence in `bytes` is either closed or
+/// genuinely absent, the boundary is `bytes.len()` — everything is safe to
+/// emit.
 ///
 /// `start` is 1 exactly when the client is awaiting a charset designator:
 /// `bytes[0]` is then that designator, consumed unconditionally (even when
-/// it is an `ESC`), and scanning resumes right after it (FR3).
+/// it is an `ESC`), and scanning resumes right after it (FR3). For a carried
+/// run it is instead the start of the held chain's last construct (the links
+/// before it were settled by an earlier scan and need no second walk, round4
+/// FR1).
 ///
 /// `carried_candidate` is true when `bytes` begins with bytes held in
-/// `pending` from an earlier read: the construct that opens at index 0 is
-/// then a carried-over sequence, and when it completes the scan records the
-/// index just past its terminator ([`BoundaryScan::carried_end`]) — the
-/// FR6 report, made inside this single pass.
+/// `pending` from an earlier read — a chain headed at index 0: the construct
+/// that opens at `start` is then a carried-over sequence, and when it
+/// completes the scan records the index just past its terminator
+/// ([`BoundaryScan::carried_end`]) — the FR6 report, made inside this single
+/// pass.
 ///
 /// task0002 (mux-suppressed-output-fixes, FR1/FR2/FR5): this scan follows
 /// the SAME transition rules `term_core`'s parser applies (see
@@ -578,15 +655,30 @@ impl ScrollbackWriteFilter {
 /// - **Complete**: BEL (OSC only) or `ESC \` (ST, all three kinds). The scan
 ///   resumes right after the terminator.
 /// - **Aborted**: `ESC` followed by any OTHER byte. The string is CLOSED
-///   there — not held — and that following byte is processed as the start of
-///   a fresh escape sequence (mirrors `term_core`'s `*_escape` handlers,
-///   which dispatch the string as `Unterminated` and re-feed the byte to
+///   there and that following byte is processed as the start of a fresh
+///   escape sequence (mirrors `term_core`'s `*_escape` handlers, which
+///   dispatch the string as `Unterminated` and re-feed the byte to
 ///   `escape()`). The scan resumes AT the aborting `ESC`, not past it, so a
-///   string beginning there is recognized as its own attempt.
+///   string beginning there is recognized as its own attempt. The aborting
+///   `ESC` is itself the opening of the next construct, so the closed string
+///   is a LINK of a chain (below), not a settled sequence: it is written only
+///   once the chain settles.
 /// - **Incomplete**: the buffer runs out before either of the above is seen —
 ///   including an `ESC` that is the very last byte (we don't yet know if the
 ///   next byte will complete it as `\\`, abort it, or start something else
-///   next time). The WHOLE string — from its own opening `ESC` — is held.
+///   next time). The WHOLE string — from its own opening `ESC`, and from the
+///   head of the chain it closes — is held.
+///
+/// **Chains (round4 FR1).** Consecutive constructs, each closed by the `ESC`
+/// that opens the next: an aborted OSC/DCS/APC string whose aborting `ESC`
+/// opens another construct, and the superseded first `ESC` of `ESC ESC`. The
+/// chain ends at a completed string, a plain byte, a complete non-string
+/// escape (`ESC [`, a two-byte dispatch) or `ESC (` / `ESC )`; everything
+/// from the head to that point is settled. While it is open, the boundary is
+/// the chain's HEAD, [`BoundaryScan::construct_start`] is the start of its
+/// last construct, and [`BoundaryScan::csi`] is the CSI state before the
+/// head. One forward pass: each byte of a chain is visited once, however
+/// many links it has.
 ///
 /// **Other escapes** (not OSC/DCS/APC introducers):
 /// - `ESC ESC`: the first `ESC` is superseded (mirrors `term_core`'s escape
@@ -630,8 +722,19 @@ fn scan_boundary(
     // The CSI sub-state of the emitted stream at `i` (FR4). It starts as the
     // state carried in, is entered by `ESC [`, and is walked byte by byte
     // inside this same loop: a CSI's bytes are visited once, as every other
-    // byte is.
-    let mut csi = csi_in;
+    // byte is. A carried run that resumes past its chain head starts in
+    // ground: the head's `ESC` already aborted the carried-in CSI.
+    let mut csi = if carried_candidate && start > 0 {
+        None
+    } else {
+        csi_in
+    };
+    // The chain being walked (FR1): the index of its head and the CSI state
+    // of the emitted stream right before that head. A run carried in from an
+    // earlier read starts inside the chain it holds, headed at index 0 (its
+    // CSI state is the carried-in one); a chain is otherwise opened by the
+    // first `ESC` that closes with a following construct.
+    let mut chain: Option<(usize, Option<CsiPhase>)> = carried_candidate.then_some((0, csi_in));
     while i < n {
         if let Some(phase) = csi {
             let (next, open) = walk_csi(bytes, i, phase);
@@ -640,6 +743,7 @@ fn scan_boundary(
             if csi.is_none() {
                 // The CSI ended at `next - 1` (completed or cancelled):
                 // what follows is ground.
+                chain = None;
                 continue;
             }
             if i >= n {
@@ -649,20 +753,27 @@ fn scan_boundary(
             // state just before it, and is cleared below once this `ESC`
             // is known to be written.
         } else if bytes[i] != 0x1b {
+            chain = None;
             i += 1;
             continue;
         }
         let intro_start = i;
-        let carried_here = carried_candidate && intro_start == 0;
+        let carried_here = carried_candidate && intro_start == start;
         let csi_before = csi;
+        // Where a hold from here starts: the chain head, or this `ESC` when
+        // no chain is open. The CSI state reported with it is the state the
+        // head's `ESC` would abort.
+        let (head, head_csi) = chain.unwrap_or((intro_start, csi_before));
         let incomplete = |carried_end| BoundaryScan {
-            boundary: intro_start,
+            boundary: head,
+            construct_start: intro_start,
             awaiting_designator: false,
             carried_end,
-            csi: csi_before,
+            csi: head_csi,
         };
         if i + 1 >= n {
-            // Lone trailing ESC: incomplete, held whole (1 byte).
+            // Lone trailing ESC: incomplete, held whole (1 byte) together
+            // with the chain it closes.
             return incomplete(carried_end);
         }
         // From here on the `ESC` at `i` is written (or settled with its
@@ -680,8 +791,14 @@ fn scan_boundary(
                             carried_end = Some(end);
                         }
                         i = end;
+                        chain = None;
                     }
-                    StringScanResult::Aborted(abort_pos) => i = abort_pos,
+                    StringScanResult::Aborted(abort_pos) => {
+                        // Closed by the `ESC` that opens the next construct:
+                        // a link of the chain, not yet settled.
+                        i = abort_pos;
+                        chain = Some((head, head_csi));
+                    }
                     StringScanResult::Incomplete => return incomplete(carried_end),
                 }
                 csi = None;
@@ -693,17 +810,23 @@ fn scan_boundary(
                             carried_end = Some(end);
                         }
                         i = end;
+                        chain = None;
                     }
-                    StringScanResult::Aborted(abort_pos) => i = abort_pos,
+                    StringScanResult::Aborted(abort_pos) => {
+                        i = abort_pos;
+                        chain = Some((head, head_csi));
+                    }
                     StringScanResult::Incomplete => return incomplete(carried_end),
                 }
                 csi = None;
             }
             0x1b => {
-                // ESC ESC: the first ESC is superseded; re-evaluate starting
-                // at the second one.
+                // ESC ESC: the first ESC is superseded by the second, which
+                // is re-evaluated at the next iteration — a link of the
+                // chain, not yet settled.
                 i += 1;
                 csi = None;
+                chain = Some((head, head_csi));
             }
             b'(' | b')' => {
                 // Charset designation: the next byte is ALWAYS the
@@ -711,13 +834,16 @@ fn scan_boundary(
                 // ESC) — never a fresh introducer. If it isn't available yet
                 // there is nothing to hold for it, but the client IS now
                 // awaiting it: the next feed's first byte is the designator
-                // (FR3).
+                // (FR3). The escape is complete, so the chain it closes
+                // settles with it.
                 if i + 2 < n {
                     i += 3;
                     csi = None;
+                    chain = None;
                 } else {
                     return BoundaryScan {
                         boundary: n,
+                        construct_start: n,
                         awaiting_designator: true,
                         carried_end,
                         csi: None,
@@ -727,18 +853,22 @@ fn scan_boundary(
             b'[' => {
                 // CSI: nothing is held for it. Its bytes are walked at the
                 // top of this loop, and the state at the end of the run is
-                // reported (FR4).
+                // reported (FR4). It is a complete escape: it settles the
+                // chain it closes.
                 i += 2;
                 csi = Some(CsiPhase::Entry);
+                chain = None;
             }
             _ => {
                 i += 2;
                 csi = None;
+                chain = None;
             }
         }
     }
     BoundaryScan {
         boundary: n,
+        construct_start: n,
         awaiting_designator: false,
         carried_end,
         csi,
@@ -779,9 +909,14 @@ fn walk_csi(bytes: &[u8], from: usize, mut phase: CsiPhase) -> (usize, Option<Cs
 
 /// Result of [`scan_boundary`].
 struct BoundaryScan {
-    /// Position of the first still-incomplete string / lone ESC, or the
-    /// buffer length when nothing is held.
+    /// Position of the head of the chain still incomplete at the end of the
+    /// buffer (a chain of one construct is headed at its own `ESC`), or the
+    /// buffer length when nothing is held. The bytes before it are settled.
     boundary: usize,
+    /// Position of the opening `ESC` of that chain's last construct (the
+    /// incomplete string or lone `ESC`); `>= boundary`. The buffer length
+    /// when nothing is held. A carried run's next scan resumes here.
+    construct_start: usize,
     /// The buffer ends right after `ESC (` / `ESC )` outside any string.
     awaiting_designator: bool,
     /// Index just past the terminator of the carried-over sequence that
@@ -790,7 +925,8 @@ struct BoundaryScan {
     /// The CSI sub-state of the emitted stream at `boundary` (FR4): `Some`
     /// when the bytes before the boundary end inside a CSI. At the buffer's
     /// end that is the state to carry into the next feed; before a held
-    /// construct it is the state that construct's opening `ESC` would abort.
+    /// chain it is the state the chain head's `ESC` would abort (not the
+    /// state at the last construct, whose `ESC` follows the chain's links).
     /// Never set together with `awaiting_designator`.
     csi: Option<CsiPhase>,
 }

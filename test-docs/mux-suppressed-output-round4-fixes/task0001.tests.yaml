@@ -1,9 +1,11 @@
 task_id: task0001
-baseline_failures: []          # `--lib` on the inherited files, run before any change: 4018 passed, 0 failed, 3 ignored
-final_failures: []             # re-executed after the implementation (full `--lib` run): 4028 passed, 0 failed, 3 ignored
+baseline_failures: []          # refreshed after the parent (task0002, task0003, task0004 merged) was merged in: `--lib` on the parent's write_filter.rs with the `held_construct_start` accessor stubbed so this task's tests compile: 4062 passed, 18 failed, 3 ignored; the 18 are this task's new or updated tests, none is inherited
+final_failures: []             # re-executed after FR1 was re-implemented on the updated parent (full `--lib` run): 4080 passed, 0 failed, 3 ignored
 # Red observations were made against the parent's write_filter.rs (the new and
 # updated tests present, the production file restored to the parent's; the
-# `held_construct_start` accessor stubbed so the tests compile): 13 tests failed.
+# `held_construct_start` accessor stubbed so the tests compile): 18 tests failed
+# on the updated parent, 13 of them the first-round FR1 tests and 5 the tests
+# for the chain head's CSI state added when task0004 (FR4) merged.
 acceptance_tests:
   AC-1:
     tests:
@@ -18,25 +20,48 @@ acceptance_tests:
     tests:
       - mux::ipc::pty_spawn::tests::round4_chain::a_cut_at_or_after_the_chain_head_drops_the_whole_chain
       - mux::ipc::pty_spawn::tests::round4_chain::the_reader_fallback_drops_a_held_chain_from_its_head
+      - mux::ipc::pty_spawn::tests::round4_chain::a_chain_dropped_at_a_cut_after_an_open_csi_closes_the_csi_and_every_link_is_dropped
+      - mux::ipc::pty_spawn::tests::round4_chain::the_ring_after_a_chain_dropped_after_an_open_csi_replays_like_the_raw_stream
+      - mux::ipc::pty_spawn::tests::round4_chain::an_overflowing_chain_after_an_open_csi_leaves_no_csi_state_and_no_closing
     red_confirmed: true
     red_reason: >-
-      Against the parent's write_filter.rs both failed. The filter-level test with "OSC aborted
+      Against the parent's write_filter.rs the first four failed (the overflow test with a CSI
+      before the chain passed there: the parent's flush already clears the state; its chain
+      part is checked by the AC-5 overflow test, so no red state exists for it). The filter-level test with "OSC aborted
       by OSC: cut at 10, [] after it: the settled bytes and the bytes after the cut, nothing
       from the chain head on" (left `ab ESC ]11;?`, right `ab`): the aborted OSC was already
       written. The reader-level fallback test with "[?47h: the held chain is not written to
-      the ring" (left 1 OSC introducer in the ring, right 0).
+      the ring" (left 1 OSC introducer in the ring, right 0). The CSI + chain test with
+      "`ESC [` then `ESC ESC`, one call, cut at 4: the CSI's bytes, one DEL, no link" (left
+      `ESC [ ESC`: the superseded first ESC was written and no DEL followed, right `ESC [ DEL`),
+      and the replay test with "the replayed ring differs from the raw stream" (the ring's
+      replay left every row empty, while the raw stream displays the continuation `n` in
+      row 0). As a mutation check of the CSI capture, with the CSI state reported at the last
+      construct's ESC instead of the chain head's, the CSI + chain test, the chain-head state
+      test, the replay test and the token-corpus oracle test all failed (the CSI + chain test
+      with left `ESC [`, right `ESC [ DEL`).
   AC-3:
     tests:
       - mux::ipc::pty_spawn::tests::round4_chain::chain_corpus_is_split_invariant_and_pending_is_the_whole_chain_after_every_call
       - mux::ipc::pty_spawn::tests::round4_chain::the_read_that_opens_a_chain_does_not_write_its_head
       - mux::ipc::pty_spawn::tests::write_filter_boundaries_are_split_position_independent_and_match_term_core
+      - mux::ipc::pty_spawn::tests::round4_chain::the_csi_state_is_captured_at_the_chain_head_and_follows_the_settled_chain
+      - mux::ipc::pty_spawn::tests::round4_chain::chains_and_csis_are_split_invariant_and_the_csi_state_matches_term_core
+      - mux::ipc::pty_spawn::tests::round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus
     red_confirmed: true
     red_reason: >-
-      Against the parent's write_filter.rs the first two failed: the corpus test with "OSC
+      Against the parent's write_filter.rs five of the six failed. The corpus test with "OSC
       aborted by OSC + []: after feeding ab ESC ]11;? ESC ]0;x, pending must be exactly the
       chain that ends in the single incomplete construct" (left `ESC ]0;x`, right the whole
-      chain), the second with "only the settled prefix is written" (left `ab ESC ]11;?`, right
-      `ab`). `write_filter_boundaries_are_split_position_independent_and_match_term_core` was
+      chain). `the_read_that_opens_a_chain_does_not_write_its_head` with "only the settled
+      prefix is written" (left `ab ESC ]11;?`, right `ab`). The chain-head state test at its
+      first assertion (left `ESC [ 6 ESC ] a ESC`, the aborted OSC link written, right
+      `ESC [ 6`). The token-corpus oracle test on the stream `ESC ESC` (the superseded first
+      ESC was written, which leaves the emitted stream in an escape state, and the filter's
+      CSI state disagreed with term_core's on it). The token-corpus invariants test at the
+      stored-construct-start check of a held chain (the stubbed accessor returns None; the
+      parent has no such state).
+      `write_filter_boundaries_are_split_position_independent_and_match_term_core` was
       updated (its allowed pending shapes now include a chain that starts with a superseded
       ESC, and two such items joined its corpus); it passed on the parent's file too, because
       the parent also holds those two items from their last construct onward, so no red state
@@ -101,7 +126,7 @@ acceptance_tests:
       module (found by searching the test directory for `pty_spawn/write_filter.rs`,
       `write_filter.rs`, `suppressed_output.rs` and `pty_spawn/mod.rs`) detects a regression of
       the write filter and the replacement builder; no red state occurred for this criterion.
-      The full `--lib` suite ended at 4028 passed, 0 failed, 3 ignored, and
+      The full `--lib` suite ended at 4080 passed, 0 failed, 3 ignored, and
       `cargo check --manifest-path src-tauri/Cargo.toml --no-default-features` passed after the
       change. That nothing under `crates/mux_ipc/` and no snapshot assembly code changed is a
       property of the diff that no test measures.

@@ -18,6 +18,7 @@ use super::round3_write_path::{
     run_reader_without_owner, run_visibility_restore_at, switch_pairs,
 };
 use super::*;
+use crate::mux::scrollback_filter::strip_replayable_rich_content;
 use std::time::{Duration, Instant};
 
 const BUDGET: Duration = Duration::from_secs(10);
@@ -857,4 +858,364 @@ fn a_hostile_aborted_introducer_stream_is_one_linear_chain() {
     let outcome = f.feed_with_cuts(b"", DIMS, &[0]);
     assert!(outcome.bytes.is_empty());
     assert!(f.pending().is_empty());
+}
+
+// ── FR1 with FR4: the CSI state at the chain head ───────────────────────
+
+/// What a client shows and answers after a byte stream.
+#[derive(Debug, PartialEq)]
+struct ClientView {
+    rows: Vec<String>,
+    cursor: (u16, u16),
+    responses: Vec<u8>,
+}
+
+fn replay_view(stream: &[u8]) -> ClientView {
+    view_after_a_cut(b"", stream)
+}
+
+/// The client after `before` and then `after`, answers to `before` discarded
+/// (a snapshot replay discards them; the live parser answered them at the
+/// time).
+fn view_after_a_cut(before: &[u8], after: &[u8]) -> ClientView {
+    let mut core = new_core();
+    core.process_pty_data_fully(before);
+    let _answered_before = core.take_response();
+    core.process_pty_data_fully(after);
+    let responses = core.take_response();
+    ClientView {
+        rows: (0..DIMS.1)
+            .map(|r| core.get_line_text(r).trim_end().to_string())
+            .collect(),
+        cursor: (core.get_cursor_row(), core.get_cursor_col()),
+        responses,
+    }
+}
+
+/// Whether a client fed `stream` is still inside a CSI: a following `m` is
+/// consumed by that CSI, and displayed in ground. Only meaningful for a
+/// stream that ends inside a CSI or in ground.
+fn ends_inside_a_csi(stream: &[u8]) -> bool {
+    let view = replay_view(&[stream, b"m"].concat());
+    !view.rows.iter().any(|row| row.contains('m'))
+}
+
+/// Open CSIs: `(bytes, sub-state after them)`.
+const OPEN_CSIS: &[(&[u8], CsiPhase)] = &[
+    (b"\x1b[", CsiPhase::Entry),
+    (b"\x1b[6", CsiPhase::Param),
+    (b"\x1b[?25", CsiPhase::Param),
+    (b"\x1b[6 ", CsiPhase::Param),
+    (b"abc\x1b[12;3", CsiPhase::Param),
+];
+
+/// Chains that follow an open CSI. The first `ESC` aborts the CSI; the chain
+/// is dropped by a cut, `ESC` and all.
+const CHAINS_AFTER_A_CSI: &[&[u8]] = &[
+    b"\x1b\x1b",
+    b"\x1b\x1b\x1b",
+    b"\x1b]11;?\x1b\x1b",
+    b"\x1b]11;?\x1b]0;x",
+    b"\x1bP0;1|x\x1b]0;t",
+    b"\x1b_Xi=1;P\x1b\x1b",
+    b"\x1b]a\x1b]b\x1b]c\x1b",
+];
+
+/// AC-2 with FR4 (TM-1, EC-1): the chain a cut drops starts with an `ESC` that
+/// the live client used to abort an open CSI, so the CSI state the filter
+/// reports is the one at the chain HEAD. The emitted stream ends inside the
+/// CSI and the cut closes it with one DEL: `ESC[6 ESC ESC` is dropped from
+/// its first `ESC`, not from the last one. The result is the same whether the
+/// CSI and the chain arrive in one call, in separate calls, byte by byte, with
+/// the chain closed by an empty fed range with a cut at 0 (the reader's
+/// fallback), or with the cut anywhere at or after the chain head.
+#[test]
+fn a_chain_dropped_at_a_cut_after_an_open_csi_closes_the_csi_and_every_link_is_dropped() {
+    for (head, phase) in OPEN_CSIS {
+        for chain in CHAINS_AFTER_A_CSI {
+            let label = format!("{head:?} then {chain:?}");
+            let expected = [*head, CSI_CLOSING].concat();
+            let input = [*head, *chain].concat();
+
+            // (a) One call, cuts at every position at or after the chain head
+            // (nothing after the cut).
+            for cut in head.len()..=input.len() {
+                let mut f = ScrollbackWriteFilter::new();
+                let outcome = f.feed_with_cuts(&input[..cut], DIMS, &[cut]);
+                assert_eq!(
+                    outcome.bytes, expected,
+                    "{label}, one call, cut at {cut}: the CSI's bytes, one DEL, no link"
+                );
+                assert!(f.pending().is_empty(), "{label}, cut at {cut}");
+                assert_eq!(f.held_construct_start(), None, "{label}, cut at {cut}");
+                assert_eq!(f.csi_phase(), None, "{label}, cut at {cut}: cleared");
+                assert!(!f.awaiting_designator(), "{label}, cut at {cut}");
+            }
+
+            // (b) The CSI in one call, the chain in a second, the closing as
+            // an empty fed range with a cut at 0. Between the calls the
+            // filter holds the whole chain and the CSI state of the head.
+            let mut f = ScrollbackWriteFilter::new();
+            let (_dims, mut emitted) = f.feed(head, DIMS);
+            assert_eq!(f.csi_phase(), Some(*phase), "{label}: after the CSI");
+            let (_dims, out) = f.feed(chain, DIMS);
+            emitted.extend_from_slice(&out);
+            assert_eq!(emitted, *head, "{label}: no link is written");
+            assert_eq!(f.pending(), *chain, "{label}: the whole chain is held");
+            assert_eq!(
+                f.csi_phase(),
+                Some(*phase),
+                "{label}: the CSI state is the one at the chain head"
+            );
+            let outcome = f.feed_with_cuts(b"", DIMS, &[0]);
+            emitted.extend_from_slice(&outcome.bytes);
+            assert_eq!(emitted, expected, "{label}: the fallback closing");
+            assert!(f.pending().is_empty(), "{label}");
+            assert_eq!(f.csi_phase(), None, "{label}");
+            assert_eq!(f.held_construct_start(), None, "{label}");
+
+            // (c) Byte by byte, the cut at the end of the last call.
+            let mut f = ScrollbackWriteFilter::new();
+            let mut emitted = Vec::new();
+            let (init, last) = input.split_at(input.len() - 1);
+            for byte in init {
+                emitted.extend_from_slice(&f.feed(&[*byte], DIMS).1);
+            }
+            emitted.extend_from_slice(&f.feed_with_cuts(last, DIMS, &[1]).bytes);
+            assert_eq!(emitted, expected, "{label}: byte by byte");
+            assert!(f.pending().is_empty(), "{label}: byte by byte");
+        }
+    }
+}
+
+/// AC-2 with FR4 (TM-1): what the dropped chain's cut leaves in the ring
+/// replays like the raw stream. A continuation that would complete the
+/// aborted CSI (`n`) or one of the dropped strings (BEL) does nothing on
+/// replay, as in the raw stream where the removed switch's `ESC` closed
+/// them.
+#[test]
+fn the_ring_after_a_chain_dropped_after_an_open_csi_replays_like_the_raw_stream() {
+    for (enter, leave) in switch_pairs() {
+        let pair = [enter, leave].concat();
+        for (head, _phase) in OPEN_CSIS {
+            for chain in CHAINS_AFTER_A_CSI {
+                let prefix = [*head, *chain].concat();
+                for continuation in [&b"n"[..], b"\x07Z", b"\x1b\\Z", b"m", b"R"] {
+                    let reference = [&prefix[..], &pair[..], continuation].concat();
+                    let mut f = ScrollbackWriteFilter::new();
+                    let mut ring = f.feed_with_cuts(&prefix, DIMS, &[prefix.len()]).bytes;
+                    ring.extend_from_slice(&f.feed(continuation, DIMS).1);
+                    assert_eq!(
+                        replay_view(&ring),
+                        replay_view(&reference),
+                        "{head:?} then {chain:?}, then switch {enter:?}, then {continuation:?}: \
+                         the replayed ring differs from the raw stream"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// AC-1 / AC-3 with FR4: while a chain is held, the carried CSI state is the
+/// one before the chain head; when the chain settles, the state is that of
+/// the emitted stream, which the settling construct may have changed. The
+/// scan of the carried run resumes at the last construct (stored start) and
+/// reaches the same end state as a single scan of the whole stream.
+#[test]
+fn the_csi_state_is_captured_at_the_chain_head_and_follows_the_settled_chain() {
+    // `(stream, pending after it, held construct start, csi phase)`.
+    let stream = b"\x1b[6\x1b]a\x1b\x1b";
+    let mut f = ScrollbackWriteFilter::new();
+    let (_dims, out) = f.feed(stream, DIMS);
+    assert_eq!(out, b"\x1b[6".to_vec());
+    assert_eq!(f.pending(), b"\x1b]a\x1b\x1b");
+    assert_eq!(f.held_construct_start(), Some(4));
+    assert_eq!(f.csi_phase(), Some(CsiPhase::Param));
+
+    // The chain settles with a complete two-byte escape: the whole chain is
+    // written, and the stream is in ground (the `ESC` aborted the CSI).
+    let (_dims, out) = f.feed(b"7", DIMS);
+    assert_eq!(out, b"\x1b]a\x1b\x1b7".to_vec());
+    assert!(f.pending().is_empty());
+    assert_eq!(f.csi_phase(), None);
+    assert_eq!(f.held_construct_start(), None);
+
+    // The chain settles with a CSI of its own: the stream ends inside it.
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(stream, DIMS);
+    let (_dims, out) = f.feed(b"[7", DIMS);
+    assert_eq!(out, b"\x1b]a\x1b\x1b[7".to_vec());
+    assert!(f.pending().is_empty());
+    assert_eq!(f.csi_phase(), Some(CsiPhase::Param));
+
+    // The chain settles with a completed string; the state is ground.
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b[6\x1b]a\x1b]b", DIMS);
+    assert_eq!(f.csi_phase(), Some(CsiPhase::Param));
+    let outcome = f.feed_with_cuts(b"\x07", DIMS, &[]);
+    assert_eq!(outcome.bytes, b"\x1b]a\x1b]b\x07".to_vec());
+    assert_eq!(outcome.carried.expect("completed").bytes(), b"\x1b]b\x07");
+    assert_eq!(f.csi_phase(), None);
+
+    // The chain settles with a plain byte: ground, the CSI was aborted.
+    let mut f = ScrollbackWriteFilter::new();
+    f.feed(b"\x1b[6\x1b\x1b", DIMS);
+    let (_dims, out) = f.feed(b"Z", DIMS);
+    assert_eq!(out, b"\x1b\x1bZ".to_vec(), "the superseded ESC and the ESC");
+    assert_eq!(f.csi_phase(), None);
+}
+
+/// AC-2 / AC-5 with FR4: a chain held past the cap takes the overflow flush,
+/// whole; its first `ESC` is written and aborts the open CSI, so a cut after
+/// the flush writes no closing DEL.
+#[test]
+fn an_overflowing_chain_after_an_open_csi_leaves_no_csi_state_and_no_closing() {
+    let mut f = ScrollbackWriteFilter::new();
+    let (_dims, out) = f.feed(b"\x1b[6", DIMS);
+    assert_eq!(out, b"\x1b[6".to_vec());
+    let body = vec![b'x'; SCROLLBACK_FILTER_PENDING_CAP];
+    let chain = [&b"\x1b\x1b]a"[..], &body[..]].concat();
+    let (_dims, out) = f.feed(&chain, DIMS);
+    assert_eq!(out, chain, "the flush writes the whole chain");
+    assert!(f.pending().is_empty());
+    assert_eq!(f.held_construct_start(), None);
+    assert_eq!(f.csi_phase(), None, "the chain's first ESC aborted the CSI");
+    let outcome = f.feed_with_cuts(b"", DIMS, &[0]);
+    assert!(!outcome.bytes.contains(&0x7f), "no DEL after the flush");
+}
+
+/// The tokens of the exhaustive corpus. The designator forms (`ESC (`) are
+/// left to the corpus of the designator tests, and the final `n` is only ever
+/// a continuation: a complete device query is stripped from the ring, so it
+/// would be answered by the raw stream and not by the ring.
+const TOKENS: &[&[u8]] = &[b"\x1b", b"[", b"]", b"6", b"P", b"11;?", b"\x07", b"\\"];
+
+/// Every concatenation of at most `max_len` tokens.
+fn token_streams(max_len: usize) -> Vec<Vec<u8>> {
+    let mut all: Vec<Vec<u8>> = vec![Vec::new()];
+    let mut frontier: Vec<Vec<u8>> = vec![Vec::new()];
+    for _ in 0..max_len {
+        let mut next = Vec::new();
+        for stream in &frontier {
+            for token in TOKENS {
+                next.push([&stream[..], token].concat());
+            }
+        }
+        all.extend(next.iter().cloned());
+        frontier = next;
+    }
+    all
+}
+
+/// AC-3 / AC-5 with FR4 (TM-1): over every stream of up to five tokens
+/// (`ESC`, `[`, `]`, `6`, `P`, `11;?`, BEL, `\`), whatever mix of aborted
+/// strings, superseded `ESC`s and CSIs it forms:
+/// - `pending` after one call is the model's chain, from its head, and what
+///   was emitted is the strip of the bytes before it;
+/// - fed byte by byte or in two calls, the filter ends in the same state
+///   (pending, stored construct start, CSI state) and its output is the same
+///   once the device queries a split CSI leaves in it are stripped (the
+///   snapshot-time strip removes them; nothing is held for a CSI).
+#[test]
+fn chains_and_csis_are_split_invariant_and_the_csi_state_matches_term_core() {
+    let start = Instant::now();
+    for stream in token_streams(5) {
+        let mut whole = ScrollbackWriteFilter::new();
+        let (_dims, emitted) = whole.feed(&stream, DIMS);
+        assert_eq!(
+            whole.pending(),
+            model_pending(&stream),
+            "{stream:?}: pending is the chain from its head"
+        );
+        assert_eq!(
+            emitted,
+            strip_pty_output_for_scrollback_write(&stream[..stream.len() - whole.pending().len()]),
+            "{stream:?}: exactly the bytes before the chain head are emitted, through the strip"
+        );
+        match model_chain_head(&stream) {
+            Some(head) => {
+                let construct = whole.held_construct_start().expect("held");
+                assert!(construct < whole.pending().len(), "{stream:?}");
+                assert_eq!(
+                    stream[head + construct],
+                    0x1b,
+                    "{stream:?}: the stored start is an ESC"
+                );
+            }
+            None => assert_eq!(whole.held_construct_start(), None, "{stream:?}"),
+        }
+
+        let mut bytewise = ScrollbackWriteFilter::new();
+        let mut emitted_bytewise = Vec::new();
+        for byte in &stream {
+            emitted_bytewise.extend_from_slice(&bytewise.feed(&[*byte], DIMS).1);
+        }
+        assert_eq!(
+            strip_replayable_rich_content(&emitted_bytewise),
+            strip_replayable_rich_content(&emitted),
+            "{stream:?}: byte by byte"
+        );
+        assert_eq!(bytewise.pending(), whole.pending(), "{stream:?}");
+        assert_eq!(
+            bytewise.held_construct_start(),
+            whole.held_construct_start(),
+            "{stream:?}"
+        );
+        assert_eq!(bytewise.csi_phase(), whole.csi_phase(), "{stream:?}");
+
+        // Fed in two calls at the middle.
+        let mid = stream.len() / 2;
+        let mut halves = ScrollbackWriteFilter::new();
+        let mut emitted_halves = halves.feed(&stream[..mid], DIMS).1;
+        emitted_halves.extend_from_slice(&halves.feed(&stream[mid..], DIMS).1);
+        assert_eq!(
+            strip_replayable_rich_content(&emitted_halves),
+            strip_replayable_rich_content(&emitted),
+            "{stream:?}: two calls"
+        );
+        assert_eq!(halves.pending(), whole.pending(), "{stream:?}");
+        assert_eq!(halves.csi_phase(), whole.csi_phase(), "{stream:?}");
+    }
+    assert!(start.elapsed() < BUDGET, "took {:?}", start.elapsed());
+}
+
+/// AC-3 with FR4 (TM-1): for every stream of up to four tokens followed by a
+/// removed switch and a continuation, the ring the filter produces with the
+/// cut at the end of the stream replays like the raw stream — the screen, the
+/// cursor and the responses the continuation provokes — and its CSI state
+/// agrees with term_core on the bytes emitted before the cut. (The ring is
+/// replayed as a snapshot is: through the snapshot-time strip, with the
+/// answers to what it holds discarded; the live parser answered the raw
+/// stream's queries before the cut already, so the reference's responses
+/// start after the cut.)
+#[test]
+fn the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus() {
+    let start = Instant::now();
+    let pair = [&b"\x1b[?1049h"[..], &b"\x1b[?1049l"[..]].concat();
+    for stream in token_streams(4) {
+        // The CSI state against term_core, on what the filter emitted before
+        // the chain head.
+        let mut probe = ScrollbackWriteFilter::new();
+        let (_dims, emitted) = probe.feed(&stream, DIMS);
+        assert_eq!(
+            probe.csi_phase().is_some(),
+            ends_inside_a_csi(&emitted),
+            "{stream:?}: the CSI state against term_core on the emitted {emitted:?}"
+        );
+
+        for continuation in [&b"n"[..], b"\x07"] {
+            let mut f = ScrollbackWriteFilter::new();
+            let ring = f.feed_with_cuts(&stream, DIMS, &[stream.len()]).bytes;
+            let later = f.feed(continuation, DIMS).1;
+            let expected = view_after_a_cut(&[&stream[..], &pair[..]].concat(), continuation);
+            assert_eq!(
+                view_after_a_cut(&strip_replayable_rich_content(&ring), &later),
+                expected,
+                "{stream:?}, switch, {continuation:?}: the replayed ring {ring:?} then {later:?} \
+                 differs from the raw stream"
+            );
+        }
+    }
+    assert!(start.elapsed() < BUDGET, "took {:?}", start.elapsed());
 }
