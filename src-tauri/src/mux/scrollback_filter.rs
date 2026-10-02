@@ -89,6 +89,17 @@ pub(in crate::mux) fn strip_pty_output_for_scrollback_write(bytes: &[u8]) -> Vec
     strip_rich_content(bytes)
 }
 
+/// State-taking form of [`strip_pty_output_for_scrollback_write`] for the
+/// write filter: `pending_designator` is true when `bytes[0]` is the pending
+/// charset designator of an `ESC (` / `ESC )` that ended the previous feed.
+/// See [`strip_rich_content_and_remap_with_designator`].
+pub(in crate::mux) fn strip_pty_output_for_scrollback_write_with_designator(
+    bytes: &[u8],
+    pending_designator: bool,
+) -> Vec<u8> {
+    strip_rich_content_and_remap_with_designator(bytes, &[], pending_designator).0
+}
+
 /// Shared implementation for [`strip_replayable_rich_content`] /
 /// [`strip_pty_output_for_scrollback_write`] (the write path and the
 /// snapshot path are identical since task0004 round-4 rework D1' — see
@@ -117,11 +128,39 @@ pub(in crate::mux) fn strip_rich_content_and_remap(
     bytes: &[u8],
     watch_offsets: &[usize],
 ) -> (Vec<u8>, Vec<usize>) {
+    strip_rich_content_and_remap_with_designator(bytes, watch_offsets, false)
+}
+
+/// State-taking form of [`strip_rich_content_and_remap`]: the same single
+/// pass, started in the client's "awaiting a charset designator" state when
+/// `pending_designator` is true — `bytes[0]` is then the designator of an
+/// `ESC (` / `ESC )` that ended the previous feed, so it is copied verbatim
+/// (even when it is an `ESC`) and scanning resumes after it. With the flag
+/// clear this is exactly [`strip_rich_content_and_remap`].
+///
+/// Designator transition (mux-suppressed-output-round3-fixes FR2/FR3, the
+/// same transition as `term_core`'s escape handling and the write filter's
+/// boundary scan): at top level, `ESC (` / `ESC )` and the byte after it are
+/// copied verbatim and the pass resumes after them. The third byte is
+/// consumed even when it is an `ESC`, so it never starts an OSC, APC, DCS or
+/// CSI candidate. `ESC (` / `ESC )` at the very end of the input is copied
+/// verbatim; the caller carries the state. Every copied byte, the designator
+/// byte included, keeps a one-to-one remapped offset, and the pass stays
+/// single and bounded with no backtracking.
+pub(in crate::mux) fn strip_rich_content_and_remap_with_designator(
+    bytes: &[u8],
+    watch_offsets: &[usize],
+    pending_designator: bool,
+) -> (Vec<u8>, Vec<usize>) {
     let mut out = Vec::with_capacity(bytes.len());
     let mut remapped = vec![0usize; watch_offsets.len()];
     let mut next_watch = 0usize;
     let mut i = 0;
     let n = bytes.len();
+    // Number of upcoming bytes to copy without examining them: the
+    // designator awaited by the caller's state, or the brace and the
+    // designator of an `ESC (` / `ESC )` met at top level.
+    let mut verbatim = usize::from(pending_designator);
     // Smallest index at or after which an `ESC \` (ST) terminator may still
     // exist. Once a terminator search runs off the end we set this to `n`, so
     // subsequent APC/DCS introducers short-circuit instead of re-scanning the
@@ -137,6 +176,14 @@ pub(in crate::mux) fn strip_rich_content_and_remap(
         while next_watch < watch_offsets.len() && watch_offsets[next_watch] <= i {
             remapped[next_watch] = out.len();
             next_watch += 1;
+        }
+        // Designator bytes are copied one at a time so each keeps its own
+        // one-to-one remapped offset (the watch loop above runs per byte).
+        if verbatim > 0 {
+            verbatim -= 1;
+            out.push(bytes[i]);
+            i += 1;
+            continue;
         }
         // Only sequences introduced by ESC are candidates for removal.
         if bytes[i] != 0x1b || i + 1 >= n {
@@ -190,6 +237,14 @@ pub(in crate::mux) fn strip_rich_content_and_remap(
                 }
                 out.push(bytes[i]);
                 i += 1;
+            }
+            b'(' | b')' => {
+                // Charset designation: `ESC`, the brace and the designator
+                // byte after it are copied verbatim; the designator is never
+                // examined as a fresh introducer.
+                out.push(bytes[i]);
+                i += 1;
+                verbatim = 2;
             }
             _ => {
                 out.push(bytes[i]);

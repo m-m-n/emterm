@@ -808,3 +808,256 @@ fn every_strip_entry_point_keeps_non_launch_and_overflowed_osc_bodies() {
         }
     }
 }
+
+// ── designator-aware strip (mux-suppressed-output-round3-fixes task0002,
+//    FR2 / FR3) ──────────────────────────────────────────────────────────
+//
+// term_core consumes the byte after `ESC (` / `ESC )` as the charset
+// designator, even when it is an ESC, so that byte never opens an OSC, APC,
+// DCS or CSI. The strip follows the same transition in every entry point.
+
+/// Runs in which the byte after `ESC (` / `ESC )` is an ESC: nothing in them
+/// is a strip target for the client, so every entry point keeps every byte.
+const DESIGNATOR_ESC_KEPT_RUNS: &[&[u8]] = &[
+    b"\x1b(\x1b]0777;emterm;markdown;begin;id=x\x07X",
+    b"\x1b)\x1b[6n",
+    b"\x1b(\x1b]777;emterm;markdown;x\x07",
+    b"\x1b)\x1b]777;emterm;agent-status;v=1;state=idle\x07",
+    b"\x1b(\x1b_Gi=1,a=T;PAYLOAD\x1b\\",
+    b"\x1b)\x1bPq#0;2;0;0;0\x1b\\",
+    b"\x1b(\x1b]9999;emterm-md;begin\x1b\\",
+    b"a\x1b(\x1b[5nb",
+];
+
+/// Every entry point (snapshot, ring write, strip-and-remap, and the
+/// state-taking forms with the flag clear) keeps a designator ESC's run.
+#[test]
+fn every_strip_entry_point_keeps_a_designator_esc_and_what_follows_it() {
+    for input in DESIGNATOR_ESC_KEPT_RUNS {
+        let label = String::from_utf8_lossy(input);
+        assert_eq!(
+            strip_replayable_rich_content(input),
+            *input,
+            "{label:?}: snapshot strip"
+        );
+        assert_eq!(
+            strip_pty_output_for_scrollback_write(input),
+            *input,
+            "{label:?}: ring-write strip"
+        );
+        assert_eq!(
+            strip_rich_content_and_remap(input, &[]).0,
+            *input,
+            "{label:?}: strip-and-remap"
+        );
+        assert_eq!(
+            strip_pty_output_for_scrollback_write_with_designator(input, false),
+            *input,
+            "{label:?}: state-taking write form, flag clear"
+        );
+        assert_eq!(
+            strip_rich_content_and_remap_with_designator(input, &[], false).0,
+            *input,
+            "{label:?}: state-taking remap form, flag clear"
+        );
+    }
+}
+
+/// A completed designation (`ESC ( B`) is over: a launch that follows it is a
+/// real launch and is still stripped, with either brace and either terminator.
+#[test]
+fn a_launch_after_a_completed_designator_is_still_stripped() {
+    for designation in [&b"\x1b(B"[..], &b"\x1b)0"[..], &b"\x1b(\x1b"[..]] {
+        for terminator in [&b"\x07"[..], &b"\x1b\\"[..]] {
+            let mut input = b"pre".to_vec();
+            input.extend_from_slice(designation);
+            input.extend_from_slice(&osc(b"777;emterm;markdown;begin;id=x", terminator));
+            input.extend_from_slice(b"X");
+            let mut expected = b"pre".to_vec();
+            expected.extend_from_slice(designation);
+            expected.extend_from_slice(b"X");
+            assert_eq!(
+                strip_pty_output_for_scrollback_write(&input),
+                expected,
+                "designation {designation:?}: ring-write strip"
+            );
+            assert_eq!(
+                strip_replayable_rich_content(&input),
+                expected,
+                "designation {designation:?}: snapshot strip"
+            );
+        }
+    }
+}
+
+/// `ESC (` followed by an ESC consumes only ONE ESC: a launch opened by the
+/// ESC after it is stripped (`ESC ( ESC ( ESC ]` and `ESC ( ESC ESC ]`).
+#[test]
+fn only_the_byte_right_after_the_designation_is_consumed() {
+    let launch = osc(b"777;emterm;markdown;begin", b"\x07");
+
+    let mut chain = b"\x1b(\x1b(".to_vec();
+    chain.extend_from_slice(&launch);
+    assert_eq!(
+        strip_pty_output_for_scrollback_write(&chain),
+        b"\x1b(\x1b(",
+        "the second `(` is plain text; the ESC after it opens the launch"
+    );
+
+    let mut double_esc = b"\x1b(\x1b".to_vec();
+    double_esc.extend_from_slice(&launch);
+    assert_eq!(
+        strip_pty_output_for_scrollback_write(&double_esc),
+        b"\x1b(\x1b",
+        "the second ESC is the designator; the third byte starts the launch"
+    );
+}
+
+/// `ESC (` / `ESC )` at the very end of the input is copied verbatim.
+#[test]
+fn a_trailing_designation_start_is_copied_verbatim() {
+    for input in [
+        &b"abc\x1b("[..],
+        &b"abc\x1b)"[..],
+        &b"\x1b("[..],
+        &b"\x1b(\x1b("[..],
+    ] {
+        assert_eq!(strip_pty_output_for_scrollback_write(input), input);
+        assert_eq!(strip_replayable_rich_content(input), input);
+    }
+}
+
+/// The state-taking form with the flag set copies byte 0 verbatim, even an
+/// ESC that would open a launch, and resumes after it.
+#[test]
+fn the_flag_makes_byte_zero_a_verbatim_designator() {
+    let launch = osc(b"777;emterm;markdown;begin;id=x", b"\x07");
+
+    // Byte 0 is an ESC: it does not open the launch that follows it.
+    assert_eq!(
+        strip_pty_output_for_scrollback_write_with_designator(&launch, true),
+        launch,
+        "the leading ESC is the designator; the rest is plain text"
+    );
+    assert_eq!(
+        strip_rich_content_and_remap_with_designator(&launch, &[], true).0,
+        launch
+    );
+
+    // Byte 0 is an ordinary designator; a launch after it is stripped.
+    let mut input = b"B".to_vec();
+    input.extend_from_slice(&launch);
+    input.extend_from_slice(b"Z");
+    assert_eq!(
+        strip_pty_output_for_scrollback_write_with_designator(&input, true),
+        b"BZ"
+    );
+
+    // Empty input with the flag set is empty.
+    assert!(strip_pty_output_for_scrollback_write_with_designator(b"", true).is_empty());
+    assert_eq!(
+        strip_rich_content_and_remap_with_designator(b"", &[0, 3], true),
+        (Vec::new(), vec![0, 0])
+    );
+
+    // A designator byte 0 followed by another `ESC (` run: the new
+    // designation is tracked as usual.
+    assert_eq!(
+        strip_pty_output_for_scrollback_write_with_designator(b"x\x1b(\x1b]0;t\x07", true),
+        b"x\x1b(\x1b]0;t\x07"
+    );
+}
+
+/// With the flag clear the state-taking form equals the existing entry
+/// points, on a corpus that mixes strip targets, designations and text.
+#[test]
+fn the_state_taking_form_with_the_flag_clear_equals_the_existing_entry_points() {
+    let launch = osc(b"777;emterm;markdown;begin", b"\x07");
+    let mut corpus: Vec<Vec<u8>> = vec![
+        b"plain".to_vec(),
+        b"a\x1b[6nb".to_vec(),
+        b"\x1b(B\x1b)0text".to_vec(),
+        b"\x1b_Gi=1;P\x1b\\tail".to_vec(),
+        b"\x1bPq#0\x1b\\tail".to_vec(),
+        b"\x1b]0;title\x07".to_vec(),
+        b"\x1b".to_vec(),
+        Vec::new(),
+    ];
+    corpus.push([b"x".as_slice(), &launch, b"y"].concat());
+    corpus.extend(DESIGNATOR_ESC_KEPT_RUNS.iter().map(|r| r.to_vec()));
+    for input in &corpus {
+        assert_eq!(
+            strip_pty_output_for_scrollback_write_with_designator(input, false),
+            strip_pty_output_for_scrollback_write(input),
+            "{input:?}"
+        );
+        let watch: Vec<usize> = (0..=input.len()).collect();
+        assert_eq!(
+            strip_rich_content_and_remap_with_designator(input, &watch, false),
+            strip_rich_content_and_remap(input, &watch),
+            "{input:?}"
+        );
+    }
+}
+
+/// Remapped watch offsets before, on and after the designator byte map each
+/// copied byte one-to-one.
+#[test]
+fn remap_offsets_around_a_designator_byte_stay_consistent_with_the_output() {
+    // `ab`, `ESC ( B`, a stripped launch, `Z`.
+    let launch = osc(b"777;emterm;markdown;begin", b"\x07");
+    let mut input = b"ab\x1b(B".to_vec();
+    input.extend_from_slice(&launch);
+    input.extend_from_slice(b"Z");
+    let launch_start = 5usize;
+    let z = launch_start + launch.len();
+    let watch = [0usize, 1, 2, 3, 4, launch_start, launch_start + 3, z, z + 1];
+    let (out, remapped) = strip_rich_content_and_remap(&input, &watch);
+    assert_eq!(out, b"ab\x1b(BZ");
+    assert_eq!(remapped, vec![0, 1, 2, 3, 4, 5, 5, 5, 6]);
+
+    // The designator byte is an ESC: every byte of the run is kept and every
+    // offset maps to itself.
+    let input = b"\x1b(\x1b]777;emterm;markdown;x\x07";
+    let watch: Vec<usize> = (0..=input.len()).collect();
+    let (out, remapped) = strip_rich_content_and_remap(input, &watch);
+    assert_eq!(out, input.to_vec());
+    assert_eq!(remapped, watch);
+
+    // A designation after a stripped launch: offsets on its three bytes shift
+    // by exactly the stripped length.
+    let mut input = launch.clone();
+    input.extend_from_slice(b"\x1b(\x1b]0;t\x07");
+    let l = launch.len();
+    let (out, remapped) = strip_rich_content_and_remap(&input, &[l, l + 1, l + 2, l + 3]);
+    assert_eq!(out, b"\x1b(\x1b]0;t\x07");
+    assert_eq!(remapped, vec![0, 1, 2, 3]);
+
+    // The flag set: offsets 0 and 1 stay in place and byte 0 is copied.
+    let input = b"\x1b]777;emterm;markdown;x\x07";
+    let (out, remapped) = strip_rich_content_and_remap_with_designator(input, &[0, 1, 2], true);
+    assert_eq!(out, input.to_vec());
+    assert_eq!(remapped, vec![0, 1, 2]);
+}
+
+/// Designator chains scan in one bounded pass and keep every byte.
+#[test]
+fn designator_chains_are_one_pass_and_keep_every_byte() {
+    for unit in [&b"\x1b("[..], &b"\x1b(\x1b"[..], &b"\x1b)\x1b)"[..]] {
+        let input: Vec<u8> = std::iter::repeat_n(unit, 50_000)
+            .flatten()
+            .copied()
+            .collect();
+        let start = std::time::Instant::now();
+        let out = strip_pty_output_for_scrollback_write(&input);
+        let (remapped_out, remapped) = strip_rich_content_and_remap(&input, &[0, input.len() / 2]);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "chain of {unit:?} took {:?}",
+            start.elapsed()
+        );
+        assert_eq!(out, input);
+        assert_eq!(remapped_out, input);
+        assert_eq!(remapped, vec![0, input.len() / 2]);
+    }
+}
