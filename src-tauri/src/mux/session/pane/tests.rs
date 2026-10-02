@@ -3732,11 +3732,11 @@ fn ac2_equal_boundary_with_an_identical_construct_keeps_it() {
     );
 }
 
-/// AC-2: an equal boundary with a different construct yields none —
-/// conflicting information falls back to the pre-feature re-send. Every
-/// pairing of (some, other, none) is covered.
+/// AC-2 (superseded by mux-suppressed-output-round3-fixes FR7): an equal
+/// boundary keeps the later record's construct, none included. Every pairing
+/// of (some, other, none) is covered.
 #[test]
-fn ac2_equal_boundary_with_a_different_construct_yields_none() {
+fn ac2_equal_boundary_with_a_different_construct_takes_the_later_record() {
     let a = Some(b"\x1b(".to_vec());
     let b = Some(b"\x1b)".to_vec());
     let pairs: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> =
@@ -3748,8 +3748,8 @@ fn ac2_equal_boundary_with_a_different_construct_yields_none() {
         capture.record_boundary_with_construct(&tx, 5, second.clone());
         assert_eq!(
             cover_construct(&capture, &tx, 5),
-            Some(None),
-            "first={first:?} second={second:?}"
+            Some(second.clone()),
+            "the later record wins: first={first:?} second={second:?}"
         );
     }
 }
@@ -3887,6 +3887,196 @@ fn ac2_construct_is_read_under_the_same_boundary_hold_as_the_covered_decision() 
         Some(Some(vec![0xe4])),
         "after the hold ends the waiting record lands"
     );
+}
+
+// ── mux-suppressed-output-round3-fixes task0004 (FR6, FR7): generation in
+//    the boundary record, later record wins at an equal boundary ───────────
+
+fn cover_generation(
+    capture: &OutputCapture,
+    tx: &mpsc::Sender<PtyOutputChunk>,
+    number: u64,
+) -> Option<u64> {
+    capture.boundary_cover(tx, number).map(|c| c.generation)
+}
+
+/// AC-1 (FR7, TM-3, TS-7; registry, finding `240031761bfdf695`): the record
+/// rules for one destination. An equal-boundary record leaves the later
+/// construct whatever it is (none included, in both directions), an identical
+/// construct is kept, a higher boundary replaces both values, a lower boundary
+/// changes nothing (generation included), insert / higher / equal records each
+/// give a strictly greater generation, and one destination's record never
+/// changes another's construct or generation.
+#[test]
+fn round3_24003176_equal_boundary_takes_the_later_record() {
+    let paren = Some(b"\x1b(".to_vec());
+    let other_designator = Some(b"\x1b)".to_vec());
+
+    // Equal boundary: the later construct wins, in every pairing.
+    let pairs: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> = vec![
+        (None, paren.clone()),
+        (paren.clone(), None),
+        (paren.clone(), other_designator.clone()),
+        (paren.clone(), paren.clone()),
+    ];
+    for (first, second) in pairs {
+        let capture = OutputCapture::new();
+        let (tx, _rx) = construct_channel();
+        capture.record_boundary_with_construct(&tx, 5, first.clone());
+        let g_first = cover_generation(&capture, &tx, 5).expect("covered");
+        capture.record_boundary_with_construct(&tx, 5, second.clone());
+        assert_eq!(
+            cover_construct(&capture, &tx, 5),
+            Some(second.clone()),
+            "first={first:?} second={second:?}: the later record's construct stands"
+        );
+        assert!(
+            cover_generation(&capture, &tx, 5).expect("covered") > g_first,
+            "first={first:?} second={second:?}: an equal-boundary record advances the generation"
+        );
+        assert_eq!(
+            cover_construct(&capture, &tx, 6),
+            None,
+            "the boundary stays 5"
+        );
+    }
+
+    // Higher boundary: replaces boundary and construct, generation advances.
+    let capture = OutputCapture::new();
+    let (tx, _rx) = construct_channel();
+    capture.record_boundary_with_construct(&tx, 5, paren.clone());
+    let g_insert = cover_generation(&capture, &tx, 5).expect("covered");
+    capture.record_boundary_with_construct(&tx, 7, other_designator.clone());
+    let g_higher = cover_generation(&capture, &tx, 7).expect("covered");
+    assert!(
+        g_higher > g_insert,
+        "a higher boundary advances the generation"
+    );
+    assert_eq!(
+        cover_construct(&capture, &tx, 7),
+        Some(other_designator.clone())
+    );
+    assert_eq!(cover_construct(&capture, &tx, 8), None);
+
+    // Lower boundary: boundary, construct and generation are all unchanged.
+    capture.record_boundary_with_construct(&tx, 6, paren.clone());
+    capture.record_boundary(&tx, 1);
+    assert_eq!(
+        cover_construct(&capture, &tx, 7),
+        Some(other_designator.clone())
+    );
+    assert_eq!(
+        cover_generation(&capture, &tx, 7),
+        Some(g_higher),
+        "a lower boundary leaves the generation alone"
+    );
+    assert_eq!(cover_construct(&capture, &tx, 8), None);
+
+    // A record for one destination never changes another's construct or
+    // generation, and generations are never reused across destinations.
+    let (tx_b, _rx_b) = construct_channel();
+    capture.record_boundary_with_construct(&tx_b, 7, paren.clone());
+    let g_b = cover_generation(&capture, &tx_b, 7).expect("covered");
+    assert!(g_b > g_higher, "a later record gets a later generation");
+    capture.record_boundary_with_construct(&tx_b, 7, None);
+    capture.record_boundary_with_construct(&tx_b, 9, paren.clone());
+    assert_eq!(
+        cover_construct(&capture, &tx, 7),
+        Some(other_designator),
+        "destination A keeps its own construct"
+    );
+    assert_eq!(
+        cover_generation(&capture, &tx, 7),
+        Some(g_higher),
+        "destination A keeps its own generation"
+    );
+    assert_ne!(
+        cover_generation(&capture, &tx_b, 9),
+        cover_generation(&capture, &tx, 7),
+        "no generation value is shared between destinations"
+    );
+}
+
+/// AC-1: the guard form of the record gives the same results as the
+/// free-standing form (equal boundary, later record wins; generation
+/// advances).
+#[test]
+fn round3_guard_record_forms_apply_the_same_rules() {
+    let capture = OutputCapture::new();
+    let (tx, _rx) = construct_channel();
+    let mut guard = capture.hold_boundary();
+    guard.record_with_construct(&tx, 4, Some(b"\x1b(".to_vec()));
+    let first = guard.cover(&tx, 4).expect("covered");
+    assert_eq!(first.construct, Some(b"\x1b(".to_vec()));
+    guard.record(&tx, 4);
+    let second = guard.cover(&tx, 4).expect("covered");
+    assert_eq!(
+        second.construct, None,
+        "the boundary-only form is the later record"
+    );
+    assert!(second.generation > first.generation);
+    guard.record_with_construct(&tx, 3, Some(vec![0xe4]));
+    assert_eq!(
+        guard.cover(&tx, 4),
+        Some(second),
+        "a lower record changes nothing"
+    );
+}
+
+/// AC-2 (FR6): the covered query returns the construct with the semantics it
+/// always had, together with the destination's current generation — on the
+/// free-standing form and on a held guard alike. The generation is the same
+/// across repeated queries with no record in between, and a chunk number
+/// below the boundary still sees the entry's generation with no construct.
+#[test]
+fn round3_covered_query_carries_the_current_generation_on_both_forms() {
+    let capture = OutputCapture::new();
+    let (tx, _rx) = construct_channel();
+    assert_eq!(
+        capture.boundary_cover(&tx, 1),
+        None,
+        "no entry: not covered"
+    );
+
+    capture.record_boundary_with_construct(&tx, 6, Some(b"\x1b[".to_vec()));
+    let at_boundary = capture.boundary_cover(&tx, 6).expect("covered at 6");
+    assert_eq!(at_boundary.construct, Some(b"\x1b[".to_vec()));
+    let below = capture.boundary_cover(&tx, 3).expect("covered at 3");
+    assert_eq!(
+        below.construct, None,
+        "the construct never applies below the boundary"
+    );
+    assert_eq!(
+        below.generation, at_boundary.generation,
+        "one entry, one generation, whatever number is asked"
+    );
+    assert_eq!(capture.boundary_cover(&tx, 7), None, "7 is not covered");
+    assert_eq!(
+        capture.boundary_cover(&tx, 6),
+        Some(at_boundary.clone()),
+        "repeated queries with no record in between agree"
+    );
+
+    {
+        let guard = capture.hold_boundary();
+        assert_eq!(
+            guard.cover(&tx, 6),
+            Some(at_boundary.clone()),
+            "the guard form answers exactly as the free-standing form"
+        );
+        assert_eq!(guard.cover(&tx, 6), guard.cover(&tx, 6));
+        assert_eq!(guard.cover(&tx, 7), None);
+    }
+
+    capture.record_boundary_with_construct(&tx, 6, Some(b"\x1b[".to_vec()));
+    let after = capture.boundary_cover(&tx, 6).expect("covered at 6");
+    assert_eq!(after.construct, at_boundary.construct);
+    assert!(
+        after.generation > at_boundary.generation,
+        "a re-record of an identical construct is still a later record"
+    );
+    assert!(!capture.is_boundary_covered(&tx, 7));
+    assert!(capture.is_boundary_covered(&tx, 6));
 }
 
 // ── task0004 AC-3: visibility restore records the construct of the

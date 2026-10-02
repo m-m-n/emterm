@@ -137,20 +137,72 @@ pub(in crate::mux) struct SuppressedReplacementRequest<'a> {
     pub carried_over_completion: Option<CarriedOverCompletion<'a>>,
 }
 
-/// [`build_suppressed_replacement`] over a full request.
+/// [`build_suppressed_replacement`] over a full request: the result of
+/// [`finalize_suppressed_replacement`] applied to
+/// [`prepare_suppressed_replacement`], with the request's own snapshot
+/// trailing construct. Signature and result are unchanged for every input
+/// (mux-suppressed-output-round3-fixes task0004, FR6: the split exists so the
+/// reader can decide tail omission from the destination's record as it stands
+/// at send time).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::mux) fn build_suppressed_replacement_for(
     request: &SuppressedReplacementRequest<'_>,
 ) -> Vec<u8> {
+    finalize_suppressed_replacement(
+        prepare_suppressed_replacement(request),
+        request.snapshot_trailing_construct,
+    )
+}
+
+/// A suppressed chunk's replacement assembled up to, but not including, the
+/// tail-omission decision (mux-suppressed-output-round3-fixes task0004, FR6).
+/// Owned, so it can be held while the reader secures a send slot and re-takes
+/// its exclusions.
+pub(in crate::mux) struct PreparedReplacement {
+    /// The assembled items: every reportable query / launch, in stream order,
+    /// the carried-over completion included.
+    items: Vec<u8>,
+    /// The tail bytes: the write filter's pending run (D4 rule 1) or the
+    /// client-parity scan's own incomplete trailing construct.
+    tail: Vec<u8>,
+    /// Whether the tail may be omitted when the destination's snapshot
+    /// already left the client holding it. Only a tail found by the
+    /// client-parity scan may; the write filter's pending run never may.
+    tail_omittable: bool,
+}
+
+impl PreparedReplacement {
+    /// Neither items nor a tail: no construct can make the finalized
+    /// replacement non-empty.
+    pub(in crate::mux) fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.tail.is_empty()
+    }
+}
+
+/// The part of replacement assembly that needs no knowledge of the
+/// destination's snapshot: the client-parity scan, the item assembly
+/// (carried-over completion included) and the tail selection (FR6).
+///
+/// `request.snapshot_trailing_construct` is NOT read here — it is the input of
+/// [`finalize_suppressed_replacement`]. The reader passes `None`. Runs outside
+/// every exclusion; the cost is the scan, as before.
+pub(in crate::mux) fn prepare_suppressed_replacement(
+    request: &SuppressedReplacementRequest<'_>,
+) -> PreparedReplacement {
     let SuppressedReplacementRequest {
         chunk,
         ring_written_ranges,
         pending_after,
         window,
-        snapshot_trailing_construct,
+        snapshot_trailing_construct: _,
         carried_over_completion,
     } = *request;
     if chunk.is_empty() {
-        return Vec::new();
+        return PreparedReplacement {
+            items: Vec::new(),
+            tail: Vec::new(),
+            tail_omittable: false,
+        };
     }
 
     // D4: the write filter's pending run is the tail ONLY when it is
@@ -164,50 +216,80 @@ pub(in crate::mux) fn build_suppressed_replacement_for(
         .last()
         .is_some_and(|r| r.end == chunk.len());
 
-    if !pending_after.is_empty() && chunk_ends_in_ring_written {
-        // D4 rule 1 / FR5: nothing is extracted from the chunk bytes pending
-        // will re-deliver (TM-1). Those are exactly the last
-        // min(pending, fed) bytes of the concatenated ring-written ranges;
-        // exclude the chunk-coordinate pieces that make them up — never the
-        // gaps (alternate-screen ranges, removed switch sequences) between
-        // ranges — and walk the whole chunk so items around them survive.
-        let fed_len: usize = ring_written_ranges
-            .iter()
-            .map(|r| r.end.saturating_sub(r.start))
-            .sum();
-        let contribution = pending_after.len().min(fed_len);
-        let excluded = excluded_pieces(ring_written_ranges, contribution);
-        let outcome = client_parity_scan::scan(window, chunk, &excluded);
-        let mut out = assemble_items(&outcome, carried_over_completion.as_ref());
-        out.extend_from_slice(pending_after);
-        out
-    } else {
-        let outcome = client_parity_scan::scan(window, chunk, &[]);
-        let mut out = assemble_items(&outcome, carried_over_completion.as_ref());
-        let tail: Vec<u8> = match outcome.tail.clone() {
-            Some(tail_range) => {
-                let tail_bytes = &outcome.combined[tail_range];
-                if outcome.tail_strip_c0 {
-                    strip_c0(tail_bytes).collect()
-                } else {
-                    tail_bytes.to_vec()
+    let (mut items, tail, tail_omittable) =
+        if !pending_after.is_empty() && chunk_ends_in_ring_written {
+            // D4 rule 1 / FR5: nothing is extracted from the chunk bytes pending
+            // will re-deliver (TM-1). Those are exactly the last
+            // min(pending, fed) bytes of the concatenated ring-written ranges;
+            // exclude the chunk-coordinate pieces that make them up — never the
+            // gaps (alternate-screen ranges, removed switch sequences) between
+            // ranges — and walk the whole chunk so items around them survive.
+            let fed_len: usize = ring_written_ranges
+                .iter()
+                .map(|r| r.end.saturating_sub(r.start))
+                .sum();
+            let contribution = pending_after.len().min(fed_len);
+            let excluded = excluded_pieces(ring_written_ranges, contribution);
+            let outcome = client_parity_scan::scan(window, chunk, &excluded);
+            let items = assemble_items(&outcome, carried_over_completion.as_ref());
+            (items, pending_after.to_vec(), false)
+        } else {
+            let outcome = client_parity_scan::scan(window, chunk, &[]);
+            let items = assemble_items(&outcome, carried_over_completion.as_ref());
+            let tail: Vec<u8> = match outcome.tail.clone() {
+                Some(tail_range) => {
+                    let tail_bytes = &outcome.combined[tail_range];
+                    if outcome.tail_strip_c0 {
+                        strip_c0(tail_bytes).collect()
+                    } else {
+                        tail_bytes.to_vec()
+                    }
                 }
-            }
-            None => Vec::new(),
+                None => Vec::new(),
+            };
+            (items, tail, true)
         };
-
-        // FR8: the destination's covering snapshot left the client parser
-        // holding exactly this tail. Re-sending it would double the
-        // construct (a second `ESC (` would be taken as the designator and
-        // printed), so it is omitted — see `carried_tail_output`.
-        let already_carried = !tail.is_empty()
-            && snapshot_trailing_construct.is_some_and(|construct| construct == tail.as_slice());
-        if already_carried {
-            return carried_tail_output(out, tail);
-        }
-        out.extend_from_slice(&tail);
-        out
+    // The finalize step (which may run under the reader's exclusions) then
+    // only compares and appends; make the append a copy into spare capacity.
+    if !items.is_empty() {
+        items.reserve(tail.len());
     }
+    PreparedReplacement {
+        items,
+        tail,
+        tail_omittable,
+    }
+}
+
+/// The tail-omission decision and the final concatenation (FR6). Performs no
+/// scan, no identification and no decider call — it only compares and
+/// concatenates, so the reader may run it under its exclusions.
+///
+/// FR8: when the tail is omittable, non-empty and equal to `construct`, the
+/// destination's covering snapshot left the client parser holding exactly this
+/// tail. Re-sending it would double the construct (a second `ESC (` would be
+/// taken as the designator and printed), so it is treated as already carried —
+/// see `carried_tail_output`. In every other case the result is the items
+/// followed by the tail.
+pub(in crate::mux) fn finalize_suppressed_replacement(
+    prepared: PreparedReplacement,
+    construct: Option<&[u8]>,
+) -> Vec<u8> {
+    let PreparedReplacement {
+        mut items,
+        tail,
+        tail_omittable,
+    } = prepared;
+    let already_carried =
+        tail_omittable && !tail.is_empty() && construct.is_some_and(|c| c == tail.as_slice());
+    if already_carried {
+        return carried_tail_output(items, tail);
+    }
+    if items.is_empty() {
+        return tail;
+    }
+    items.extend_from_slice(&tail);
+    items
 }
 
 /// The replacement for a chunk whose tail the client already holds (FR8):
@@ -1688,5 +1770,297 @@ mod tests {
         assert!(!is_deliverable_osc(b"\x1b]11;?"));
         assert!(!is_deliverable_osc(b"\x1b]11;?\\"));
         assert!(!is_deliverable_osc(b"x]11;?\x07"));
+    }
+    // ---- mux-suppressed-output-round3-fixes task0004 (FR6): prepare and
+    // finalize ----
+
+    /// The monolithic builder as it stood before the prepare / finalize split,
+    /// kept as the equivalence oracle: same scan, same assembly, same
+    /// tail-omission rule, applied in one function.
+    fn legacy_build(request: &SuppressedReplacementRequest<'_>) -> Vec<u8> {
+        let SuppressedReplacementRequest {
+            chunk,
+            ring_written_ranges,
+            pending_after,
+            window,
+            snapshot_trailing_construct,
+            carried_over_completion,
+        } = *request;
+        if chunk.is_empty() {
+            return Vec::new();
+        }
+        let chunk_ends_in_ring_written = ring_written_ranges
+            .last()
+            .is_some_and(|r| r.end == chunk.len());
+        if !pending_after.is_empty() && chunk_ends_in_ring_written {
+            let fed_len: usize = ring_written_ranges
+                .iter()
+                .map(|r| r.end.saturating_sub(r.start))
+                .sum();
+            let contribution = pending_after.len().min(fed_len);
+            let excluded = excluded_pieces(ring_written_ranges, contribution);
+            let outcome = client_parity_scan::scan(window, chunk, &excluded);
+            let mut out = assemble_items(&outcome, carried_over_completion.as_ref());
+            out.extend_from_slice(pending_after);
+            out
+        } else {
+            let outcome = client_parity_scan::scan(window, chunk, &[]);
+            let mut out = assemble_items(&outcome, carried_over_completion.as_ref());
+            let tail: Vec<u8> = match outcome.tail.clone() {
+                Some(tail_range) => {
+                    let tail_bytes = &outcome.combined[tail_range];
+                    if outcome.tail_strip_c0 {
+                        strip_c0(tail_bytes).collect()
+                    } else {
+                        tail_bytes.to_vec()
+                    }
+                }
+                None => Vec::new(),
+            };
+            let already_carried = !tail.is_empty()
+                && snapshot_trailing_construct
+                    .is_some_and(|construct| construct == tail.as_slice());
+            if already_carried {
+                return carried_tail_output(out, tail);
+            }
+            out.extend_from_slice(&tail);
+            out
+        }
+    }
+
+    struct CorpusCase {
+        name: &'static str,
+        window: Vec<u8>,
+        chunk: Vec<u8>,
+        ranges: Vec<Range<usize>>,
+        pending: Vec<u8>,
+        carried: Option<(&'static [u8], usize)>,
+    }
+
+    fn corpus() -> Vec<CorpusCase> {
+        let whole = |name, chunk: &[u8]| CorpusCase {
+            name,
+            window: Vec::new(),
+            chunk: chunk.to_vec(),
+            ranges: vec![0..chunk.len()],
+            pending: Vec::new(),
+            carried: None,
+        };
+        let utf8_tail = [b"abc".as_slice(), &[0xe4, 0xb8]].concat();
+        let utf8_items = [b"\x1b[6nabc".as_slice(), &[0xe4, 0xb8]].concat();
+        let pending_run = b"\x1b]9999;emterm-md;partial".to_vec();
+        let with_pending = [b"abc".as_slice(), &pending_run].concat();
+        let alt_query = b"\x1b]11;?\x07abc\x1b(".to_vec();
+        let alt_start = b"\x1b]11;?\x07".len();
+        let launch_chunk = [&SHORT_LAUNCH[12..], b"post"].concat();
+        vec![
+            whole("empty chunk", b""),
+            whole("plain output", b"hello, world\r\n"),
+            whole("awaiting designator tail", b"abc\x1b("),
+            whole("awaiting designator tail, close form", b"abc\x1b)"),
+            whole("cut utf-8 tail", &utf8_tail),
+            whole("cut csi tail", b"abc\x1b[3"),
+            whole("cut csi tail with an inner c0", b"abc\x1b[1\r;"),
+            whole("csi query then designator tail", b"\x1b[6nabc\x1b("),
+            whole("csi query then csi tail", b"\x1b[6nabc\x1b[3"),
+            whole("csi query then utf-8 tail", &utf8_items),
+            whole(
+                "viewer launch then designator tail",
+                b"\x1b]9999;emterm-md;# hi\x07abc\x1b(",
+            ),
+            whole("color query only", b"\x1b]11;?\x07"),
+            whole("incomplete osc query as the tail", b"\x1b]11;?\x1b"),
+            CorpusCase {
+                name: "color query in an alternate span, designator tail",
+                window: Vec::new(),
+                ranges: vec![alt_start..alt_query.len()],
+                chunk: alt_query,
+                pending: Vec::new(),
+                carried: None,
+            },
+            CorpusCase {
+                name: "pending run is the tail",
+                window: Vec::new(),
+                ranges: vec![0..with_pending.len()],
+                chunk: with_pending,
+                pending: pending_run,
+                carried: None,
+            },
+            CorpusCase {
+                name: "pending run equal to a designator construct",
+                window: Vec::new(),
+                chunk: b"abc\x1b(".to_vec(),
+                ranges: vec![0..5],
+                pending: b"\x1b(".to_vec(),
+                carried: None,
+            },
+            CorpusCase {
+                name: "tail starting in the window",
+                window: b"ab\x1b[".to_vec(),
+                chunk: b"3".to_vec(),
+                ranges: vec![0..1],
+                pending: Vec::new(),
+                carried: None,
+            },
+            CorpusCase {
+                name: "carried-over launch with a designator tail",
+                window: Vec::new(),
+                ranges: vec![0..launch_chunk.len()],
+                chunk: launch_chunk,
+                pending: Vec::new(),
+                carried: Some((SHORT_LAUNCH, SHORT_LAUNCH.len() - 12)),
+            },
+        ]
+    }
+
+    fn corpus_constructs() -> Vec<Option<Vec<u8>>> {
+        vec![
+            None,
+            Some(b"\x1b(".to_vec()),
+            Some(b"\x1b)".to_vec()),
+            Some(b"\x1b[3".to_vec()),
+            Some(b"\x1b[1;".to_vec()),
+            Some(b"\x1b[1\r;".to_vec()),
+            Some(vec![0xe4, 0xb8]),
+            Some(vec![0xe4]),
+            Some(b"\x1b]11;?\x1b".to_vec()),
+            Some(b"\x1b]9999;emterm-md;partial".to_vec()),
+        ]
+    }
+
+    /// AC-3 (FR6, TM-2): finalize applied to prepare equals the monolithic
+    /// builder's output for a corpus of requests with and without a
+    /// construct, and equals the public builders'.
+    #[test]
+    fn round3_finalize_of_prepare_equals_the_monolithic_builder_over_a_corpus() {
+        let mut omissions = 0usize;
+        let mut cases = 0usize;
+        for case in corpus() {
+            for construct in corpus_constructs() {
+                let carried = case
+                    .carried
+                    .map(|(bytes, end)| CarriedOverCompletion { bytes, end });
+                let request = SuppressedReplacementRequest {
+                    chunk: &case.chunk,
+                    ring_written_ranges: &case.ranges,
+                    pending_after: &case.pending,
+                    window: &case.window,
+                    snapshot_trailing_construct: construct.as_deref(),
+                    carried_over_completion: carried,
+                };
+                let expected = legacy_build(&request);
+                let composed = finalize_suppressed_replacement(
+                    prepare_suppressed_replacement(&request),
+                    construct.as_deref(),
+                );
+                assert_eq!(
+                    composed, expected,
+                    "case {:?}, construct {construct:?}",
+                    case.name
+                );
+                assert_eq!(
+                    build_suppressed_replacement_for(&request),
+                    expected,
+                    "case {:?}, construct {construct:?}: the builder keeps its result",
+                    case.name
+                );
+                let without = SuppressedReplacementRequest {
+                    snapshot_trailing_construct: None,
+                    ..request
+                };
+                if construct.is_some() && legacy_build(&without) != expected {
+                    omissions += 1;
+                }
+                cases += 1;
+            }
+        }
+        assert!(cases >= 100, "the corpus must be broad, ran {cases}");
+        assert!(
+            omissions >= 5,
+            "the corpus must exercise the tail-omission rule, only {omissions} cases changed"
+        );
+    }
+
+    /// AC-3: one prepared value finalizes correctly against any construct —
+    /// the decision is the only thing finalize looks at, and prepare does not
+    /// read the request's own construct.
+    #[test]
+    fn round3_one_prepared_value_finalizes_against_each_construct() {
+        let chunk = b"\x1b[6nabc\x1b(";
+        let ranges = [0..chunk.len()];
+        let request = |construct| SuppressedReplacementRequest {
+            chunk,
+            ring_written_ranges: &ranges,
+            pending_after: &[],
+            window: &[],
+            snapshot_trailing_construct: construct,
+            carried_over_completion: None,
+        };
+        // Prepared with a matching construct in the request: still the same
+        // prepared value as without one.
+        let prepared = prepare_suppressed_replacement(&request(Some(b"\x1b(")));
+        assert!(!prepared.is_empty());
+        let again = prepare_suppressed_replacement(&request(None));
+        assert_eq!(prepared.items, again.items);
+        assert_eq!(prepared.tail, again.tail);
+        assert_eq!(prepared.tail_omittable, again.tail_omittable);
+
+        assert_eq!(
+            finalize_suppressed_replacement(again, None),
+            b"\x1b[6n\x1b(",
+            "no construct: the tail is sent after the items"
+        );
+        assert_eq!(
+            finalize_suppressed_replacement(prepared, Some(b"\x1b(")),
+            b"B\x1b[6n\x1b(",
+            "a matching construct: filler, items, tail"
+        );
+    }
+
+    /// AC-3: the write filter's pending-run tail is never omittable, and a
+    /// prepared value with neither items nor a tail is empty whatever the
+    /// construct.
+    #[test]
+    fn round3_pending_tail_is_not_omittable_and_an_empty_prepare_stays_empty() {
+        let pending = b"\x1b(";
+        let chunk = b"abc\x1b(";
+        let prepared = prepare_suppressed_replacement(&SuppressedReplacementRequest {
+            chunk,
+            ring_written_ranges: &[0..chunk.len()],
+            pending_after: pending,
+            window: &[],
+            snapshot_trailing_construct: None,
+            carried_over_completion: None,
+        });
+        assert!(!prepared.tail_omittable);
+        assert_eq!(
+            finalize_suppressed_replacement(prepared, Some(b"\x1b(")),
+            b"\x1b("
+        );
+
+        let plain = b"hello\r\n";
+        let prepared = prepare_suppressed_replacement(&SuppressedReplacementRequest {
+            chunk: plain,
+            ring_written_ranges: &[0..plain.len()],
+            pending_after: &[],
+            window: &[],
+            snapshot_trailing_construct: None,
+            carried_over_completion: None,
+        });
+        assert!(prepared.is_empty());
+        for construct in corpus_constructs() {
+            let again = prepare_suppressed_replacement(&SuppressedReplacementRequest {
+                chunk: plain,
+                ring_written_ranges: &[0..plain.len()],
+                pending_after: &[],
+                window: &[],
+                snapshot_trailing_construct: None,
+                carried_over_completion: None,
+            });
+            assert!(
+                finalize_suppressed_replacement(again, construct.as_deref()).is_empty(),
+                "construct {construct:?}"
+            );
+        }
     }
 }
