@@ -7126,9 +7126,10 @@ fn removed_switch_between_main_ranges_delivers_the_alt_query_once_and_sends_no_t
         vec![b"\x1b[6n".to_vec()],
         "CSI 6n once and no tail"
     );
-    assert_eq!(run.ring, b"\x1b]2;xy");
-    // Responses only: the ring replay (D4: concatenated spans) keeps the OSC
-    // open over `y`, a display difference this task leaves alone.
+    // The OSC the removed switch closed is never written (round3 FR1): the
+    // ring holds only the bytes after it.
+    assert_eq!(run.ring, b"y");
+    // Responses only: the screen comparison is not part of this test.
     assert_r2_responses_match(&run, &chunks, false, "AC-3 (a)");
 }
 
@@ -7336,8 +7337,9 @@ fn fr4_removed_switch_stream_matches_the_reference_over_split_positions() {
     let positions: Vec<usize> = (1..stream.len()).filter(|p| !inside.contains(p)).collect();
     r2_sweep_three_reads("FR4", stream, &positions, true, |run, _chunks, ctx| {
         assert_eq!(
-            run.ring, b"A\x1b]11;?\x07C",
-            "{ctx}: the ring is the concatenation of the main-buffer spans"
+            run.ring, b"A\x07C",
+            "{ctx}: the ring is the concatenation of the main-buffer spans \
+             without the OSC the removed switch closed (round3 FR1)"
         );
     });
 }
@@ -7473,24 +7475,24 @@ fn repeated_switch_sequences_with_incomplete_introducers_finish_within_budget() 
 
 /// AC-2 (FR4): the reader runs the cut-aware feed also when the fed range is
 /// empty but a cut exists — a chunk that starts with a switch to the
-/// alternate screen closes (and so releases to the ring) what the filter
-/// was holding.
+/// alternate screen closes what the filter was holding. Round3 FR1: the
+/// closed construct is dropped, never written to the ring.
 #[test]
 fn reader_closes_pending_at_a_chunk_that_starts_with_a_switch_to_the_alt_screen() {
     let chunks = vec![b"\x1b]11;?".to_vec(), b"\x1b[?1049h alt".to_vec()];
     let run = run_reader_with_suppressed_reads(&chunks, &[]);
     assert_eq!(
-        run.ring, b"\x1b]11;?",
-        "the OSC the client's switch ESC closed is released to the ring"
+        run.ring, b"",
+        "the OSC the client's switch ESC closed is not written to the ring"
     );
 }
 
 /// AC-2 (FR4): the fallback path (the scan disagrees with the shadow parser
-/// about the alternate screen) derives no cuts and keeps its behavior: the
-/// whole-chunk gate still drops a chunk whose switch straddled the read
-/// boundary.
+/// about the alternate screen) keeps the whole-chunk gate: with both screens
+/// on main the whole chunk is fed, and a chunk whose switch straddled the
+/// read boundary is still gated out of the ring.
 #[test]
-fn fallback_path_derives_no_cuts_and_keeps_the_whole_chunk_gate() {
+fn fallback_path_keeps_the_whole_chunk_gate() {
     let chunks = vec![b"a\x1b[?10".to_vec(), b"49hxyz".to_vec()];
     let run = run_reader_with_suppressed_reads(&chunks, &[]);
     assert_eq!(
@@ -7500,6 +7502,7 @@ fn fallback_path_derives_no_cuts_and_keeps_the_whole_chunk_gate() {
 }
 
 // END round2 task0003 tests: pre-existing entry points.
+mod round3_write_path;
 
 // BEGIN round2 task0003 tests: new entry points (cut-aware feed, awaiting
 // flag, carried-over report, cut and coordinate derivation).
@@ -7620,35 +7623,40 @@ fn split_invariance_includes_the_awaiting_flag() {
     }
 }
 
-/// AC-2 (FR4): a cut closes an in-progress OSC and emits it through the
-/// existing strip; nothing closed by a cut stays in pending.
+/// AC-2 (FR4): a cut closes an in-progress OSC; nothing closed by a cut
+/// stays in pending. Round3 FR1: the closed OSC's bytes are not emitted.
 #[test]
 fn a_cut_closes_an_in_progress_osc_and_pending_holds_no_closed_osc() {
     let mut f = ScrollbackWriteFilter::new();
     // `ESC ]11;?`, a removed switch pair (cut at 6), one space.
     let outcome = r2_feed(&mut f, b"\x1b]11;? ", &[6]);
-    assert_eq!(outcome.bytes, b"\x1b]11;? ".to_vec());
+    assert_eq!(
+        outcome.bytes,
+        b" ".to_vec(),
+        "the closed OSC is dropped; only the byte after the cut is emitted"
+    );
     assert!(
         f.pending().is_empty(),
         "the OSC closed by the cut is not held"
     );
     assert!(outcome.carried.is_none());
 
-    // A strip-target introducer closed by a cut is emitted verbatim (the
-    // strip only removes COMPLETE sequences, as for an ESC-aborted one).
+    // A strip-target introducer closed by a cut is dropped as well, with no
+    // terminator appended.
     let mut f = ScrollbackWriteFilter::new();
     let fed = b"\x1b]777;emterm;markdown;chunk;x=1z";
     let outcome = r2_feed(&mut f, fed, &[fed.len() - 1]);
-    assert_eq!(outcome.bytes, fed.to_vec());
+    assert_eq!(outcome.bytes, b"z".to_vec());
     assert!(f.pending().is_empty());
 }
 
-/// AC-2 (FR4): a held lone ESC before a removed switch is closed.
+/// AC-2 (FR4): a held lone ESC before a removed switch is closed. Round3
+/// FR1: the closed lone ESC is not emitted.
 #[test]
 fn a_cut_closes_a_held_lone_esc() {
     let mut f = ScrollbackWriteFilter::new();
     let outcome = r2_feed(&mut f, b"abc\x1b", &[4]);
-    assert_eq!(outcome.bytes, b"abc\x1b".to_vec());
+    assert_eq!(outcome.bytes, b"abc".to_vec());
     assert!(f.pending().is_empty());
 
     // Without the cut the same bytes hold the lone ESC.
@@ -7682,7 +7690,8 @@ fn a_cut_clears_the_awaiting_designator_flag() {
     assert!(!g.awaiting_designator());
 }
 
-/// AC-2 (FR4): an empty fed range with a cut still closes pending.
+/// AC-2 (FR4): an empty fed range with a cut still closes pending. Round3
+/// FR1: the closed pending run is dropped, not emitted.
 #[test]
 fn an_empty_fed_range_with_a_cut_still_closes_pending() {
     let mut f = ScrollbackWriteFilter::new();
@@ -7691,26 +7700,27 @@ fn an_empty_fed_range_with_a_cut_still_closes_pending() {
     assert_eq!(f.pending(), b"\x1b]11;?".as_slice());
 
     let outcome = r2_feed(&mut f, b"", &[0]);
-    assert_eq!(
-        outcome.bytes,
-        b"\x1b]11;?".to_vec(),
-        "the held OSC is closed by the cut and released"
+    assert!(
+        outcome.bytes.is_empty(),
+        "the held OSC is closed by the cut and not written"
     );
     assert!(f.pending().is_empty());
     assert!(outcome.carried.is_none());
 
-    // A cut at fed 0 with bytes: the held run closes, then the fed bytes
-    // start from ground.
+    // A cut at fed 0 with bytes: the held run closes and is dropped, then
+    // the fed bytes start from ground.
     let mut g = ScrollbackWriteFilter::new();
     g.feed(b"\x1b]11;?", (80, 24));
     let outcome = r2_feed(&mut g, b"abc", &[0]);
-    assert_eq!(outcome.bytes, b"\x1b]11;?abc".to_vec());
+    assert_eq!(outcome.bytes, b"abc".to_vec());
     assert!(g.pending().is_empty());
 }
 
 /// AC-2 (FR4, postcondition): after every feed, pending equals what a fresh
 /// filter would hold for the bytes after the last cut — never a sequence
-/// closed by a cut, nor any byte after one.
+/// closed by a cut, nor any byte after one. Round3 FR1: the emitted bytes are
+/// what a fresh filter emits for each cut-delimited segment, so the construct
+/// each cut closed is absent.
 #[test]
 fn pending_after_a_cut_equals_a_fresh_scan_of_the_bytes_after_the_last_cut() {
     let corpus: [&[u8]; 7] = [
@@ -7735,10 +7745,19 @@ fn pending_after_a_cut_equals_a_fresh_scan_of_the_bytes_after_the_last_cut() {
                     fresh.pending(),
                     "{fed:?} with cuts {cuts:?}: pending must be the incomplete string after the last cut"
                 );
+                // Every segment starts from ground (a cut closes what is open
+                // and clears the designator wait), so the emitted bytes are
+                // the concatenation of what a fresh filter emits for each
+                // segment: the incomplete construct each cut closed is gone.
+                let mut expected = Vec::new();
+                for (lo, hi) in [(0, first), (first, second), (second, fed.len())] {
+                    let mut seg_filter = ScrollbackWriteFilter::new();
+                    let (_d, seg_out) = seg_filter.feed(&fed[lo..hi], (80, 24));
+                    expected.extend_from_slice(&seg_out);
+                }
                 assert_eq!(
-                    outcome.bytes,
-                    fed[..fed.len() - f.pending().len()].to_vec(),
-                    "{fed:?} with cuts {cuts:?}: everything else is emitted"
+                    outcome.bytes, expected,
+                    "{fed:?} with cuts {cuts:?}: the constructs closed by a cut are not emitted"
                 );
                 assert_eq!(f.awaiting_designator(), fresh.awaiting_designator());
             }
