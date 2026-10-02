@@ -162,9 +162,9 @@ tasks:
     - NFR3
     - NFR5
     - NFR6
-    status: failed
+    status: in_progress
     branch: em-workflow/mux-suppressed-output-round3-fixes/task0001
-    notes: null
+    notes: 'batch auto-retry consumed (1/1): previous attempt orphaned (launching session gone)'
   task0002:
     title: 'Write-path client parity: closed constructs, designators, straddling switches'
     plan: tasks/task0002.md
@@ -190,9 +190,9 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: failed
+    status: in_progress
     branch: em-workflow/mux-suppressed-output-round3-fixes/task0002
-    notes: null
+    notes: 'batch auto-retry consumed (1/1): previous attempt orphaned (launching session gone)'
   task0003:
     title: Designator-aware as-05 fallback in the client-parity scan
     plan: tasks/task0003.md
@@ -210,9 +210,9 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: failed
+    status: in_progress
     branch: em-workflow/mux-suppressed-output-round3-fixes/task0003
-    notes: null
+    notes: 'batch auto-retry consumed (1/1): previous attempt orphaned (launching session gone)'
   task0004:
     title: Generation-checked tail omission at send time; later record wins
     plan: tasks/task0004.md
@@ -239,9 +239,9 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: failed
+    status: in_progress
     branch: em-workflow/mux-suppressed-output-round3-fixes/task0004
-    notes: null
+    notes: 'batch auto-retry consumed (1/1): previous attempt orphaned (launching session gone)'
   task0005:
     title: Decision table for the eight round-1 findings
     plan: tasks/task0005.md
