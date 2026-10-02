@@ -658,70 +658,250 @@ const ALT_SCREEN_TOGGLES: [(&[u8], bool); 6] = [
     (b"\x1b[?47l", false),
 ];
 
+/// Client-parity state of the byte stream's designator slot (mux-suppressed-
+/// output-round4-fixes FR5), carried from one read to the next by the reader
+/// (O(1) state; see [`extract_main_buffer`]).
+///
+/// `term_core` consumes the byte right after `ESC (` / `ESC )` as the charset
+/// designator whatever it is, an `ESC` included, so a `ESC [ ? 1049 h` whose
+/// `ESC` sits in that slot is the designator plus printed text, not a screen
+/// switch. The state records how much of `ESC (` / `ESC )` the previous read
+/// ended with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum DesignatorSlot {
+    /// The previous read ended with nothing that makes the next byte special.
+    #[default]
+    Ground,
+    /// The previous read ended with a live `ESC` (one `term_core` did not
+    /// consume as a designator): a `(` / `)` that opens the next read makes
+    /// the byte after it the designator.
+    EscapeSeen,
+    /// The previous read ended right after `ESC (` / `ESC )`: the first byte
+    /// of the next read is the designator.
+    Awaiting,
+}
+
+/// Result of [`extract_main_buffer`].
+pub(super) struct MainBufferExtraction<'a> {
+    /// The concatenated main-buffer content of the chunk.
+    pub(super) bytes: Cow<'a, [u8]>,
+    /// The alt state the scan ended in, as `term_core` has it: a switch whose
+    /// `ESC` `term_core` consumes as a designator is not a switch. The reader
+    /// reads the spans, which already carry it; the unit tests pin it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) final_alt: bool,
+    /// The byte ranges of the chunk that make up `bytes`, in order.
+    pub(super) spans: Vec<std::ops::Range<usize>>,
+    /// The alt state a parser that treats every `ESC` as an abort reaches at
+    /// the chunk's end: each recognized switch counts, a designator-slot one
+    /// included. The shadow parser (vt100) is such a parser, so the reader's
+    /// cross-check compares THIS state with the shadow's. It equals
+    /// `final_alt` unless a switch sat in a designator slot.
+    pub(super) shadow_alt: bool,
+    /// The designator-slot state at the end of the chunk, for the next read.
+    pub(super) slot: DesignatorSlot,
+}
+
+/// Convenience form of [`extract_main_buffer`] for a chunk that follows
+/// nothing relevant (the designator-slot state starts at ground) when only
+/// the main-buffer bytes, the final alt state and the spans are wanted.
+///
 /// Returns `(bytes, final_alt, spans)`: `bytes` is the concatenated
 /// main-buffer content (as before); `spans` are the byte ranges of `data`
 /// each contributing to `bytes`, in order — added so a caller can gate
 /// OTHER per-byte-position decisions (e.g. [`AgentStatusFeedScanner`]'s OSC
 /// 133 mark eligibility) against the exact same main-buffer spans without
 /// re-deriving them.
+#[cfg(test)]
 pub(super) fn extract_main_buffer_bytes(
     data: &[u8],
     alt_at_start: bool,
 ) -> (Cow<'_, [u8]>, bool, Vec<std::ops::Range<usize>>) {
-    let matches_toggle = |d: &[u8]| {
-        ALT_SCREEN_TOGGLES
-            .iter()
-            .find(|(p, _)| d.starts_with(p))
-            .copied()
-    };
+    let extraction = extract_main_buffer(data, alt_at_start, DesignatorSlot::Ground);
+    (extraction.bytes, extraction.final_alt, extraction.spans)
+}
 
-    // Fast scan for any toggle. Most chunks (plain output, even SGR-colored)
-    // contain none, so we can borrow without building a filtered copy.
-    let mut has_toggle = false;
-    let mut i = 0;
-    while i < data.len() {
-        if data[i] == 0x1b && matches_toggle(&data[i..]).is_some() {
-            has_toggle = true;
+/// What the main-buffer scan sees at a toggle position, if it is one.
+fn toggle_at(d: &[u8]) -> Option<(&'static [u8], bool)> {
+    ALT_SCREEN_TOGGLES
+        .iter()
+        .find(|(p, _)| d.starts_with(p))
+        .copied()
+}
+
+/// One forward step of the scan over the designator slot, shared by the fast
+/// scan and the span-building scan so both walk the stream identically.
+///
+/// `i` is the position of the next unexamined byte and `slot` the state the
+/// scan is in there. Returns the next live switch — the position of its
+/// `ESC`, its pattern and whether it enters the alternate screen — or `None`
+/// when the chunk ends first. A switch whose `ESC` is a designator is skipped
+/// as `term_core` skips it; `shadow_alt` still follows it (see
+/// [`MainBufferExtraction::shadow_alt`]). On a returned switch `i` is left AT
+/// its `ESC`, and `slot` is `Ground`.
+fn next_live_toggle(
+    data: &[u8],
+    i: &mut usize,
+    slot: &mut DesignatorSlot,
+    shadow_alt: &mut bool,
+) -> Option<(usize, &'static [u8], bool)> {
+    let n = data.len();
+
+    // The designator slot at the chunk's start (carried from the last read).
+    // At most two bytes are decided here; everything after is the plain loop.
+    if *i == 0 && n > 0 {
+        let designator_at = match *slot {
+            DesignatorSlot::Awaiting => Some(0),
+            DesignatorSlot::EscapeSeen if matches!(data[0], b'(' | b')') => {
+                if n > 1 {
+                    Some(1)
+                } else {
+                    *slot = DesignatorSlot::Awaiting;
+                    *i = 1;
+                    None
+                }
+            }
+            _ => None,
+        };
+        match designator_at {
+            Some(at) => {
+                if data[at] == 0x1b {
+                    if let Some((_, is_enter)) = toggle_at(&data[at..]) {
+                        *shadow_alt = is_enter;
+                    }
+                }
+                *slot = DesignatorSlot::Ground;
+                *i = at + 1;
+            }
+            None => {
+                if *slot != DesignatorSlot::Awaiting {
+                    *slot = DesignatorSlot::Ground;
+                }
+            }
+        }
+    }
+
+    while *i < n {
+        if data[*i] != 0x1b {
+            *i += 1;
+            continue;
+        }
+        if let Some((pat, is_enter)) = toggle_at(&data[*i..]) {
+            *slot = DesignatorSlot::Ground;
+            return Some((*i, pat, is_enter));
+        }
+        // A live `ESC` that opens no switch.
+        if *i + 1 >= n {
+            *slot = DesignatorSlot::EscapeSeen;
+            *i = n;
             break;
         }
-        i += 1;
-    }
-    if !has_toggle {
-        return if alt_at_start {
-            (Cow::Borrowed(&[]), true, Vec::new())
+        if matches!(data[*i + 1], b'(' | b')') {
+            // `ESC (` / `ESC )`: the next byte is the designator, consumed
+            // whatever it is, and never starts a switch.
+            if *i + 2 < n {
+                if data[*i + 2] == 0x1b {
+                    if let Some((_, is_enter)) = toggle_at(&data[*i + 2..]) {
+                        *shadow_alt = is_enter;
+                    }
+                }
+                *i += 3;
+            } else {
+                *slot = DesignatorSlot::Awaiting;
+                *i = n;
+                break;
+            }
         } else {
-            (Cow::Borrowed(data), false, vec![0..data.len()])
-        };
+            *i += 1;
+        }
     }
+    None
+}
+
+/// Extract the main-buffer byte spans of a raw PTY chunk for the scrollback
+/// ring, given `alt_at_start` (the shadow parser's alt-screen state *before*
+/// this chunk) and `slot_at_start` (the designator-slot state the previous
+/// read ended in). The alternate screen has no scrollback, so its output —
+/// and the buffer-switch toggles themselves (`?1049` / `?1047` / `?47`
+/// `h`/`l`) — are dropped; only main-buffer bytes survive. A chunk that
+/// crosses a buffer switch keeps the main-buffer side rather than being
+/// discarded wholesale (which would lose e.g. command output emitted just
+/// before a TUI opens in the same read).
+///
+/// A switch is only removed when `term_core` treats it as one. The byte
+/// right after `ESC (` / `ESC )` is the charset designator, consumed
+/// whatever it is, so a switch sequence whose `ESC` sits there is the
+/// designator plus printed text: it stays in the output (FR5). The scan
+/// follows that rule inside its existing pass over the chunk, with the
+/// O(1) [`DesignatorSlot`] carried across reads; a chunk without any switch
+/// pattern is still returned borrowed.
+///
+/// `final_alt` is the alt state the scan ended in. The caller cross-checks
+/// [`MainBufferExtraction::shadow_alt`] against the authoritative post-chunk
+/// parser state to detect a toggle that straddled the read boundary (or an
+/// unrecognized form) and fall back conservatively. `Cow::Borrowed` is
+/// returned for the common no-toggle chunk (whole chunk on main, empty on
+/// alt) so the hot path avoids a copy.
+///
+/// Both [`AgentStatusFeedScanner`]'s OSC 133 mark gating (SPEC FR5) and the
+/// cut derivation consume the span list, so they follow the same rule.
+pub(super) fn extract_main_buffer<'a>(
+    data: &'a [u8],
+    alt_at_start: bool,
+    slot_at_start: DesignatorSlot,
+) -> MainBufferExtraction<'a> {
+    let mut slot = slot_at_start;
+    let mut shadow_alt = alt_at_start;
+    let mut i = 0usize;
+
+    // Fast scan for any live toggle. Most chunks (plain output, even
+    // SGR-colored) contain none, so we can borrow without building a
+    // filtered copy.
+    let Some(first) = next_live_toggle(data, &mut i, &mut slot, &mut shadow_alt) else {
+        let (bytes, spans) = if alt_at_start {
+            (Cow::Borrowed(&[][..]), Vec::new())
+        } else {
+            (Cow::Borrowed(data), vec![0..data.len()])
+        };
+        return MainBufferExtraction {
+            bytes,
+            final_alt: alt_at_start,
+            spans,
+            shadow_alt,
+            slot,
+        };
+    };
 
     // Slow path: split into main-buffer spans, dropping toggles and alt spans.
     let mut out = Vec::with_capacity(data.len());
     let mut spans = Vec::new();
     let mut alt = alt_at_start;
     let mut span_start: Option<usize> = if alt { None } else { Some(0) };
-    let mut i = 0;
-    while i < data.len() {
-        if data[i] == 0x1b {
-            if let Some((pat, is_enter)) = matches_toggle(&data[i..]) {
-                if let Some(s) = span_start.take() {
-                    out.extend_from_slice(&data[s..i]);
-                    spans.push(s..i);
-                }
-                alt = is_enter;
-                i += pat.len();
-                if !alt {
-                    span_start = Some(i);
-                }
-                continue;
-            }
+    let mut next = Some(first);
+    while let Some((at, pat, is_enter)) = next {
+        if let Some(s) = span_start.take() {
+            out.extend_from_slice(&data[s..at]);
+            spans.push(s..at);
         }
-        i += 1;
+        alt = is_enter;
+        shadow_alt = is_enter;
+        i = at + pat.len();
+        if !alt {
+            span_start = Some(i);
+        }
+        next = next_live_toggle(data, &mut i, &mut slot, &mut shadow_alt);
     }
     if let Some(s) = span_start {
         out.extend_from_slice(&data[s..]);
         spans.push(s..data.len());
     }
-    (Cow::Owned(out), alt, spans)
+    MainBufferExtraction {
+        bytes: Cow::Owned(out),
+        final_alt: alt,
+        spans,
+        shadow_alt,
+        slot,
+    }
 }
 
 /// Decode state for [`AgentStatusFeedScanner`] — structurally identical to
