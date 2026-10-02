@@ -103,7 +103,7 @@ workflow:
   - MT-1
   - MT-2
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Chain-aware hold and closing in the write filter
