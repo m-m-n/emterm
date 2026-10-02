@@ -354,6 +354,13 @@ pub(in crate::mux) fn pty_reader_loop(
     // FR6/NFR3 (mux-suppressed-output-fixes task0001): reader-thread-local,
     // no lock — see `advance_retained_window`'s doc.
     let mut retained_window: Vec<u8> = Vec::new();
+    // FR5 (mux-suppressed-output-round4-fixes): where the previous read left
+    // the client parser's charset-designator slot (right after `ESC (` /
+    // `ESC )`, after a live `ESC`, or neither). Reader-thread-local O(1) state
+    // read and written only inside the capture step below, so it needs no
+    // lock and adds none; main-span extraction maintains it inside its
+    // existing pass over the chunk.
+    let mut designator_slot = DesignatorSlot::default();
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
@@ -505,8 +512,23 @@ pub(in crate::mux) fn pty_reader_loop(
                     // buffer switch (e.g. command output emitted right before a
                     // TUI opens). Capture still happens regardless of attach state
                     // so a later reattach can replay pre-detach history.
-                    let (main_bytes, scan_alt, main_spans) =
-                        extract_main_buffer_bytes(data, alt_before);
+                    //
+                    // FR5 (round4): a switch whose `ESC` is the charset
+                    // designator after `ESC (` / `ESC )` is text for the
+                    // client, so extraction keeps it (and `designator_slot`
+                    // carries an `ESC (` that ended the previous read). The
+                    // shadow parser treats that `ESC` as an abort and does
+                    // switch, so the cross-check below compares the state a
+                    // parser of that kind reaches (`shadow_alt`), which is
+                    // `final_alt` unless a switch sat in a designator slot.
+                    let MainBufferExtraction {
+                        bytes: main_bytes,
+                        shadow_alt: scan_alt,
+                        spans: main_spans,
+                        slot,
+                        ..
+                    } = extract_main_buffer(data, alt_before, designator_slot);
+                    designator_slot = slot;
                     // FR4 (round2): cuts (the removed switch sequences) are
                     // derived from the span list on the non-fallback path.
                     // The fallback with the alternate screen involved closes
