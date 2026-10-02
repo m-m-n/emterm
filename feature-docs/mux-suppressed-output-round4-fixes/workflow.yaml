@@ -212,6 +212,7 @@ tasks:
     - src-tauri/src/mux/ipc/pty_spawn/tests.rs
     - src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs
     - feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_designator_cut.rs
     skills:
     - backend-impl
     domains:
@@ -227,7 +228,7 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-suppressed-output-round4-fixes/task0005
     notes: null
 review:
