@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use crate::mux::scrollback_filter::strip_pty_output_for_scrollback_write;
+use crate::mux::scrollback_filter::strip_pty_output_for_scrollback_write_with_designator;
 use crate::mux::session::pane::AgentStatusFeedItem;
 
 /// Read PTY output in a blocking loop and forward to the output target.
@@ -171,7 +171,7 @@ impl ScrollbackWriteFilter {
     ///
     /// task0003 D1 (review round-2 finding `a6ab9b340119beed`, critical):
     /// the flushed bytes still go through
-    /// [`strip_pty_output_for_scrollback_write`] — they are NOT forwarded
+    /// [`strip_pty_output_for_scrollback_write_with_designator`] — they are NOT forwarded
     /// raw. Before this fix, the overflow path returned `pending` verbatim,
     /// so a child process could force this branch (an unterminated OSC/DCS/
     /// APC introducer padded past the cap) and have a forged resize marker
@@ -197,10 +197,14 @@ impl ScrollbackWriteFilter {
     /// that `ESC`:
     ///
     /// - an in-progress OSC/DCS/APC string, or a held lone `ESC`, is closed
-    ///   and emitted through the existing strip, exactly as an ESC-aborted
-    ///   string is today;
-    /// - the awaiting-designator flag is cleared (the client consumed the
-    ///   switch's `ESC` as the designator, as-08);
+    ///   and NOT written (round3 FR1): the bytes from its opening `ESC` on are
+    ///   absent from the emitted bytes and no terminator is appended, so a
+    ///   later BEL / ST in the ring can never complete what the client already
+    ///   closed. The settled bytes before it are emitted through the strip;
+    /// - an `ESC (` / `ESC )` that ends the run, awaiting its designator, is
+    ///   emitted whole with the rest (nothing is held for it, as-08/as-02) and
+    ///   the awaiting-designator flag is cleared (the client consumed the
+    ///   switch's `ESC` as the designator);
     ///
     /// and processing continues from ground with the next fed byte. An empty
     /// `fed` with a non-empty `cuts` still closes whatever is held.
@@ -208,14 +212,22 @@ impl ScrollbackWriteFilter {
     /// **Postcondition.** After every call, `pending` holds only the single
     /// incomplete string — or lone `ESC` — at the end of the fed stream
     /// after its last cut; never a sequence closed by a cut, nor any byte
-    /// after one.
+    /// after one. (A construct closed by a cut is not written either: it
+    /// leaves neither `pending` nor the emitted bytes.)
     ///
     /// **Carried-over completion.** When the sequence whose opening `ESC`
     /// was held in `pending` at the start of the call reaches its terminator
     /// inside the call, before any cut, the outcome reports it (recorded by
     /// the boundary scan itself — no extra pass). Nothing is reported when
     /// that sequence is aborted, closed by a cut, or still incomplete, nor
-    /// when the call took the overflow flush.
+    /// when the call took the overflow flush. A completion always ends before
+    /// the construct a cut closes, so its bytes stay readable from the run
+    /// the report keeps.
+    ///
+    /// **Awaiting designator.** Every strip call receives, as its initial
+    /// flag, whether the run it strips starts with a pending designator byte
+    /// (the wait carried in with an empty `pending`), so a designator `ESC`
+    /// never starts a strip target there either.
     ///
     /// **Overflow.** Past [`SCROLLBACK_FILTER_PENDING_CAP`] the run is
     /// flushed exactly as [`Self::feed`] documents; afterwards `pending` is
@@ -296,18 +308,33 @@ impl ScrollbackWriteFilter {
                 } else {
                     false
                 };
-                out.extend_from_slice(&strip_pty_output_for_scrollback_write(&run));
+                out.extend_from_slice(&strip_pty_output_for_scrollback_write_with_designator(
+                    &run,
+                    skip == 1,
+                ));
                 continue;
             }
 
             let scan = scan_boundary(&self.pending, skip, carry_len_before > 0);
             if !is_last {
-                // A cut follows: the client's ESC closes whatever is open,
-                // so the whole run is emitted and nothing is held.
+                // A cut follows: the client's ESC closes whatever is open.
+                // The single incomplete construct at the end of the run (an
+                // OSC / DCS / APC string, or a held lone ESC, from its
+                // opening ESC on) is dropped: the bytes before it are
+                // emitted through the strip and nothing is held or
+                // terminated (round3 FR1). A run ending in an awaiting
+                // `ESC (` / `ESC )` has no such construct, so it is emitted
+                // whole (round2 as-08).
                 pending_untouched = false;
                 self.awaiting_designator = false;
-                let run = std::mem::take(&mut self.pending);
-                out.extend_from_slice(&strip_pty_output_for_scrollback_write(&run));
+                let mut run = std::mem::take(&mut self.pending);
+                // A completed carried-over sequence ends at or before the
+                // boundary, so it stays readable from `run[..end]`.
+                run.truncate(scan.boundary);
+                out.extend_from_slice(&strip_pty_output_for_scrollback_write_with_designator(
+                    &run,
+                    skip == 1,
+                ));
                 if carried.is_none() {
                     if let Some(end) = scan.carried_end {
                         carried = Some(CarriedCompletion {
@@ -326,7 +353,10 @@ impl ScrollbackWriteFilter {
             }
             pending_untouched = false;
             let strippable: Vec<u8> = self.pending.drain(..scan.boundary).collect();
-            out.extend_from_slice(&strip_pty_output_for_scrollback_write(&strippable));
+            out.extend_from_slice(&strip_pty_output_for_scrollback_write_with_designator(
+                &strippable,
+                skip == 1,
+            ));
             if let Some(end) = scan.carried_end {
                 carried = Some(CarriedCompletion {
                     end,

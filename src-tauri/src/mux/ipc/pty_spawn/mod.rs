@@ -506,9 +506,11 @@ pub(in crate::mux) fn pty_reader_loop(
                     // so a later reattach can replay pre-detach history.
                     let (main_bytes, scan_alt, main_spans) =
                         extract_main_buffer_bytes(data, alt_before);
-                    // FR4: cuts (the removed switch sequences) exist only on
-                    // this non-fallback path; the fallback keeps its
-                    // pre-existing behavior and derives none.
+                    // FR4 (round2): cuts (the removed switch sequences) are
+                    // derived from the span list on the non-fallback path.
+                    // The fallback with the alternate screen involved closes
+                    // the write filter's held construct with one cut at fed
+                    // position 0 (round3 FR4).
                     let (to_write, live_spans, cuts): (
                         &[u8],
                         Vec<std::ops::Range<usize>>,
@@ -525,7 +527,15 @@ pub(in crate::mux) fn pty_reader_loop(
                         if !alt_before && !alt_after {
                             (data, vec![0..data.len()], Vec::new())
                         } else {
-                            (&[], Vec::new(), Vec::new())
+                            // The alternate screen is involved, so the
+                            // client's parser met a switch's `ESC` that this
+                            // path cannot place: whatever construct the
+                            // filter holds is closed on the client side. An
+                            // empty range with one cut at fed 0 makes the
+                            // filter close and drop it, and write nothing
+                            // for the chunk (no live spans, no carried-over
+                            // completion).
+                            (&[], Vec::new(), vec![0])
                         }
                     };
                     // An empty fed range with a cut still runs the filter
