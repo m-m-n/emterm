@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-suppressed-output-round4-fixes
+records:
+  - question_id: review.chain-walk-skip-reason
+    packet_id: null
+    answered_at: "2026-10-02T15:05:00+09:00"
+    source: codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "advance to the codex chain entry"
+    normalized_answer: "advance to the codex chain entry"
+    resolution_note: "gate: review round 1 chain walk, skip_reason review_data_too_large (not in the retryable table) for architecture#0 / spec#0; options: A advance to codex entry (1 hop) / B keep skip, perspective unreviewed; chosen: A; not chosen: B; codex_consulted: true; key point: the precondition that every entry hits the problem identically does not hold because the codex reviewer fetches data incrementally"
+  - question_id: review.self-reported-unparseable-result
+    packet_id: null
+    answered_at: "2026-10-02T15:15:00+09:00"
+    source: codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "accept as completed per schema-validity rule"
+    normalized_answer: "accept as completed per schema-validity rule"
+    resolution_note: "gate: review round 1 schema-valid empty results whose summary says 'codex returned non-JSON output' (security#0, comprehensive#0, spec#1); options: A treat as harness failure and dispatch Claude fallback / B accept as completed; chosen: B; not chosen: A; codex_consulted: true; key point: protocol states schema validity is the only test, so re-dispatching on summary text would violate it. Evaluator flagged that these perspectives effectively returned no review evidence"
