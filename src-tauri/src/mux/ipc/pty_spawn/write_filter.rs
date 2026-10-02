@@ -202,9 +202,9 @@ impl ScrollbackWriteFilter {
     ///   later BEL / ST in the ring can never complete what the client already
     ///   closed. The settled bytes before it are emitted through the strip;
     /// - an `ESC (` / `ESC )` that ends the run, awaiting its designator, is
-    ///   emitted whole with the rest (nothing is held for it, as-08/as-02) and
-    ///   the awaiting-designator flag is cleared (the client consumed the
-    ///   switch's `ESC` as the designator);
+    ///   emitted whole with the rest (nothing is held for it, as-08) and is
+    ///   followed by one ESC (round4 FR3, see "Awaiting designator" below);
+    ///   the awaiting-designator flag is cleared;
     ///
     /// and processing continues from ground with the next fed byte. An empty
     /// `fed` with a non-empty `cuts` still closes whatever is held.
@@ -228,6 +228,26 @@ impl ScrollbackWriteFilter {
     /// flag, whether the run it strips starts with a pending designator byte
     /// (the wait carried in with an empty `pending`), so a designator `ESC`
     /// never starts a strip target there either.
+    ///
+    /// **Awaiting designator at a cut (round4 FR3).** The client is awaiting a
+    /// designator at a cut when the run before the cut ends in `ESC (` /
+    /// `ESC )` outside any string, or when the wait was carried in with an
+    /// empty `pending` and nothing in this call has consumed the designator
+    /// byte yet. The cut's `ESC` was consumed by the client as that
+    /// designator, so the filter writes exactly one `ESC` (0x1B) after the
+    /// bytes it emits for the run and clears the flag; replay then takes that
+    /// byte as the designator and the bytes after the cut start from ground.
+    /// The same rule holds on every path: a cut inside the call, a cut at an
+    /// empty segment (an earlier read left the wait with an empty `pending`;
+    /// the fed range is empty or not), and a cut that follows an overflow
+    /// flush in its segment (the end-of-run wait is computed for the flushed
+    /// run on that path only). The reader's fallback closing, an empty fed
+    /// range with a cut at 0, reaches the empty-segment path. The `ESC` is
+    /// written after the strip, so it never starts a strip target, and it is
+    /// part of the bytes attributed to the outcome's dims. Nothing is written
+    /// when no designator is awaited: after a complete designation, after a
+    /// designator consumed by the segment's first byte, or after a run that
+    /// ends in an open string (which the cut drops).
     ///
     /// **Overflow.** Past [`SCROLLBACK_FILTER_PENDING_CAP`] the run is
     /// flushed exactly as [`Self::feed`] documents; afterwards `pending` is
@@ -278,8 +298,12 @@ impl ScrollbackWriteFilter {
             self.pending.extend_from_slice(seg);
             if self.pending.is_empty() {
                 // Nothing held and nothing fed in this segment; a cut still
-                // ends the client's designator wait.
-                if !is_last {
+                // ends the client's designator wait. The wait can only have
+                // been carried in with an empty `pending` and nothing has
+                // consumed the designator byte yet, so the cut's ESC is the
+                // designator: write it (round4 FR3).
+                if !is_last && self.awaiting_designator {
+                    out.push(0x1b);
                     self.awaiting_designator = false;
                 }
                 continue;
@@ -301,17 +325,23 @@ impl ScrollbackWriteFilter {
                 overflowed = true;
                 pending_untouched = false;
                 let run = std::mem::take(&mut self.pending);
-                // Client-parity flag at the end of the flushed run; a cut
-                // after this segment clears it again anyway.
-                self.awaiting_designator = if is_last {
-                    scan_boundary(&run, skip, false).awaiting_designator
-                } else {
-                    false
-                };
+                // Client-parity wait at the end of the flushed run (one
+                // bounded pass, overflow path only). In the last segment it
+                // is carried as the new flag; before a cut it decides the
+                // closing write instead (round4 FR3).
+                let awaiting_at_end = scan_boundary(&run, skip, false).awaiting_designator;
                 out.extend_from_slice(&strip_pty_output_for_scrollback_write_with_designator(
                     &run,
                     skip == 1,
                 ));
+                if is_last {
+                    self.awaiting_designator = awaiting_at_end;
+                } else {
+                    self.awaiting_designator = false;
+                    if awaiting_at_end {
+                        out.push(0x1b);
+                    }
+                }
                 continue;
             }
 
@@ -324,7 +354,8 @@ impl ScrollbackWriteFilter {
                 // emitted through the strip and nothing is held or
                 // terminated (round3 FR1). A run ending in an awaiting
                 // `ESC (` / `ESC )` has no such construct, so it is emitted
-                // whole (round2 as-08).
+                // whole (round2 as-08), followed by one closing ESC (round4
+                // FR3).
                 pending_untouched = false;
                 self.awaiting_designator = false;
                 let mut run = std::mem::take(&mut self.pending);
@@ -343,6 +374,12 @@ impl ScrollbackWriteFilter {
                             run,
                         });
                     }
+                }
+                // A run ending in `ESC (` / `ESC )` is awaiting its
+                // designator: the cut's ESC was consumed as that designator,
+                // so write one ESC after the emitted bytes (round4 FR3).
+                if scan.awaiting_designator {
+                    out.push(0x1b);
                 }
                 continue;
             }
