@@ -1,0 +1,84 @@
+task_id: task0001
+baseline_failures: []          # full `--lib` run on the clean checkout before any change: 3965 passed, 0 failed, 3 ignored
+final_failures: []             # full `--lib` re-run after implementation: 3971 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::osc_identify::tests::round3_ac1_osc_body_identity_matches_the_reference_over_the_corpus
+      - mux::osc_identify::tests::round3_ac1_identity_of_the_non_contiguous_view_forms
+      - mux::osc_identify::tests::round3_ac1_the_corpus_reaches_every_identity
+    red_confirmed: true
+    red_reason: >-
+      The entry did not exist, so a placeholder `osc_body_identity` that always
+      returned NotIdentified was put in to let the tests compile. Against it the
+      corpus test failed with `body "777;emterm;markdown;x" left: NotIdentified`
+      (right: ViewerLaunch("markdown")) and the non-contiguous-form test failed
+      on `7e7m7term;;markdown`. The corpus-coverage test passed against the
+      placeholder (it reads only the reference pair); it guards that the corpus
+      reaches every identity and is not itself a red.
+  AC-2:
+    tests:
+      - mux::osc_identify::tests::round3_b3e644c5_osc_identification_is_allocation_free_and_matches_the_reference
+    red_confirmed: true
+    red_reason: >-
+      Against a placeholder entry that delegated to the reference pair
+      (`identify_osc(&recover_osc(body))`) the equality and control assertions
+      passed and the zero-allocation assertion failed: `identification
+      allocated over a corpus of 19021 bodies left: 31592 right: 0`. Against the
+      always-NotIdentified placeholder the same test failed earlier, on the
+      equality assertion for `777;emterm;markdown;x`.
+  AC-3:
+    tests:
+      - mux::scrollback_filter::tests::ring_write_strip_removes_leading_zero_and_non_digit_prefixed_launches
+      - mux::scrollback_filter::tests::snapshot_strip_removes_leading_zero_and_non_digit_prefixed_launches
+      - mux::scrollback_filter::tests::strip_and_remap_removes_leading_zero_and_non_digit_prefixed_launches
+      - mux::scrollback_filter::tests::build_snapshot_bytes_funnel_strips_leading_zero_viewer_launch
+      - mux::scrollback_filter::tests::every_strip_entry_point_keeps_non_launch_and_overflowed_osc_bodies
+      - mux::scrollback_filter::tests::strip_removes_agent_status_set_report
+      - mux::scrollback_filter::tests::strip_removes_agent_status_clear_report
+      - mux::scrollback_filter::tests::strip_keeps_osc777_fold_mark
+      - mux::scrollback_filter::tests::strip_keeps_osc777_other_kinds
+      - mux::scrollback_filter::tests::strip_keeps_osc9999_emterm_mux_control
+      - mux::scrollback_filter::tests::strip_removes_osc777_image_json_yaml_viewers
+      - mux::scrollback_filter::tests::strip_matches_replayable_viewer_kinds_ssot
+      - mux::osc_identify::tests::ac2_every_replayable_viewer_kind_is_a_viewer_launch_in_all_forms
+      - mux::osc_identify::tests::ac2_everything_else_is_not_identified
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing
+      `mux::scrollback_filter::tests` strip tests, the
+      `mux::snapshot_bytes::tests` strip tests and the
+      `mux::ipc::pty_spawn::tests::scrollback_filter_strips_*` tests detect a
+      wiring that identifies launches wrongly (with the always-NotIdentified
+      placeholder wired into `is_replayable_osc_body`, 31 existing tests failed); no
+      red state occurred for this change, because the strip behavior is
+      unchanged and those tests passed before it. The other half of the
+      criterion, that `scrollback_filter.rs` no longer references `recover_osc`
+      or `identify_osc`, has no executable check and is verified by reading the
+      diff (grep of the file for both names returns nothing).
+  AC-4:
+    tests:
+      - mux::osc_identify::tests::round3_ac4_one_mebibyte_bodies_finish_within_two_seconds_and_match_the_reference
+      - mux::osc_identify::tests::round3_ac4_a_number_of_one_million_digits_finishes_within_two_seconds_and_matches_the_reference
+    red_confirmed: true
+    red_reason: >-
+      Observed against the always-NotIdentified placeholder: both tests failed
+      on the equality with the reference (`left: [NotIdentified, ...]`) because
+      the launch-shaped large bodies identify as launches in the reference. The
+      two-second bound and no-panic parts were not made to fail (the
+      delegating placeholder, a linear reference, passes them).
+  AC-5:
+    tests:
+      - mux::osc_identify::tests::round3_b3e644c5_osc_identification_is_allocation_free_and_matches_the_reference
+    red_confirmed: false
+    red_reason: >-
+      The criterion is verified by build results (`cargo check` with default
+      features and with `--no-default-features`, both passing) and by the full
+      `--lib` suite passing with the counter installed (3971 passed, 0
+      failed). Neither check failed before the change, and none can be made to
+      fail first: the dependency and cfg(test) conditions hold by construction
+      of the diff. The registry test's control assertion (at least one
+      allocation recorded around a reference recovery) proves the counter is
+      installed. Searched src-tauri/src, src-tauri/tests, test/ and the root
+      test files by path and basename (`osc_identify.rs`, `scrollback_filter.rs`);
+      no existing test reads those files' text for a dependency rule.

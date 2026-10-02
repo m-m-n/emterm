@@ -6,7 +6,7 @@
 //! layer (`mux::ipc::reattach`) for it; both depend on this shared module
 //! instead.
 
-use crate::mux::osc_identify::{OscIdentity, identify_osc, recover_osc};
+use crate::mux::osc_identify::{OscIdentity, osc_body_identity};
 
 /// Remove rich-content viewer launch sequences from a completed byte run so a
 /// reattach / window-switch snapshot replays plain-text history WITHOUT
@@ -294,9 +294,12 @@ fn dcs_is_sixel(body: &[u8]) -> bool {
 /// Decide whether an OSC body (the bytes between `ESC ]` and the terminator)
 /// is a replayable rich-content launch sequence that must be stripped.
 ///
-/// The body is identified through the shared recovery
+/// The body is identified through the shared identification
 /// ([`crate::mux::osc_identify`]) — the same number and data the client's
-/// parser reconstructs — rather than by matching a byte prefix. The strip
+/// parser reconstructs — rather than by matching a byte prefix. The
+/// identification borrows the body: it copies nothing, allocates nothing and
+/// does not validate the body as UTF-8, because this runs for every OSC the
+/// shell emits on the write path (round3 FR8). The strip
 /// selection is: a viewer launch of every kind (image included), a Markdown
 /// launch, and an agent-status report (SPEC FR4: the OSC report itself is
 /// never replayed — the daemon resyncs current state out-of-band after a
@@ -307,7 +310,7 @@ fn dcs_is_sixel(body: &[u8]) -> bool {
 /// rework D1' — see [`strip_pty_output_for_scrollback_write`]'s doc
 /// comment): there is no more `resize` kind to conditionally strip.
 fn is_replayable_osc_body(body: &[u8]) -> bool {
-    match identify_osc(&recover_osc(body)) {
+    match osc_body_identity(body) {
         OscIdentity::ViewerLaunch(_)
         | OscIdentity::MarkdownLaunch
         | OscIdentity::AgentStatusReport => true,
