@@ -1,0 +1,173 @@
+task_id: task0004
+# Run 4a: the project test command on the worktree as inherited. The worktree
+# already held the previous session's uncommitted work (the boundary record's
+# generation and later-record rule, the pane record tests, the prepare / finalize
+# split and its tests), so the inherited suite is that tree: 3971 passed / 0 failed /
+# 3 ignored. Nothing was red.
+baseline_failures: []
+# Actually re-executed after the implementation (project test command on the final
+# tree, formatted): 3985 passed / 0 failed / 3 ignored, the 14 tests of
+# round3_send_recheck.rs being the addition over the baseline.
+# `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml`
+# and the same with `--no-default-features` both exit 0 with no code warning.
+final_failures: []
+# How the red observations below were made: the record rule and the prepare /
+# finalize split were already in the worktree when this session began, so a red
+# could not be seen by running before them. Each red here is a mutation of the
+# final code that puts back the pre-fix behavior of exactly one rule (named per
+# criterion), run against the final tests, and then removed again (no mutation is
+# in the commit). The pre-fix pipeline had no send-time point at all; its decision
+# (the construct captured at the covered decision, no re-check) is the mutation
+# used for AC-4.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::session::pane::tests::round3_24003176_equal_boundary_takes_the_later_record
+      - mux::session::pane::tests::ac2_equal_boundary_with_a_different_construct_takes_the_later_record
+      - mux::session::pane::tests::round3_guard_record_forms_apply_the_same_rules
+    red_confirmed: true
+    red_reason: >-
+      With upsert_latest in output_capture.rs put back to the pre-fix equal-boundary
+      rule (an equal boundary with a different construct gives none, no new
+      generation), the three tests failed: the registry test with `first=None
+      second=Some([27, 40]): the later record's construct stands left: Some(None)
+      right: Some(Some([27, 40]))`, the renamed test with `the later record wins:
+      first=Some([27, 40]) second=Some([27, 41]) left: Some(None) right:
+      Some(Some([27, 41]))`, and the guard-form test with `assertion failed:
+      second.generation > first.generation`.
+  AC-2:
+    tests:
+      - mux::session::pane::tests::round3_covered_query_carries_the_current_generation_on_both_forms
+      - mux::session::pane::tests::ac2_covered_query_returns_the_construct_only_when_the_number_equals_the_boundary
+      - mux::session::pane::tests::ac2_construct_is_read_under_the_same_boundary_hold_as_the_covered_decision
+      - mux::session::pane::tests::ac6_alternate_screen_visibility_restore_records_none
+      - mux::ipc::handlers::tests::on_demand_snapshot_sends_the_assembly_bytes_and_records_the_construct_of_that_payload
+      - mux::ipc::reattach::tests::collect_reattach_data_records_the_construct_of_the_payload_it_returns
+      - mux::ipc::pty_spawn::tests::snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock
+    red_confirmed: true
+    red_reason: >-
+      The clause "a later record, even of an identical construct, gives a later
+      generation" was observed failing with the same pre-fix rule as AC-1:
+      round3_covered_query_carries_the_current_generation_on_both_forms failed with
+      `a re-record of an identical construct is still a later record`. The clauses
+      "the same generation across repeated queries with no record in between" and
+      "the construct value keeps its semantics" pass on any implementation that
+      carries a stable generation, so they have no failing-first observation; the
+      six other tests in this list are existing tests (the ac2_* record tests, the
+      snapshot-path tests that read the recorded construct, the concurrent stress
+      test) and pass unchanged, with no red state for this change.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::suppressed_output::tests::round3_finalize_of_prepare_equals_the_monolithic_builder_over_a_corpus
+      - mux::ipc::pty_spawn::suppressed_output::tests::round3_one_prepared_value_finalizes_against_each_construct
+      - mux::ipc::pty_spawn::suppressed_output::tests::round3_pending_tail_is_not_omittable_and_an_empty_prepare_stays_empty
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_an_empty_final_replacement_sends_nothing_and_releases_its_slot
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_an_unchanged_record_keeps_the_captured_decision
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_needs_slot_arm_decides_tail_omission_at_send_time
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_needs_slot_arm_sends_the_tail_when_no_construct_is_recorded
+    red_confirmed: true
+    red_reason: >-
+      Three mutations, each run against the final tests. (1) finalize never treating
+      the tail as already carried: the corpus equivalence test and
+      round3_one_prepared_value_finalizes_against_each_construct failed. (2) The
+      reader sending the finalized replacement even when it is empty: the empty-final
+      test failed with `the reader must finish (it is blocked on a full channel or a
+      wait)`, the extra empty chunk using the slot the EOF marker needs. (3) The
+      pre-fix decision (captured construct, no re-check) in the shared pipeline:
+      round3_needs_slot_arm_decides_tail_omission_at_send_time, which reaches the
+      pipeline through the NeedsSlot arm, failed with `the current record carries
+      the tail, so nothing is sent, got [[27, 40]]`.
+      round3_an_unchanged_record_keeps_the_captured_decision, the NeedsSlot test
+      without a recorded construct and the pending-tail test pin behavior that
+      already held (no record change between the decision and the send, a pending
+      run tail never omitted), so they pass before and after. Every existing
+      suppressed_output.rs test passes unchanged (the full suite).
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_6230e66b_tail_omission_uses_the_record_current_at_send_time
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_case_a_a_stale_construct_is_replaced_by_the_current_none
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_case_b_a_stale_none_is_replaced_by_the_current_construct
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_case_b_with_items_the_current_construct_gives_the_filler_form
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_case_c_a_higher_current_boundary_sends_the_tail
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_case_d_a_utf8_lead_byte_is_not_re_sent_after_a_snapshot_that_carries_it
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_case_e_another_destinations_record_never_changes_the_decision
+    red_confirmed: true
+    red_reason: >-
+      With the pipeline deciding from the construct captured at the covered
+      decision only (no re-check at send time), cases (a) to (d) failed. (a) `left:
+      [[48, 108, 113, 107, 27, 40, 66, 13, 10, 90]] right: [[27, 40], [48, ...]]`:
+      the tail ESC ( was not sent. (b) `left: [[27, 40], [48, ...]] right: [[48,
+      ...]]`: the tail was re-sent after the snapshot that carries it. (b) with
+      items `left: [[27, 91, 99, 27, 40], ...] right: [[66, 27, 91, 99, 27, 40],
+      ...]`: no filler. (c) `left: [] right: [[27, 40]]`. (d) `left: [[228, 184],
+      [173, ...]] right: [[173, ...]]`: the lead bytes were re-sent. Case (e) (a
+      record for another destination changes nothing, and S's replacement never
+      reaches it) passes on both, because no decision there depends on a record
+      change for S; it is an invariant guard and is part of the registry test,
+      which failed on case (a). Second snapshots: before the covered decision and at
+      P4, the production visibility restore (resume_pane_with_permit, after the
+      target is set to Detached HiddenByVisibility as a hide/show cycle does) and an
+      on-demand snapshot assembled and recorded as the on-demand handler does
+      (build_snapshot_bytes_for_ring, construct from the assembled payload, try_send
+      and record under one boundary hold), not the handler itself, which needs a
+      session manager and connection. Case (c) is recorded through the
+      boundary-record API (no real reader makes a higher boundary) and asserts no
+      parity. The client / reference comparison uses the parent module's oracle
+      unchanged; the screen comparison is skipped only when the last snapshot is an
+      on-demand snapshot of a ring ending in ESC (, whose own assembly appends a
+      screen-switch sequence that the pending designator swallows (the client then
+      shows `[?1049l`; a mismatch in snapshot assembly, out of scope). That skip
+      applies to cases (a) and (e1), to the "restore then on-demand" test and to the
+      none variant of the unchanged-record test; those
+      still compare responses, require no `(` on any row, and require the next
+      chunk's first byte to select line drawing. Every other case requires the
+      screen comparison to run.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_on_demand_then_visibility_restore_leaves_the_restore_construct
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_visibility_restore_then_on_demand_re_sends_the_tail
+    red_confirmed: true
+    red_reason: >-
+      With the pre-fix equal-boundary rule put back (as for AC-1),
+      round3_on_demand_then_visibility_restore_leaves_the_restore_construct failed
+      with `no `(` is re-sent between the snapshot and the next chunk left: [[27,
+      40], [48, ...]] right: [[48, ...]]`. The other order,
+      round3_visibility_restore_then_on_demand_re_sends_the_tail, passed under that
+      mutation: the pre-fix rule gives none for two different constructs, which is
+      also what the later-record rule gives when the later record is none, so that
+      order has no failing-first observation. Both tests use the production
+      visibility restore and the on-demand snapshot described under AC-4; the
+      restore-then-on-demand test skips the screen comparison for the reason given
+      there and keeps the response, stray `(` and line-drawing checks.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::round3_send_recheck::round3_slot_wait_and_p4_hold_neither_exclusion
+      - mux::ipc::pty_spawn::tests::snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock
+    red_confirmed: true
+    red_reason: >-
+      With the pipeline mutated to hold output_target while it secures its slot,
+      round3_slot_wait_and_p4_hold_neither_exclusion failed with `output_target and
+      the boundary exclusion must be takeable while the reader waits for a slot`. The
+      test has no other failing-first observation: the pre-fix pipeline also waited
+      for its slot with no lock held, and had no P4 point. The wait itself cannot be
+      detected from the test (there is no hook inside the blocking reservation), so
+      the test waits for the reader's passthrough notification, which the pipeline
+      emits just before it secures the slot, plus a 50 ms settle, then requires both
+      locks to be takeable; the P4 half is deterministic. The existing
+      snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock and the
+      pause-hook tests pass unchanged (the full suite).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The criterion is verified by commands, not by a test that can fail first: the
+      libtest listing (`cargo test --lib -- --list`) contains
+      `mux::session::pane::tests::ac2_equal_boundary_with_a_different_construct_takes_the_later_record: test`;
+      test-docs/mux-suppressed-output-round2-fixes/task0004.tests.yaml AC-2 lists that
+      name with the supersede comment and an unchanged red_reason;
+      `git diff --stat -- crates/` is empty; the `--lib` suite ended with 3985 passed
+      and 0 failed; the `--no-default-features` check exits 0. No failure of any of
+      these was observed before the change. Searched by path and basename
+      (`test-docs`, `tests.yaml`, `task0004` in src-tauri/src, src-tauri/tests,
+      scripts and the Makefile): the only hits are comments, and no existing test
+      reads the record.

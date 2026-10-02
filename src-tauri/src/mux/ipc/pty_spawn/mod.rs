@@ -9,8 +9,8 @@ use tokio::sync::mpsc;
 
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    AgentStatusFeedItem, AgentStatusReportSender, DetachReason, MuxPane, NotificationSender,
-    PaneId, PaneOutputTarget, PtyOutputChunk, SharedAgentStatusReportSender,
+    AgentStatusFeedItem, AgentStatusReportSender, CoveredBoundary, DetachReason, MuxPane,
+    NotificationSender, PaneId, PaneOutputTarget, PtyOutputChunk, SharedAgentStatusReportSender,
     SharedNotificationSender, SharedOutputCapture, SharedOutputTarget, SharedPaneExitSender,
     SharedScrollback, SharedShadowParser, SharedTitleSender, TitleChangeSender, lock_shadow_parser,
 };
@@ -26,7 +26,8 @@ mod suppressed_output;
 mod write_filter;
 
 use suppressed_output::{
-    CarriedOverCompletion, SuppressedReplacementRequest, build_suppressed_replacement_for,
+    CarriedOverCompletion, SuppressedReplacementRequest, finalize_suppressed_replacement,
+    prepare_suppressed_replacement,
 };
 use write_filter::*;
 
@@ -646,7 +647,7 @@ pub(in crate::mux) fn pty_reader_loop(
                             let boundary = output_capture.hold_boundary();
                             if let Some(cover) = boundary.cover(&s, chunk_number) {
                                 drop(boundary);
-                                ReaderForward::Suppressed(s, cover.construct)
+                                ReaderForward::Suppressed(s, cover)
                             } else {
                                 let chunk = PtyOutputChunk::pty_output(pane_id, data.to_vec());
                                 match tx.try_send(chunk) {
@@ -699,12 +700,15 @@ pub(in crate::mux) fn pty_reader_loop(
 
                 match forward {
                     ReaderForward::Done => {}
-                    ReaderForward::Suppressed(s, snapshot_construct) => {
+                    ReaderForward::Suppressed(s, covered) => {
                         run_suppressed_pipeline(
                             pane_id,
                             data,
                             &s,
-                            snapshot_construct.as_deref(),
+                            covered,
+                            chunk_number,
+                            &output_target,
+                            &output_capture,
                             &raw_passthrough,
                             &passthrough_scanner,
                             &notification_sender,
@@ -745,7 +749,10 @@ pub(in crate::mux) fn pty_reader_loop(
                                         pane_id,
                                         data,
                                         &s,
-                                        cover.construct.as_deref(),
+                                        cover,
+                                        chunk_number,
+                                        &output_target,
+                                        &output_capture,
                                         &raw_passthrough,
                                         &passthrough_scanner,
                                         &notification_sender,
@@ -825,11 +832,14 @@ enum ReaderForward {
     Done,
     /// The destination's recorded boundary already covers this chunk's
     /// number: the FR9/FR10 replacement pipeline runs for it instead of the
-    /// raw bytes. The second field is the incomplete construct the covering
-    /// snapshot left the client parser in, obtained together with the
-    /// covered decision (task0004, FR8); `None` when that chunk is not the
-    /// snapshot's last covered chunk or the snapshot ended in ground.
-    Suppressed(mpsc::Sender<PtyOutputChunk>, Option<Vec<u8>>),
+    /// raw bytes. The second field is the covered answer obtained together
+    /// with the covered decision: the incomplete construct the covering
+    /// snapshot left the client parser in (task0004, FR8; `None` when that
+    /// chunk is not the snapshot's last covered chunk or the snapshot ended
+    /// in ground) and the generation of the record it comes from
+    /// (mux-suppressed-output-round3-fixes task0004, FR6), which the
+    /// pipeline compares at send time.
+    Suppressed(mpsc::Sender<PtyOutputChunk>, CoveredBoundary),
     /// The channel was full on the non-blocking attempt; the reader must
     /// release every lock and block on a slot reservation (D4) before
     /// deciding again.
@@ -842,24 +852,46 @@ enum ReaderForward {
 /// discards the passthrough scanner's own in-flight state so it cannot
 /// later stitch with output from an unrelated future Detached period, then
 /// builds the FR9/FR10 replacement payload and — if it is non-empty —
-/// delivers it to `s` with the same backpressure handling an ordinary chunk
-/// gets. The replacement is never checked against the boundary (it is not
-/// itself subject to suppression) and is dropped silently if `s` is closed
-/// — the primary chunk's own send attempt already decided this reader's
-/// `output_target` fate; this is a best-effort follow-up delivery to the
-/// same fixed destination.
+/// delivers it to `s`. The replacement is never checked against the boundary
+/// (it is not itself subject to suppression) and is dropped silently if `s`
+/// is closed — the primary chunk's own send attempt already decided this
+/// reader's `output_target` fate; this is a best-effort follow-up delivery
+/// to the same fixed destination.
 ///
-/// `snapshot_construct` (mux-suppressed-output-round2-fixes task0004, FR8) is
-/// the incomplete construct the destination's covering snapshot left the
-/// client parser in, obtained with the covered decision for THIS destination;
-/// it goes into the replacement request so a tail the client already holds is
-/// not re-sent.
+/// Send sequence (mux-suppressed-output-round3-fixes task0004, FR6/NFR2, D3):
+/// 1. `covered` — the construct and the record generation for `s` — comes
+///    from the covered decision, made under `output_target` and the boundary
+///    exclusion by the caller;
+/// 2. everything that needs no knowledge of the destination's record runs
+///    outside every exclusion: passthrough capture, partial-sequence discard,
+///    carried-over completion mapping and [`prepare_suppressed_replacement`];
+/// 3. a prepared value with neither items nor a tail stops here: no construct
+///    can make the result non-empty;
+/// 4. a send slot on `s` is secured outside every exclusion — a non-blocking
+///    reservation first, a blocking one when the channel is full, nothing
+///    when it is closed;
+/// 5. P4 (test builds only);
+/// 6. `output_target` and then the boundary exclusion are re-taken and the
+///    covered query is run again: the captured construct stands only when the
+///    generation is the one captured, otherwise the record as it stands now
+///    decides (none when `s` has no entry);
+/// 7. [`finalize_suppressed_replacement`] — a comparison and a concatenation
+///    only — and, when its result is non-empty, a non-blocking send into the
+///    secured slot while both are still held; otherwise the slot is released
+///    and nothing is sent (TM-2: an empty replacement must never become an
+///    empty `PtyOutput` chunk — the client reads that as PTY exit).
+///
+/// No blocking wait runs under either exclusion, and the non-blocking send in
+/// step 7 is the only channel operation there (NFR2).
 #[allow(clippy::too_many_arguments)]
 fn run_suppressed_pipeline(
     pane_id: PaneId,
     data: &[u8],
     s: &mpsc::Sender<PtyOutputChunk>,
-    snapshot_construct: Option<&[u8]>,
+    covered: CoveredBoundary,
+    chunk_number: u64,
+    output_target: &SharedOutputTarget,
+    output_capture: &SharedOutputCapture,
     raw_passthrough: &SharedRawPassthrough,
     passthrough_scanner: &SharedPassthroughScanner,
     notification_sender: &SharedNotificationSender,
@@ -889,33 +921,35 @@ fn run_suppressed_pipeline(
             end: chunk_end_of_fed_prefix(ring_written_ranges, c.fed_end())?,
         })
     });
-    let replacement = build_suppressed_replacement_for(&SuppressedReplacementRequest {
+    // The snapshot trailing construct is not an input of `prepare`: the
+    // tail-omission decision is made at send time, from the record as it
+    // stands then.
+    let prepared = prepare_suppressed_replacement(&SuppressedReplacementRequest {
         chunk: data,
         ring_written_ranges,
         pending_after: scrollback_filter.pending(),
         window: retained_window,
-        snapshot_trailing_construct: snapshot_construct,
+        snapshot_trailing_construct: None,
         carried_over_completion,
     });
-    if replacement.is_empty() {
-        // TM-2: never turn an empty replacement into an empty `PtyOutput`
-        // chunk — the client reads that as PTY exit.
+    if prepared.is_empty() {
         return;
     }
-    let chunk = PtyOutputChunk::pty_output(pane_id, replacement);
-    match s.try_send(chunk) {
-        Ok(()) => {}
-        Err(mpsc::error::TrySendError::Full(chunk)) => {
-            match futures::executor::block_on(s.clone().reserve_owned()) {
-                Ok(permit) => {
-                    let _ = permit.send(chunk);
-                }
+
+    // Secure a slot outside every exclusion, so no blocking wait ever runs
+    // under `output_target` or the boundary exclusion (NFR2).
+    let permit = match s.clone().try_reserve_owned() {
+        Ok(permit) => permit,
+        Err(mpsc::error::TrySendError::Full(sender)) => {
+            match futures::executor::block_on(sender.reserve_owned()) {
+                Ok(permit) => permit,
                 Err(_closed) => {
                     log::debug!(
                         "pane {}: suppressed-chunk replacement dropped (destination closed \
                          while waiting for a slot)",
                         pane_id
                     );
+                    return;
                 }
             }
         }
@@ -924,8 +958,35 @@ fn run_suppressed_pipeline(
                 "pane {}: suppressed-chunk replacement dropped (destination closed)",
                 pane_id
             );
+            return;
         }
+    };
+
+    // P4 (test builds only): slot secured, no exclusion held, before the
+    // record is re-checked.
+    #[cfg(test)]
+    output_capture.p4.hit();
+
+    // Re-take `output_target`, then the boundary exclusion (the order every
+    // other holder uses), and decide from the record as it stands now.
+    let target = output_target.lock().unwrap();
+    let boundary = output_capture.hold_boundary();
+    let construct = match boundary.cover(s, chunk_number) {
+        Some(current) if current.generation == covered.generation => covered.construct,
+        Some(current) => current.construct,
+        None => None,
+    };
+    let replacement = finalize_suppressed_replacement(prepared, construct.as_deref());
+    if replacement.is_empty() {
+        drop(boundary);
+        drop(target);
+        drop(permit);
+        return;
     }
+    // The slot is already reserved, so this send does not block.
+    let _ = permit.send(PtyOutputChunk::pty_output(pane_id, replacement));
+    drop(boundary);
+    drop(target);
 }
 
 /// Run `data` through the per-pane passthrough scanner and append any
