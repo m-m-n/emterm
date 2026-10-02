@@ -1,0 +1,70 @@
+schema_version: 2
+feature: mux-suppressed-output-round4-fixes
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.62
+    confidence: 0.59
+    legend:
+      '0': '0: Only a wording or rule-text change: no new logic, and no test change.'
+      '1': '1: A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.'
+      '2': '2: New logic, a change reaching across several modules, or a change to
+        an external contract.'
+      '3': '3: A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.01
+      '1': 0.38
+      '2': 0.6
+      '3': 0.01
+  observed_at: '2026-10-02T13:06:00+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.88
+    confidence: 0.87
+    legend:
+      '0': '0: Only a wording or rule-text change: no new logic, and no test change.'
+      '1': '1: A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.'
+      '2': '2: New logic, a change reaching across several modules, or a change to
+        an external contract.'
+      '3': '3: A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.12
+      '2': 0.88
+      '3': 0.0
+  observed_at: '2026-10-02T13:12:00+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/round3_as05.rs
+  - feature-docs/mux-suppressed-output-round3-fixes/SPEC.md
+  - feature-docs/mux-suppressed-output-round3-fixes/DECISIONS.md
+  - test-docs/mux-suppressed-output-round3-fixes/task0002.tests.yaml
+  - test-docs/mux-suppressed-output-round3-fixes/task0003.tests.yaml
+  changed_lines_approx: 300
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules: []
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 8
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 4
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: 指定ブランチ31538ac2を静的確認した。round1.yamlの3件はunresolvedで、レビュー対象コミット以降の本体差分はない。write_filter.rs:333の切り詰め、client_parity_scan.rs:140の先頭限定除外、write_filter.rs:283/329の指定文字待ち解除が残る。関連テストはあるが3件の再現系列を網羅していない。SPEC
+    as-02／EC-2と既存期待値の改訂、3件の判断記録が必要。数値と修正ファイルは概算で、新規関数0は既存の本体関数を拡張する想定。呼出元2・依存2を数えた。通信形式の変更は不要と見積もった。ファイル変更とテスト実行はしていない
+decided_at: '2026-10-02T13:12:30+09:00'
