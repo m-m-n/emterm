@@ -8744,3 +8744,7 @@ mod fr8_snapshot_tail {
         );
     }
 }
+
+// mux-suppressed-output-round3-fixes task0004 (FR6, FR7, NFR2): send-time
+// re-check of the tail omission.
+mod round3_send_recheck;
