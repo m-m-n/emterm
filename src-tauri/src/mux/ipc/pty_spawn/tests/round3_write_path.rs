@@ -16,10 +16,10 @@ use crate::mux::scrollback_filter::{
 use crate::mux::session::pane::{AnyPermit, ResumeOutcome, resume_pane_with_permit};
 use term_core::terminal_core::{ReplaySegment, TerminalCore};
 
-const DIMS: (u16, u16) = (80, 24);
+pub(super) const DIMS: (u16, u16) = (80, 24);
 
 /// The three removed-switch pairs: 47, 1047 and 1049 `h` / `l`.
-fn switch_pairs() -> [(&'static [u8], &'static [u8]); 3] {
+pub(super) fn switch_pairs() -> [(&'static [u8], &'static [u8]); 3] {
     [
         (b"\x1b[?47h", b"\x1b[?47l"),
         (b"\x1b[?1047h", b"\x1b[?1047l"),
@@ -289,9 +289,9 @@ fn round3_195916fd_write_filter_output_is_split_invariant_across_a_designator_es
         assert!(compared > 2);
         assert_eq!(
             one_out,
-            b"\x1b(".to_vec(),
-            "the segment before the cut is kept; what follows starts from ground \
-             and is stripped"
+            b"\x1b(\x1b".to_vec(),
+            "the segment before the cut is kept and followed by the designator ESC \
+             (round4 FR3); what follows starts from ground and is stripped"
         );
     }
 
@@ -447,20 +447,21 @@ fn a_cut_drops_the_construct_from_its_opening_esc_on() {
     assert_eq!(carried.bytes(), b"\x1b]0;t\x07");
     assert_eq!(carried.fed_end(), 1);
 
-    // EC-2: an awaiting-designator `ESC (` at a cut is still emitted and the
-    // flag is cleared.
+    // EC-2 (round4 FR3): an awaiting-designator `ESC (` at a cut is emitted,
+    // followed by one ESC, and the flag is cleared.
     let mut f = ScrollbackWriteFilter::new();
     let outcome = f.feed_with_cuts(b"ab\x1b(", DIMS, &[4]);
-    assert_eq!(outcome.bytes, b"ab\x1b(".to_vec());
+    assert_eq!(outcome.bytes, b"ab\x1b(\x1b".to_vec());
     assert!(f.pending().is_empty());
     assert!(!f.awaiting_designator());
 
-    // The same when the `ESC (` was fed by an earlier call.
+    // The same when the `ESC (` was fed by an earlier call: the cut writes the
+    // one ESC.
     let mut f = ScrollbackWriteFilter::new();
     f.feed(b"\x1b(", DIMS);
     assert!(f.awaiting_designator());
     let outcome = f.feed_with_cuts(b"", DIMS, &[0]);
-    assert!(outcome.bytes.is_empty());
+    assert_eq!(outcome.bytes, b"\x1b".to_vec());
     assert!(!f.awaiting_designator(), "the cut clears the awaiting flag");
 }
 
@@ -485,7 +486,7 @@ fn a_cut_after_a_carried_designator_keeps_the_designator_esc() {
 
 /// Answers `OSC 11 ; ?` — but never an `Unterminated` one, as the production
 /// color responder — so a test can count color-query answers.
-struct QueryResponder;
+pub(super) struct QueryResponder;
 
 impl term_core::OscResponder for QueryResponder {
     fn respond(
@@ -502,7 +503,7 @@ impl term_core::OscResponder for QueryResponder {
     }
 }
 
-fn new_core() -> TerminalCore {
+pub(super) fn new_core() -> TerminalCore {
     let mut core = TerminalCore::new(R2_COLS, R2_ROWS, 10_000);
     core.osc_responder = Some(Box::new(QueryResponder));
     core
@@ -512,7 +513,7 @@ fn new_core() -> TerminalCore {
 /// `reset_and_replay_segments` with its responses discarded, every
 /// `PtyOutput` chunk through `process_pty_data_fully`. Returns the client and
 /// every response it produced from `PtyOutput` bytes.
-fn client_view(received: &[PtyOutputChunk]) -> (TerminalCore, Vec<u8>) {
+pub(super) fn client_view(received: &[PtyOutputChunk]) -> (TerminalCore, Vec<u8>) {
     let mut client = new_core();
     let mut responses = Vec::new();
     for chunk in received {
@@ -541,7 +542,7 @@ fn client_view(received: &[PtyOutputChunk]) -> (TerminalCore, Vec<u8>) {
     (client, responses)
 }
 
-fn reference_view(chunks: &[Vec<u8>]) -> (TerminalCore, Vec<u8>) {
+pub(super) fn reference_view(chunks: &[Vec<u8>]) -> (TerminalCore, Vec<u8>) {
     let mut reference = new_core();
     reference.process_pty_data_fully(&chunks.concat());
     let responses = reference.take_response();
@@ -550,7 +551,11 @@ fn reference_view(chunks: &[Vec<u8>]) -> (TerminalCore, Vec<u8>) {
 
 /// Responses, screen, cursor and displayed characters of the client equal the
 /// raw-stream reference's, unconditionally (the FR1 oracle convention).
-fn assert_client_equals_reference(received: &[PtyOutputChunk], chunks: &[Vec<u8>], ctx: &str) {
+pub(super) fn assert_client_equals_reference(
+    received: &[PtyOutputChunk],
+    chunks: &[Vec<u8>],
+    ctx: &str,
+) {
     let (client, client_responses) = client_view(received);
     let (reference, reference_responses) = reference_view(chunks);
     assert_eq!(
@@ -583,7 +588,7 @@ fn assert_client_equals_reference(received: &[PtyOutputChunk], chunks: &[Vec<u8>
 
 /// Spawn `pty_reader_loop` on a background thread against `pane`, fed
 /// `chunks`, WITHOUT touching the pane's output target.
-fn spawn_reader_keeping_target(
+pub(super) fn spawn_reader_keeping_target(
     pane: &MuxPane,
     chunks: Vec<Vec<u8>>,
 ) -> std::thread::JoinHandle<()> {
@@ -624,11 +629,11 @@ fn spawn_reader_keeping_target(
 }
 
 /// What one scripted reader run delivered, with the ring it left.
-struct RestoreRun {
+pub(super) struct RestoreRun {
     /// Everything the owner's channel received, in order (the snapshot of the
     /// visibility restore, forwarded reads and replacements, EOF last).
-    received: Vec<PtyOutputChunk>,
-    ring: Vec<u8>,
+    pub(super) received: Vec<PtyOutputChunk>,
+    pub(super) ring: Vec<u8>,
 }
 
 /// Drive `chunks` through the production reader on a main-screen pane that is
@@ -638,7 +643,7 @@ struct RestoreRun {
 /// that read is covered by the restore's snapshot and suppressed. The pane's
 /// ring has not wrapped, so the snapshot has no screen-dump block: its
 /// content is the ring alone, with no ESC of a dump to abort an open OSC.
-fn run_visibility_restore_at(chunks: &[Vec<u8>], restore_read: usize) -> RestoreRun {
+pub(super) fn run_visibility_restore_at(chunks: &[Vec<u8>], restore_read: usize) -> RestoreRun {
     assert!(restore_read < chunks.len());
     let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
     let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
@@ -688,7 +693,7 @@ fn run_visibility_restore_at(chunks: &[Vec<u8>], restore_read: usize) -> Restore
 }
 
 /// Count the occurrences of an OSC introducer in `bytes`.
-fn osc_introducers(bytes: &[u8]) -> usize {
+pub(super) fn osc_introducers(bytes: &[u8]) -> usize {
     r2_count(bytes, b"\x1b]")
 }
 
@@ -888,7 +893,7 @@ fn straddling_switches_over_many_reads_close_repeatedly_and_never_send_an_empty_
 
 /// Run `chunks` through the production reader on a pane with no connected
 /// owner (nothing is forwarded); returns the ring.
-fn run_reader_without_owner(chunks: Vec<Vec<u8>>) -> Vec<u8> {
+pub(super) fn run_reader_without_owner(chunks: Vec<Vec<u8>>) -> Vec<u8> {
     let output_target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
         reason: DetachReason::NetworkDetach,
         owner: None,

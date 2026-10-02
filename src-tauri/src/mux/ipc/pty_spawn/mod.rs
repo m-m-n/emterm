@@ -533,9 +533,11 @@ pub(in crate::mux) fn pty_reader_loop(
                             // path cannot place: whatever construct the
                             // filter holds is closed on the client side. An
                             // empty range with one cut at fed 0 makes the
-                            // filter close and drop it, and write nothing
-                            // for the chunk (no live spans, no carried-over
-                            // completion).
+                            // filter close as at a cut: it drops what it
+                            // holds and writes nothing from a closed
+                            // construct, and at most the single closing
+                            // write the cut contract defines (no live
+                            // spans, no carried-over completion).
                             (&[], Vec::new(), vec![0])
                         }
                     };
