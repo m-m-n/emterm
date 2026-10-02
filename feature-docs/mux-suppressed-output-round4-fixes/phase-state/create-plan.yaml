@@ -40,7 +40,7 @@ artifacts:
   produced_by: create-plan-run-0001
 patches:
 - patch_id: create-plan-run-0001-p0001
-  status: pending
+  status: applied
   base_input_digest: sha256:18687f7226b75bbe01b2ae6a259e17425ac5c193f51f102c0e5de870a8de5c73
   base_workflow_blob: 906ffd8670f9262065722dbea2ecc3b2411718cd
 progress_fingerprint: null
