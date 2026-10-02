@@ -6567,6 +6567,8 @@ async fn destination_takeover_through_collect_reattach_data_binds_suppression_to
     }
 }
 
+mod round4_designator_slot;
+
 // ── mux-suppressed-output-round2-fixes task0003: write-filter parity,
 //    pending exclusion and carried-over completions (AC-1 through AC-7) ─────
 //
