@@ -1,0 +1,77 @@
+task_id: task0003
+baseline_failures: []          # full `--lib` run before any production change: 3971 passed, 4 failed, 3 ignored; the 4 failures are this task's own new tests (the reds recorded below), no pre-existing test failed
+final_failures: []             # full `--lib` re-run after implementation: 3975 passed, 0 failed, 3 ignored; `cargo check` passes with default features and with --no-default-features
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_trailing_designator_introducer_extracts_nothing_at_the_chunk_start
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_trailing_designator_introducer_keeps_constructs_that_start_later
+    red_confirmed: true
+    red_reason: >-
+      Run against the pre-fix scan: the first test failed with `ESC ( chain /
+      OSC 11 color query: no item may start at the chunk's first byte, got
+      [ScanItem { kind: ColorQuery, range: 0..7 }]`; the second failed with
+      `CSI query, then OSC 11 query: items left: [(CsiQuery, 0..4), (ColorQuery,
+      4..11)] right: [(ColorQuery, 4..11)]`. The window set is the ESC ( chain,
+      the ESC ) chain, the mixed chain and a `(` at offset 0 followed by an
+      ESC chain; the last one is 257 bytes because a 256-byte window that starts
+      with `(`, holds no decidable ESC and ends in `ESC (` cannot be built.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_trailing_paren_not_preceded_by_esc_still_scans_from_the_chunk_start
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_window_with_a_decidable_esc_keeps_its_results
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_short_window_is_walked_from_its_start
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_trailing_designator_introducer_keeps_an_incomplete_utf8_tail
+      - mux::ipc::pty_spawn::tests::round3_as05::round3_as05_trailing_paren_not_preceded_by_esc_still_delivers_the_query
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_derive_prefix_start_never_returns_offset_zero
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_derive_prefix_start_excludes_an_esc_in_a_designator_slot_past_offset_one
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_derive_prefix_start_fallback_is_unchanged_when_no_esc_qualifies
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_derive_prefix_start_scans_a_short_window_from_its_start
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac3_scan_starts_at_a_decidable_esc_in_a_full_window
+      - mux::ipc::pty_spawn::suppressed_output::tests::full_window_with_no_decidable_esc_falls_back_to_ground
+      - mux::ipc::pty_spawn::suppressed_output::tests::full_window_with_no_decidable_esc_and_trailing_utf8_partial_is_carried_over
+    red_confirmed: false
+    red_reason: >-
+      These are the unaffected cases (a trailing `(` not preceded by ESC, a
+      window with a decidable ESC, a window below the retention size, the
+      trailing UTF-8 partial) and the existing start-state tests; the behavior
+      pre-existed and all of them passed against the pre-fix scan, so no red
+      state occurred for this change. They pin the unchanged results. An
+      incomplete UTF-8 character at the chunk's first byte keeps its tail
+      under the trigger (the rule removes control sequences only).
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::round3_as05::round3_eaf83fe0_as05_fallback_never_fabricates_after_a_trailing_esc_paren
+      - mux::ipc::pty_spawn::tests::round3_as05::round3_as05_even_chain_never_answers_more_than_the_reference
+    red_confirmed: true
+    red_reason: >-
+      The registry test failed against the pre-fix reader with `129 ESC ( then
+      a suppressed query: response bytes differ from the reference left: [27,
+      93, 49, 49, 59, 114, 103, 98, 58, ...] right: []` (the suppressed OSC 11
+      query was re-delivered and the client answered it). The 128-pair test is
+      the accepted miss: it asserts only that no response is fabricated, so it
+      passed before the change and is not a red. The screen comparison runs
+      when the stand-in snapshot reproduces the reference's screen for its own
+      prefix (the prefix-reproduction guard of the reader-level oracle).
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_degenerate_windows_with_adversarial_chunks_finish_within_budget
+      - mux::ipc::pty_spawn::client_parity_scan::tests::ac1_degenerate_full_windows_complete_without_panicking
+    red_confirmed: false
+    red_reason: >-
+      Panic-freedom and time-budget guards over degenerate windows and
+      adversarial chunks; the scan was already a bounded panic-free pass, so
+      both tests passed against the pre-fix code and no red state occurred. The
+      new check reads at most the window's last two bytes.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::client_parity_scan::tests
+      - mux::ipc::pty_spawn::suppressed_output::tests
+    red_confirmed: false
+    red_reason: >-
+      The outcome is the full `--lib` suite and the --no-default-features
+      `cargo check`; neither failed before the change, so no red state
+      occurred. A dedicated new module is out of scope, but the existing
+      client_parity_scan and suppressed_output test modules (which read
+      client_parity_scan.rs through `scan` and the replacement builders) detect
+      a behavior change in the scan; no red state occurred for this change.

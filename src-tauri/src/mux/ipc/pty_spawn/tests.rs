@@ -8030,6 +8030,7 @@ fn a_fed_offset_maps_to_the_position_just_past_it_in_chunk_coordinates() {
 }
 
 // END round2 task0003 tests: new entry points.
+mod round3_as05;
 
 // ── End-to-end child reap (task0001 AC-1/AC-7; TS-7, TS-8, TS-9) ──────
 //
