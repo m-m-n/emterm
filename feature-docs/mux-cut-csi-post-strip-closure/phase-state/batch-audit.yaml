@@ -1,0 +1,13 @@
+schema_version: 1
+feature: mux-cut-csi-post-strip-closure
+records:
+- gate_id: create-spec.requirement-clarification
+  question_id: requirement.scope.no-cut-strip-merge
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-03T08:52:00+09:00'
+  source: batch-codex-consultation
+  selected_option_ids:
+  - cut-and-carry
+  resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); Codex (codex harness, 1 turn) consulted; Opus escalation: not run; options: cut-and-carry [chosen] / strip-closes
+    [not chosen]; key points: 期待挙動と完了の定義は write_filter.rs:512/520 のカット閉鎖と状態引き継ぎに絞られる。フォールバック閉鎖(400)とオーバーフロー後(441)も含める。共有 strip への DEL 追加はスナップショット出力と位置補正(snapshot_bytes.rs:330)に波及し回帰リスクが広がる。カット無し連結は前身 DECISIONS.md:27
+    の既存残件で別修正が妥当。注意: 残件と 4c0ad9058a983648 の判定を明記する'

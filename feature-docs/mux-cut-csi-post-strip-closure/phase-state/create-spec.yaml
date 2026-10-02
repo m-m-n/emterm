@@ -5,10 +5,44 @@ status: in_progress
 generation: 1
 base_revision: 52d6287be3af3127cc4e960ecaf2bf40a5e99b5b
 last_input_digest: sha256:3d7eef3061778ecc77bcfc47e8aaab31483462bb1b4ede9d1340ed151713503b
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
-worker_runs: []
+active_request_id: create-spec-run-0002
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-03T08:47:00+09:00'
+    questions:
+    - question_id: requirement.scope.no-cut-strip-merge
+      status: answered
+    - question_id: design-step
+      status: answered
+answers:
+  requirement.scope.no-cut-strip-merge:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T08:52:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - cut-and-carry
+    freeform: null
+    normalized_answer: 修正範囲は書き込みフィルタのカット閉鎖・フォールバック閉鎖・オーバーフロー後のカット・引き継ぐ CSI 状態に限り、除去後の出力の状態で決める。共有 strip の出力（スナップショット経路を含む）は変えない。カットの無い strip 連結は残件として決定記録に書き、別タスクで扱う。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); Codex (codex harness, 1 turn) consulted; Opus escalation: not run; options: cut-and-carry [chosen] / strip-closes
+      [not chosen]; key points: 期待挙動と完了の定義は write_filter.rs:512/520 のカット閉鎖と状態引き継ぎに絞られる。フォールバック閉鎖(400)とオーバーフロー後(441)も含める。共有 strip への DEL 追加はスナップショット出力と位置補正(snapshot_bytes.rs:330)に波及し回帰リスクが広がる。カット無し連結は前身
+      DECISIONS.md:27 の既存残件で別修正が妥当。注意: 残件と 4c0ad9058a983648 の判定を明記する'
+  design-step:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T08:52:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: design step は推奨どおり skip（Rust 内部のみの変更で UI に触れない）
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously (= analyst の推奨を受け入れる)。packet の options が skip/run で decide_autonomously を含まないため、その意味どおり recommended
+      の skip に写像した'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:3d7eef3061778ecc77bcfc47e8aaab31483462bb1b4ede9d1340ed151713503b
 artifacts: []
 patches: []
 progress_fingerprint: null
