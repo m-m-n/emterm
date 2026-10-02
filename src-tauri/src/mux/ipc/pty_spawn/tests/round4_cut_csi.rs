@@ -593,17 +593,21 @@ fn round4_fr4_each_cut_closes_at_most_once() {
 
 /// AC-3 (FR4): never together with the FR3 designator ESC. A CSI that an
 /// `ESC (` / `ESC )` aborted is gone before the wait starts, and the wait is
-/// never a CSI.
+/// never a CSI: each cut writes exactly one closing byte, the designator ESC.
 #[test]
 fn round4_fr4_the_closing_never_coincides_with_the_designator_wait() {
+    const ESC_BYTE: &[u8] = &[0x1b];
     for head in [&b"\x1b[6"[..], b"\x1b["] {
         for brace in [&b"("[..], b")"] {
             let fed = [head, b"\x1b", brace].concat();
+
+            // The cut in the same call.
             let mut filter = ScrollbackWriteFilter::new();
             let out = filter.feed_with_cuts(&fed, DIMS, &[fed.len()]).bytes;
-            assert!(
-                !out.windows(CSI_CLOSING.len()).any(|w| w == CSI_CLOSING),
-                "{:?}: an aborted CSI is not closed",
+            assert_eq!(
+                out,
+                [&fed[..], ESC_BYTE].concat(),
+                "{:?}: the designator ESC only; the aborted CSI is not closed",
                 text(&fed)
             );
 
@@ -617,9 +621,18 @@ fn round4_fr4_the_closing_never_coincides_with_the_designator_wait() {
             let mut filter = ScrollbackWriteFilter::new();
             filter.feed(&fed, DIMS);
             let out = filter.feed_with_cuts(b"", DIMS, &[0]).bytes;
-            assert!(
-                !out.windows(CSI_CLOSING.len()).any(|w| w == CSI_CLOSING),
-                "{:?}: the wait is not a CSI",
+            assert_eq!(out, ESC_BYTE, "{:?}: the wait is not a CSI", text(&fed));
+
+            // The CSI in an earlier call, the designation in the next, the
+            // cut after it.
+            let mut filter = ScrollbackWriteFilter::new();
+            let mut got = filter.feed(head, DIMS).1;
+            let next = [b"\x1b", brace].concat();
+            got.extend_from_slice(&filter.feed_with_cuts(&next, DIMS, &[next.len()]).bytes);
+            assert_eq!(
+                got,
+                [&fed[..], ESC_BYTE].concat(),
+                "{:?}: CSI carried in, designation in the cut call",
                 text(&fed)
             );
         }
