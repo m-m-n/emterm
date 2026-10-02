@@ -110,20 +110,48 @@ pub(in crate::mux) struct ScanOutcome {
 /// will re-deliver must never also be found here). An empty `excluded`
 /// disables neither: items and the tail are discovered over the whole chunk.
 ///
-/// Contract (NFR5/TM-2): a single forward pass, work proportional to
-/// `window.len() + chunk.len()` (plus one pass over `excluded` per reported
-/// item); never panics.
+/// Contract (NFR5/TM-2): a bounded forward pass per reading, work
+/// proportional to `window.len() + chunk.len()` (plus one pass over
+/// `excluded` per reported item); never panics.
 ///
-/// Round-3 FR5: when [`first_chunk_byte_may_be_designator`] holds, no item
-/// and no tail is reported from a control sequence that starts at the chunk's
-/// first byte; constructs that start later are classified by the same rules
-/// as always. The rule can only cause misses, never add an item.
+/// Round-4 FR2 (as-05 fallback): when [`first_chunk_byte_may_be_designator`]
+/// holds, the walk starts at the chunk and the chunk's first byte may or may
+/// not have been consumed by the client as a designator, which the window
+/// cannot decide. The scan then reads the same view two ways — reading (b)
+/// parses the first byte from ground, reading (a) takes it as the consumed
+/// designator and starts the same ground-state walk one byte later — and
+/// keeps only what both readings report identically:
+///
+/// - an item, when both report an item with the same range and the same
+///   kind;
+/// - the tail, when both report the same tail start (its C0-strip flag is the
+///   one that tail carries);
+/// - an end-of-view check that does not depend on where the walk started
+///   (the incomplete UTF-8 character at the end of the view) is evaluated
+///   once on the shared view, so both readings report it identically.
+///
+/// Everything else is dropped. The intersection can only remove results, so
+/// it can cause misses but never a fabricated item or tail; a designator
+/// chain (`ESC ( ESC ( …`) inside the chunk can no longer turn an ESC that
+/// the client consumed as a designator into the start of a sequence. Outside
+/// the fallback condition there is exactly one reading, from the chunk's
+/// start, as before.
 pub(in crate::mux) fn scan(window: &[u8], chunk: &[u8], excluded: &[Range<usize>]) -> ScanOutcome {
+    scan_with_reading_count(window, chunk, excluded).0
+}
+
+/// [`scan`], and the number of readings it ran: 2 under the as-05 fallback
+/// condition ([`first_chunk_byte_may_be_designator`]), otherwise 1.
+pub(in crate::mux::ipc::pty_spawn) fn scan_with_reading_count(
+    window: &[u8],
+    chunk: &[u8],
+    excluded: &[Range<usize>],
+) -> (ScanOutcome, usize) {
     let s = derive_prefix_start(window);
-    // Round-3 FR5 (TM-1): in the as-05 fallback behind a trailing `ESC (` /
+    // Round-4 FR2 (TM-1): in the as-05 fallback behind a trailing `ESC (` /
     // `ESC )` the chunk's first byte may have been consumed by the client as
-    // the designator, so a control sequence starting at that byte is
-    // undecidable from the window alone.
+    // the designator. The walk then starts at the chunk (`s` is the window's
+    // end), so the window contributes nothing to the walked view.
     let first_byte_undecided = first_chunk_byte_may_be_designator(window, s);
     let mut combined = Vec::with_capacity((window.len() - s) + chunk.len());
     combined.extend_from_slice(&window[s..]);
@@ -131,13 +159,36 @@ pub(in crate::mux) fn scan(window: &[u8], chunk: &[u8], excluded: &[Range<usize>
     combined.extend_from_slice(chunk);
 
     let detect_tail = excluded.is_empty();
-    let (raw_items, tail_start, tail_strip_c0) = scan_view(&combined, detect_tail);
+    // End-of-view check, independent of where a walk started: evaluated once
+    // on the shared view.
+    let utf8_tail = if detect_tail {
+        utf8_tail_start_at_end(&combined)
+    } else {
+        None
+    };
+
+    // Reading (b): the walk from ground at the view's first byte.
+    let from_ground = walk_view(&combined, 0, detect_tail);
+    let (raw_items, tail, readings) = if first_byte_undecided {
+        // Reading (a): the view's first byte is the consumed designator, so
+        // the same ground-state walk starts one byte later (same
+        // coordinates).
+        let after_designator = walk_view(&combined, 1, detect_tail);
+        let tail = same_tail(
+            reading_tail(&from_ground, utf8_tail),
+            reading_tail(&after_designator, utf8_tail),
+        );
+        let items = common_items(from_ground.items, &after_designator.items);
+        (items, tail, 2)
+    } else {
+        let tail = reading_tail(&from_ground, utf8_tail);
+        (from_ground.items, tail, 1)
+    };
 
     let items = raw_items
         .into_iter()
         .filter(|item| {
             item.range.end > boundary
-                && !(first_byte_undecided && item.range.start == boundary)
                 && !overlaps_excluded(
                     item.range.start.saturating_sub(boundary),
                     item.range.end - boundary,
@@ -145,26 +196,70 @@ pub(in crate::mux) fn scan(window: &[u8], chunk: &[u8], excluded: &[Range<usize>
                 )
         })
         .collect();
-    // A tail that is a control sequence starting at the undecided first byte
-    // is dropped with its C0-strip flag. An incomplete UTF-8 character at
-    // that byte is not a control sequence and stays: re-delivering it
-    // reproduces the client's own handling of the byte in both cases.
-    let tail_at_undecided_byte = first_byte_undecided
-        && tail_start == Some(boundary)
-        && combined.get(boundary) == Some(&0x1b);
-    let (tail, tail_strip_c0) = if tail_at_undecided_byte {
-        (None, false)
-    } else {
-        (tail_start.map(|start| start..combined.len()), tail_strip_c0)
+    let (tail, tail_strip_c0) = match tail {
+        Some((start, strip_c0)) => (Some(start..combined.len()), strip_c0),
+        None => (None, false),
     };
 
-    ScanOutcome {
-        combined,
-        boundary,
-        items,
-        tail,
-        tail_strip_c0,
+    (
+        ScanOutcome {
+            combined,
+            boundary,
+            items,
+            tail,
+            tail_strip_c0,
+        },
+        readings,
+    )
+}
+
+/// What one reading of the view reports: its items, and the trailing
+/// incomplete construct its walk ended in (when tail discovery is on).
+struct Reading {
+    items: Vec<ScanItem>,
+    /// Start of the construct the walk was still inside at the view's end.
+    walk_tail_start: Option<usize>,
+    /// Whether that construct is an in-progress CSI (FR3: its C0 bytes are
+    /// removed before re-delivery).
+    walk_tail_strip_c0: bool,
+}
+
+/// The tail a reading reports as `(start, strip C0)`: the construct its walk
+/// ended in, otherwise the shared view's incomplete UTF-8 character.
+fn reading_tail(reading: &Reading, utf8_tail: Option<usize>) -> Option<(usize, bool)> {
+    match reading.walk_tail_start {
+        Some(start) => Some((start, reading.walk_tail_strip_c0)),
+        None => utf8_tail.map(|start| (start, false)),
     }
+}
+
+/// The tail both readings report: kept only when their starts are equal. The
+/// C0-strip flag is the one that tail carries — it follows from the byte at
+/// the start (a CSI strips, an incomplete OSC/DCS/APC, designator, bare ESC
+/// or UTF-8 character does not), so equal starts carry equal flags.
+fn same_tail(first: Option<(usize, bool)>, second: Option<(usize, bool)>) -> Option<(usize, bool)> {
+    match (first, second) {
+        (Some(a), Some(b)) if a.0 == b.0 => Some(a),
+        _ => None,
+    }
+}
+
+/// The items both readings report with the same range and the same kind, in
+/// stream order. Each list is in ascending, non-overlapping order, so one
+/// forward pass over both finds the common items.
+fn common_items(first: Vec<ScanItem>, second: &[ScanItem]) -> Vec<ScanItem> {
+    let mut common = Vec::new();
+    let mut other = second.iter().peekable();
+    for item in first {
+        while other
+            .next_if(|c| c.range.start < item.range.start)
+            .is_some()
+        {}
+        if other.peek().is_some_and(|c| **c == item) {
+            common.push(item);
+        }
+    }
+    common
 }
 
 /// Whether the chunk-coordinate span `[start, end)` overlaps any excluded
@@ -203,7 +298,12 @@ fn derive_prefix_start(window: &[u8]) -> usize {
 
 /// Round-3 FR5 (TM-1, review finding eaf83fe08869d5e6): whether, in the
 /// as-05 fallback, the chunk's first byte may already have been consumed by
-/// the client's parser as a charset designator.
+/// the client's parser as a charset designator. Round-4 FR2 (review finding
+/// 989ec5c588abce06): when it holds, [`scan`] reads the chunk two ways — the
+/// first byte as the consumed designator, and from ground — and keeps only
+/// what both readings report, because the undecidable designator parity
+/// carries through the chunk (every `ESC (` chain inside it shifts which
+/// ESC the client consumed).
 ///
 /// The fallback applies when the window is at the retention size and holds
 /// no ESC that [`esc_may_be_designator_byte`] accepts as a restart position
@@ -363,19 +463,21 @@ fn utf8_tail_start_at_end(view: &[u8]) -> Option<usize> {
     None
 }
 
-/// Single forward pass over `combined` (FR2), classifying every completed
-/// OSC/CSI as a reportable item when it qualifies (FR7/FR9), and reporting
-/// the trailing incomplete construct when the walk reaches the buffer's end
-/// without resolving one AND `detect_tail` is set (tail discovery is
-/// disabled when the write filter's pending run owns the tail — FR5's
+/// Single forward pass over `view` from `start` (FR2), classifying every
+/// completed OSC/CSI as a reportable item when it qualifies (FR7/FR9), and
+/// reporting the trailing incomplete construct when the walk reaches the
+/// buffer's end without resolving one AND `detect_tail` is set (tail discovery
+/// is disabled when the write filter's pending run owns the tail — FR5's
 /// pending exclusion).
 ///
-/// Returns `(items, tail_start, tail_strip_c0)`.
-fn scan_view(combined: &[u8], detect_tail: bool) -> (Vec<ScanItem>, Option<usize>, bool) {
-    let limit = combined.len();
-    let view = combined;
+/// The walk begins in the ground state at `start` — 0 for the ordinary walk,
+/// 1 for the as-05 reading that takes the view's first byte as a consumed
+/// designator — and reports in the view's coordinates. The incomplete UTF-8
+/// character at the view's end is not part of the walk (see [`scan`]).
+fn walk_view(view: &[u8], start: usize, detect_tail: bool) -> Reading {
+    let limit = view.len();
     let mut items = Vec::new();
-    let mut pos = 0usize;
+    let mut pos = start;
     let mut tail_start: Option<usize> = None;
     let mut tail_strip_c0 = false;
 
@@ -480,11 +582,11 @@ fn scan_view(combined: &[u8], detect_tail: bool) -> (Vec<ScanItem>, Option<usize
         }
     }
 
-    if tail_start.is_none() && detect_tail {
-        tail_start = utf8_tail_start_at_end(view);
+    Reading {
+        items,
+        walk_tail_start: tail_start,
+        walk_tail_strip_c0: tail_strip_c0,
     }
-
-    (items, tail_start, tail_strip_c0)
 }
 
 /// FR2 (g): the OSC number and data exactly as term_core's OSC string state
