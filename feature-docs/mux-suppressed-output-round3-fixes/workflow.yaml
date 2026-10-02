@@ -239,7 +239,7 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-suppressed-output-round3-fixes/task0004
     notes: 'batch auto-retry consumed (1/1): previous attempt orphaned (launching session gone)'
   task0005:
