@@ -139,7 +139,7 @@ workflow:
   completed_at_commit: 600ecce8ee643c0e8182e2c5c8efde4b8330891f
   base_commit: d7729d0d330edc30b6c978bc93be5dcf7a6f7f24
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -257,8 +257,17 @@ tasks:
     branch: em-workflow/mux-suppressed-output-round3-fixes/task0005
     notes: null
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
 requirements:
   FR1:
     title: A construct closed by a removed screen switch is not written to the ring (review finding 973af79f520bdaa5)
