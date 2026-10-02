@@ -1,0 +1,17 @@
+schema_version: 1
+feature: mux-cut-csi-post-strip-closure
+phase: create-spec
+status: in_progress
+generation: 1
+base_revision: 52d6287be3af3127cc4e960ecaf2bf40a5e99b5b
+last_input_digest: sha256:3d7eef3061778ecc77bcfc47e8aaab31483462bb1b4ede9d1340ed151713503b
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
