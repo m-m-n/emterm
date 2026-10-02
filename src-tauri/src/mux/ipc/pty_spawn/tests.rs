@@ -7672,12 +7672,19 @@ fn a_cut_closes_a_held_lone_esc() {
     assert_eq!(g.pending(), b"\x1b".as_slice());
 }
 
-/// AC-2 (FR4): the awaiting-designator flag clears at a cut.
+/// AC-2 (FR4): the awaiting-designator flag clears at a cut. Round4 FR3:
+/// one ESC follows the awaiting `ESC (` at the cut, the designator the client
+/// consumed as the switch's ESC, also for a wait carried in from an earlier
+/// read.
 #[test]
 fn a_cut_clears_the_awaiting_designator_flag() {
     let mut f = ScrollbackWriteFilter::new();
     let outcome = r2_feed(&mut f, b"\x1b(", &[2]);
-    assert_eq!(outcome.bytes, b"\x1b(".to_vec());
+    assert_eq!(
+        outcome.bytes,
+        b"\x1b(\x1b".to_vec(),
+        "the waiting `ESC (` is followed by one ESC at the cut"
+    );
     assert!(
         !f.awaiting_designator(),
         "cut at the fed end clears the flag"
@@ -7692,7 +7699,11 @@ fn a_cut_clears_the_awaiting_designator_flag() {
     g.feed(b"\x1b(", (80, 24));
     assert!(g.awaiting_designator());
     let outcome = r2_feed(&mut g, b"", &[0]);
-    assert!(outcome.bytes.is_empty());
+    assert_eq!(
+        outcome.bytes,
+        b"\x1b".to_vec(),
+        "a wait carried in from an earlier read is closed with one ESC"
+    );
     assert!(!g.awaiting_designator());
 }
 
@@ -7755,11 +7766,19 @@ fn pending_after_a_cut_equals_a_fresh_scan_of_the_bytes_after_the_last_cut() {
                 // and clears the designator wait), so the emitted bytes are
                 // the concatenation of what a fresh filter emits for each
                 // segment: the incomplete construct each cut closed is gone.
+                // Round4 FR3: a segment that ends awaiting a designator and
+                // is followed by a cut gets one ESC after its bytes.
                 let mut expected = Vec::new();
-                for (lo, hi) in [(0, first), (first, second), (second, fed.len())] {
+                for (idx, (lo, hi)) in [(0, first), (first, second), (second, fed.len())]
+                    .into_iter()
+                    .enumerate()
+                {
                     let mut seg_filter = ScrollbackWriteFilter::new();
                     let (_d, seg_out) = seg_filter.feed(&fed[lo..hi], (80, 24));
                     expected.extend_from_slice(&seg_out);
+                    if idx < 2 && seg_filter.awaiting_designator() {
+                        expected.push(0x1b);
+                    }
                 }
                 assert_eq!(
                     outcome.bytes, expected,
@@ -8056,6 +8075,7 @@ fn a_fed_offset_maps_to_the_position_just_past_it_in_chunk_coordinates() {
 
 // END round2 task0003 tests: new entry points.
 mod round3_as05;
+mod round4_designator_cut;
 
 // ── End-to-end child reap (task0001 AC-1/AC-7; TS-7, TS-8, TS-9) ──────
 //
@@ -8169,6 +8189,8 @@ mod child_reap_e2e {
         }
     }
 }
+
+mod round4_as05;
 
 // ── mux-suppressed-output-round2-fixes task0004 (FR8, finding
 //    `3eccc254dd278b33`): a tail the snapshot already carried is not

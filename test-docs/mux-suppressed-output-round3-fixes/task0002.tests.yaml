@@ -29,6 +29,7 @@ acceptance_tests:
       `designator_chains_are_one_pass_and_keep_every_byte` are in the same module and passed
       on that behavior (they pin behavior that pre-exists), so they are not listed.
   AC-2:
+    # Superseded: the cut-after-a-designator-start segment emitted as `ESC (` with nothing after it is replaced by feature-docs/mux-suppressed-output-round4-fixes/SPEC.md FR3 (one ESC follows it); split invariance itself is unchanged.
     tests:
       - mux::ipc::pty_spawn::tests::round3_write_path::round3_195916fd_write_filter_output_is_split_invariant_across_a_designator_esc
     red_confirmed: true
@@ -37,6 +38,7 @@ acceptance_tests:
       registry test failed with 'AC-2: split at 3 of [27, 40, 27, 91, 54, 110] differs from a
       single call' (the two-call result emitted all six bytes, the one-call result [27, 40]).
   AC-3:
+    # Superseded: the waiting `ESC (` / `ESC )` at a cut emitted with nothing after it (round3 SPEC as-02 / EC-2) is replaced by feature-docs/mux-suppressed-output-round4-fixes/SPEC.md FR3 (one ESC follows it).
     tests:
       - mux::ipc::pty_spawn::tests::round3_write_path::a_cut_drops_the_construct_from_its_opening_esc_on
       - mux::ipc::pty_spawn::tests::round3_write_path::a_cut_after_a_carried_designator_keeps_the_designator_esc
