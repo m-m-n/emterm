@@ -113,8 +113,18 @@ pub(in crate::mux) struct ScanOutcome {
 /// Contract (NFR5/TM-2): a single forward pass, work proportional to
 /// `window.len() + chunk.len()` (plus one pass over `excluded` per reported
 /// item); never panics.
+///
+/// Round-3 FR5: when [`first_chunk_byte_may_be_designator`] holds, no item
+/// and no tail is reported from a control sequence that starts at the chunk's
+/// first byte; constructs that start later are classified by the same rules
+/// as always. The rule can only cause misses, never add an item.
 pub(in crate::mux) fn scan(window: &[u8], chunk: &[u8], excluded: &[Range<usize>]) -> ScanOutcome {
     let s = derive_prefix_start(window);
+    // Round-3 FR5 (TM-1): in the as-05 fallback behind a trailing `ESC (` /
+    // `ESC )` the chunk's first byte may have been consumed by the client as
+    // the designator, so a control sequence starting at that byte is
+    // undecidable from the window alone.
+    let first_byte_undecided = first_chunk_byte_may_be_designator(window, s);
     let mut combined = Vec::with_capacity((window.len() - s) + chunk.len());
     combined.extend_from_slice(&window[s..]);
     let boundary = combined.len();
@@ -127,6 +137,7 @@ pub(in crate::mux) fn scan(window: &[u8], chunk: &[u8], excluded: &[Range<usize>
         .into_iter()
         .filter(|item| {
             item.range.end > boundary
+                && !(first_byte_undecided && item.range.start == boundary)
                 && !overlaps_excluded(
                     item.range.start.saturating_sub(boundary),
                     item.range.end - boundary,
@@ -134,7 +145,18 @@ pub(in crate::mux) fn scan(window: &[u8], chunk: &[u8], excluded: &[Range<usize>
                 )
         })
         .collect();
-    let tail = tail_start.map(|start| start..combined.len());
+    // A tail that is a control sequence starting at the undecided first byte
+    // is dropped with its C0-strip flag. An incomplete UTF-8 character at
+    // that byte is not a control sequence and stays: re-delivering it
+    // reproduces the client's own handling of the byte in both cases.
+    let tail_at_undecided_byte = first_byte_undecided
+        && tail_start == Some(boundary)
+        && combined.get(boundary) == Some(&0x1b);
+    let (tail, tail_strip_c0) = if tail_at_undecided_byte {
+        (None, false)
+    } else {
+        (tail_start.map(|start| start..combined.len()), tail_strip_c0)
+    };
 
     ScanOutcome {
         combined,
@@ -177,6 +199,41 @@ fn derive_prefix_start(window: &[u8]) -> usize {
     // character — in which case start the walk there so the combined scan
     // naturally re-derives the UTF-8-partial state at the boundary.
     utf8_tail_start_at_end(window).unwrap_or(window.len())
+}
+
+/// Round-3 FR5 (TM-1, review finding eaf83fe08869d5e6): whether, in the
+/// as-05 fallback, the chunk's first byte may already have been consumed by
+/// the client's parser as a charset designator.
+///
+/// The fallback applies when the window is at the retention size and holds
+/// no ESC that [`esc_may_be_designator_byte`] accepts as a restart position
+/// (`start` is then the window's end, or its trailing UTF-8 partial's lead
+/// byte). If the window's last byte is `(` / `)` and that byte is either the
+/// window's first byte or preceded by ESC, it may be a real `ESC (` / `ESC )`
+/// introducer, in which case the chunk's first byte is its designator. Whether
+/// it is depends on the parity of a designator chain that began before the
+/// window, which the window cannot decide.
+///
+/// A trailing `(` / `)` preceded by anything other than ESC is a designator
+/// byte or text, never an introducer, so it does not qualify. A window below
+/// the retention size, a window with a decidable ESC, and a trailing UTF-8
+/// partial (whose last byte is never `(` / `)`) never qualify either.
+///
+/// Reads at most the window's last two bytes (NFR5): no extra pass.
+fn first_chunk_byte_may_be_designator(window: &[u8], start: usize) -> bool {
+    if window.len() < RETAINED_WINDOW_BYTES || start != window.len() {
+        return false;
+    }
+    if !matches!(window.last(), Some(b'(' | b')')) {
+        return false;
+    }
+    // At the retention size the introducer is never the window's first byte
+    // (`None`); the arm keeps the rule reading like the designator-slot
+    // exclusion in [`esc_may_be_designator_byte`].
+    match window.len().checked_sub(2) {
+        None => true,
+        Some(before_intro) => window.get(before_intro) == Some(&0x1b),
+    }
 }
 
 /// Round-2 FR1 (TM-1): whether the ESC at `window[esc_pos]` may be the
@@ -975,5 +1032,332 @@ mod tests {
         let chunk = b"ok\x1b[3";
         assert_eq!(scan(&[], chunk, &[]).tail, Some(2..chunk.len()));
         assert_eq!(scan(&[], chunk, &[2..chunk.len()]).tail, None);
+    }
+
+    // ---- mux-suppressed-output-round3-fixes task0003 (FR5): the as-05
+    // fallback with an undecidable trailing designator introducer ----
+
+    /// A full window of `ESC (` / `ESC )` pairs that alternate between the
+    /// two introducers, cut at exactly [`RETAINED_WINDOW_BYTES`].
+    fn mixed_designator_chain_window() -> Vec<u8> {
+        (0..RETAINED_WINDOW_BYTES)
+            .map(|i| match (i % 2, (i / 2) % 2) {
+                (0, _) => ESC,
+                (_, 0) => b'(',
+                _ => b')',
+            })
+            .collect()
+    }
+
+    /// `(` at window offset 0 followed by `ESC <intro>` pairs. The window is
+    /// [`RETAINED_WINDOW_BYTES`] + 1 bytes long: at exactly the retention
+    /// size a window that starts with `(`, holds no decidable ESC and ends
+    /// in `ESC <intro>` cannot exist (the chain's ESCs would sit at odd
+    /// offsets and the last byte, at an odd offset, would be an ESC).
+    /// `derive_prefix_start` treats any window of at least the retention
+    /// size as full.
+    fn offset_zero_paren_chain_window(intro: u8) -> Vec<u8> {
+        std::iter::once(b'(')
+            .chain([ESC, intro].repeat(RETAINED_WINDOW_BYTES / 2))
+            .collect()
+    }
+
+    /// The five chunk shapes of AC-1, each with a construct (or incomplete
+    /// construct) that starts at the chunk's first byte.
+    fn construct_at_first_byte_chunks() -> Vec<(&'static str, Vec<u8>)> {
+        vec![
+            ("OSC 11 color query", b"\x1b]11;?\x07".to_vec()),
+            ("CSI 6n query", b"\x1b[6n".to_vec()),
+            (
+                "OSC 777 markdown launch",
+                b"\x1b]777;emterm;markdown;begin;id=r3\x07".to_vec(),
+            ),
+            ("incomplete CSI", b"\x1b[".to_vec()),
+            ("incomplete OSC", b"\x1b]11;?".to_vec()),
+        ]
+    }
+
+    /// A full window in ground state (no ESC at all): the scan starts at the
+    /// chunk and nothing is undecided.
+    fn ground_window() -> Vec<u8> {
+        vec![b'x'; RETAINED_WINDOW_BYTES]
+    }
+
+    /// AC-1 (FR5, TM-1): a full window with no decidable ESC that ends in
+    /// `ESC (` / `ESC )` leaves the chunk's first byte possibly consumed as a
+    /// designator, so nothing is extracted — no item and no tail — from a
+    /// construct starting at that byte. The same chunks yield an item or a
+    /// tail from a ground window (the controls), so the rule is what removes
+    /// them.
+    #[test]
+    fn round3_as05_trailing_designator_introducer_extracts_nothing_at_the_chunk_start() {
+        use crate::mux::ipc::pty_spawn::suppressed_output::build_suppressed_replacement;
+
+        let windows: Vec<(&str, Vec<u8>)> = vec![
+            ("ESC ( chain", designator_chain_window(b'(')),
+            ("ESC ) chain", designator_chain_window(b')')),
+            ("mixed chain", mixed_designator_chain_window()),
+            (
+                "( at offset 0, ESC ( chain",
+                offset_zero_paren_chain_window(b'('),
+            ),
+            (
+                "( at offset 0, ESC ) chain",
+                offset_zero_paren_chain_window(b')'),
+            ),
+        ];
+        for (chunk_label, chunk) in construct_at_first_byte_chunks() {
+            let control = scan(&ground_window(), &chunk, &[]);
+            assert!(
+                !control.items.is_empty() || control.tail.is_some(),
+                "{chunk_label}: the control scan from ground must yield an item or a tail"
+            );
+            for (window_label, window) in &windows {
+                let outcome = scan(window, &chunk, &[]);
+                assert_eq!(
+                    outcome.boundary, 0,
+                    "{window_label} / {chunk_label}: the as-05 fallback starts at the window's end"
+                );
+                assert!(
+                    outcome.items.is_empty(),
+                    "{window_label} / {chunk_label}: no item may start at the chunk's first byte, got {:?}",
+                    outcome.items
+                );
+                assert_eq!(
+                    outcome.tail, None,
+                    "{window_label} / {chunk_label}: no tail may start at the chunk's first byte"
+                );
+                assert!(
+                    build_suppressed_replacement(&chunk, &[0..chunk.len()], &[], window).is_empty(),
+                    "{window_label} / {chunk_label}: nothing is delivered for the chunk"
+                );
+            }
+        }
+    }
+
+    /// AC-1 (FR5): a construct that starts later in the chunk, after a
+    /// construct that ends inside it, is classified by the existing rules
+    /// exactly as from a ground window — only what starts at the chunk's
+    /// first byte is dropped.
+    #[test]
+    fn round3_as05_trailing_designator_introducer_keeps_constructs_that_start_later() {
+        let window = designator_chain_window(b'(');
+        let cases: Vec<(
+            &str,
+            &[u8],
+            Vec<(ScanItemKind, Range<usize>)>,
+            Option<Range<usize>>,
+        )> = vec![
+            (
+                "OSC title, then CSI query",
+                b"\x1b]2;x\x07\x1b[6n",
+                vec![(ScanItemKind::CsiQuery, 6..10)],
+                None,
+            ),
+            (
+                "CSI query, then OSC 11 query",
+                b"\x1b[6n\x1b]11;?\x07",
+                vec![(ScanItemKind::ColorQuery, 4..11)],
+                None,
+            ),
+            (
+                "ESC ESC, then OSC 11 query",
+                b"\x1b\x1b]11;?\x07",
+                vec![(ScanItemKind::ColorQuery, 1..8)],
+                None,
+            ),
+            (
+                "designator pair, then CSI query",
+                b"\x1b(A\x1b[6n",
+                vec![(ScanItemKind::CsiQuery, 3..7)],
+                None,
+            ),
+            (
+                "CSI query, then an incomplete CSI",
+                b"\x1b[6n\x1b[3",
+                vec![],
+                Some(4..7),
+            ),
+        ];
+        for (label, chunk, expected_items, expected_tail) in cases {
+            let outcome = scan(&window, chunk, &[]);
+            assert_eq!(outcome.boundary, 0, "{label}: fallback start");
+            let items: Vec<(ScanItemKind, Range<usize>)> = outcome
+                .items
+                .iter()
+                .map(|item| (item.kind, item.range.clone()))
+                .collect();
+            assert_eq!(items, expected_items, "{label}: items");
+            assert_eq!(outcome.tail, expected_tail, "{label}: tail");
+
+            // The same chunk from a ground window, minus what starts at byte 0.
+            let control = scan(&ground_window(), chunk, &[]);
+            let control_items: Vec<(ScanItemKind, Range<usize>)> = control
+                .items
+                .iter()
+                .filter(|item| item.range.start != 0)
+                .map(|item| (item.kind, item.range.clone()))
+                .collect();
+            assert_eq!(
+                items, control_items,
+                "{label}: items equal the ground scan's"
+            );
+            let control_tail = control.tail.filter(|tail| tail.start != 0);
+            assert_eq!(
+                outcome.tail, control_tail,
+                "{label}: tail equals the ground scan's"
+            );
+        }
+    }
+
+    /// AC-1 / AC-2 (FR5, unaffected case): the rule removes control sequences
+    /// that start at the chunk's first byte. An incomplete UTF-8 character is
+    /// not a control sequence, so its tail is kept at the chunk's first byte
+    /// as well as later (re-delivering it reproduces the client's handling of
+    /// the byte whether or not it was the designator).
+    #[test]
+    fn round3_as05_trailing_designator_introducer_keeps_an_incomplete_utf8_tail() {
+        let window = designator_chain_window(b'(');
+        assert_eq!(scan(&window, &[0xe4, 0xb8], &[]).tail, Some(0..2));
+        assert_eq!(
+            scan(&ground_window(), &[0xe4, 0xb8], &[]).tail,
+            Some(0..2),
+            "control: a ground window yields the same tail"
+        );
+        assert_eq!(scan(&window, b"a\xe4", &[]).tail, Some(1..2));
+    }
+
+    /// AC-2 (FR5, unaffected cases): the trailing `(` / `)` of a full
+    /// fallback window is not preceded by ESC, so it is a designator byte or
+    /// text and the scan still starts at the chunk.
+    #[test]
+    fn round3_as05_trailing_paren_not_preceded_by_esc_still_scans_from_the_chunk_start() {
+        let query = b"\x1b[6n";
+        let mut windows: Vec<(&str, Vec<u8>)> = vec![
+            ("( bytes only", vec![b'('; RETAINED_WINDOW_BYTES]),
+            (") bytes only", vec![b')'; RETAINED_WINDOW_BYTES]),
+        ];
+        for intro in [b'(', b')'] {
+            let mut window = ground_window();
+            let last = window.len() - 1;
+            window[last] = intro;
+            windows.push(("x then a trailing paren", window));
+        }
+        for (label, window) in windows {
+            let outcome = scan(&window, query, &[]);
+            assert_eq!(
+                outcome.items,
+                vec![ScanItem {
+                    kind: ScanItemKind::CsiQuery,
+                    range: 0..4
+                }],
+                "{label}: the query at the chunk start is extracted"
+            );
+        }
+    }
+
+    /// AC-2 (FR5, unaffected cases): a window that holds a decidable ESC
+    /// restarts there as before, even though it ends in `ESC (` — the walk
+    /// reproduces the client's state, so a construct at the chunk's first
+    /// byte is classified by the walk itself (here the chunk's first byte is
+    /// the designator the trailing `ESC (` awaits, so the query is not one).
+    #[test]
+    fn round3_as05_window_with_a_decidable_esc_keeps_its_results() {
+        // `ESC [ 0 m` early, then padding, then `ESC ( ESC (`: the early ESC
+        // is decidable, so the restart position is there and the trailing
+        // `ESC (` does not trigger the rule.
+        let mut prefix = vec![b'x', ESC, b'[', b'0', b'm'];
+        prefix.resize(RETAINED_WINDOW_BYTES - 4, b'y');
+        prefix.extend_from_slice(&[ESC, b'(', ESC, b'(']);
+        let ground_ending = full_window(&prefix, b'y');
+        assert_eq!(ground_ending.len(), RETAINED_WINDOW_BYTES);
+        // The walk from the decidable ESC ends in ground: a query at the
+        // chunk's first byte is extracted.
+        let outcome = scan(&ground_ending, b"\x1b]11;?\x07", &[]);
+        assert_eq!(outcome.items.len(), 1);
+        assert_eq!(outcome.items[0].kind, ScanItemKind::ColorQuery);
+
+        // Same window with a single trailing `ESC (`: the walk ends awaiting
+        // the designator, which is the chunk's first byte: no query there.
+        let mut awaiting = full_window(&[b'x', ESC, b'[', b'0', b'm'], b'y');
+        let last = awaiting.len();
+        awaiting[last - 2] = ESC;
+        awaiting[last - 1] = b'(';
+        let outcome = scan(&awaiting, b"\x1b]11;?\x07", &[]);
+        assert!(
+            outcome.items.is_empty(),
+            "the chunk's ESC is the designator: {:?}",
+            outcome.items
+        );
+    }
+
+    /// AC-2 (FR5, unaffected cases): a window shorter than the retention
+    /// size is walked from its start, so a trailing `ESC (` that is itself
+    /// preceded by a designator-slot ESC leaves the walk in ground and a
+    /// query at the chunk's first byte is extracted.
+    #[test]
+    fn round3_as05_short_window_is_walked_from_its_start() {
+        let mut window = vec![b'x'; RETAINED_WINDOW_BYTES - 5];
+        window.extend_from_slice(&[ESC, b'(', ESC, b'(']);
+        assert_eq!(window.len(), RETAINED_WINDOW_BYTES - 1);
+        let outcome = scan(&window, b"\x1b]11;?\x07", &[]);
+        assert_eq!(outcome.items.len(), 1);
+        assert_eq!(outcome.items[0].kind, ScanItemKind::ColorQuery);
+        assert_eq!(outcome.items[0].range.start, outcome.boundary);
+    }
+
+    /// AC-4 (TM-2, NFR5, TS-9): degenerate full windows combined with
+    /// adversarial chunks finish within the budget and never panic, through
+    /// the scan and through the replacement builder.
+    #[test]
+    fn round3_as05_degenerate_windows_with_adversarial_chunks_finish_within_budget() {
+        use crate::mux::ipc::pty_spawn::suppressed_output::build_suppressed_replacement;
+
+        let mut paren_then_text = vec![b'('];
+        paren_then_text.resize(RETAINED_WINDOW_BYTES, b'x');
+        let windows: Vec<(&str, Vec<u8>)> = vec![
+            ("all (", vec![b'('; RETAINED_WINDOW_BYTES]),
+            ("all ESC", vec![ESC; RETAINED_WINDOW_BYTES]),
+            ("ESC ( chain", designator_chain_window(b'(')),
+            ("ESC ) chain", designator_chain_window(b')')),
+            ("mixed chain", mixed_designator_chain_window()),
+            ("( then non-ESC bytes", paren_then_text),
+            (
+                "( at offset 0, ESC ( chain",
+                offset_zero_paren_chain_window(b'('),
+            ),
+        ];
+        const BIG: usize = 64 * 1024;
+        let mut long_csi = vec![ESC, b'['];
+        long_csi.resize(BIG, b'1');
+        let mut long_osc = vec![ESC, b']'];
+        long_osc.resize(BIG, b'x');
+        let mut long_osc_terminated = long_osc.clone();
+        long_osc_terminated.push(0x07);
+        let esc_paren_chain = [ESC, b'('].repeat(BIG / 2);
+        let chunks: Vec<(&str, Vec<u8>)> = vec![
+            ("long CSI", long_csi),
+            ("long OSC", long_osc),
+            ("long terminated OSC", long_osc_terminated),
+            ("64 KiB ESC ( chain", esc_paren_chain),
+        ];
+
+        let start = std::time::Instant::now();
+        for (window_label, window) in &windows {
+            for (chunk_label, chunk) in &chunks {
+                let outcome = scan(window, chunk, &[]);
+                assert_eq!(
+                    outcome.combined.len() - outcome.boundary,
+                    chunk.len(),
+                    "{window_label} / {chunk_label}"
+                );
+                let _ = build_suppressed_replacement(chunk, &[0..chunk.len()], &[], window);
+            }
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "degenerate windows with adversarial chunks must finish within the budget; took {:?}",
+            start.elapsed()
+        );
     }
 }
