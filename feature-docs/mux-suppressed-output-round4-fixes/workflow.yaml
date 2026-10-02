@@ -1,0 +1,191 @@
+schema_version: 1
+feature: mux-suppressed-output-round4-fixes
+created: '2026-10-02'
+base_branch: main
+goal: |
+  # mux: 抑止チャンクの副作用処理の round3-fixes review で残った medium 指摘 3 件の対応
+
+  Notion: https://www.notion.so/3ed3509ec8ee81609e98dd3bf8dd7ab5
+
+  ## 現象 (必須)
+  mux-suppressed-output-round3-fixes（PR https://github.com/m-m-n/emterm/pull/112 ）の review round 1 で、medium 指摘 3 件が `unresolved` のまま残っている。いずれもスナップショット再生後にクライアントが開始していない問い合わせ（OSC 11 色照会など）が成立しうる。
+  - `3e2024dce619ed9f` カット直前の未完了構文を落とす切り詰め（`run.truncate(scan.boundary)`）が、その開始 ESC で中断済みだった直前の文字列や ESC ESC の先行 ESC まで落とす。例: `ESC]11;? ESC]0;x` の直後に切り替えシーケンス → リングに `ESC]11;?` が残り、再生後の BEL で OSC 11 色照会が成立する（round3 の差分で生じた退行）
+  - `989ec5c588abce06` as-05 フォールバックの指定文字（designator）不確定性をチャンク先頭バイトにしか適用せず、チャンク内の `ESC (` 連鎖の後ろでクエリを捏造する。例: `ESC ( ESC ( ESC ]11;? BEL`（FR5 未達）
+  - `48caec6f5b0b5810` カット時に指定文字待ちの `ESC (` / `ESC )` が指定文字無しでリングに残り、再生時に後続バイトを指定文字として消費してパースがずれる。例: `X ESC ( ESC[?1049h ESC[?1049l ESC ( ESC ]11;? BEL` → リングで OSC 11 照会成立（round3 以前からの挙動。直すには round3 SPEC の as-02/EC-2 の見直しが要る）
+  ## 再現手順 (必須)
+  1. mux の pane に上記の各例のバイト列を含む出力を流す
+  2. そのチャンクの途中で snapshot 取得（タブ切り替え / reattach）が走り、チャンクが抑止される
+  3. 再生後に後続の BEL / `\` 等で、クライアントが開始していない問い合わせが成立する
+  ## 期待する挙動 (必須)
+  抑止したチャンクとリングへの書き込みが、ライブのクライアントと同じ解析状態を保ち、クライアントが開始していない問い合わせを再生や抽出で成立させない。
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  - [ ] 各 stable_id について、対応済みか・対応不要かを判断して記録する
+  ## 該当箇所 (任意)
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:333`（3e2024dce619ed9f）
+  - `src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs:138`（989ec5c588abce06）
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:319`（48caec6f5b0b5810）
+  - 詳細: ブランチ `em-workflow/mux-suppressed-output-round3-fixes/integration` の `feature-docs/mux-suppressed-output-round3-fixes/reviews/round1.yaml`
+  ## 実害・発生条件 (任意)
+  snapshot 取得と特定のバイト列を含む 1 チャンクが重なったときにだけ起きる。
+parent_branch: em-workflow/mux-suppressed-output-round4-fixes/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.01
+      '1': 0.38
+      '2': 0.6
+      '3': 0.01
+    description_plus_code:
+      '0': 0.0
+      '1': 0.12
+      '2': 0.88
+      '3': 0.0
+  at: '2026-10-02T13:12:30+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: f09f96882337b826612510927250a8aaaa495bf9
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'Rust-only change inside the mux daemon; no UI, child WebView or visual surface is touched (batch: decide_autonomously)'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: 31538ac27867c6bd6426fdba4d3ce05c038ad483
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Chain-aware closing at a cut (3e2024dce619ed9f)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: 'As-05 fallback: designator undecidability carried through the chunk (989ec5c588abce06)'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Awaiting designator at a cut writes the consumed designator ESC (48caec6f5b0b5810)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: 'Conditional: an in-progress CSI at a cut (adjacent path)'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: 'Conditional: a switch sequence in the designator slot misread by extraction (adjacent path)'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Record the decisions
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Compatibility
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: Lock discipline
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Reader hot-path load
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Security (TM-1)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: Security (TM-2)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: Build and platforms
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
