@@ -5,7 +5,7 @@ status: in_progress
 generation: 1
 base_revision: 52d6287be3af3127cc4e960ecaf2bf40a5e99b5b
 last_input_digest: sha256:72e36fa94040a92d46f7d92b88e67b101eeebeccf670af53d6a8b09c246cd6dc
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -46,7 +46,16 @@ worker_runs:
 - request_id: create-spec-run-0002
   status: completed
   input_digest: sha256:72e36fa94040a92d46f7d92b88e67b101eeebeccf670af53d6a8b09c246cd6dc
-artifacts: []
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:72e36fa94040a92d46f7d92b88e67b101eeebeccf670af53d6a8b09c246cd6dc
+artifacts:
+- path: feature-docs/mux-cut-csi-post-strip-closure/REQUIREMENTS.md
+  sha256: sha256:15192c9a097bc9a43dddb48ada84422480fd7c2b27fd22e083e57fde7476ef20
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-cut-csi-post-strip-closure/SPEC.md
+  sha256: sha256:d6b1340dc12b2c6f98083a8047e4f2b3241ef70668c5717ec2ccbe871fee9edc
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
