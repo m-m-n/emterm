@@ -1,7 +1,15 @@
 task_id: task0004
+# From step 4a, before any change: 4018 passed, 0 failed. One earlier run, made while a second
+# cargo process was building in the same target directory, saw the reader-harness timeout
+# `visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once` ('the reader must
+# reach P2 ... Timeout'); it passed in the clean re-run, so it is not listed.
+# After the first merge attempt hit a conflict in write_filter.rs and the parent side was
+# adopted (task0002 and task0003 had merged), the adopted tree alone does not compile (this
+# task's tests name `CSI_CLOSING`), so the refreshed baseline could not be run separately; the
+# run after the re-implementation has no failures, which includes every test the parent brought.
 baseline_failures: []
-# Re-executed after the implementation: `cargo test --lib` finished with 4036 passed,
-# 0 failed, 3 ignored (the 4018 of the baseline plus the 18 tests of round4_cut_csi.rs).
+# Re-executed after the re-implementation on the updated parent: `cargo test --lib` finished
+# with 4064 passed, 0 failed, 3 ignored.
 final_failures: []
 acceptance_tests:
   AC-1:
