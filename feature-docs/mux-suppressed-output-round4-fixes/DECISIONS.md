@@ -6,9 +6,9 @@ Decisions for the three medium findings left unresolved in review round 1 of mux
 
 | stable_id | requirement | verdict | rationale | regression test |
 |-----------|-------------|---------|-----------|-----------------|
-| 3e2024dce619ed9f | FR1 | pending (task0001) | pending (task0001) | pending (task0001) |
-| 989ec5c588abce06 | FR2 | pending (task0003) | pending (task0003) | pending (task0003) |
-| 48caec6f5b0b5810 | FR3 | pending (task0002) | pending (task0002) | pending (task0002) |
+| 3e2024dce619ed9f | FR1 | resolved | The write filter held only the last construct of a chain, so an OSC/DCS/APC string aborted by the ESC that opens the next construct, and the superseded first ESC of ESC ESC, were written to the ring when the read that opened the chain was fed. The live client's ESC (the removed switch's) had closed them, so a later BEL / ST in the ring completed what the client never completed. `pending` now holds the whole chain from its head, on normal drain and at a cut; a carried run resumes its scan at the stored start of the chain's last construct; the carried completion is defined from that construct's start; the overflow flush clears the chain state; the CSI state is captured at the chain head, so `ESC[6 ESC ESC` is dropped from its first ESC and closed with the DEL at a cut (FR4 interplay). The suppressed-chunk tail re-delivery needed no change (its excluded pieces derive from `pending`'s length). | `mux::ipc::pty_spawn::tests::round4_chain::round4_3e2024dc_a_chain_closed_by_a_cut_is_never_completed_by_a_later_read` |
+| 989ec5c588abce06 | FR2 | resolved | In the as-05 fallback the client-parity scan reads the chunk with its first byte consumed as the designator and with it parsed from ground. It keeps only the items with the same range and kind and the tail with the same start (the end-of-view UTF-8 check is evaluated once on the shared view). An `ESC (` chain inside the chunk no longer yields a query or tail. Misses are accepted. | `mux::ipc::pty_spawn::tests::round4_as05::round4_989ec5c5_as05_fallback_never_fabricates_after_a_designator_chain_inside_the_chunk` |
+| 48caec6f5b0b5810 | FR3 | resolved | A cut that closes the filter while the client awaits a charset designator writes one ESC after the bytes already written, standing for the switch ESC the client consumed as the designator. This applies on every path: a cut inside the same call, a cut at an empty segment (including the reader's fallback closing), an overflow flush followed by a cut, and the reader fallback. Replay no longer takes a later byte as the designator, so no query is fabricated. Nothing extra is written for a complete designation, a designator consumed by the segment's first byte, or a run that ends in an open string. This supersedes round3 SPEC as-02 and EC-2. | `mux::ipc::pty_spawn::tests::round4_designator_cut::round4_48caec6f_awaiting_designator_at_a_cut_writes_the_consumed_esc` |
 
 ## Adjacent paths
 
@@ -50,15 +50,34 @@ Residual: an `h` form of 47 or 1049 in the designator slot that nothing closes. 
 
 ### FR1
 
-pending (task0001)
+| old name | new name | file | reason |
+|----------|----------|------|--------|
+| `write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail` | `write_filter_holds_an_esc_aborted_chain_from_its_head` | `src-tauri/src/mux/ipc/pty_spawn/tests.rs` | FR1: an aborted string whose aborting ESC opens another construct is a link of the held chain, not written until the chain settles |
+| `write_filter_double_esc_treats_the_second_esc_as_the_introducer` | unchanged | `src-tauri/src/mux/ipc/pty_spawn/tests.rs` | FR1: the superseded first ESC is held with the chain that follows it |
+| `write_filter_boundaries_are_split_position_independent_and_match_term_core` | unchanged | `src-tauri/src/mux/ipc/pty_spawn/tests.rs` | FR1: the allowed `pending` shapes are widened to a whole chain, and two corpus items are added |
+| `write_filter_hostile_aborted_introducers_stream_is_linear_and_holds_only_the_final_pair` | `write_filter_hostile_aborted_introducers_stream_is_linear_and_held_as_one_chain` | `src-tauri/src/mux/ipc/pty_spawn/tests.rs` | FR1: the whole aborted-introducer stream below the cap is one held chain |
+| `every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source` | unchanged | `src-tauri/src/mux/ipc/pty_spawn/tests.rs` | FR1: follows the renamed D7 registry names through `D7_RENAMED_REGISTRY_TESTS` |
+
+Predecessor `test-docs/` records updated: `test-docs/mux-suppressed-output-fixes/task0002.tests.yaml` (new names for the renamed tests; supersede notes on AC-2, AC-3 and AC-6; `red_reason` unchanged).
+
+With FR1 the CSI state is captured at the chain head, so the FR4 closing is also written after a cut that dropped a chain.
 
 ### FR2
 
-pending (task0003)
+None. No existing test changed its expectation; the `round3_as05_*` and client-parity-scan tests pass unchanged.
+
+Predecessor `test-docs/` records updated: None.
 
 ### FR3
 
-pending (task0002)
+| old name | new name | file | reason |
+|----------|----------|------|--------|
+| `a_cut_clears_the_awaiting_designator_flag` | unchanged | `src-tauri/src/mux/ipc/pty_spawn/tests.rs` | FR3: one ESC now follows the waiting `ESC (` at a cut |
+| `pending_after_a_cut_equals_a_fresh_scan_of_the_bytes_after_the_last_cut` | unchanged | `src-tauri/src/mux/ipc/pty_spawn/tests.rs` | FR3: the emitted-bytes expectation gains the closing ESC; the pending expectation is unchanged |
+| `a_cut_drops_the_construct_from_its_opening_esc_on` | unchanged | `src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs` | FR3: the EC-2 parts expect the closing ESC after the waiting `ESC (` |
+| `round3_195916fd_write_filter_output_is_split_invariant_across_a_designator_esc` | unchanged | `src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs` | FR3: the final cut assertion changes from `ESC (` to `ESC ( ESC`; split invariance itself is unchanged |
+
+Predecessor `test-docs/` records updated: `test-docs/mux-suppressed-output-round2-fixes/task0003.tests.yaml` (AC-2) and `test-docs/mux-suppressed-output-round3-fixes/task0002.tests.yaml` (AC-2, AC-3), each with a supersede note naming round4 SPEC FR3; names kept, `red_reason` unchanged.
 
 ### FR4
 
