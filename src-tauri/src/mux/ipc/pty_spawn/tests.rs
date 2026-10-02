@@ -8164,6 +8164,8 @@ mod child_reap_e2e {
     }
 }
 
+mod round4_as05;
+
 // ── mux-suppressed-output-round2-fixes task0004 (FR8, finding
 //    `3eccc254dd278b33`): a tail the snapshot already carried is not
 //    re-sent ────────────────────────────────────────────────────────────

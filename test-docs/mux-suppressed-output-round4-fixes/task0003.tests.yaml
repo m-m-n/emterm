@@ -1,0 +1,107 @@
+task_id: task0003
+baseline_failures: []          # full `--lib` run in the untouched worktree before any edit: 4018 passed, 0 failed, 3 ignored
+final_failures: []             # full `--lib` re-run after implementation: 4029 passed (4018 + 11 new), 0 failed, 3 ignored; `cargo check` passes with default features and with --no-default-features
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_989ec5c5_as05_fallback_never_fabricates_after_a_designator_chain_inside_the_chunk
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_scan_reports_nothing_behind_a_designator_chain_in_the_chunk
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_intersection_never_reports_more_than_the_true_parse_answers
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_even_chain_never_answers_more_than_the_reference
+    red_confirmed: true
+    red_reason: >-
+      Run against the pre-change scan. The registry test failed with `window
+      ESC ( chain, chunk ESC ( chain: suppressed query: response bytes differ
+      from the reference left: [27, 93, 49, 49, 59, 114, 103, 98, 58, 48, 48,
+      48, 48, 47, ...] right: []` (the fabricated OSC 11 query was delivered and
+      the client answered it). The scan-level test failed with `no item may be
+      reported for the chunk, got [ScanItem { kind: ColorQuery, range: 4..11 }]`.
+      The token-sequence oracle failed with `odd chain, chunk
+      "\u{1b}(\u{1b}(\u{1b}[c": the items draw more DA1 responses than the raw
+      stream`. The open-CSI half of the registry test sits after the query half,
+      so on the pre-change code its first failure was hidden; it was observed
+      separately with a one-off probe of the same reads (chunks: 129 `ESC (`,
+      `ESC ( ESC ( ESC [`, `6n`) that was removed afterwards: the pre-change
+      reader re-delivered the 2-byte `ESC [` tail and `6n` drew the DSR
+      `[27, 91, 49, 59, 54, 55, 82]` while the reference answered nothing. The
+      even-chain test is the accepted miss: it asserts only that no response is
+      fabricated, so it passed before the change and is not a red.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_items_and_tails_both_readings_report_identically_are_kept
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_plain_first_byte_then_a_color_query_is_still_delivered_once
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_trailing_designator_introducer_keeps_constructs_that_start_later
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_trailing_designator_introducer_keeps_an_incomplete_utf8_tail
+    red_confirmed: false
+    red_reason: >-
+      These pin what the two readings agree on: a plain first byte followed by a
+      query, a designator pair or ESC ESC before a query, an incomplete UTF-8
+      character at the end of the view, and the control behind a ground window.
+      The behavior pre-existed (the old rule kept all of it) and the new tests
+      passed against the pre-change scan, so no red state occurred; the
+      intersection only removes results, and these cases show it removes none
+      of them. The existing round3_as05 tests run unchanged and are not edited.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_outside_the_fallback_the_scan_equals_the_pre_change_results
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_trailing_paren_not_preceded_by_esc_still_scans_from_the_chunk_start
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_window_with_a_decidable_esc_keeps_its_results
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_short_window_is_walked_from_its_start
+      - mux::ipc::pty_spawn::tests::round3_as05::round3_as05_trailing_paren_not_preceded_by_esc_still_delivers_the_query
+    red_confirmed: false
+    red_reason: >-
+      The corpus test (12 windows outside the fallback x 15 chunks, 180 fixed
+      expectations) was captured from the parent revision's scan and then
+      compared with the changed scan, so it passed against the pre-change code
+      and no red state occurred; it detects any change of result outside the
+      fallback and asserts exactly one reading per pair. The existing
+      round3_as05_* and client-parity-scan tests pass unchanged.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_the_second_reading_runs_only_under_the_fallback_condition
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_long_chains_in_the_window_and_the_chunk_finish_within_budget
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_fallback_with_excluded_pieces_reports_no_tail_and_filters_items
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round3_as05_degenerate_windows_with_adversarial_chunks_finish_within_budget
+    red_confirmed: true
+    red_reason: >-
+      Run against the pre-change scan, with `scan_with_reading_count` added as a
+      refactor that reports one reading. The reading-count test failed with
+      `ESC ( chain / empty chunk: the fallback reads the chunk two ways left: 1
+      right: 2`, the long-chain test with `ESC ( chain / ESC ( chain, even
+      length left: 1 right: 2`, and the excluded-pieces test with `the query
+      behind the designator chain is not reported even though it lies outside
+      the piece`. The no-panic and time-budget parts (64 KiB chains, odd and
+      even, a long CSI and OSC, empty and one-byte chunks) passed before the
+      change; the existing round3_as05 degenerate-window test covers the
+      single-reading budget and is unchanged, no red state occurred for it.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_the_scan_takes_no_lock_and_adds_no_blocking_wait
+    red_confirmed: false
+    red_reason: >-
+      The property held before the change and still holds (the scan took no lock
+      and never waited), so the source check passed against the pre-change code
+      and no red state occurred. The unchanged call sites in
+      suppressed_output.rs are verified by diff inspection: the change set does
+      not touch that file.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not done in this task. The criterion is a document, the FR2 row and the
+      FR2 behavior-changing tests subsection of
+      feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md, and the
+      implementer must not modify feature-docs/** in any worktree, so the file
+      was left untouched and no executable check or red state exists. Searched
+      for existing tests that read this document by path and by basename
+      (DECISIONS.md): the only document-contract checks read a predecessor
+      feature's DECISIONS.md, none reads this feature's. The text for the two
+      regions is handed to the orchestrator in the task report.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The outcome is the full `--lib` suite (4029 passed, 0 failed) and the two
+      `cargo check` runs (default features and --no-default-features), all
+      passing after the change; the suite and both checks passed before it too
+      (clean 4018-test baseline), so no red state occurred for this criterion.
