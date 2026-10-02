@@ -16,6 +16,7 @@
 //! The two exclusions are never held at the same time (IMPLEMENTATION.md
 //! Conventions).
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex as StdMutex, MutexGuard};
 
 use tokio::sync::mpsc;
@@ -35,7 +36,13 @@ pub struct OutputCapture {
     last_captured: StdMutex<u64>,
     /// The boundary exclusion, guarding the suppression boundary record.
     boundary: StdMutex<Vec<BoundaryEntry>>,
-    /// Test-only reader pause hooks (P1/P2/P3). Zero cost in non-test
+    /// Source of boundary-record generations (mux-suppressed-output-round3-fixes
+    /// task0004, FR6/FR7). A value is handed out only while the boundary
+    /// exclusion is held, so values increase in the order the records are
+    /// made and are never reused — not within one destination's entry and
+    /// not across destinations. 0 is never handed out.
+    next_generation: AtomicU64,
+    /// Test-only reader pause hooks (P1/P2/P3/P4). Zero cost in non-test
     /// builds.
     #[cfg(test)]
     pub p1: PauseHook,
@@ -43,6 +50,8 @@ pub struct OutputCapture {
     pub p2: PauseHook,
     #[cfg(test)]
     pub p3: PauseHook,
+    #[cfg(test)]
+    pub p4: PauseHook,
 }
 
 struct BoundaryEntry {
@@ -52,16 +61,26 @@ struct BoundaryEntry {
     /// the snapshot recorded at `boundary` left the client parser in, or
     /// `None` (mux-suppressed-output-round2-fixes task0004, FR8).
     construct: Option<Vec<u8>>,
+    /// Which record the entry's current values come from
+    /// (mux-suppressed-output-round3-fixes task0004, FR6/FR7): a fresh value
+    /// is stored whenever the boundary and construct are (re)written, so two
+    /// reads of the entry that return the same generation saw the same
+    /// record.
+    generation: u64,
 }
 
 /// The answer of a covered query: the chunk number is covered by the
 /// destination's recorded boundary, and `construct` is the incomplete
 /// construct (bytes) the covering snapshot left the client parser in —
 /// present only when the chunk number equals the recorded boundary
-/// (mux-suppressed-output-round2-fixes task0004, FR8).
+/// (mux-suppressed-output-round2-fixes task0004, FR8). `generation`
+/// identifies the record the answer comes from
+/// (mux-suppressed-output-round3-fixes task0004, FR6): the same value across
+/// two queries means no record changed the entry in between.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoveredBoundary {
     pub construct: Option<Vec<u8>>,
+    pub generation: u64,
 }
 
 impl OutputCapture {
@@ -69,12 +88,15 @@ impl OutputCapture {
         Self {
             last_captured: StdMutex::new(0),
             boundary: StdMutex::new(Vec::new()),
+            next_generation: AtomicU64::new(0),
             #[cfg(test)]
             p1: PauseHook::new(),
             #[cfg(test)]
             p2: PauseHook::new(),
             #[cfg(test)]
             p3: PauseHook::new(),
+            #[cfg(test)]
+            p4: PauseHook::new(),
         }
     }
 
@@ -110,10 +132,10 @@ impl OutputCapture {
         (result, *last)
     }
 
-    /// Record `boundary` for `sender`, keeping the maximum of the old and
-    /// new values (never lowering an existing entry). Every call first
-    /// prunes closed senders (THREAT-MODEL TM-4), so the record holds
-    /// entries only for live senders.
+    /// Record `boundary` for `sender`: the larger boundary is kept (an
+    /// existing entry is never lowered) and, at an equal boundary, the later
+    /// record wins. Every call first prunes closed senders (THREAT-MODEL
+    /// TM-4), so the record holds entries only for live senders.
     pub fn record_boundary(&self, sender: &mpsc::Sender<PtyOutputChunk>, boundary: u64) {
         self.record_boundary_with_construct(sender, boundary, None);
     }
@@ -128,7 +150,13 @@ impl OutputCapture {
     ) {
         let mut entries = self.boundary.lock().unwrap();
         prune_closed(&mut entries);
-        upsert_max(&mut entries, sender, boundary, construct);
+        upsert_latest(
+            &mut entries,
+            &self.next_generation,
+            sender,
+            boundary,
+            construct,
+        );
     }
 
     /// Whether `number` is covered by a boundary already recorded for
@@ -166,6 +194,7 @@ impl OutputCapture {
     pub fn hold_boundary(&self) -> BoundaryGuard<'_> {
         BoundaryGuard {
             entries: self.boundary.lock().unwrap(),
+            next_generation: &self.next_generation,
         }
     }
 }
@@ -227,6 +256,7 @@ impl OutputCapture {
 /// A held boundary exclusion (see [`OutputCapture::hold_boundary`]).
 pub struct BoundaryGuard<'a> {
     entries: MutexGuard<'a, Vec<BoundaryEntry>>,
+    next_generation: &'a AtomicU64,
 }
 
 impl BoundaryGuard<'_> {
@@ -262,7 +292,13 @@ impl BoundaryGuard<'_> {
         construct: Option<Vec<u8>>,
     ) {
         prune_closed(&mut self.entries);
-        upsert_max(&mut self.entries, sender, boundary, construct);
+        upsert_latest(
+            &mut self.entries,
+            self.next_generation,
+            sender,
+            boundary,
+            construct,
+        );
     }
 }
 
@@ -284,6 +320,7 @@ fn cover(
             } else {
                 None
             },
+            generation: e.generation,
         })
 }
 
@@ -291,33 +328,42 @@ fn prune_closed(entries: &mut Vec<BoundaryEntry>) {
     entries.retain(|e| !e.sender.is_closed());
 }
 
-/// Record `(boundary, construct)` for `sender`:
-/// - no entry yet: insert;
-/// - higher boundary: replaces both values;
-/// - equal boundary: keeps the construct when identical, otherwise sets it
-///   to none (conflicting information falls back to the pre-feature
-///   re-send);
-/// - lower boundary: leaves the entry unchanged.
-fn upsert_max(
+/// Record `(boundary, construct)` for `sender`; the caller holds the boundary
+/// exclusion:
+/// - no entry yet: insert, with a new generation;
+/// - higher boundary: replaces boundary and construct (none included), with a
+///   new generation;
+/// - equal boundary: the later record wins — its construct (none included)
+///   replaces the stored one, with a new generation;
+/// - lower boundary: leaves the entry unchanged, generation included.
+fn upsert_latest(
     entries: &mut Vec<BoundaryEntry>,
+    next_generation: &AtomicU64,
     sender: &mpsc::Sender<PtyOutputChunk>,
     boundary: u64,
     construct: Option<Vec<u8>>,
 ) {
     if let Some(existing) = entries.iter_mut().find(|e| e.sender.same_channel(sender)) {
-        if boundary > existing.boundary {
+        if boundary >= existing.boundary {
             existing.boundary = boundary;
             existing.construct = construct;
-        } else if boundary == existing.boundary && existing.construct != construct {
-            existing.construct = None;
+            existing.generation = new_generation(next_generation);
         }
     } else {
         entries.push(BoundaryEntry {
             sender: sender.clone(),
             boundary,
             construct,
+            generation: new_generation(next_generation),
         });
     }
+}
+
+/// The next generation value. Only called under the boundary exclusion, so
+/// the values follow the order of the records; `Relaxed` suffices because the
+/// exclusion itself orders every read and write of a stored generation.
+fn new_generation(counter: &AtomicU64) -> u64 {
+    counter.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 /// Test-only rendezvous point letting a test pause the PTY reader thread at
