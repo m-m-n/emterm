@@ -1,18 +1,81 @@
 schema_version: 1
 feature: mux-suppressed-output-round4-fixes
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: c5301884439699257ebc26a91a1d0d5bca693b42
 last_input_digest: sha256:b9a723984345d15f2364ffad334f6acb2ffed47115f34a5874ad48d4b65b50be
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-02T13:30:00+09:00'
+    questions:
+    - question_id: requirement.fr1.cross-call-chain
+      status: answered
+    - question_id: requirement.fr3.awaiting-designator-at-cut
+      status: answered
+    - question_id: requirement.scope.adjacent-gaps
+      status: answered
+    - question_id: design-step.recommendation
+      status: answered
+answers:
+  requirement.fr1.cross-call-chain:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-02T13:40:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - hold-chain
+    freeform: null
+    normalized_answer: FR1 は、最後の未完構文の直前にある中断済み文字列と ESC ESC の先行 ESC の連鎖も pending に保持し、カット（および FR4 フォールバックの閉じ）では連鎖の先頭から落とすことで満たす。読み取りをまたぐ経路も直す。pending
+      の事後条件を改め、carried-over 完了の報告と suppressed_output の末尾再配送を合わせる。連鎖の先頭と未完構文の開始位置を分けて持つ。512 KiB 上限超過経路での解析状態も定義する。終端は足さない。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); Codex (codex harness, 1 turn)
+      consulted; Opus escalation: not run; options: hold-chain [chosen] / within-run / neutral-close [not chosen]; key points:
+      within-run は write_filter.rs:355 が通常読取りで連鎖の先頭を書くため読取りをまたぐ再現が残る。単独 ESC は term_core で Escape/OscEscape に入り中立にならないので neutral-close
+      は不可。注意: CarriedCompletion と末尾再配送、上限超過経路の扱いを合わせて改める'
+  requirement.fr3.awaiting-designator-at-cut:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-02T13:40:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - append-esc
+    freeform: null
+    normalized_answer: FR3 は、カット時と FR4 フォールバックの閉じで指定文字待ち（ESC ( / ESC )）のときに限り、リングに ESC（0x1B）を 1 バイト書くことで満たす。同一呼出し・前の読取りで出力済み（空
+      pending）・上限超過・mod.rs のフォールバックの全経路で同じ規則にする。round3 as-02/EC-2 を改め、それを固定する既存テストの期待値を変える。検証は末尾判定だけでなく term_core の後続解析と応答の比較で行う。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); Codex (codex harness, 1 turn)
+      consulted; Opus escalation: not run; options: append-esc [chosen] / drop-or-append / no-change [not chosen]; key points:
+      term_core escape.rs は指定文字を無条件に消費して Ground に戻るため ESC 追加でライブと同じ消費になる。drop は文字集合指定が失われ、no-change は完了の定義を満たさない。ESC 追加は指定文字待ちの場合に限る'
+  requirement.scope.adjacent-gaps:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-02T13:40:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - include-adjacent
+    freeform: null
+    normalized_answer: カット直前に進行中の CSI（ESC[6 + 切替 + n）と、ESC ( 直後の切替シーケンスの誤抽出の 2 経路も create-plan で確かめ、term_core を使う回帰試験で起きると確認できたものはこの機能で直す。3
+      件の stable_id の判定とは別に記録する。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); Codex (codex harness, 1 turn)
+      consulted; Opus escalation: not run; options: include-adjacent [chosen] / three-findings-only [not chosen]; key points:
+      CSI 経路は write_filter.rs:556 が ESC [ を追跡せず ESC[6 がリングに残り次の n で DSR が成立すると静的に確認できる。指定文字経路も term_core と extract_main_buffer_bytes
+      の判定が食い違う。どちらもタスクの期待する挙動（解析状態の一致）に直接関係する。analyst の推奨（three-findings-only）とは異なる判断'
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-02T13:40:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step は推奨どおり skip（Rust 内部のみの変更で UI に触れない）
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:b9a723984345d15f2364ffad334f6acb2ffed47115f34a5874ad48d4b65b50be
-  output_digest: null
+  output_digest: sha256:4962678d18fcaa499836fb57ce7f8b6f6072c125baed2fa8ccb8bfeed5d34ae6
 artifacts: []
 patches: []
 progress_fingerprint: null
