@@ -140,6 +140,97 @@ pub(in crate::mux) fn identify_osc(osc: &RecoveredOsc) -> OscIdentity {
     }
 }
 
+/// Identify an OSC body without copying it and without validating it as
+/// UTF-8 (round3 FR8).
+///
+/// Returns exactly what `identify_osc(&recover_osc(body))` returns for the
+/// same `body`, for every input — the pair stays as the reference for the
+/// delivery side and as the test oracle. This entry is for the write path,
+/// where a body is identified for every OSC the shell emits: it makes no heap
+/// allocation, takes one forward pass bounded by `body`, and cannot panic.
+///
+/// The data view that `recover_osc` would build is never materialized. It is
+/// the non-digit bytes before the first `;` (in order, so it can be
+/// non-contiguous when digits are interleaved) followed by the bytes after
+/// the first `;`, and it is walked lazily as an iterator over the borrowed
+/// body.
+///
+/// Why comparing raw bytes agrees with the reference's comparison of the
+/// lossily decoded string: every token matched below (`emterm;`, the kinds,
+/// `emterm-md`) is ASCII. Lossy decoding replaces invalid bytes by U+FFFD,
+/// which is never ASCII, and never absorbs a valid ASCII byte, so an
+/// invalid byte inside a token matches nothing on either side.
+pub(in crate::mux) fn osc_body_identity(body: &[u8]) -> OscIdentity {
+    // The OSC number: base-10 digits before the first `;`. Non-digit bytes
+    // there belong to the data view. Above the u16 range `recover_osc`
+    // yields no number, and the accumulation only grows, so stop at once.
+    let mut acc: u32 = 0;
+    let mut head_len = body.len();
+    for (i, &b) in body.iter().enumerate() {
+        if b.is_ascii_digit() {
+            acc = acc.saturating_mul(10).saturating_add(u32::from(b - b'0'));
+            if acc > u32::from(u16::MAX) {
+                return OscIdentity::NotIdentified;
+            }
+        } else if b == b';' {
+            head_len = i;
+            break;
+        }
+    }
+    let Ok(number) = u16::try_from(acc) else {
+        return OscIdentity::NotIdentified;
+    };
+    if number != OSC_NUMBER_EMTERM && number != OSC_NUMBER_MARKDOWN {
+        return OscIdentity::NotIdentified;
+    }
+
+    // The borrowed data view. `head_len <= body.len()`, so the split cannot
+    // fail; the first `;` (at `tail[0]`, when there is one) is dropped.
+    let (head, tail) = body.split_at(head_len);
+    let tail = tail.get(1..).unwrap_or_default();
+    let mut view = head
+        .iter()
+        .copied()
+        .filter(|b| !b.is_ascii_digit())
+        .chain(tail.iter().copied());
+
+    if number == OSC_NUMBER_EMTERM {
+        if !consume_literal(&mut view, OSC_777_PAYLOAD_PREFIX) {
+            return OscIdentity::NotIdentified;
+        }
+        // The kind runs up to the next `;`, or to the end of the view.
+        let kind = view.take_while(|&b| b != b';');
+        if kind.clone().eq(AGENT_STATUS_OSC_KIND.bytes()) {
+            return OscIdentity::AgentStatusReport;
+        }
+        match REPLAYABLE_VIEWER_KINDS
+            .iter()
+            .find(|&&k| kind.clone().eq(k.bytes()))
+        {
+            Some(&viewer_kind) => OscIdentity::ViewerLaunch(viewer_kind),
+            None => OscIdentity::NotIdentified,
+        }
+    } else {
+        // The token alone, or the token followed by `;`.
+        if consume_literal(&mut view, MARKDOWN_LAUNCH_TOKEN)
+            && matches!(view.next(), None | Some(b';'))
+        {
+            OscIdentity::MarkdownLaunch
+        } else {
+            OscIdentity::NotIdentified
+        }
+    }
+}
+
+/// Consume `literal` from the front of `view`: true when the view starts with
+/// exactly those bytes (the view is advanced past them), false at the first
+/// difference or when the view ends early.
+fn consume_literal(view: &mut impl Iterator<Item = u8>, literal: &str) -> bool {
+    literal
+        .bytes()
+        .all(|expected| view.next() == Some(expected))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,5 +411,437 @@ mod tests {
                 String::from_utf8_lossy(body)
             );
         }
+    }
+
+    // ---- round3 FR8 (b3e644c5e2d31809): allocation-free identification ----
+
+    /// Test-only global allocator wrapper that counts allocation requests
+    /// made on a thread while that thread has armed the counter
+    /// (IMPLEMENTATION.md Conventions, "Test-only allocation counting").
+    ///
+    /// It is installed for the whole lib test binary, so it adds no
+    /// allocation, no lazy initialization and no destructor of its own: the
+    /// thread-local state is constant-initialized `Cell`s of plain integers,
+    /// and every request is forwarded to the system allocator unchanged.
+    mod alloc_counter {
+        use std::alloc::{GlobalAlloc, Layout, System};
+        use std::cell::Cell;
+
+        thread_local! {
+            static ARMED: Cell<bool> = const { Cell::new(false) };
+            static COUNT: Cell<usize> = const { Cell::new(0) };
+        }
+
+        /// Record one allocation request when the calling thread is armed.
+        /// `try_with` never panics, and neither cell allocates.
+        fn note_request() {
+            let _ = ARMED.try_with(|armed| {
+                if armed.get() {
+                    let _ = COUNT.try_with(|count| count.set(count.get() + 1));
+                }
+            });
+        }
+
+        struct CountingAllocator;
+
+        // SAFETY: every method forwards its arguments unchanged to `System`,
+        // which upholds the `GlobalAlloc` contract; the counting side effect
+        // touches only constant-initialized thread-local cells.
+        unsafe impl GlobalAlloc for CountingAllocator {
+            unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+                note_request();
+                unsafe { System.alloc(layout) }
+            }
+
+            unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+                note_request();
+                unsafe { System.alloc_zeroed(layout) }
+            }
+
+            unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+                note_request();
+                unsafe { System.realloc(ptr, layout, new_size) }
+            }
+
+            unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+                unsafe { System.dealloc(ptr, layout) }
+            }
+        }
+
+        #[global_allocator]
+        static COUNTING_ALLOCATOR: CountingAllocator = CountingAllocator;
+
+        /// Disarms the calling thread on drop, so a panic inside the
+        /// measured closure cannot leave the thread armed.
+        struct Armed;
+
+        impl Drop for Armed {
+            fn drop(&mut self) {
+                let _ = ARMED.try_with(|armed| armed.set(false));
+            }
+        }
+
+        /// Run `f` with the calling thread armed and return its result with
+        /// the number of allocation requests made on this thread meanwhile.
+        /// Only `f` runs while armed: arm immediately before, disarm
+        /// immediately after.
+        pub(super) fn measure<R>(f: impl FnOnce() -> R) -> (R, usize) {
+            let before = COUNT.with(Cell::get);
+            let guard = Armed;
+            ARMED.with(|armed| armed.set(true));
+            let result = f();
+            drop(guard);
+            (result, COUNT.with(Cell::get) - before)
+        }
+    }
+
+    /// A byte that is not valid UTF-8 anywhere in a string.
+    const INVALID: u8 = 0xff;
+
+    /// Every body up to `max_len` symbols long, over `alphabet`.
+    fn every_body_over(alphabet: &[&[u8]], max_len: usize) -> Vec<Vec<u8>> {
+        let mut all: Vec<Vec<u8>> = vec![Vec::new()];
+        let mut frontier: Vec<Vec<u8>> = vec![Vec::new()];
+        for _ in 0..max_len {
+            let mut next = Vec::new();
+            for prefix in &frontier {
+                for symbol in alphabet {
+                    let mut body = prefix.clone();
+                    body.extend_from_slice(symbol);
+                    next.push(body);
+                }
+            }
+            all.extend(next.iter().cloned());
+            frontier = next;
+        }
+        all
+    }
+
+    /// The equivalence corpus (round3 AC-1): every shape the identification
+    /// has to agree with the reference on.
+    fn identification_corpus() -> Vec<Vec<u8>> {
+        let mut corpus: Vec<Vec<u8>> = Vec::new();
+
+        // Canonical OSC 777 bodies (and the leading-zero / non-digit forms)
+        // for every replayable viewer kind, image included, and agent-status.
+        for &kind in REPLAYABLE_VIEWER_KINDS
+            .iter()
+            .chain(std::iter::once(&AGENT_STATUS_OSC_KIND))
+        {
+            corpus.extend(viewer_forms(kind));
+        }
+
+        let fixed: &[&[u8]] = &[
+            // OSC 9999: the token itself, with a `;` tail, near misses.
+            b"9999;emterm-md",
+            b"9999;emterm-md;x",
+            b"9999;emterm-md;",
+            b"9999;emterm-mdx",
+            b"9999;emterm-mdx;x",
+            b"9999;emterm-m",
+            b"9999;emterm-mux;x",
+            b"9999;emterm-md ",
+            b"9999;Emterm-md",
+            b"9999emterm-md",
+            b"9999emterm-md;;x",
+            b"9998;emterm-md;x",
+            b"9999;",
+            b"9999",
+            // Leading-zero numbers.
+            b"0777;emterm;markdown;x",
+            b"00777;emterm;image",
+            b"0000777;emterm;agent-status;v=1;state=idle",
+            b"09999;emterm-md",
+            b"09999;emterm-md;x",
+            b"009999;emterm-mdx",
+            // Non-digit bytes before the first `;`, digits interleaved.
+            b"777emterm;;markdown;x",
+            b"7e7m7term;;markdown",
+            b"a777emterm;;json",
+            b"777x;emterm;markdown",
+            b"7x7x7;emterm;yaml",
+            b"77 7;emterm;html",
+            b"emterm;markdown;x",
+            b"777emterm",
+            b"777emterm;",
+            b"9999emterm-md;",
+            b"9e9m9t9erm-md;;x",
+            b"9e9m9t9e9r9m9-md;;x",
+            // Bodies with no `;`.
+            b"777",
+            b"9999",
+            b"emterm",
+            b"markdown",
+            b"x",
+            b"0",
+            // The empty body.
+            b"",
+            // Other numbers.
+            b"0;emterm;markdown",
+            b"2;emterm;markdown",
+            b"11;?;?",
+            b"52;c;?",
+            b"133;A",
+            b"778;emterm;markdown;x",
+            b"7770;emterm;markdown",
+            b"77;emterm;markdown",
+            // u16 boundary and beyond (saturating, never wrapping).
+            b"65535;emterm;markdown",
+            b"65536;emterm;markdown;x",
+            b"66313;emterm;markdown;x",
+            b"70000;emterm-md",
+            b"75535;emterm-md",
+            b"99999;emterm-md;x",
+            b"4294967296;emterm;markdown",
+            b"4294967297;emterm;markdown",
+            b"4294968073;emterm;markdown",
+            b"99999999999999999999;emterm;markdown;x",
+            b"65536",
+            // Invalid UTF-8 before and after the first `;`.
+            b"777;\xffemterm;markdown",
+            b"777;emterm\xff;markdown",
+            b"777;emterm;\xffmarkdown",
+            b"777;emterm;mark\xffdown",
+            b"777;emterm;markdown\xff",
+            b"777;emterm;markdown;\xff",
+            b"777;emterm;markdown;\xe2\x82",
+            b"777;\xe2\x82emterm;markdown",
+            b"777;emterm;agent-status\xff",
+            b"777;emterm;agent-status;\xff\xfe",
+            b"777\xff;emterm;markdown",
+            b"\xff777;emterm;markdown",
+            b"7\xff7\xff7;emterm;markdown",
+            b"777;emterm;\xef\xbf\xbdmarkdown",
+            b"9999;emterm-md\xff",
+            b"9999;emterm-md;\xff",
+            b"9999;\xffemterm-md",
+            b"9999;emterm\xff-md",
+            b"9999\xff;emterm-md",
+            b"\xff9999;emterm-md",
+            b"\xff",
+            b";\xff",
+        ];
+        corpus.extend(fixed.iter().map(|body| body.to_vec()));
+
+        // Long bodies: a launch with a long tail, a long garbage head, a long
+        // run of leading zeros.
+        for prefix in [
+            "777;emterm;markdown;",
+            "777;emterm;agent-status;",
+            "9999;emterm-md;",
+        ] {
+            let mut body = prefix.as_bytes().to_vec();
+            body.extend(std::iter::repeat_n(b'x', 100_000));
+            corpus.push(body);
+        }
+        let mut long_head = vec![b'a'; 100_000];
+        long_head.extend_from_slice(b";emterm-md");
+        corpus.push(long_head);
+        let mut zeros = vec![b'0'; 100_000];
+        zeros.extend_from_slice(b"777;emterm;json");
+        corpus.push(zeros);
+
+        // Every body up to 4 bytes long over the significant bytes: digits,
+        // `;`, `e`, `m` and one invalid byte.
+        let alphabet: &[&[u8]] = &[b"0", b"7", b"9", b";", b"e", b"m", &[INVALID]];
+        corpus.extend(every_body_over(alphabet, 4));
+
+        // Every body up to 4 tokens long over the tokens the identity rules
+        // are made of, so identified bodies occur in the exhaustive part too.
+        let tokens: &[&[u8]] = &[
+            b"777",
+            b"9999",
+            b"0",
+            b"7",
+            b";",
+            b"emterm;",
+            b"emterm-md",
+            b"markdown",
+            b"agent-status",
+            b"x",
+            &[INVALID],
+        ];
+        corpus.extend(every_body_over(tokens, 4));
+
+        corpus
+    }
+
+    /// The reference result: recover, then identify.
+    fn reference_identity(body: &[u8]) -> OscIdentity {
+        identify_osc(&recover_osc(body))
+    }
+
+    // ---- AC-1 (FR8 equivalence) ----
+
+    #[test]
+    fn round3_ac1_osc_body_identity_matches_the_reference_over_the_corpus() {
+        for body in identification_corpus() {
+            assert_eq!(
+                osc_body_identity(&body),
+                reference_identity(&body),
+                "body {:?}",
+                String::from_utf8_lossy(&body[..body.len().min(64)])
+            );
+        }
+    }
+
+    #[test]
+    fn round3_ac1_the_corpus_reaches_every_identity() {
+        let corpus = identification_corpus();
+        let identities: Vec<OscIdentity> = corpus.iter().map(|b| reference_identity(b)).collect();
+        for &kind in REPLAYABLE_VIEWER_KINDS {
+            assert!(
+                identities.contains(&OscIdentity::ViewerLaunch(kind)),
+                "no corpus body identifies as the {kind} launch"
+            );
+        }
+        for expected in [
+            OscIdentity::MarkdownLaunch,
+            OscIdentity::AgentStatusReport,
+            OscIdentity::NotIdentified,
+        ] {
+            assert!(
+                identities.contains(&expected),
+                "no corpus body identifies as {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn round3_ac1_identity_of_the_non_contiguous_view_forms() {
+        // The data view is the non-digit bytes before the first `;`
+        // followed by the bytes after it, so interleaved digits drop out.
+        assert_eq!(
+            osc_body_identity(b"7e7m7term;;markdown"),
+            OscIdentity::ViewerLaunch("markdown")
+        );
+        assert_eq!(
+            osc_body_identity(b"9e9m9t9erm-md;;x"),
+            OscIdentity::MarkdownLaunch
+        );
+        // Seven interleaved nines overflow the u16 range.
+        assert_eq!(
+            osc_body_identity(b"9e9m9t9e9r9m9-md;;x"),
+            OscIdentity::NotIdentified
+        );
+        assert_eq!(
+            osc_body_identity(b"9999emterm-md"),
+            OscIdentity::MarkdownLaunch
+        );
+        assert_eq!(
+            osc_body_identity(b"0000777;emterm;agent-status;v=1"),
+            OscIdentity::AgentStatusReport
+        );
+    }
+
+    // ---- AC-2 (FR8, NFR3): the registry test ----
+
+    #[test]
+    fn round3_b3e644c5_osc_identification_is_allocation_free_and_matches_the_reference() {
+        // Build everything the measurement needs before arming anything.
+        let corpus = identification_corpus();
+        let expected: Vec<OscIdentity> = corpus.iter().map(|b| reference_identity(b)).collect();
+
+        // Control: the counter sees the reference recovery's allocation on
+        // this very thread, so a zero below means "no allocation", not "the
+        // counter is not installed".
+        let (recovered, control) = alloc_counter::measure(|| recover_osc(b"777;emterm;markdown;x"));
+        assert!(
+            control >= 1,
+            "the allocation counter recorded {control} requests around the reference recovery"
+        );
+        drop(recovered);
+
+        let mut total_requests = 0usize;
+        for (body, expected) in corpus.iter().zip(&expected) {
+            let (actual, requests) = alloc_counter::measure(|| osc_body_identity(body));
+            total_requests += requests;
+            assert_eq!(
+                actual,
+                *expected,
+                "body {:?}",
+                String::from_utf8_lossy(&body[..body.len().min(64)])
+            );
+        }
+        assert_eq!(
+            total_requests,
+            0,
+            "identification allocated over a corpus of {} bodies",
+            corpus.len()
+        );
+    }
+
+    // ---- AC-4 (TM-2, NFR5): large bodies ----
+
+    #[test]
+    fn round3_ac4_one_mebibyte_bodies_finish_within_two_seconds_and_match_the_reference() {
+        const MIB: usize = 1024 * 1024;
+        let mut bodies: Vec<Vec<u8>> = vec![
+            // All non-digit, no `;`.
+            vec![b'x'; MIB],
+            // All zeros, no `;`.
+            vec![b'0'; MIB],
+            // Digits interleaved with non-digits, no `;`.
+            std::iter::repeat_n(*b"7e", MIB / 2).flatten().collect(),
+            // All `;`.
+            vec![b';'; MIB],
+            // Invalid bytes throughout.
+            vec![INVALID; MIB],
+        ];
+        let mut launch = b"777;emterm;markdown;".to_vec();
+        launch.resize(MIB, b'x');
+        bodies.push(launch);
+        let mut agent = b"777;emterm;agent-status;".to_vec();
+        agent.resize(MIB, INVALID);
+        bodies.push(agent);
+        let mut markdown = b"9999;emterm-md;".to_vec();
+        markdown.resize(MIB, b'9');
+        bodies.push(markdown);
+        let mut long_head = vec![b'x'; MIB - 16];
+        long_head.extend_from_slice(b";emterm-md");
+        bodies.push(long_head);
+
+        let expected: Vec<OscIdentity> = bodies.iter().map(|b| reference_identity(b)).collect();
+        let started = std::time::Instant::now();
+        let actual: Vec<OscIdentity> = bodies.iter().map(|b| osc_body_identity(b)).collect();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "identifying {} one-MiB bodies took {elapsed:?}",
+            bodies.len()
+        );
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn round3_ac4_a_number_of_one_million_digits_finishes_within_two_seconds_and_matches_the_reference()
+     {
+        let mut bodies: Vec<Vec<u8>> = Vec::new();
+        // Overflows the u16 range after a few digits.
+        bodies.push(vec![b'1'; 1_000_000]);
+        let mut overflow_then_launch = vec![b'9'; 1_000_000];
+        overflow_then_launch.extend_from_slice(b";emterm;markdown");
+        bodies.push(overflow_then_launch);
+        // One million leading zeros keep the value, so the launch after
+        // them is still identified.
+        let mut zeros_then_viewer = vec![b'0'; 1_000_000];
+        zeros_then_viewer.extend_from_slice(b"777;emterm;markdown");
+        bodies.push(zeros_then_viewer);
+        let mut zeros_then_markdown = vec![b'0'; 1_000_000];
+        zeros_then_markdown.extend_from_slice(b"9999;emterm-md");
+        bodies.push(zeros_then_markdown);
+        // One million zeros, nothing else: number zero.
+        bodies.push(vec![b'0'; 1_000_000]);
+
+        let expected: Vec<OscIdentity> = bodies.iter().map(|b| reference_identity(b)).collect();
+        let started = std::time::Instant::now();
+        let actual: Vec<OscIdentity> = bodies.iter().map(|b| osc_body_identity(b)).collect();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "identifying {} million-digit bodies took {elapsed:?}",
+            bodies.len()
+        );
+        assert_eq!(actual, expected);
     }
 }
