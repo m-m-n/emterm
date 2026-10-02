@@ -91,7 +91,8 @@ workflow:
   completed_at_commit: ae23204cd996dff339ef5c52f2a2318b4735d6f5
   base_commit: 31538ac27867c6bd6426fdba4d3ce05c038ad483
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 7c258379e9d447ac6d51a90c49650c7286cdce84
 - id: verify
   status: pending
   result: null
@@ -233,8 +234,8 @@ tasks:
     branch: em-workflow/mux-suppressed-output-round4-fixes/task0005
     notes: null
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor:
     - comprehensive
@@ -244,7 +245,12 @@ review:
     - spec
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 requirements:
