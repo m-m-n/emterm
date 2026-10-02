@@ -96,7 +96,134 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Chain-aware hold and closing in the write filter
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_chain.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs
+    - test-docs/mux-suppressed-output-fixes/task0002.tests.yaml
+    - feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR6
+    - NFR1
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
+  task0002:
+    title: Awaiting designator at a cut writes the consumed ESC
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_designator_cut.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs
+    - test-docs/mux-suppressed-output-round2-fixes/task0003.tests.yaml
+    - test-docs/mux-suppressed-output-round3-fixes/task0002.tests.yaml
+    - feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR3
+    - FR6
+    - NFR1
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
+  task0003:
+    title: 'As-05 fallback: two-reading intersection'
+    plan: tasks/task0003.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_as05.rs
+    - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR2
+    - FR6
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
+  task0004:
+    title: 'Conditional: in-progress CSI at a cut'
+    plan: tasks/task0004.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs
+    - feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR4
+    - FR6
+    - NFR1
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
+  task0005:
+    title: 'Conditional: switch sequence in the designator slot'
+    plan: tasks/task0005.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_designator_slot.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs
+    - feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    - concurrency
+    complexity: high
+    requirements:
+    - FR5
+    - FR6
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
 review:
   status: pending
   rounds_completed: 0
@@ -110,82 +237,141 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+    - TS-4
   FR2:
     title: 'As-05 fallback: designator undecidability carried through the chunk (989ec5c588abce06)'
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0003
+    tests:
+    - TS-5
   FR3:
     title: Awaiting designator at a cut writes the consumed designator ESC (48caec6f5b0b5810)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-4
+    - TS-6
+    - TS-7
   FR4:
     title: 'Conditional: an in-progress CSI at a cut (adjacent path)'
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0004
+    tests:
+    - TS-8
   FR5:
     title: 'Conditional: a switch sequence in the designator slot misread by extraction (adjacent path)'
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0005
+    tests:
+    - TS-9
   FR6:
     title: Record the decisions
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    - task0004
+    - task0005
+    tests:
+    - TS-12
   NFR1:
     title: Compatibility
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    - task0004
+    - task0005
+    tests:
+    - TS-13
+    - TS-14
   NFR2:
     title: Lock discipline
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0003
+    - task0005
+    tests:
+    - TS-15
   NFR3:
     title: Reader hot-path load
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    - task0004
+    - task0005
+    tests:
+    - TS-10
+    - TS-16
   NFR4:
     title: Security (TM-1)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    - task0004
+    - task0005
+    tests:
+    - TS-1
+    - TS-5
+    - TS-7
+    - TS-8
+    - TS-9
   NFR5:
     title: Security (TM-2)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    - task0004
+    - task0005
+    tests:
+    - TS-10
   NFR6:
     title: Build and platforms
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    - task0003
+    - task0004
+    - task0005
+    tests:
+    - TS-11
