@@ -1,0 +1,126 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+# baseline: 3965 passed, 0 failed, 3 ignored (the --lib suite on the inherited
+# files, run before any change; the previous implementer's uncommitted work was
+# set aside for that run). final: 3982 passed, 0 failed, 3 ignored (re-executed
+# after the implementation: 3965 + 9 tests of round3_write_path.rs + 8 strip
+# tests in scrollback_filter/tests.rs).
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::round3_write_path::round3_76342d8d_designator_esc_never_starts_a_strip_target_in_either_strip
+      - mux::scrollback_filter::tests::every_strip_entry_point_keeps_a_designator_esc_and_what_follows_it
+      - mux::scrollback_filter::tests::the_flag_makes_byte_zero_a_verbatim_designator
+      - mux::scrollback_filter::tests::remap_offsets_around_a_designator_byte_stay_consistent_with_the_output
+    red_confirmed: true
+    red_reason: >-
+      Observed on the parent's behavior (write_filter.rs and mod.rs restored to the parent,
+      the strip's designator transition and its flag turned off while the new state-taking
+      signatures stayed so the tests compile). The registry test failed with
+      '"ESC ( ESC ]0777;emterm;markdown;begin;id=x BEL X": ring-write strip keeps every
+      byte' (left [27, 40, 88], the leading-zero launch was stripped). The three strip tests
+      failed with 'snapshot strip' (same left), 'the leading ESC is the designator; the rest
+      is plain text' (left []) and a remapped-output mismatch (left [27, 40]).
+      `a_launch_after_a_completed_designator_is_still_stripped`,
+      `the_state_taking_form_with_the_flag_clear_equals_the_existing_entry_points`,
+      `only_the_byte_right_after_the_designation_is_consumed`,
+      `a_trailing_designation_start_is_copied_verbatim` and
+      `designator_chains_are_one_pass_and_keep_every_byte` are in the same module and passed
+      on that behavior (they pin behavior that pre-exists), so they are not listed.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::round3_write_path::round3_195916fd_write_filter_output_is_split_invariant_across_a_designator_esc
+    red_confirmed: true
+    red_reason: >-
+      Observed on the parent's write filter and strip (same arrangement as AC-1). The
+      registry test failed with 'AC-2: split at 3 of [27, 40, 27, 91, 54, 110] differs from a
+      single call' (the two-call result emitted all six bytes, the one-call result [27, 40]).
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::round3_write_path::a_cut_drops_the_construct_from_its_opening_esc_on
+      - mux::ipc::pty_spawn::tests::round3_write_path::a_cut_after_a_carried_designator_keeps_the_designator_esc
+      - mux::ipc::pty_spawn::tests::a_cut_closes_an_in_progress_osc_and_pending_holds_no_closed_osc
+      - mux::ipc::pty_spawn::tests::a_cut_closes_a_held_lone_esc
+      - mux::ipc::pty_spawn::tests::an_empty_fed_range_with_a_cut_still_closes_pending
+      - mux::ipc::pty_spawn::tests::pending_after_a_cut_equals_a_fresh_scan_of_the_bytes_after_the_last_cut
+    red_confirmed: true
+    red_reason: >-
+      Observed on the parent's write filter (same arrangement as AC-1). All six failed: the
+      new tests with 'OSC: settled bytes go through the strip (the launch is removed), the
+      construct and any terminator are absent' (left ends with the held `ESC ]0;title`) and
+      'the first byte is the designator; the rest is plain text' (left []); the four
+      registry tests with their updated expectations, e.g. `a_cut_closes_a_held_lone_esc`
+      (left [97, 98, 99, 27], right [97, 98, 99]) and `a_cut_closes_an_in_progress_osc...`
+      (left [27, 93, 49, 49, 59, 63, 32], right [32]). The carried-completion and
+      awaiting-designator cases (EC-1, EC-2) inside the new test are covered by the same
+      test and by the existing `a_completion_before_a_cut_is_reported_and_at_most_one_per_feed`
+      and `a_cut_clears_the_awaiting_designator_flag`, which pin behavior that pre-exists.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::round3_write_path::round3_973af79f_osc_closed_by_a_removed_switch_is_never_completed_by_a_later_bel
+      - mux::ipc::pty_spawn::tests::reader_closes_pending_at_a_chunk_that_starts_with_a_switch_to_the_alt_screen
+      - mux::ipc::pty_spawn::tests::removed_switch_between_main_ranges_delivers_the_alt_query_once_and_sends_no_tail
+      - mux::ipc::pty_spawn::tests::fr4_removed_switch_stream_matches_the_reference_over_split_positions
+    red_confirmed: true
+    red_reason: >-
+      Observed on the parent's write filter and reader (same arrangement as AC-1). The
+      registry test failed with '(a) [?47h trailing []: the ring holds no OSC' (left 1, right
+      0). With that ring assertion switched off for one run, the same test failed on the
+      oracle with '(a) [?47h trailing []: response bytes differ from the raw-stream
+      reference' (left `ESC ]11;rgb:1111/2222/3333 BEL`, right []), so the client-versus-
+      reference comparison detects the bug by itself. The three reader-level registry tests
+      failed on their updated ring expectations (e.g. `fr4_removed_switch_stream...` left
+      [65, 27, 93, 49, 49, 59, 63, 7, 67], right [65, 7, 67]). The registry test drives the
+      production visibility restore (`resume_pane_with_permit`, ring not wrapped, no dump
+      block); screen, cursor, displayed characters and responses are compared
+      unconditionally, the prefix-reproduction guard is not used.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::round3_write_path::round3_2a9d929f_straddling_switch_fallback_closes_the_held_construct
+    red_confirmed: true
+    red_reason: >-
+      Observed on the parent's reader (mod.rs restored to the parent, same arrangement as
+      AC-1). The registry test failed with '[?47h: the replacement and the forwarded reads
+      hold no color query' (left 1, right 0: the held ESC joined the last read and its
+      completion was delivered). The renamed `fallback_path_keeps_the_whole_chunk_gate`
+      belongs to this criterion too; its assertion is unchanged and it passed before and
+      after the change (the both-main fallback pre-exists), so it is not listed. The screen
+      comparison of this test uses the prefix-reproduction guard
+      (`r2_snapshot_reproduces_prefix`) because the stand-in snapshot appends a screen dump;
+      responses are compared unconditionally. For the 1047 shape the shadow parser does not
+      treat the straddled `ESC [?1047h` as an alternate-screen switch, so the reader does
+      not take the fallback path there and the ring keeps the complete switch sequences; the
+      test asserts the ring holds no OSC introducer and ends with the last read.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::round3_write_path::straddling_switches_over_many_reads_close_repeatedly_and_never_send_an_empty_chunk
+      - mux::ipc::pty_spawn::tests::round3_write_path::an_osc_held_near_the_cap_is_dropped_at_a_cut_and_at_the_fallback
+    red_confirmed: true
+    red_reason: >-
+      Observed on the parent's write filter and reader (same arrangement as AC-1). The
+      straddling test failed with 'each round's open OSC is closed by the fallback and
+      dropped' (left holds both `ESC ]0;t ESC` runs, right [120, 120, 7, 122]); the near-cap
+      test failed with 'the held OSC is dropped, not written'.
+      `designator_chains_finish_within_the_budget_in_the_strip_and_the_filter` also
+      belongs to this criterion (designator chains in one call and split, within the time
+      budget) and passed on that behavior, so it is not listed; the existing
+      `long_designator_chains_are_linear_and_split_invariant`,
+      `repeated_switch_sequences_with_incomplete_introducers_finish_within_budget`,
+      `a_run_flushed_by_the_cap_never_reports_a_completion` and
+      `overflow_with_cuts_flushes_without_a_report` pin the cap and the overflow flush,
+      which are unchanged.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests
+      - mux::scrollback_filter::tests
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing `mux::ipc::pty_spawn::tests`
+      and `mux::scrollback_filter::tests` modules (found by searching the test directory for
+      the changed files' paths and for `write_filter.rs`, `scrollback_filter.rs` and `mod.rs`)
+      detect a regression of the write filter and the strip; no red state occurred for this
+      criterion, the full `--lib` suite and the `--no-default-features` check were green
+      before and after the change. That the normal path gains no new pass over the chunk is a
+      property of the code (designator tracking sits inside the strip's single pass and the
+      cut path reuses the boundary scan) that no executable check measures.
