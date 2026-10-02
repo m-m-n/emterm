@@ -32,11 +32,12 @@ acceptance_tests:
       passed against the stub by construction; it constrains the real
       single-pass decider, not the stub.
   AC-2:
+    # Superseded: the equal-boundary rule "a different construct yields none" is replaced by feature-docs/mux-suppressed-output-round3-fixes/SPEC.md FR7 (the later record wins).
     tests:
       - mux::session::pane::tests::ac2_higher_boundary_replaces_both_boundary_and_construct
       - mux::session::pane::tests::ac2_higher_boundary_without_a_construct_clears_the_old_construct
       - mux::session::pane::tests::ac2_equal_boundary_with_an_identical_construct_keeps_it
-      - mux::session::pane::tests::ac2_equal_boundary_with_a_different_construct_yields_none
+      - mux::session::pane::tests::ac2_equal_boundary_with_a_different_construct_takes_the_later_record
       - mux::session::pane::tests::ac2_lower_boundary_leaves_the_entry_unchanged
       - mux::session::pane::tests::ac2_boundary_only_record_form_means_construct_none
       - mux::session::pane::tests::ac2_a_record_for_one_destination_never_changes_another
