@@ -19,6 +19,7 @@ acceptance_tests:
       and failed to compile on the pre-fix files (no method named
       `awaiting_designator` on ScrollbackWriteFilter).
   AC-2:
+    # Superseded: the waiting `ESC (` / `ESC )` written with nothing after it at a cut is replaced by feature-docs/mux-suppressed-output-round4-fixes/SPEC.md FR3 (one ESC follows it).
     tests:
       - mux::ipc::pty_spawn::tests::round2_b600645f_removed_screen_switch_closes_the_pending_string
       - mux::ipc::pty_spawn::tests::reader_closes_pending_at_a_chunk_that_starts_with_a_switch_to_the_alt_screen
