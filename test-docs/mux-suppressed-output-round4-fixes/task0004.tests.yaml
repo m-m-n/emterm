@@ -1,0 +1,110 @@
+task_id: task0004
+# From step 4a, before any change: 4018 passed, 0 failed. One earlier run, made while a second
+# cargo process was building in the same target directory, saw the reader-harness timeout
+# `visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once` ('the reader must
+# reach P2 ... Timeout'); it passed in the clean re-run, so it is not listed.
+# After the first merge attempt hit a conflict in write_filter.rs and the parent side was
+# adopted (task0002 and task0003 had merged), the adopted tree alone does not compile (this
+# task's tests name `CSI_CLOSING`), so the refreshed baseline could not be run separately; the
+# run after the re-implementation has no failures, which includes every test the parent brought.
+baseline_failures: []
+# Re-executed after the re-implementation on the updated parent: `cargo test --lib` finished
+# with 4064 passed, 0 failed, 3 ignored.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_in_progress_csi_at_a_cut_matches_the_raw_stream_reference
+    red_confirmed: true
+    red_reason: >-
+      Observed on the parent's write filter (the harness widening and the test module line
+      only, no production change): the registry test failed with '(a) [?47h head [6 final n:
+      response bytes differ from the raw-stream reference' (left `ESC [ 1 ; 1 R`, right []).
+      So FR4 reproduced: the ring held `ESC[6` while the live parser had aborted that CSI at
+      the removed switch's ESC, and the later `n` completed a cursor-position report on
+      replay. The test failed on the pre-change code.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_in_progress_csi_at_a_cut_matches_the_raw_stream_reference
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_reader_fallback_closes_an_open_csi
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_an_overflow_flush_followed_by_a_cut_closes_an_open_csi
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_a_cut_inside_a_call_and_a_carried_csi_replay_like_the_raw_stream
+      - mux::ipc::pty_spawn::tests::fallback_path_keeps_the_whole_chunk_gate
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change filter: the registry test, the overflow-flush test and the
+      cut-inside-a-call / carried-CSI test failed on the response and screen comparison with
+      the raw-stream reference (for example a `ESC [ 1 ; 1 R` answer on the client where the
+      reference has none). The reader-fallback test was first written with a layout whose next
+      live read starts with an ESC, which aborts the open CSI on the client; that version
+      passed on the pre-change code, so it was rewritten so that the byte after the snapshot
+      is not an ESC, and the rewritten test failed on the pre-change code with 'held ESC,
+      [?47h: response bytes differ from the raw-stream reference'. The existing test
+      `fallback_path_keeps_the_whole_chunk_gate` had its expected ring bytes updated
+      (the ring gains one closing byte); its old expectation was observed to fail after the
+      implementation, and the updated expectation was not watched red before it.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_filter_output_at_a_cut_replays_like_the_raw_stream
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_closing_is_written_only_when_the_emitted_stream_ends_inside_a_csi
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_each_cut_closes_at_most_once
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_closing_never_coincides_with_the_designator_wait
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_filter_output_and_state_are_split_invariant_across_a_csi
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_carried_state_names_the_csi_sub_state
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_every_byte_in_each_csi_state_is_classified_like_term_core
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_closing_bytes_cancel_the_csi_without_effect_in_term_core
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_neither_strip_reads_the_closing_bytes_as_a_strip_target
+    red_confirmed: true
+    red_reason: >-
+      The term_core oracle test `round4_fr4_the_filter_output_at_a_cut_replays_like_the_raw_stream`
+      was observed failing on the pre-change filter (the replayed ring differs from the raw
+      stream for the open-CSI prefixes). The other eight tests read `CSI_CLOSING`, `CsiPhase`
+      or `csi_phase()`, which did not exist before the change, so they were written after the
+      implementation and were never run against the pre-change code (a compile failure is
+      not an observed red); they are listed in unconfirmed_reds of the report. Their
+      assertions compare the emitted bytes and carried state with term_core's parser, so
+      they check the corpus the criterion names: parameters, intermediates, C0 bytes
+      inside the CSI, bytes that cancel it, and an ESC that aborts it.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_long_csi_parameter_runs_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_many_csis_straddling_calls_with_cuts_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_many_open_csis_through_the_reader_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_a_long_csi_fed_byte_by_byte_is_never_held
+    red_confirmed: false
+    red_reason: >-
+      The criterion is a no-extra-pass / budget / no-panic property that the pre-change code
+      also satisfies, so no failing state exists for it. `round4_fr4_long_csi_parameter_runs_finish_within_the_budget`
+      passed on the pre-change code. `round4_fr4_many_csis_straddling_calls_with_cuts_finish_within_the_budget`
+      and `round4_fr4_many_open_csis_through_the_reader_finish_within_the_budget` failed on the
+      pre-change code, but on their ring-versus-reference comparison (the FR4 bug), not on the
+      budget; `round4_fr4_a_long_csi_fed_byte_by_byte_is_never_held` reads `csi_phase()` and was
+      written after the implementation. The tests are guards: a design that held CSI bytes in
+      `pending` and rescanned them would be quadratic on the byte-at-a-time test.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_decision_record_states_the_outcome_and_lists_the_changed_test
+    red_confirmed: true
+    red_reason: >-
+      Document-contract test over feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md.
+      Observed failing before the record was written: 'the decision record ... DECISIONS.md is
+      unreadable: No such file or directory'. It checks that the FR4 section states exactly
+      one outcome, names the registry path, that the path resolves to a test function in
+      round4_cut_csi.rs, and that the FR4 behavior-changing subsection lists
+      `fallback_path_keeps_the_whole_chunk_gate`.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::fallback_path_keeps_the_whole_chunk_gate
+      - mux::ipc::pty_spawn::tests::round3_write_path::a_cut_drops_the_construct_from_its_opening_esc_on
+    red_confirmed: false
+    red_reason: >-
+      The verifiable outcomes are the full `cargo test --lib` run and the two `cargo check`
+      runs (default features and --no-default-features), all passing, plus a diff that touches
+      nothing under crates/mux_ipc/ and no snapshot assembly code. A dedicated new module is
+      out of scope, but the existing tests that read the changed file's ring output through
+      the filter (searched by the path src-tauri/src/mux/ipc/pty_spawn/write_filter.rs, which
+      no test names, and by the basename and the type ScrollbackWriteFilter: pty_spawn/tests.rs
+      and tests/round3_write_path.rs) assert exact ring bytes and detect an unwanted ring
+      change; no red state occurred for this change, except that the old expectation of
+      `fallback_path_keeps_the_whole_chunk_gate` failed after the implementation, which is the
+      one intended ring change recorded in DECISIONS.md.
