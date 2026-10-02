@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-suppressed-output-round4-fixes
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: fbc01fa667f10fbb47c8fcec5bb4b6365add6fc9
+last_input_digest: sha256:18687f7226b75bbe01b2ae6a259e17425ac5c193f51f102c0e5de870a8de5c73
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:18687f7226b75bbe01b2ae6a259e17425ac5c193f51f102c0e5de870a8de5c73
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
