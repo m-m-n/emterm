@@ -147,7 +147,7 @@ workflow:
   failed_items: []
   completed_at_commit: 6bf3f57d6f2e7c05530eec9450693ab209556c98
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Allocation-free OSC identification on the write path
