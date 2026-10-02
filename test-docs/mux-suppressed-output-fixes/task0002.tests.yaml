@@ -20,7 +20,8 @@ acceptance_tests:
       test named by the D7 registry (TS-1, shared with task0001) and as
       regression coverage for the still-correct pending contract.
   AC-2:
-    tests: [write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail]
+    # Superseded: flushing the aborted OSC and DCS while only the incomplete APC is held is replaced by feature-docs/mux-suppressed-output-round4-fixes/SPEC.md FR1 (the aborted OSC and DCS and the incomplete APC form one chain, held whole from its head).
+    tests: [write_filter_holds_an_esc_aborted_chain_from_its_head]
     red_confirmed: true
     red_reason: >
       Pre-fix: `assert_eq!` failed — "the aborted OSC and the aborted DCS
@@ -31,6 +32,7 @@ acceptance_tests:
       instead of an abort, so `find_safe_boundary` held the ENTIRE chunk —
       including the aborted OSC and DCS — from the very first introducer.
   AC-3:
+    # Superseded: flushing the superseded first ESC of `ESC ESC` while the OSC is held is replaced by feature-docs/mux-suppressed-output-round4-fixes/SPEC.md FR1 (the superseded ESC is held with the OSC and written with it on completion). The test names are kept.
     tests:
       - write_filter_double_esc_treats_the_second_esc_as_the_introducer
       - write_filter_charset_designator_consumes_the_next_byte_even_if_esc
@@ -93,7 +95,8 @@ acceptance_tests:
       flushed everything, while feeding all 7 at once held everything —
       exactly the kind of inconsistency the postcondition rules out.
   AC-6:
-    tests: [write_filter_hostile_aborted_introducers_stream_is_linear_and_holds_only_the_final_pair]
+    # Superseded: holding only the final `ESC ]` pair of the 64 KiB aborted-introducer stream is replaced by feature-docs/mux-suppressed-output-round4-fixes/SPEC.md FR1 (the stream below the cap is one chain, held whole).
+    tests: [write_filter_hostile_aborted_introducers_stream_is_linear_and_held_as_one_chain]
     red_confirmed: true
     red_reason: >
       Pre-fix: `assert_eq!` failed — "everything before the final

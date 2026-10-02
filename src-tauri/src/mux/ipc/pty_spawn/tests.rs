@@ -427,14 +427,19 @@ fn write_filter_holds_string_ending_in_trailing_esc_until_completed() {
 }
 
 /// AC-2 (FR5): OSC, DCS and APC bodies followed by ESC plus a non-backslash
-/// byte count as CLOSED (aborted) at that ESC — nothing after them is held
-/// because of them. A string that begins at that very ESC and is still
-/// incomplete at the end of the feed is held from its own start. Here an
-/// ESC-aborted OSC is immediately followed by an ESC-aborted DCS (the
-/// aborting ESC of each is the introducer of the next), and finally an
-/// unterminated APC that stays incomplete to the end.
+/// byte count as CLOSED (aborted) at that ESC, and the string that begins at
+/// that very ESC is its own construct. Here an ESC-aborted OSC is immediately
+/// followed by an ESC-aborted DCS (the aborting ESC of each is the introducer
+/// of the next), and finally an unterminated APC that stays incomplete to the
+/// end.
+///
+/// Superseded by `mux-suppressed-output-round4-fixes` FR1 (the test was
+/// `write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail`):
+/// each aborted string is closed by the ESC that opens the next one, so the
+/// three form one chain. The whole run is held from the OSC, and the chain
+/// head is not written by the read that opened it.
 #[test]
-fn write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail() {
+fn write_filter_holds_an_esc_aborted_chain_from_its_head() {
     let mut filter = ScrollbackWriteFilter::new();
     let mut chunk = Vec::new();
     chunk.extend_from_slice(b"\x1b]0;osc"); // OSC introducer + body
@@ -444,17 +449,26 @@ fn write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail() {
     chunk.extend_from_slice(b"_apcbody"); // APC introducer (the aborting ESC's '_') + body, no terminator
 
     let (_dims, out) = filter.feed(&chunk, (80, 24));
-    assert_eq!(
-        out,
-        b"\x1b]0;osc\x1bPdcs".to_vec(),
-        "the aborted OSC and the aborted DCS are both closed and flushed; \
-         nothing after them is held because of them"
+    assert!(
+        out.is_empty(),
+        "the aborted OSC and the aborted DCS are links of the chain that ends in the \
+         still-open APC: none of it is written yet"
     );
     assert_eq!(
         filter.pending(),
-        b"\x1b_apcbody".as_slice(),
-        "the still-open APC is held from its own start"
+        chunk.as_slice(),
+        "the whole chain is held from the OSC that heads it"
     );
+
+    // The chain settles when its last construct completes.
+    let (_dims, out) = filter.feed(b"\x1b\\", (80, 24));
+    let mut settled = chunk.clone();
+    settled.extend_from_slice(b"\x1b\\");
+    assert_eq!(
+        out, settled,
+        "the whole held run is written when the APC completes"
+    );
+    assert_eq!(filter.pending_len(), 0);
 }
 
 /// AC-3 (FR5): `ESC ESC` followed by an OSC introducer treats the SECOND ESC
@@ -470,20 +484,23 @@ fn write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail() {
 fn write_filter_double_esc_treats_the_second_esc_as_the_introducer() {
     let mut filter = ScrollbackWriteFilter::new();
     let (_dims, out1) = filter.feed(b"\x1b\x1b]11;?", (80, 24));
-    assert_eq!(
-        out1,
-        b"\x1b".to_vec(),
-        "only the superseded FIRST esc flushes; the OSC the second esc \
-         introduces is still incomplete and must be held"
+    assert!(
+        out1.is_empty(),
+        "the superseded FIRST esc is closed by the esc that opens the OSC, so it \
+         is held with that OSC (mux-suppressed-output-round4-fixes FR1)"
     );
     assert_eq!(
         filter.pending(),
-        b"\x1b]11;?".as_slice(),
-        "pending must start at the SECOND esc, not the first"
+        b"\x1b\x1b]11;?".as_slice(),
+        "pending starts at the superseded FIRST esc, the head of the chain"
     );
 
     let (_dims, out2) = filter.feed(b"\x07", (80, 24));
-    assert_eq!(out2, b"\x1b]11;?\x07".to_vec());
+    assert_eq!(
+        out2,
+        b"\x1b\x1b]11;?\x07".to_vec(),
+        "the superseded esc is written with the OSC once it completes"
+    );
     assert_eq!(filter.pending_len(), 0);
 }
 
@@ -586,6 +603,8 @@ fn write_filter_boundaries_are_split_position_independent_and_match_term_core() 
         b"\x1bXafter1\x1b^after2".to_vec(), // AC-3, two-byte escapes, closed
         b"plain text\x1b".to_vec(),         // AC-3, lone trailing ESC, open
         b"\x1b]0;osc\x1bPdcs\x1b[31mtext".to_vec(), // AC-4, closed (non-query CSI + text, no hold)
+        b"\x1b\x1b".to_vec(),               // round4 FR1, open: superseded ESC + lone ESC
+        b"ab\x1b\x1b]11;?".to_vec(),        // round4 FR1, open: superseded ESC + OSC
     ];
 
     for input in &corpus {
@@ -611,13 +630,17 @@ fn write_filter_boundaries_are_split_position_independent_and_match_term_core() 
                  run as an unsplit feed"
             );
 
+            // The chain that ends in the single incomplete construct
+            // (mux-suppressed-output-round4-fixes FR1): it starts at its
+            // head's ESC, which is followed by a string introducer or by the
+            // ESC of a superseded-ESC chain.
             let pending = filter.pending();
             assert!(
                 pending.is_empty()
                     || pending == b"\x1b"
                     || (pending[0] == 0x1b
                         && pending.len() >= 2
-                        && matches!(pending[1], b']' | b'P' | b'_')),
+                        && matches!(pending[1], b']' | b'P' | b'_' | 0x1b)),
                 "pending after split {split} for {input:?} has an \
                  unexpected shape: {pending:?}"
             );
@@ -650,10 +673,11 @@ fn write_filter_boundaries_are_split_position_independent_and_match_term_core() 
 
 /// AC-6 (TM-2, NFR5): a hostile 64 KiB feed made of nothing but repeated
 /// `ESC ]` pairs, each aborting the previous OSC and opening a new one,
-/// completes in linear time and holds at most the final (genuinely
-/// incomplete) pair.
+/// completes in linear time. Below the cap the stream is one chain and is held
+/// whole (`mux-suppressed-output-round4-fixes` FR1; the test was
+/// `write_filter_hostile_aborted_introducers_stream_is_linear_and_holds_only_the_final_pair`).
 #[test]
-fn write_filter_hostile_aborted_introducers_stream_is_linear_and_holds_only_the_final_pair() {
+fn write_filter_hostile_aborted_introducers_stream_is_linear_and_held_as_one_chain() {
     let mut filter = ScrollbackWriteFilter::new();
     let pair_count = 32 * 1024; // 64 KiB of `ESC ]` pairs
     let chunk: Vec<u8> = std::iter::repeat_n(*b"\x1b]", pair_count)
@@ -669,15 +693,14 @@ fn write_filter_hostile_aborted_introducers_stream_is_linear_and_holds_only_the_
         "a hostile chain of aborted introducers must scan in linear time; \
          took {elapsed:?}"
     );
-    assert_eq!(
-        out,
-        chunk[..chunk.len() - 2].to_vec(),
-        "everything before the final (incomplete) pair is flushed unchanged"
+    assert!(
+        out.is_empty(),
+        "the stream below the cap is one chain: nothing is written until it settles"
     );
     assert_eq!(
         filter.pending(),
-        b"\x1b]".as_slice(),
-        "only the final, genuinely incomplete introducer pair is held"
+        chunk.as_slice(),
+        "the whole chain is held from its head"
     );
 }
 
@@ -2991,6 +3014,17 @@ const D7_REGISTRY_TEST_NAMES: [&str; 23] = [
     "snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock",
 ];
 
+/// D7 registry tests that a later feature renamed (old name, current name).
+/// The old name stays on [`D7_REGISTRY_TEST_NAMES`] because DECISIONS.md — a
+/// predecessor feature's prose — still cites it; the definition check follows
+/// the rename, like the test-docs records
+/// (`.claude/rules/test-docs-records.md`). Renamed by
+/// `mux-suppressed-output-round4-fixes` FR1.
+const D7_RENAMED_REGISTRY_TESTS: [(&str, &str); 1] = [(
+    "write_filter_closes_esc_aborted_strings_and_holds_only_incomplete_tail",
+    "write_filter_holds_an_esc_aborted_chain_from_its_head",
+)];
+
 /// AC-4: every regression-test name from the IMPLEMENTATION.md D7 registry
 /// is cited somewhere in DECISIONS.md — a transcription check that would
 /// catch a dropped or misspelled test name.
@@ -3067,14 +3101,20 @@ fn registry_test_name_is_defined_in_crate_source(name: &str) -> bool {
 /// AC-4 (FR13; TS-21): every name on the D7 registry list — the SAME list
 /// `decisions_md_contains_every_d7_registry_test_name` uses, never a
 /// second copy — must actually be a test function defined somewhere under
-/// `src-tauri/src`, not merely a name DECISIONS.md happens to mention.
+/// `src-tauri/src`, not merely a name DECISIONS.md happens to mention. A name
+/// that a later feature renamed ([`D7_RENAMED_REGISTRY_TESTS`]) is looked up
+/// under its current name.
 #[test]
 fn every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source() {
     for name in D7_REGISTRY_TEST_NAMES {
+        let current = D7_RENAMED_REGISTRY_TESTS
+            .iter()
+            .find(|(old, _)| *old == name)
+            .map_or(name, |(_, new)| *new);
         assert!(
-            registry_test_name_is_defined_in_crate_source(name),
-            "D7 registry test name {name:?} is not defined as a function \
-             anywhere under src-tauri/src"
+            registry_test_name_is_defined_in_crate_source(current),
+            "D7 registry test name {name:?} (current name {current:?}) is not defined as a \
+             function anywhere under src-tauri/src"
         );
     }
 }
@@ -7503,6 +7543,7 @@ fn fallback_path_keeps_the_whole_chunk_gate() {
 
 // END round2 task0003 tests: pre-existing entry points.
 mod round3_write_path;
+mod round4_chain;
 
 // BEGIN round2 task0003 tests: new entry points (cut-aware feed, awaiting
 // flag, carried-over report, cut and coordinate derivation).
