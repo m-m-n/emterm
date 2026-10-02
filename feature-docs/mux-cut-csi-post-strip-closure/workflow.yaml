@@ -1,0 +1,179 @@
+schema_version: 1
+feature: mux-cut-csi-post-strip-closure
+created: '2026-10-03'
+base_branch: main
+goal: |+
+  # mux: round4-fixes review で残った medium 指摘 4c0ad9058a983648（カット閉鎖が除去前の走査結果 scan.csi を使う）の対応
+
+  Notion: https://www.notion.so/3ed3509ec8ee81dbbe38cbca5e6b4eb6
+
+  ## 現象 (必須)
+  mux-suppressed-output-round4-fixes の review round 1 で、medium 指摘 `4c0ad9058a983648`（architecture）が `unresolved` のまま残っている。
+  カット経路の FR4 閉鎖（未完 CSI を DEL で閉じる処理）が、除去前の run を走査した `scan.csi` で判断している。`scan_boundary` は完了した OSC/APC/DCS や後続の完了 CSI の ESC で `csi` を None にするが、strip（`scrollback_filter.rs` の `strip_rich_content_and_remap_with_designator`）はその ESC を含む構文ごと除去する（OSC 777 ビューア起動列、OSC 9999、agent-status、Kitty APC、SIXEL DCS、`ESC[6n` 等の CSI 照会列）。
+  このため `ESC[6` + 除去対象の完全な構文の直後にカットが来ると、出力は `ESC[6` で終わり閉鎖の DEL が付かない。`ESC[6 ESC[6n` + カットも同じ。復元後に `n` が届くと、生ストリームには無い CPR 応答をクライアントが返す。通常経路も `self.csi = scan.csi`（None）を引き継ぐため、後のフォールバック閉鎖も何も書かない。
+  ## 再現手順 (必須)
+  1. mux の pane に `ESC[6` の直後に strip 対象の完全な構文（例: `ESC]777;emterm;markdown;…BEL`、Kitty APC `ESC_G…ESC\`、`ESC[6n`）を続けた出力を流す
+  2. その直後に snapshot 取得（タブ切り替え / reattach）が走り、カットが入る
+  3. 後続の出力で `n` が届くと、クライアントが開始していない CPR 応答（`ESC[row;colR`）を返す
+  ## 期待する挙動 (必須)
+  カットの閉鎖と次の呼び出しへ引き継ぐ CSI 状態の両方を、除去後の出力の状態で決める。除去後の出力が未完 CSI で終わるときは閉鎖を書き、クライアントが開始していない問い合わせを成立させない。
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある（`round4_cut_csi.rs` の CLOSING_CASES と term_core 生ストリーム比較に、`ESC[6 ESC]777;emterm;markdown;…BEL` / `ESC[6 ESC_G…ESC\` / `ESC[6 ESC[6n` のそれぞれにカットと後続の `n` を続けたケースを、同一呼び出しのカットとフォールバック閉鎖の両方で追加）
+  - [ ] stable_id `4c0ad9058a983648` について、対応済みか・対応不要かを判断して記録する
+  ## 該当箇所 (任意)
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:512`（512-515 行のカット閉鎖）
+  - `src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs`（CLOSING_CASES は除去されない `ESC]0;t BEL` しか含まない）
+  - 詳細: ブランチ `em-workflow/mux-suppressed-output-round4-fixes/integration` の `feature-docs/mux-suppressed-output-round4-fixes/reviews/round1.yaml`
+  - 修正案: strip が開いた CSI を中断する ESC で始まる構文を除去するときに閉鎖を代わりに書く、または strip の出力末尾の CSI 状態を返させて書き込みフィルタがそれを使う
+  ## 実害・発生条件 (任意)
+  snapshot 取得と、未完 CSI の直後に strip 対象構文を含む 1 チャンクが重なったときにだけ起きる。カットが無い場合も、リングが除去済み構文の直後の `ESC[6` で終われば次のライブの `n` が完成させうる（以前からの strip の挙動）。
+
+parent_branch: em-workflow/mux-cut-csi-post-strip-closure/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.53
+      '2': 0.46
+      '3': 0.01
+    description_plus_code:
+      '0': 0.0
+      '1': 0.04
+      '2': 0.96
+      '3': 0.0
+  at: '2026-10-03T08:37:30+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: edff3341b6979bf213f669ac359bcc0497ee3062
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'UI に触れない Rust 内部の変更（mux デーモンの書き込みフィルタ）。batch: decide_autonomously'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: カット閉鎖を除去後の出力で判定
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: 引き継ぐ CSI 状態を除去後の出力で決める
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: オーバーフロー経路も同じ規則にする
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: 回帰テストの追加
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: 判断の記録
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: カットの無い strip 連結は残件として記録
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: 互換性
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: リーダー通常経路の負荷
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: セキュリティ（TM-1）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: セキュリティ（TM-2）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: ビルドとプラットフォーム
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
