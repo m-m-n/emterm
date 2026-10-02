@@ -174,7 +174,7 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-suppressed-output-round4-fixes/task0003
     notes: null
   task0004:
