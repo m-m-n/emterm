@@ -83,7 +83,12 @@ pub(in crate::mux) struct CarriedOverCompletion<'a> {
 ///   with its responses discarded.
 /// - `pending_after`: [`super::write_filter::ScrollbackWriteFilter::pending`]'s
 ///   contents taken right after this chunk was fed to the filter. Never
-///   empty unless nothing is currently held back.
+///   empty unless nothing is currently held back. When the filter holds a
+///   chain of aborted strings and superseded ESCs (mux-suppressed-output-
+///   round4-fixes FR1), this is the WHOLE chain from its head: a contiguous
+///   suffix of the stream fed after the last cut, so the re-delivered tail is
+///   the whole chain and the pieces excluded from item scanning are derived
+///   from its length.
 /// - `window`: the stream bytes immediately preceding `chunk` (the reader's
 ///   retained window, FR6, up to
 ///   [`client_parity_scan::RETAINED_WINDOW_BYTES`]), as it stood BEFORE this
@@ -122,7 +127,8 @@ pub(in crate::mux) struct SuppressedReplacementRequest<'a> {
     pub chunk: &'a [u8],
     /// The ring-written ranges of `chunk`, ascending, in chunk coordinates.
     pub ring_written_ranges: &'a [Range<usize>],
-    /// The write filter's pending bytes right after this read.
+    /// The write filter's pending bytes right after this read: empty, or the
+    /// whole held chain (round4 FR1).
     pub pending_after: &'a [u8],
     /// The retained window preceding `chunk`.
     pub window: &'a [u8],
@@ -162,8 +168,9 @@ pub(in crate::mux) struct PreparedReplacement {
     /// The assembled items: every reportable query / launch, in stream order,
     /// the carried-over completion included.
     items: Vec<u8>,
-    /// The tail bytes: the write filter's pending run (D4 rule 1) or the
-    /// client-parity scan's own incomplete trailing construct.
+    /// The tail bytes: the write filter's pending run — the whole held chain
+    /// when it holds one (D4 rule 1) — or the client-parity scan's own
+    /// incomplete trailing construct.
     tail: Vec<u8>,
     /// Whether the tail may be omitted when the destination's snapshot
     /// already left the client holding it. Only a tail found by the
@@ -224,6 +231,12 @@ pub(in crate::mux) fn prepare_suppressed_replacement(
             // exclude the chunk-coordinate pieces that make them up — never the
             // gaps (alternate-screen ranges, removed switch sequences) between
             // ranges — and walk the whole chunk so items around them survive.
+            // Round4 FR1: pending may be a chain of aborted strings and
+            // superseded ESCs whose head lies in an earlier read. The chain
+            // is a contiguous suffix of the fed stream after the last cut
+            // (nothing held survives a cut), so its length still identifies
+            // exactly the chunk bytes it re-delivers, and the head's bytes
+            // from earlier reads are covered by the min() clamp.
             let fed_len: usize = ring_written_ranges
                 .iter()
                 .map(|r| r.end.saturating_sub(r.start))

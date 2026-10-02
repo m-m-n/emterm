@@ -1,0 +1,107 @@
+task_id: task0001
+baseline_failures: []          # `--lib` on the inherited files, run before any change: 4018 passed, 0 failed, 3 ignored
+final_failures: []             # re-executed after the implementation (full `--lib` run): 4028 passed, 0 failed, 3 ignored
+# Red observations were made against the parent's write_filter.rs (the new and
+# updated tests present, the production file restored to the parent's; the
+# `held_construct_start` accessor stubbed so the tests compile): 13 tests failed.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_chain::round4_3e2024dc_a_chain_closed_by_a_cut_is_never_completed_by_a_later_read
+    red_confirmed: true
+    red_reason: >-
+      Against the parent's write_filter.rs the registry test failed with "(a) one read, OSC
+      aborted by OSC [?47h: the ring holds no OSC introducer from the chain" (left 1, right 0):
+      the aborted `ESC ]11;?` was written to the ring when the read that opened the chain
+      was fed, so the snapshot replay left an OSC open and the later BEL completed it.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_chain::a_cut_at_or_after_the_chain_head_drops_the_whole_chain
+      - mux::ipc::pty_spawn::tests::round4_chain::the_reader_fallback_drops_a_held_chain_from_its_head
+    red_confirmed: true
+    red_reason: >-
+      Against the parent's write_filter.rs both failed. The filter-level test with "OSC aborted
+      by OSC: cut at 10, [] after it: the settled bytes and the bytes after the cut, nothing
+      from the chain head on" (left `ab ESC ]11;?`, right `ab`): the aborted OSC was already
+      written. The reader-level fallback test with "[?47h: the held chain is not written to
+      the ring" (left 1 OSC introducer in the ring, right 0).
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_chain::chain_corpus_is_split_invariant_and_pending_is_the_whole_chain_after_every_call
+      - mux::ipc::pty_spawn::tests::round4_chain::the_read_that_opens_a_chain_does_not_write_its_head
+      - mux::ipc::pty_spawn::tests::write_filter_boundaries_are_split_position_independent_and_match_term_core
+    red_confirmed: true
+    red_reason: >-
+      Against the parent's write_filter.rs the first two failed: the corpus test with "OSC
+      aborted by OSC + []: after feeding ab ESC ]11;? ESC ]0;x, pending must be exactly the
+      chain that ends in the single incomplete construct" (left `ESC ]0;x`, right the whole
+      chain), the second with "only the settled prefix is written" (left `ab ESC ]11;?`, right
+      `ab`). `write_filter_boundaries_are_split_position_independent_and_match_term_core` was
+      updated (its allowed pending shapes now include a chain that starts with a superseded
+      ESC, and two such items joined its corpus); it passed on the parent's file too, because
+      the parent also holds those two items from their last construct onward, so no red state
+      occurred for that test.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_chain::a_held_construct_that_completes_reports_only_its_own_bytes_and_settles_the_chain
+      - mux::ipc::pty_spawn::tests::round4_chain::a_chain_that_settles_before_a_cut_is_written_and_the_next_construct_is_dropped
+      - mux::ipc::pty_spawn::tests::round4_chain::a_suppressed_chunk_whose_pending_holds_a_chain_redelivers_it_once
+    red_confirmed: true
+    red_reason: >-
+      Against the parent's write_filter.rs all three failed on the chain not being held: the
+      first with left `ab ESC ]11;?` right `ab` (the first aborted link was written when the
+      chain was fed), the second with the same left / right at its first assertion, the third
+      with "the chain is held whole" (left `ESC ]0;x`, right `ESC ]11;? ESC ]0;x`). The
+      third test's later assertions (the tail is the whole chain, no byte is both an item and
+      part of the tail, the carried completion is delivered once) were not reached on the
+      parent's file; they pass after the change with no change to suppressed_output.rs
+      logic, so the item / tail derivation showed no gap.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_chain::a_held_chain_past_the_cap_takes_the_overflow_flush
+      - mux::ipc::pty_spawn::tests::round4_chain::a_hostile_aborted_introducer_stream_is_one_linear_chain
+      - mux::ipc::pty_spawn::tests::write_filter_hostile_aborted_introducers_stream_is_linear_and_held_as_one_chain
+    red_confirmed: true
+    red_reason: >-
+      Against the parent's write_filter.rs all three failed: the overflow test at "read 0: the
+      chain is held whole" (the chain held across calls; its single-large-feed part and the
+      post-flush state assertions passed on the parent's file, whose flush already resets
+      `pending`), the 64 KiB test at "the whole chain is held", the renamed hostile-stream
+      test at "the stream below the cap is one chain: nothing is written until it settles".
+      The time budgets and the no-panic clauses passed before the change: they are guards
+      the parent already met, so no red state exists for them.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::write_filter_holds_an_esc_aborted_chain_from_its_head
+      - mux::ipc::pty_spawn::tests::write_filter_double_esc_treats_the_second_esc_as_the_introducer
+      - mux::ipc::pty_spawn::tests::write_filter_boundaries_are_split_position_independent_and_match_term_core
+      - mux::ipc::pty_spawn::tests::write_filter_hostile_aborted_introducers_stream_is_linear_and_held_as_one_chain
+      - mux::ipc::pty_spawn::tests::every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source
+    red_confirmed: true
+    red_reason: >-
+      With the updated expectations in place and write_filter.rs restored to the parent's, the
+      three changed-expectation tests failed: `write_filter_holds_an_esc_aborted_chain_from_its_head`
+      with "the aborted OSC and the aborted DCS are links of the chain that ends in the
+      still-open APC: none of it is written yet", `write_filter_double_esc_treats_the_second_esc_as_the_introducer`
+      with "the superseded FIRST esc is closed by the esc that opens the OSC, so it is held
+      with that OSC" and the hostile-stream test as listed under AC-5.
+      `write_filter_boundaries_are_split_position_independent_and_match_term_core` (shape
+      allowance widened) and `every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source`
+      (looks the renamed D7 registry name up under its current name; the D7 name list and the
+      predecessor DECISIONS.md stay as written) passed on the parent's file: no red state for
+      those two. The round1 record update (new names, supersede notes, `red_reason` unchanged)
+      has no executable check that can be made to fail; each updated name appears in the
+      libtest `--list` output.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing `mux::ipc::pty_spawn::tests`
+      module (found by searching the test directory for `pty_spawn/write_filter.rs`,
+      `write_filter.rs`, `suppressed_output.rs` and `pty_spawn/mod.rs`) detects a regression of
+      the write filter and the replacement builder; no red state occurred for this criterion.
+      The full `--lib` suite ended at 4028 passed, 0 failed, 3 ignored, and
+      `cargo check --manifest-path src-tauri/Cargo.toml --no-default-features` passed after the
+      change. That nothing under `crates/mux_ipc/` and no snapshot assembly code changed is a
+      property of the diff that no test measures.
