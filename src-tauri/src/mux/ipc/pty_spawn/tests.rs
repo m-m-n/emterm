@@ -7491,13 +7491,19 @@ fn reader_closes_pending_at_a_chunk_that_starts_with_a_switch_to_the_alt_screen(
 /// about the alternate screen) keeps the whole-chunk gate: with both screens
 /// on main the whole chunk is fed, and a chunk whose switch straddled the
 /// read boundary is still gated out of the ring.
+///
+/// mux-suppressed-output-round4-fixes FR4: the previous read left the ring
+/// inside the CSI `ESC[?10`, which the gated read's `49h` completed for the
+/// client; the fallback's cut therefore closes it with one DEL after the
+/// ring's bytes.
 #[test]
 fn fallback_path_keeps_the_whole_chunk_gate() {
     let chunks = vec![b"a\x1b[?10".to_vec(), b"49hxyz".to_vec()];
     let run = run_reader_with_suppressed_reads(&chunks, &[]);
     assert_eq!(
-        run.ring, b"a\x1b[?10",
-        "the straddling read is gated out of the ring as before"
+        run.ring, b"a\x1b[?10\x7f",
+        "the straddling read is gated out of the ring as before; the CSI the \
+         ring was left inside is closed"
     );
 }
 
@@ -8768,3 +8774,6 @@ mod fr8_snapshot_tail {
 // mux-suppressed-output-round3-fixes task0004 (FR6, FR7, NFR2): send-time
 // re-check of the tail omission.
 mod round3_send_recheck;
+
+// mux-suppressed-output-round4-fixes task0004 (FR4): in-progress CSI at a cut.
+mod round4_cut_csi;
