@@ -1077,3 +1077,114 @@ fn adversarial_designator_chains_send_no_empty_chunk_and_match_the_reference() {
         }
     }
 }
+
+// ── AC-6 (FR5, FR6): the decision record ─────────────────────────────────
+
+/// The text of the section that starts at the line `heading` and runs to the
+/// next heading of the same or a higher level.
+fn section_of<'a>(doc: &'a str, heading: &str) -> &'a str {
+    let level = heading.chars().take_while(|c| *c == '#').count();
+    let mut offset = 0usize;
+    let mut start = None;
+    let mut end = doc.len();
+    for line in doc.lines() {
+        let hashes = line.chars().take_while(|c| *c == '#').count();
+        let is_heading = hashes > 0 && line[hashes..].starts_with(' ');
+        match start {
+            None if line == heading => start = Some(offset),
+            Some(_) if is_heading && hashes <= level => {
+                end = offset;
+                break;
+            }
+            _ => {}
+        }
+        offset += line.len() + 1;
+    }
+    let start = start.unwrap_or_else(|| panic!("DECISIONS.md has no heading {heading:?}"));
+    &doc[start..end]
+}
+
+/// AC-6 (FR5, FR6, SPEC AC-6): the decision record's FR5 section states
+/// whether the path reproduced, with the registry test path, names the
+/// residual outside the fix boundary and its cause, and its
+/// behavior-changing-tests subsection lists the existing tests whose
+/// expectation this task changed. Every name the record cites resolves to a
+/// test in the source.
+#[test]
+fn round4_fr5_the_decision_record_states_the_outcome_the_residual_and_the_changed_tests() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md");
+    let doc = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("the decision record {} is unreadable: {e}", path.display()));
+
+    let adjacent = section_of(&doc, "### FR5: switch sequence in the designator slot");
+    assert!(
+        !adjacent.contains("pending (task0005)"),
+        "the FR5 section is filled in: {adjacent}"
+    );
+    let fixed = adjacent.contains("reproduced and fixed");
+    let not_reproducing = adjacent.contains("not reproducing");
+    assert!(
+        fixed != not_reproducing,
+        "the FR5 section states exactly one outcome: {adjacent}"
+    );
+    let registry_file = "src-tauri/src/mux/ipc/pty_spawn/tests/round4_designator_slot.rs";
+    let registry_test = "mux::ipc::pty_spawn::tests::round4_designator_slot::\
+                         round4_fr5_switch_in_the_designator_slot_matches_the_raw_stream_reference";
+    assert!(adjacent.contains(registry_file), "{adjacent}");
+    assert!(adjacent.contains(registry_test), "{adjacent}");
+    // The cited path resolves: this module, and a test function of that name.
+    let (module, function) = registry_test.rsplit_once("::").unwrap();
+    assert!(module_path!().ends_with(module), "{}", module_path!());
+    assert!(
+        include_str!("round4_designator_slot.rs").contains(&format!("fn {function}()")),
+        "{function} is defined in {registry_file}"
+    );
+    // The pre-change test failed (task0005 record) and the fix is in the
+    // production path; a record that says otherwise contradicts it.
+    assert!(
+        fixed,
+        "the pre-change test failed (task0005 record), so the outcome is `reproduced and fixed`"
+    );
+    // The residual outside the boundary: named, with its cause.
+    let residual = adjacent
+        .lines()
+        .find(|line| line.starts_with("Residual:"))
+        .unwrap_or_else(|| panic!("the FR5 section has a Residual line: {adjacent}"));
+    for needle in ["shadow parser", "snapshot assembly", "D4"] {
+        assert!(
+            residual.contains(needle),
+            "the residual names {needle:?}: {residual}"
+        );
+    }
+
+    let behavior_changing = {
+        let start = doc
+            .find("## Behavior-changing tests")
+            .expect("the Behavior-changing tests section");
+        section_of(&doc[start..], "### FR5")
+    };
+    assert!(
+        !behavior_changing.contains("pending (task0005)"),
+        "the FR5 subsection is filled in: {behavior_changing}"
+    );
+    let changed = [
+        "round4_48caec6f_awaiting_designator_at_a_cut_writes_the_consumed_esc",
+        "round4_many_straddling_switches_after_a_waiting_designator_stay_within_the_budget",
+    ];
+    for name in changed {
+        assert!(
+            behavior_changing.contains(&format!("`{name}`")),
+            "the FR5 subsection lists {name}: {behavior_changing}"
+        );
+        assert!(
+            include_str!("round4_designator_cut.rs").contains(&format!("fn {name}()")),
+            "the listed test exists under that name"
+        );
+    }
+    assert!(
+        behavior_changing
+            .contains("src-tauri/src/mux/ipc/pty_spawn/tests/round4_designator_cut.rs"),
+        "{behavior_changing}"
+    );
+}

@@ -1,0 +1,148 @@
+task_id: task0005
+# From step 4a, before any change. The run's output went to a scratchpad file that a parallel
+# task's run also wrote, so the file mixes two runs (one `ok. 4018 passed; 0 failed`, one
+# `FAILED. 4016 passed; 2 failed`); the two failures below are the ones the file lists, and I
+# cannot tell from the file which of the two runs this worktree produced. Both are reader /
+# PTY harness timing tests (the first panics with 'the reader must reach P2 ... Timeout', the
+# second with 'bytes written through the adopted master ... must be readable back'); neither
+# failed in any later run in this worktree (4074 and 4075 passed, 0 failed). Another task's
+# baseline saw the same kind of reader-harness timeout (`visible_reattach_...`) while several
+# cargo processes were building in parallel.
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::on_demand_snapshot_redelivers_alt_screen_and_main_screen_color_queries_once
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+# Re-executed after the implementation, on the tree after the parent (tasks 0002, 0003, 0004)
+# was merged in and after the two tests listed in DECISIONS.md "Behavior-changing tests / FR5"
+# were updated: `cargo test --lib` finished with 4075 passed, 0 failed, 3 ignored.
+# An earlier re-execution on the merged tree, before those two expectations were updated,
+# failed exactly `round4_designator_cut::round4_48caec6f_awaiting_designator_at_a_cut_writes_the_consumed_esc`
+# and `round4_designator_cut::round4_many_straddling_switches_after_a_waiting_designator_stay_within_the_budget`
+# (the ring now keeps the designator-slot sequence as text); that run is not the one recorded here.
+final_failures: []
+# Alternate-screen state per case, term_core against the vt100 shadow parser (the state that
+# decides whether a residual falls outside the fix boundary):
+#   ESC[?47h, ESC[?1049h in the slot: term_core prints text and stays on the main screen; the
+#     shadow parser aborts on the ESC and enters the alternate screen (DIFFERS).
+#   ESC[?47l, ESC[?1049l in the slot: term_core prints text; the shadow parser stays on the
+#     main screen (same).
+#   ESC[?1047h, ESC[?1047l in the slot: term_core prints text; the shadow parser takes no
+#     action on 1047 (same).
+# The differing case is the residual recorded in DECISIONS.md (FR5): after an `h` form that
+# nothing closes the snapshot is laid out as an alternate-screen pane and the next read's
+# extraction starts in the alternate screen. Both are outside the boundary (D4).
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::round4_fr5_switch_in_the_designator_slot_matches_the_raw_stream_reference
+    red_confirmed: true
+    red_reason: >-
+      Observed on the parent's extraction and capture step (write_filter.rs and mod.rs taken
+      from the integration branch, plus a compile-only shim for the new extraction API, no
+      behavior change): the registry test failed with 'leave, one read / "\u{1b}(" / [?47h /
+      restore at read 0: the ring holds the designator-slot sequence as text' (left
+      `pre ESC ( ESC TEXT later`, right `pre ESC ( ESC [?47l TEXT later`). So FR5 reproduced:
+      the ring lacked the `[?47l` bytes that term_core prints as text after the designator
+      ESC. That ring assertion is the first one in the test, so the run stopped there; the
+      comparison of screen, cursor, responses and displayed characters with the raw-stream
+      reference follows it and was not what failed in that run. An exploratory probe on the
+      same pre-change code showed the client's rows and cursor differing from the reference at
+      the restore points of the one-read and `ESC (`-ends-the-read layouts, and in one
+      layout (a color query after the sequence) the responses too.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::round4_fr5_switch_in_the_designator_slot_matches_the_raw_stream_reference
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::extraction_removes_exactly_the_switches_term_core_dispatches
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::cuts_and_live_spans_follow_the_corrected_span_list
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::a_mark_after_a_designator_slot_switch_is_live
+    red_confirmed: true
+    red_reason: >-
+      Observed on the same pre-change code (shim as in AC-1): all four failed.
+      `cuts_and_live_spans_follow_the_corrected_span_list` expected the spans `[0..10, 16..17]`
+      and got `[0..3, 16..17]` (the slot switch was cut out); `extraction_removes_exactly_the_switches_term_core_dispatches`
+      expected `[0..35]` and got `[0..25, 33..35]`; `a_mark_after_a_designator_slot_switch_is_live`
+      failed with 'the mark is live (0 items)' (an OSC 133 mark after a slot switch was not
+      live); the registry test failed as in AC-1.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::switches_outside_a_designator_slot_extract_as_before
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::cuts_and_live_spans_follow_the_corrected_span_list
+      - mux::ipc::pty_spawn::tests::extract_main_buffer_pure_main_borrows_whole_chunk
+      - mux::ipc::pty_spawn::tests::extract_main_buffer_pure_alt_yields_nothing
+      - mux::ipc::pty_spawn::tests::extract_main_buffer_keeps_prefix_before_alt_enter
+      - mux::ipc::pty_spawn::tests::extract_main_buffer_keeps_suffix_after_alt_exit
+      - mux::ipc::pty_spawn::tests::extract_main_buffer_drops_balanced_internal_alt_span
+      - mux::ipc::pty_spawn::tests::extract_main_buffer_handles_47_and_1047_forms
+      - mux::ipc::pty_spawn::tests::cuts_are_derived_from_the_main_buffer_span_list
+    red_confirmed: false
+    red_reason: >-
+      The criterion is that existing behavior stays: switches outside a designator slot, after a
+      complete designation and straddling reads. That behavior pre-existed, so no failing state
+      exists for it. `switches_outside_a_designator_slot_extract_as_before` (which compares the
+      new extraction with a copy of the old algorithm over random streams that contain no
+      slot ESC and over every split point) passed on the pre-change code; in
+      `cuts_and_live_spans_follow_the_corrected_span_list` the assertions for the after-a-complete-designation
+      and straddling cases passed on the pre-change code and only the slot assertions failed.
+      The seven existing extraction and cut-derivation tests pass unchanged. Two existing
+      write-path tests in round4_designator_cut.rs had their expected ring changed (a
+      designator-slot switch is now text); they are listed in DECISIONS.md under FR5.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::the_designator_slot_state_after_a_read
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::the_designator_slot_state_is_split_invariant
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::designator_chains_with_switches_stay_linear_in_extraction
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::adversarial_designator_chains_through_the_reader_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::adversarial_designator_chains_send_no_empty_chunk_and_match_the_reference
+    red_confirmed: false
+    red_reason: >-
+      The budget, no-panic and no-empty-chunk properties hold on the pre-change code too, so no
+      failing state exists for them. On the pre-change code (shim as in AC-1)
+      `designator_chains_with_switches_stay_linear_in_extraction` and
+      `the_designator_slot_state_is_split_invariant` passed (the shim reports a Ground slot
+      after every read, which is trivially split-invariant), and
+      `the_designator_slot_state_after_a_read` failed (left Ground, right EscapeSeen for a read
+      ending in a lone ESC). The two reader-level adversarial tests failed on the pre-change
+      code, but on their comparison of the ring replay / client view with the raw-stream
+      reference (the FR5 bug), not on the budget or the empty-chunk check.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::snapshot_paths_run_concurrently_with_reader_and_resize_without_deadlock
+      - mux::ipc::pty_spawn::tests::stress_reader_with_concurrent_resize_and_snapshot_paths_completes_within_budget
+      - mux::ipc::pty_spawn::tests::snapshot_style_captured_read_waits_for_the_capture_step_to_finish
+    red_confirmed: false
+    red_reason: >-
+      The verifiable outcome is a diff inspection: the diff of mod.rs adds one reader-local
+      `let mut designator_slot` and changes the extraction call, and adds no lock, no
+      blocking wait and no change to the order `output_target`, capture exclusion, ring /
+      shadow parser. No failing state exists for a lock that is not added. The three listed
+      existing tests (found by searching the pty_spawn test directory and tests.rs for
+      concurrent, snapshot and lock names; no test names pty_spawn/mod.rs by path) run the
+      reader concurrently with the snapshot paths and resize and pass.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::round4_fr5_the_decision_record_states_the_outcome_the_residual_and_the_changed_tests
+    red_confirmed: true
+    red_reason: >-
+      Document-contract test over feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md.
+      Observed failing with DECISIONS.md as the parent left it: 'the FR5 section is filled in:
+      ### FR5: switch sequence in the designator slot / pending (task0005)'. It checks that
+      the FR5 section states exactly one outcome, names the registry path and test, that the
+      test resolves to a function in round4_designator_slot.rs, that the Residual line names
+      the shadow parser, the snapshot assembly and D4, and that the FR5
+      behavior-changing subsection lists the two changed tests, which exist under those names
+      in round4_designator_cut.rs.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::fallback_path_keeps_the_whole_chunk_gate
+      - mux::ipc::pty_spawn::tests::round3_write_path::a_cut_drops_the_construct_from_its_opening_esc_on
+    red_confirmed: false
+    red_reason: >-
+      The verifiable outcomes are the full `cargo test --lib` run (4075 passed, 0 failed), and
+      `cargo check` with default features and with `--no-default-features` (both finish without
+      warnings), plus a diff that touches nothing under crates/mux_ipc/ and no snapshot
+      assembly code (git diff against the parent changes only write_filter.rs, mod.rs,
+      tests.rs, round4_designator_cut.rs, round4_designator_slot.rs, DECISIONS.md and this
+      record). No failing state occurred for the checks. The
+      existing tests that assert exact ring bytes (found by searching the pty_spawn tests by
+      the type name ScrollbackWriteFilter and by pty_spawn/write_filter.rs, which no test
+      names) pass; the only ring expectations that changed are the two listed in DECISIONS.md
+      under FR5, and they changed after the implementation, not before it.
