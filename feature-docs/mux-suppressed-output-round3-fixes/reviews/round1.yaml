@@ -1,0 +1,94 @@
+round: 1
+executed_at: "2026-10-02T10:40:09+09:00"
+scope:
+  review_mode: diff
+  base_commit: d7729d0d330edc30b6c978bc93be5dcf7a6f7f24
+  head_commit: 6eed8513e74f2c7fe97fa642de92f5faa322af51
+  changed_files:
+  - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/round3_as05.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/round3_send_recheck.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/osc_identify.rs
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/scrollback_filter/tests.rs
+  - src-tauri/src/mux/session/pane/output_capture.rs
+  - src-tauri/src/mux/session/pane/tests.rs
+  - test-docs/mux-suppressed-output-round2-fixes/task0004.tests.yaml
+  - test-docs/mux-suppressed-output-round3-fixes/task0001.tests.yaml
+  - test-docs/mux-suppressed-output-round3-fixes/task0002.tests.yaml
+  - test-docs/mux-suppressed-output-round3-fixes/task0003.tests.yaml
+  - test-docs/mux-suppressed-output-round3-fixes/task0004.tests.yaml
+  - test-docs/mux-suppressed-output-round3-fixes/task0005.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: failed, note: "codex returned non-JSON output; no usable review — treated as harness-level failure and routed to the Claude fallback"}
+  - {run_id: "security#fallback", perspective: security, role: fallback, source: claude, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+unreviewed_perspectives: []
+findings:
+  - stable_id: 3e2024dce619ed9f
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    line: 333
+    title: "カット直前の未完了構文を落とす切り詰めが、その開始ESCで中断済みだった直前の文字列やESC ESCの先行ESCを残し、再生時にクエリを捏造する"
+    description: "write_filter.rs:333 の run.truncate(scan.boundary) は、カットで閉じた未完了構文を開始ESCから落とす。直前の文字列が ESC <\ 以外> で中断されていると boundary はその中断ESCを指し、切り詰めで中断ESCも消え、クライアントでは閉じていた直前の文字列がリング上で再び開く。例: ESC]11;? ESC]0;x の直後に切替シーケンス → リングに ESC]11;? が残り、再生後に後続の BEL で OSC 11 色照会が成立する（NFR4/TM-1 違反、FR1 の Consequence 未達）。本差分で新たに生じた退行。変形: ESC]11;? ESC ESC + カット → 後続の \ で ST 完了、X ESC ESC + カット → 後続の ]11;? BEL で OSC 11 成立。"
+    suggestion: "落とす範囲の開始を、クライアント側で落とす構文と一体で消費されたESCまで遡らせる（Aborted 連鎖なら中断された文字列の開始ESC、ESC ESC 連鎖なら連鎖の先頭ESC）。上記 3 形を AC-2 の raw-stream 参照比較テストに追加する。"
+    sources: [codex:comprehensive]
+    confidence: 85
+    resolution: unresolved
+  - stable_id: 989ec5c588abce06
+    severity: medium
+    category: security
+    file: src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+    line: 138
+    title: "as-05 フォールバックの designator 不確定性を先頭バイトにしか適用せず、チャンク内の ESC ( 連鎖の後ろでクエリを捏造する"
+    description: "first_chunk_byte_may_be_designator が真のとき除外されるのは range.start == boundary の item と boundary から始まる ESC の tail だけで、scan_view はチャンク先頭を ground と仮定して歩く。クライアントが designator 待ちのとき、チャンク内の ESC ( 連鎖でパース位置のずれが後ろへ伝わる。例: ESC ( ESC ( ESC ]11;? BEL で ColorQuery 4..11 が配送される／ESC ( ESC ( ESC [ で tail 4.. が再送され次の 6n と結合して DSR 成立。FR5・NFR4 違反。comprehensive#0 も同じ箇所を独立に報告。"
+    suggestion: "first_byte_undecided のときは chunk[0] から ground で歩く走査と chunk[1] から歩く走査の 2 通りを行い、両方が同じ range で報告した item と開始位置が一致する tail だけを採用する。回帰テストを追加する。"
+    sources: [claude:security, codex:comprehensive]
+    confidence: 100
+    resolution: unresolved
+  - stable_id: 48caec6f5b0b5810
+    severity: medium
+    category: security
+    file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    line: 319
+    title: "カット時に designator 待ちの ESC ( / ESC ) が designator なしでリングに残り、再生時に後続バイトを designator として消費してクエリを捏造する"
+    description: "カット直前で designator 待ちの ESC ( / ESC ) はラン全体と一緒にリングへ書かれ awaiting_designator は解除される（SPEC as-02/EC-2 で現状維持）。ライブでは切替シーケンスの ESC が designator として消費されるが、リングでは切替が除かれ後続バイトが designator になりパースがずれる。例: X ESC ( ESC[?1049h ESC[?1049l ESC ( ESC ]11;? BEL → リング X ESC ( ESC ( ESC ]11;? BEL → 再生で OSC 11 照会成立。空 pending 経路と FR4 フォールバックでも同様。本差分以前からの挙動で修正には SPEC as-02/EC-2 の見直しが必要。"
+    suggestion: "カット（および FR4 フォールバックの閉じ）時点で designator 待ちなら、リングに書いた ESC ( / ESC ) の直後に消費された designator を 1 バイト追記する（または同一呼び出し内なら末尾 2 バイトを落とす）。SPEC as-02/EC-2 を改訂してから実装する。"
+    sources: [claude:security]
+    confidence: 65
+    resolution: unresolved
+evaluation:
+  round_summary: "medium 3 件、critical/high なし。comprehensive#0 と security#fallback が client_parity_scan.rs の同じ FR5 不備を独立に報告し 1 件に統合。security#0 は codex が JSON 以外を返し使える出力なし、security 観点は security#fallback で網羅。プロンプトインジェクションの試みなし。performance / architecture は corroborated。spec#0 は矛盾なしとしたが FR1 Consequence・FR5・NFR4 は上記 1・2 件目で未達（重複回避のため spec 別 finding なし）。評価者は読み取り予算 10 ファイルを使い切り、テストファイルと round3 test-docs YAML は未確認。"
+  recommended_action: rework
+  action_rationale: "critical/high はない。medium のうち 2 件（write_filter の切り詰め、client_parity_scan の FR5）は FR1/FR5 の「クエリを捏造しない」を満たしておらず、前者は本差分の退行。3 件目は SPEC as-02/EC-2 が維持した既存挙動で、直すか見送るかは SPEC 判断。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: "no critical/high candidates; Phase R4 candidate gate admits only critical/high"
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  note: "disposition complete; no vulnerability findings (axis 2 not selected — diff touches no dependency manifest), so nothing to file"
