@@ -1,0 +1,72 @@
+round: 1
+executed_at: "2026-10-02T15:21:39+09:00"
+scope:
+  review_mode: diff
+  base_commit: 31538ac27867c6bd6426fdba4d3ce05c038ad483
+  head_commit: 7c258379e9d447ac6d51a90c49650c7286cdce84
+  changed_files:
+    - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+    - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_as05.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_chain.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_designator_cut.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_designator_slot.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - test-docs/mux-suppressed-output-fixes/task0002.tests.yaml
+    - test-docs/mux-suppressed-output-round2-fixes/task0003.tests.yaml
+    - test-docs/mux-suppressed-output-round3-fixes/task0002.tests.yaml
+    - test-docs/mux-suppressed-output-round4-fixes/task0001.tests.yaml
+    - test-docs/mux-suppressed-output-round4-fixes/task0002.tests.yaml
+    - test-docs/mux-suppressed-output-round4-fixes/task0003.tests.yaml
+    - test-docs/mux-suppressed-output-round4-fixes/task0004.tests.yaml
+    - test-docs/mux-suppressed-output-round4-fixes/task0005.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed, note: "schema-valid empty result; reviewer summary reports unparseable Codex output (accepted per schema-validity rule after Codex consultation)"}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed, note: "schema-valid empty result; reviewer summary reports unparseable Codex output (accepted per schema-validity rule after Codex consultation)"}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: skipped, skip_reason: "review_data_too_large"}
+  - {run_id: "architecture#1", perspective: architecture, role: primary, source: codex, status: completed, note: "chain advanced after review_data_too_large (treated as harness-specific after Codex consultation)"}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: skipped, skip_reason: "review_data_too_large"}
+  - {run_id: "spec#1", perspective: spec, role: primary, source: codex, status: completed, note: "schema-valid empty result; reviewer summary reports unparseable Codex output"}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: 4c0ad9058a983648
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    line: 512
+    title: "出力状態の契約に除去前の走査結果を使用している"
+    description: "cut 経路（write_filter.rs 512-515 行）の FR4 閉鎖は、除去前の run を走査した scan.csi で判断している。scan_boundary は完了した OSC/APC/DCS や後続の完了 CSI の ESC で csi を None にするが、strip（scrollback_filter.rs の strip_rich_content_and_remap_with_designator）はその ESC を含む構文ごと除去する（OSC 777 ビューア起動列、OSC 9999、agent-status、Kitty APC、SIXEL DCS、ESC[6n 等の CSI 照会列）。このため ESC[6 + 除去対象の完全な構文の直後に cut が来ると、出力は ESC[6 で終わり CSI_CLOSING（DEL）が付かない。ESC[6 ESC[6n + cut も同じ。復元後に n が届くと、生ストリームには無い CPR 応答をクライアントが返す（NFR4/TM-1、FR4 に反する）。通常経路も self.csi = scan.csi（None）を引き継ぐため、後のフォールバック閉鎖も何も書かない。round4_cut_csi.rs の CLOSING_CASES は除去されない ESC]0;t BEL しか含まない。cut が無い場合も、リングが除去済み構文の直後の ESC[6 で終われば次のライブの n が完成させうる（以前からの strip の挙動だが、新しい csi フィールドの契約にも反する）。"
+    suggestion: "cut の閉鎖と次の呼び出しへ引き継ぐ csi の両方を、除去後の出力の状態で決める。例: strip が開いた CSI を中断する ESC で始まる構文を除去するときに CSI_CLOSING を代わりに書く、または strip の出力末尾の CSI 状態を返させて書き込みフィルタがそれを使う。CLOSING_CASES と term_core 生ストリーム比較に、ESC[6 ESC]777;emterm;markdown;…BEL / ESC[6 ESC_G…ESC\\ / ESC[6 ESC[6n のそれぞれに cut と後続の n を続けた回帰テストを、同一呼び出しの cut とフォールバック閉鎖の両方で追加する。"
+    sources: ["codex:architecture"]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: "medium severity is outside the auto-fix candidate gate (critical/high only); filed as a follow-up task"
+evaluation:
+  round_summary: "評価したのは 1 件で、中程度の指摘 1 件（architecture#1）。コードと照合して有効と確認した。critical/high は無い。プロンプトインジェクションの試みは無かった。security#0、comprehensive#0、spec#1 は空の結果を返したが、要約は Codex の出力が解析できなかったことを示しておりレビューした証拠にはならない。architecture#0 と spec#0 は review_data_too_large でスキップ。評価者は SPEC.md、write_filter.rs、scrollback_filter.rs、round4_cut_csi.rs、mod.rs、suppressed_output.rs、DECISIONS.md、client_parity_scan.rs、前段 test-docs 2 件を読んだ。security: scan_boundary の cut 経路を strip と照合し architecture#1 と同じ TM-1 経路を確認、FR1/FR2/FR3 では他の捏造経路は無かった。comprehensive: 同じ箇所、FR5 の残課題は DECISIONS.md に記録済み。performance: 1 パス・O(1) 状態を確認し performance#0 と一致。spec: FR1〜FR5 を追跡、FR4 の保証は architecture#1 の箇所で満たされていない。未確認: round2-fixes/task0003.tests.yaml、round4 タスクレコード、tests.rs と round3_write_path.rs の期待値変更、改名テストの cargo test 一覧照合。"
+  recommended_action: "auto_fix"
+  action_rationale: "有効な中程度の指摘が 1 件あり修正は書き込みフィルタと strip の連携内に収まる。critical/high は無い。security、comprehensive、spec のレビュアーは実質的に結果を返しておらず、評価者の独自確認も 10 ファイルに限られるため、このラウンドを問題なしとして扱わないこと。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: ntd
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
