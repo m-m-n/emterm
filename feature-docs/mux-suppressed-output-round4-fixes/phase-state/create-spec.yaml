@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-suppressed-output-round4-fixes
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: c5301884439699257ebc26a91a1d0d5bca693b42
-last_input_digest: sha256:b9a723984345d15f2364ffad334f6acb2ffed47115f34a5874ad48d4b65b50be
-active_request_id: null
+last_input_digest: sha256:bee8bb74a6a64f29e113f8e395203727cb09491c81d6b0b91f7d5b00710cf39b
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: answered
@@ -76,6 +76,10 @@ worker_runs:
   status: needs_user_input
   input_digest: sha256:b9a723984345d15f2364ffad334f6acb2ffed47115f34a5874ad48d4b65b50be
   output_digest: sha256:4962678d18fcaa499836fb57ce7f8b6f6072c125baed2fa8ccb8bfeed5d34ae6
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:bee8bb74a6a64f29e113f8e395203727cb09491c81d6b0b91f7d5b00710cf39b
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
