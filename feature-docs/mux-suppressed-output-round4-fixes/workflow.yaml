@@ -122,7 +122,8 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-round4-fixes/task0001
     notes: null
   task0002:
     title: Awaiting designator at a cut writes the consumed ESC
@@ -149,7 +150,8 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-round4-fixes/task0002
     notes: null
   task0003:
     title: 'As-05 fallback: two-reading intersection'
@@ -172,7 +174,8 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-round4-fixes/task0003
     notes: null
   task0004:
     title: 'Conditional: in-progress CSI at a cut'
@@ -196,7 +199,8 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-round4-fixes/task0004
     notes: null
   task0005:
     title: 'Conditional: switch sequence in the designator slot'
@@ -223,7 +227,8 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-suppressed-output-round4-fixes/task0005
     notes: null
 review:
   status: pending
