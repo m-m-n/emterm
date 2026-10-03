@@ -153,15 +153,6 @@ export function renderProfilesSection(
       }),
     );
 
-    // Launch (open new tab with this profile)
-    actions.appendChild(
-      createActionButton(t("settings.profiles.launch"), () => {
-        document.dispatchEvent(
-          new CustomEvent("profile:launch", { detail: profile }),
-        );
-      }),
-    );
-
     item.appendChild(actions);
     list.appendChild(item);
   }

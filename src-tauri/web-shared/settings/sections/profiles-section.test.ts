@@ -19,6 +19,9 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { initI18n, t } from "../../i18n/index.ts";
+import enLocale from "../../i18n/locales/en.json";
+import jaLocale from "../../i18n/locales/ja.json";
 import { renderProfilesSection } from "./profiles-section.ts";
 import type { SectionContext } from "./types";
 import type {
@@ -63,14 +66,14 @@ function makeMux(): MuxSettings {
   };
 }
 
-function makeProfile(name: string): Profile {
+function makeProfile(name: string, isDefault = false): Profile {
   return {
     name,
     shell_path: "",
     shell_args: [],
     env_vars: "",
     working_directory: "",
-    is_default: false,
+    is_default: isDefault,
     ssh_connection_name: "",
     wsl_distro_name: "",
   };
@@ -145,6 +148,7 @@ function makeSettings(profiles: Profile[]): AppSettings {
 }
 
 interface RenderedProfiles {
+  panel: HTMLElement;
   settings: AppSettings;
   saves: Array<[string, unknown]>;
   reRenders: { count: number };
@@ -156,8 +160,13 @@ interface RenderedProfiles {
  * never leaks between tests). The stub context attaches listeners to the
  * element it is given and records every saveSetting / reRender call.
  */
-function renderProfiles(names: string[]): RenderedProfiles {
-  const settings = makeSettings(names.map(makeProfile));
+function renderProfiles(
+  names: string[],
+  defaultNames: string[] = [],
+): RenderedProfiles {
+  const settings = makeSettings(
+    names.map((name) => makeProfile(name, defaultNames.includes(name))),
+  );
   const saves: Array<[string, unknown]> = [];
   const reRenders = { count: 0 };
   const ctx: SectionContext = {
@@ -179,6 +188,7 @@ function renderProfiles(names: string[]): RenderedProfiles {
   renderProfilesSection(panel, ctx);
 
   return {
+    panel,
     settings,
     saves,
     reRenders,
@@ -288,5 +298,111 @@ describe("Profiles list drag reorder — dragstart then drop", () => {
 
     expect(saves.length).toBe(0);
     expect(names(settings.profiles)).toEqual(["A", "B", "C"]);
+  });
+});
+
+/** The action buttons of one rendered profile item, in DOM order. */
+function actionButtons(item: HTMLElement): HTMLButtonElement[] {
+  return Array.from(
+    item.querySelectorAll<HTMLButtonElement>(".profile-item-actions button"),
+  );
+}
+
+function buttonTexts(item: HTMLElement): string[] {
+  return actionButtons(item).map((btn) => btn.textContent ?? "");
+}
+
+describe("Profiles list Launch removal — action buttons", () => {
+  test("AC-1: each profile item holds exactly the default toggle, Edit, Duplicate and Delete buttons in that order", () => {
+    const { panel } = renderProfiles(["A", "B"], ["A"]);
+    const items = Array.from(
+      panel.querySelectorAll<HTMLElement>(".profile-list-item"),
+    );
+    expect(items.length).toBe(2);
+
+    const [itemA, itemB] = items as [HTMLElement, HTMLElement];
+    expect(buttonTexts(itemA)).toEqual([
+      t("settings.profiles.unsetDefault"),
+      t("settings.profiles.edit"),
+      t("settings.profiles.duplicate"),
+      t("settings.profiles.delete"),
+    ]);
+    expect(buttonTexts(itemB)).toEqual([
+      t("settings.profiles.setDefault"),
+      t("settings.profiles.edit"),
+      t("settings.profiles.duplicate"),
+      t("settings.profiles.delete"),
+    ]);
+  });
+
+  test("AC-1: no action button reads Launch or 起動 in either UI language", () => {
+    try {
+      for (const locale of ["en", "ja"]) {
+        initI18n(locale);
+        const { panel } = renderProfiles(["A", "B"], ["A"]);
+        const texts = Array.from(
+          panel.querySelectorAll<HTMLButtonElement>(
+            ".profile-item-actions button",
+          ),
+        ).map((btn) => btn.textContent);
+
+        expect(texts).not.toContain("Launch");
+        expect(texts).not.toContain("起動");
+        // Guard: the buttons were found (4 per profile, 2 profiles).
+        expect(texts.length).toBe(8);
+      }
+    } finally {
+      initI18n("en");
+    }
+  });
+
+  test("AC-2: clicking every action button of a profile never dispatches profile:launch on the document", () => {
+    const { item } = renderProfiles(["A"]);
+    const buttons = actionButtons(item(0));
+    expect(buttons.length).toBeGreaterThan(0);
+
+    let launchEvents = 0;
+    const onLaunch = () => {
+      launchEvents += 1;
+    };
+    document.addEventListener("profile:launch", onLaunch);
+    // Bun's native CustomEvent is rejected by happy-dom's
+    // document.dispatchEvent, so a CustomEvent dispatch would throw before
+    // reaching any listener and this test could not detect it. Use the
+    // window's CustomEvent (what a browser provides) for the duration of
+    // the test.
+    const nativeCustomEvent = globalThis.CustomEvent;
+    globalThis.CustomEvent = (
+      globalThis.window as unknown as { CustomEvent: typeof CustomEvent }
+    ).CustomEvent;
+    // Clicking Edit opens the profile editor overlay on document.body; keep
+    // track of what was already there so it can be removed afterwards.
+    const bodyChildrenBefore = new Set(Array.from(document.body.children));
+    try {
+      for (const btn of buttons) btn.click();
+    } finally {
+      globalThis.CustomEvent = nativeCustomEvent;
+      document.removeEventListener("profile:launch", onLaunch);
+      for (const child of Array.from(document.body.children)) {
+        if (!bodyChildrenBefore.has(child)) child.remove();
+      }
+    }
+
+    expect(launchEvents).toBe(0);
+  });
+});
+
+describe("Profiles list Launch removal — locale files", () => {
+  test.each([
+    ["en", enLocale],
+    ["ja", jaLocale],
+  ] as const)("AC-3: %s.json settings.profiles has no launch property", (_name, locale) => {
+    const profiles = (locale as { settings: Record<string, unknown> }).settings
+      .profiles as Record<string, unknown>;
+
+    // Guard: the object itself must still exist with its other entries.
+    expect(typeof profiles).toBe("object");
+    expect(profiles).toHaveProperty("edit");
+    expect(Object.hasOwn(profiles, "launch")).toBe(false);
   });
 });
