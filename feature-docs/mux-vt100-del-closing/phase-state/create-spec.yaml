@@ -1,0 +1,67 @@
+schema_version: 1
+feature: mux-vt100-del-closing
+phase: create-spec
+status: completed
+generation: 1
+base_revision: c50a4c11404b5a507d8d74127e542524fb606b8a
+last_input_digest: sha256:b3b97c4585076567ddf39c4a84a92d90e186ab3c16cbc9926a316eb986751035
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-04T02:18:16+09:00'
+    questions:
+    - question_id: requirement.fix-approach
+      status: answered
+    - question_id: design-step.recommendation
+      status: answered
+answers:
+  requirement.fix-approach:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T02:18:16+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - consumer_copy_state_aware
+    freeform: null
+    normalized_answer: vt100 にリングを渡す 2 か所（render_scrollback_rows / MuxPane::from_restored のシャドー再生）の直前で、書き込み済みストリームが CSI 内または単独 ESC 直後にある位置の DEL だけを CAN に置き換えたコピーを渡す。状態の遷移は置換前のバイトで進める。通常状態と OSC/DCS/APC 本文の
+      DEL は保持する。リングと term_core 経路のバイトは変えない。単独 ESC 直後の DEL（D1）も同じ変換の対象にする（assumption a3 を採用）。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (codex harness, 1 turn) consulted; Opus escalation: not run; options: consumer_copy_state_aware
+      [chosen] / consumer_copy_all_del [not chosen] / ring_two_byte_closing [not chosen]; key points: vte は CSI 内の DEL を無視し CAN で通常状態へ戻る(vte-0.15.0 lib.rs:251,:440)ため消費側変換が適する。変換は ReadPane の scratch.process(agent_api.rs:117)と復元時の
+      parser.process(pane/mod.rs:884)の直前、共有関数は scrollback_filter.rs に置き WrittenState の遷移(scrollback_filter.rs:222)を利用、O(n)。単一バイト CSI_CLOSING と D2 の 1 対 1 置換(scrollback_filter.rs:53,:287)を維持できる。全 DEL 置換は保持された
+      OSC/DCS 本文を CAN で終了させる(vte lib.rs:320,:414)ため不採用。注意: 状態判定は置換前のバイトで進める(term_core は CAN で CSI を閉じない: csi.rs:77)。ReadPane の末尾切り出し(agent_api.rs:188)とリングの先頭破棄で失われた状態は復元できない。a3(ESC 直後の DEL)も同じ変換に含める(scrollback_filter.rs:316,
+      vte lib.rs:347,:383,:388)。D3 の ESC 用終端は既に CAN なので変更不要(write_filter.rs:160)'
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T02:18:16+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: design step は推奨どおり skip（mux デーモンのバイト列処理のみで UI に触れない）
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously (= analyst の推奨を受け入れる)。packet の options が skip/run で decide_autonomously を含まないため、その意味どおり recommended
+      の skip に写像した'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:fd5a5ec1be5dbca1a0ef083f78f7cb365832b7675ed859aaeabbf6fbc5c950f2
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:f4c6411616b28557539529fd56cafd716307097c194fdd034440030aafdfe82f
+  output_digest: sha256:677bf43f122241cacc2d3482e4c216a949a2076a2b4cd284b7905d9c7053a72a
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:b3b97c4585076567ddf39c4a84a92d90e186ab3c16cbc9926a316eb986751035
+artifacts:
+- path: feature-docs/mux-vt100-del-closing/REQUIREMENTS.md
+  sha256: sha256:7688fbea906421ac1f05f8083c5630b560cdfb4b6cc39c045d358cb76df8bc52
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-vt100-del-closing/SPEC.md
+  sha256: sha256:717fc430cc150c88e1394b07fa670dbda1225a593fcb7e7cecfeadfbd759bc5c
+  produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

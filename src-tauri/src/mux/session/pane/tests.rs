@@ -3290,6 +3290,47 @@ fn from_restored_pane_can_write_and_read_through_its_adopted_master() {
     );
 }
 
+/// mux-vt100-del-closing AC-3 (FR2, FR5, NFR1): the restored shadow screen
+/// shows the text after a closed CSI parameter (the DEL in the ring is handed
+/// to the shadow parser as CAN), while the pane's ring keeps the DEL.
+#[cfg(unix)]
+#[test]
+fn from_restored_replays_a_closed_csi_into_the_shadow_and_keeps_the_ring_bytes() {
+    let pair = open_test_pty_pair();
+    let writer = pair.master.take_writer().unwrap();
+    let target = make_output_target();
+    let ring_bytes: &[u8] = b"\x1b[6\x7fHello";
+    let mut scrollback = ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY);
+    scrollback.write(ring_bytes);
+
+    let pane = MuxPane::from_restored(
+        4,
+        80,
+        24,
+        target,
+        writer,
+        pair.master,
+        scrollback,
+        None,
+        None,
+        AgentStatus::default(),
+        None,
+        false,
+        Vec::new(),
+    );
+
+    let row0 = {
+        let parser = pane.shadow_parser.lock().unwrap();
+        parser.screen().rows(0, 80).next().unwrap()
+    };
+    assert_eq!(row0, "Hello");
+    assert_eq!(
+        pane.scrollback.lock().unwrap().read_all(),
+        ring_bytes,
+        "the ring keeps the DEL (NFR1)"
+    );
+}
+
 /// AC-6: `from_restored_exited` builds an already-exited pane that
 /// adopts no descriptor, while still restoring its non-descriptor
 /// attributes (cwd/title/agent-status/scrollback) verbatim.

@@ -1,0 +1,295 @@
+schema_version: 1
+feature: mux-vt100-del-closing
+created: '2026-10-04'
+base_branch: main
+goal: '# mux: 分割照会の最終バイトを DEL に置き換えたリングを vt100 側の消費者（mux read / 復元時の shadow parser）が CSI の取り消しとして扱わず後続バイトを飲み込む
+
+
+  Notion: https://www.notion.so/3ee3509ec8ee8127acacf958ffd70efb (種別: バグ)
+
+
+  ## 現象 (必須)
+
+  mux-strip-concat-query-closure（ブランチ `em-workflow/mux-strip-concat-query-closure/integration`）の review round 1 で残った medium 指摘 `f5176c335e8e18f8`。本 feature が持ち込んだ退行。
+
+  D2（`src-tauri/src/mux/scrollback_filter.rs:284` の `Written::push`）は、読み込み境界で分割された応答対象の問い合わせの最終バイトを DEL に置き換えてリングに書く（`ESC[6` | `n` → `ESC[6 DEL`）。DEL で CSI が取り消されるのは term_core だけの前提になっている。
+
+  リングは vt100 0.16.2 / vte 0.15.0 にも渡される。渡し先は次の 2 か所。
+
+  - `agent_api.rs` の `render_scrollback_rows`（mux read の ReadPane）
+
+  - `session/pane/mod.rs` の `from_restored`（復元時の shadow parser の再生）
+
+  vt100 では DEL が CSI を取り消さない。変更前の形 `ESC[6n` + `Hello` は 1 行目に `Hello` と出ていたが、変更後の形 `ESC[6 DEL Hello` は CUP 6 と解釈され 6 行目に `ello` と表示される（evaluator が vt100 =0.16.2 で実測）。通常の読み込み分割だけで、mux read の描画と復元後の shadow
+  画面が崩れる。
+
+  D1 と既存の cut の closing（D3）も同じ DEL を使うが、vt100 には変更前から `ESC[6` に後続バイトが連結された形で渡っていたので、悪化するのは D2 の経路だけ。
+
+
+  ## 再現手順 (必須)
+
+  1. mux の pane に `ESC[6` を出力し、別の読み込みで `n` + `Hello` を出力する
+
+  2. mux read（ReadPane）でその pane を読む、または復元して shadow 画面を見る
+
+  3. `Hello` が 1 行目ではなく 6 行目に `ello` として現れる
+
+
+  ## 期待する挙動 (必須)
+
+  vt100 側の消費者でも、閉じた CSI の後続バイトが正しく描画される。
+
+
+  ## 完了の定義 (必須)
+
+  - [ ] 再現手順で現象が起きない
+
+  - [ ] 再発を検出するテストがある
+
+
+  ## 該当箇所 (任意)
+
+  - `src-tauri/src/mux/scrollback_filter.rs:284`（`Written::push`）
+
+  - `agent_api.rs` の `render_scrollback_rows`
+
+  - `session/pane/mod.rs` の `MuxPane::from_restored`
+
+
+  review での修正案:
+
+  - 案 (a): vt100 にリングを渡す 2 か所の直前で、0x7F を CAN (0x18) に置き換えたコピーを渡す（vt100 で `ESC[6 CAN Hello` が 1 行目に `Hello` と出ることは実測済み）
+
+  - 案 (b): closing を DEL + CAN の 2 バイトにする（SPEC A1 と 1 対 1 置換の前提から外れる）
+
+  - CAN 単独は term_core が CSI 内の CAN で取り消さないため使えない
+
+  - どちらの案でも、`ESC[6` + 閉じバイト + `Hello` を vt100 で描画して 1 行目に `Hello` が出るテストを追加する
+
+
+  ## 実害・発生条件 (任意)
+
+  応答対象の CSI 照会が読み込み境界で分割されたときに発生する。mux read の結果と、復元後の shadow 画面が崩れる。
+
+
+  ## 追加指示（起動時）
+
+  - 実装完了後、integration ブランチを remote に push し、gh pr create で base_branch への PR を作る。integration ブランチはローカル・リモートとも残す（base_branch へ自動マージしない）
+
+  - 不明点は Codex に相談し、比較して良いと判断した案を採用する
+
+  - 相談内容は Notion に記録する
+
+  '
+parent_branch: em-workflow/mux-vt100-del-closing/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.69
+      '2': 0.31
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.63
+      '2': 0.37
+      '3': 0.0
+  at: '2026-10-04T02:09:46+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: d2697a61cb0a54ee289556f7160a7820c529557f
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'UI に触れない Rust 内部の変更（mux デーモンが vt100 に渡すバイト列の変換）。batch: decide_autonomously'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: dd25d1a387ddf93f448c48240db1334baa74b433
+- id: implement
+  status: completed
+  base_commit: 5377fa12772c5ced3af6ccd3528a902b5b3c4509
+  completed_at_commit: 7efa3fd3eae132ca3725d3c28c9fd73c78d5d77c
+- id: review
+  status: completed
+  completed_at_commit: b66dcea2e73a3ba97a91123161907fd47eb78d52
+- id: verify
+  status: completed
+  completed_at_commit: 30d48cd8e3b022729664ef747fbfe203528b2767
+  result: pass
+  failed_items: []
+  notes: >-
+    cargo check（既定 / --no-default-features）成功。feature テスト TS-1〜TS-5・TS-7 は全件成功、TS-8 は確認で合格
+    （vt100_replay_copy は 1 パス・O(1) 状態、非テストの呼び出しは render_scrollback_rows と MuxPane::from_restored のみ）。
+    既存テストの削除・編集なし、CSI_CLOSING_BYTE は 0x7f のまま。TS-6 の --lib 全体は 2 件が経過時間 assert（BUDGET 10s）で
+    恒常的に失敗: round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus と
+    strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget。base main 0c3a2c06 でも同じく失敗する
+    既存の失敗（負荷平均 10-20 の環境）で、この feature の変更に起因しない。Codex 相談のうえ pass と判定（batch-audit.yaml 参照）。
+    手動確認 MT-1 / MT-2 は未実施。
+- id: retrospect
+  status: completed
+  completed_at_commit: a7f5e1de4b0f71776ed15bddfa2133ac2408436c
+tasks:
+  task0001:
+    title: vt100 replay copy for ReadPane and restore
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+    - src-tauri/src/mux/ipc/handlers/agent_api.rs
+    - src-tauri/src/mux/ipc/handlers/tests.rs
+    - src-tauri/src/mux/session/pane/mod.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: medium
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    status: merged
+    notes: null
+    branch: em-workflow/mux-vt100-del-closing/task0001
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, spec]
+  residual_critical_high: 0
+  needs_rework: false
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
+requirements:
+  FR1:
+    title: ReadPane rendering cancels the closing for vt100
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-5
+  FR2:
+    title: Restored shadow replay cancels the closing for vt100, and the ring is stored verbatim
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+  FR3:
+    title: State-aware DEL-to-CAN conversion for the vt100 replay copy
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-4
+    - TS-7
+  FR4:
+    title: The lone-ESC closing (D1) is covered by the same conversion
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+    - TS-4
+  FR5:
+    title: Regression tests
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+    - TS-4
+    - TS-5
+  NFR1:
+    title: 'Compatibility: ring / strip / term_core bytes unchanged'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-6
+  NFR2:
+    title: 'Performance: single O(n) pass on ReadPane and restore paths only'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+  NFR3:
+    title: 'Build: CLI-only (--no-default-features) check compiles'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-6
+  NFR4:
+    title: 'Test suite: full --lib suite passes'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-6

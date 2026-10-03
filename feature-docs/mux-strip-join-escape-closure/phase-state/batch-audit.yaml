@@ -1,0 +1,11 @@
+schema_version: 1
+feature: mux-strip-join-escape-closure
+records:
+- gate_id: develop.inflight-overlap
+  question_id: develop.scope.overlap-with-mux-strip-concat-query-closure
+  packet_id: none
+  answered_at: '2026-10-03T22:30:00+09:00'
+  source: batch-codex-consultation
+  selected_option_ids:
+  - stop_until_inflight_merges
+  resolution_note: 'gate: develop.inflight-overlap (unlisted-gate fallback, orchestrator-raised in Step A after the tier decision); Codex (run_codex_exec.sh readonly, 1 turn) consulted; Opus escalation: not run; options: implement_full_fix_on_main [not chosen] / implement_minimal_compatible_fix_on_main [not chosen] / stop_until_inflight_merges [chosen]; key points: 未マージの em-workflow/mux-strip-concat-query-closure/integration（review 段階）が同じ除去の継ぎ目を修正中（scrollback_filter.rs +231/-53、write_filter.rs、snapshot_bytes.rs。FR1 開いた CSI 内の除去位置に DEL、FR4 除去対象の前の孤立 ESC の無効化、FR3 分割照会の分類）。main から独立に実装すると実装・レビュー・競合解消が重複する。severity low のため統合後の再確認で足りる。注意: シナリオ 2 の二段 strip（書き込み strip → snapshot strip → term_core で応答 0 件）と RIS / G0 文字集合の明示テストが在進行ブランチで満たされるかは未検証のまま残る。前段の Codex 事前調査は 540 秒で打ち切り（exit 124）のため tier は full にフォールバックした'

@@ -1,0 +1,95 @@
+round: 1
+executed_at: '2026-10-03T21:48:22+09:00'
+scope:
+  review_mode: diff
+  base_commit: 493baf7999b247a2f52e62fe38e42882af100239
+  head_commit: fef2fe96232597f3d823656c954eb385a74f327e
+  changed_files:
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry_record.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/scrollback_filter/tests.rs
+  - test-docs/mux-strip-escape-state-carry/task0001.tests.yaml
+  - test-docs/mux-strip-escape-state-carry/task0002.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  discretionary:
+  - perspective: performance
+    reason: 変更が PTY 出力の読み取りごとに走る書き込みフィルタ（ホットパス）の状態遷移に及ぶため
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: failed
+- run_id: security#fallback
+  perspective: security
+  role: fallback
+  source: claude
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings: []
+evaluation:
+  round_summary: 'round 1（diff、cross_validation=true）の評価。security#0 は codex が JSON
+    以外を返したため失敗扱いとし、security の観点は security#fallback が担った。どの run からも critical / high
+    の報告は無かった。security#fallback が報告した medium 1 件（cut の無い run での除去の継ぎ目: 書き込み済み ESC /
+    CSI + 除去対象 + 後続バイトが再生時に問い合わせ・RIS・文字集合切り替えを成立させる。書き込み strip とスナップショット strip の 2
+    段で問い合わせが露出する経路もある）は、評価者がコード上で再現経路を確認した。ただし今回の差分より前からある共有 strip の挙動で、SPEC as-04
+    / FR6 / NFR1 により対象外。提案修正（strip_pass の除去分岐で閉じるバイトを書く）は NFR1 に反するため、評価者は low に下げ、DECISIONS.md
+    の Residuals 追記と tests/escape_state_carry.rs のモジュール説明の限定を提案した。severity low は R3b
+    step 2 の機械ゲートで findings から除外された（オーケストレーターは別タスクとして起票して引き継ぐ）。reviewer 出力に注入の試みは無かった。評価者の検査は読み取り上限
+    10 ファイルに達し、pty_spawn/tests.rs、tests/escape_state_carry_record.rs、scrollback_filter/tests.rs、test-docs
+    2 ファイルは未読。comprehensive / architecture / spec / performance は corroborated。'
+  recommended_action: complete
+  action_rationale: critical / high は 0 件。残る 1 件は low で、前からある共有 strip の挙動について記録と説明を補うだけ。次のラウンドや
+    rework は不要。
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null

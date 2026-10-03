@@ -1,0 +1,99 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib` finished with 4194 passed, 3 failed, 3 ignored.
+# The three failures are wall-clock budget tests (each panics with "took <N>s" over its 10 s
+# budget) on a machine whose load average was above 10 from other sessions.
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# Re-executed after the implementation: `cargo test --lib -- --test-threads=6` (same suite, fewer
+# parallel threads to lower self-contention on the loaded machine) finished with 4202 passed,
+# 2 failed, 3 ignored (4204 tests: the baseline's 4197 plus the 7 tests this task adds; one
+# baseline budget test passed in this run). Both failures are baseline budget tests. Five earlier
+# full runs of the verbatim command (default threads) gave 4199..4200 passed with the budget
+# family failing; besides the baseline tests they showed, run by run,
+# `visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once`
+# ("reader must reach P2 ... Timeout"), `escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget`
+# and `round4_fr4_the_filter_output_at_a_cut_replays_like_the_raw_stream` ("took <N>s" over the
+# budget). Those three touch no code this task changes and pass when run alone together
+# (3 passed in 7.27 s). `cargo check` and `cargo check --no-default-features` finished with no
+# error and no warning.
+final_failures:
+  - mux::ipc::pty_spawn::tests::round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# Reds: the tests were written first and run on the unchanged tree. AC-1, AC-2, AC-3 and AC-5 do
+# not call the new function, so they failed on the pre-task code of the two vt100 hand-offs.
+# AC-4's table test and the unmodified-input test were run against an identity stub of the
+# function (the stub was removed before the implementation); AC-6 was observed failing at
+# compile time with no function present.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::handlers::tests::render_pane_tail_renders_the_text_after_a_closed_csi_parameter
+    red_confirmed: true
+    red_reason: >-
+      Observed failing on the pre-task code: render_pane_tail of ESC [ 6 DEL H e l l o CR LF
+      returned "\n\n\n\nello" where "Hello" is expected (vt100 ignored the DEL, so H became the
+      cursor-position final byte and "ello" was written on the last row).
+  AC-2:
+    tests:
+      - mux::ipc::handlers::tests::render_pane_tail_renders_the_text_after_a_closed_lone_escape
+    red_confirmed: true
+    red_reason: >-
+      Observed failing on the pre-task code: render_pane_tail of ESC DEL H e l l o CR LF returned
+      "ello" where "Hello" is expected (vt100 ignored the DEL, so H became the final byte of the
+      escape).
+  AC-3:
+    tests:
+      - mux::session::pane::tests::from_restored_replays_a_closed_csi_into_the_shadow_and_keeps_the_ring_bytes
+    red_confirmed: true
+    red_reason: >-
+      Observed failing on the pre-task code: row 0 of the shadow screen was "" where "Hello" is
+      expected (the cursor-position final moved the text off row 0). The ring assertion
+      (read_all equals the input including 0x7F) is the NFR1 guard and held before and after.
+  AC-4:
+    tests:
+      - mux::scrollback_filter::tests::vt100_replay_copy_replaces_del_by_the_scan_state_just_before_it
+      - mux::scrollback_filter::tests::vt100_replay_copy_leaves_the_input_unmodified
+    red_confirmed: true
+    red_reason: >-
+      Observed failing against an identity stub of vt100_replay_copy: the table row ESC [ DEL
+      returned [27, 91, 127] where [27, 91, 24] is expected, and the unmodified-input test failed
+      "the copy differs from the input at the DEL". With no function at all, both fail to compile
+      (cannot find function `vt100_replay_copy`).
+  AC-5:
+    tests:
+      - mux::ipc::handlers::tests::render_pane_tail_renders_the_text_after_a_strip_written_query_closing
+    red_confirmed: true
+    red_reason: >-
+      Observed failing on the pre-task code: the strip output (ESC [ 6, then n H e l l o CR LF
+      with the carried state, containing 0x7F in place of n) rendered through render_pane_tail
+      as "\n\n\n\nello" where "Hello" is expected. The assertion that the concatenated strip
+      output contains 0x7F passed, so the D2 closing was produced.
+  AC-6:
+    tests:
+      - mux::scrollback_filter::tests::vt100_replay_copy_is_total_and_changes_only_del_into_can
+    red_confirmed: true
+    red_reason: >-
+      Observed failing at compile time with no implementation: error[E0425] cannot find function
+      `vt100_replay_copy` in this scope (scrollback_filter/tests.rs). The sweep asserts only the
+      bound (no panic, equal length, an output byte differs from the input only as CAN at a DEL),
+      so an identity stub satisfies it; the replacement itself is pinned by AC-4's table.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_a_cut_clears_the_carried_classification
+      - mux::snapshot_bytes::tests::build_snapshot_bytes_segments_follow_a_construct_removed_inside_an_open_csi
+      - mux::ipc::handlers::tests::render_pane_tail_renders_cr_overwrite_to_final_state
+      - mux::session::pane::tests::from_restored_sets_attributes_and_scrollback_verbatim
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope: AC-7 is a no-regression and build criterion, and the
+      existing tests detect the behaviors it protects (strip_concat_a_cut_clears_the_carried_classification
+      and build_snapshot_bytes_segments_follow_a_construct_removed_inside_an_open_csi pin the DEL
+      closing bytes the strip and snapshot write, render_pane_tail_renders_cr_overwrite_to_final_state
+      pins ReadPane rendering, from_restored_sets_attributes_and_scrollback_verbatim pins the
+      restored ring); no red state occurred for this change. No existing test was edited
+      (git diff touches only added lines in the test files). CSI_CLOSING_BYTE is unchanged at 0x7F.
+      In non-test code vt100_replay_copy is called only from render_scrollback_rows
+      (agent_api.rs) and MuxPane::from_restored (session/pane/mod.rs), checked by searching the
+      crate. `cargo check --no-default-features` compiled with no warning.

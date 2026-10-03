@@ -1,0 +1,98 @@
+schema_version: 2
+feature: mux-strip-concat-query-closure
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.59
+    confidence: 0.59
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread across a few files
+        together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the
+        architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.41
+      '2': 0.59
+      '3': 0.0
+  observed_at: '2026-10-03T20:08:00+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.98
+    confidence: 0.97
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread across a few files
+        together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the
+        architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.02
+      '2': 0.98
+      '3': 0.0
+  observed_at: '2026-10-03T20:14:30+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/snapshot_bytes.rs
+  - src-tauri/src/mux/scrollback_filter/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs
+  changed_lines_approx: 500
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules:
+  - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+  - src-tauri/src/mux/ipc/reattach.rs
+  - src-tauri/src/mux/ipc/handlers/mod.rs
+  - src-tauri/src/mux/session/pane/output_target.rs
+  - src-tauri/src/mux/snapshot_tail.rs
+  - src-tauri/src/mux/snapshot_bytes/dump_block.rs
+  work_still_required: true
+  work_still_required_evidence: '調査した main は 493baf79。git log と祖先判定で、前 feature の実装コミット cd7a2d9c が main
+    に含まれることを確認した。関連2実装ファイルへの最新変更も同コミットだった。
+
+    残件1: src-tauri/src/mux/scrollback_filter.rs:642 は後続 ESC で未完 CSI の照会判定を終了し、同ファイル:421 は対象 OSC を開始 ESC
+    ごと読み飛ばす。同ファイル:389 は後続 n をコピーするため、ESC[6＋完全な起動列＋n の出力は ESC[6n になる。出力を再検査する処理はない。同ファイル:755 が CPR 照会を除去対象としている。
+
+    残件2: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:548 のカット無し経路は除去後の未完 CSI をそのまま出力する。src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs:161
+    も起動列除去後の出力が未完 CSI のままであることを期待している。src-tauri/src/mux/snapshot_bytes.rs:330 は共有 strip を適用し、同ファイル:234
+    の通常画面の可視性復帰では末尾の画面切り替え列を付けないため、未完 CSI が残る。後続 n は crates/term_core/src/parser/csi.rs:73 と crates/term_core/src/csi_dispatch.rs:139
+    を経て、crates/term_core/src/csi_device.rs:13 の CPR 応答を成立させる。一方、再接続・明示的 snapshot の通常画面経路には src-tauri/src/mux/snapshot_bytes.rs:337
+    の末尾 ESC[?1049l があり、CSI を中断する。残件2が全 snapshot 経路で成立するわけではない。
+
+    残件3: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:826 は CSI を保持せず ESC[ を読み進める。同ファイル:543 はそのバイトを排出するため、ESC[6
+    と n を別呼び出しで受けるとリングに照会全体が残る。src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs:621 は分割された照会がそのまま残る期待値を明示している。snapshot
+    の共有 strip は完成した照会を除去するが、途中の snapshot は未完 CSI を保持する。feature-docs/mux-cut-csi-post-strip-closure/DECISIONS.md:13、:17、:23、:29
+    にも3件が残件として記録されている。
+
+    既存テストは照会除去、カット閉鎖、状態引き継ぎ、位置補正を扱っているが、3件の期待動作を満たす回帰テストではない。変更対象の期待値は src-tauri/src/mux/scrollback_filter/tests.rs:1168、src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs:161、src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs:621
+    にある。位置補正の既存テストは src-tauri/src/mux/snapshot_bytes.rs:709。実際の reader と復帰を使う試験用関数は src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs:646
+    にある。
+
+    直接の呼び出し元・依存先の集計6件は、pty_spawn/mod.rs:575、client_parity_scan.rs:498、osc_identify.rs:57、ipc/reattach.rs:241、ipc/handlers/mod.rs:582、session/pane/output_target.rs:359。間接波及として、pending
+    を配送に使う suppressed_output.rs:226、snapshot 末尾を記録する output_target.rs:420 と snapshot_tail.rs:21、再生結果を読む
+    snapshot_bytes/dump_block.rs:138 がある。位置補正は scrollback_filter.rs:376 と snapshot_bytes.rs:365 にある。
+
+    約500行と追加4試験は、既存関数の変更、期待値更新、3残件と位置補正の追試を含む調査上の概算であり、観測済みの差分ではない。新規本番関数・ファイルは必須と確認できていないため0としている。試験用
+    term_core は src-tauri/Cargo.toml:217 に既存依存として存在する。通信形式は crates/mux_ipc/src/protocol.rs:262 のまま扱えるが、除去後のバイトと状態の動作は変更が必要。ファイル変更は行わず、テストは読解のみで未実行。'
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 4
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 6
+  changes_external_contract: false
+  changes_behavior: true
+decided_at: '2026-10-03T20:14:40+09:00'

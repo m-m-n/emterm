@@ -1,0 +1,65 @@
+schema_version: 2
+feature: mux-vt100-del-closing
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.31
+    confidence: 0.69
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.69
+      '2': 0.31
+      '3': 0.0
+  observed_at: '2026-10-04T02:09:46+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.37
+    confidence: 0.63
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.63
+      '2': 0.37
+      '3': 0.0
+  observed_at: '2026-10-04T02:09:46+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/ipc/handlers/agent_api.rs
+  - src-tauri/src/mux/ipc/handlers/tests.rs
+  - src-tauri/src/mux/session/pane/mod.rs
+  - src-tauri/src/mux/session/pane/tests.rs
+  changed_lines_approx: 60
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules: []
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 2
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 3
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: HEAD 0c3a2c06では対象ファイルに作業ツリー差分なし。src-tauri/src/mux/scrollback_filter.rs:53,287はDELを出力し、src-tauri/src/mux/ipc/handlers/agent_api.rs:117とsrc-tauri/src/mux/session/pane/mod.rs:884は未変換でvt100へ渡す。Cargo.lock:4952,4963はvt100
+    0.16.2／vte 0.15.0で、読んだvteのsrc/lib.rs:251はDELを無視し、440はCANでCSIを取り消す。scrollback_filter/tests.rs:1716,2153の検証はterm_coreとDEL出力を対象とし、handlers/tests.rs:2662とpane/tests.rs:2995以降には該当するvt100再発テストなし。概算は案(a)を既存2関数へ適用し、両経路に各1テスト追加する場合。本番の直接呼び出し元2か所（agent_api.rs:142、mux/upgrade.rs:823）と直接依存vt100を計上。ファイル変更・テスト実行なし
+decided_at: '2026-10-04T02:09:46+09:00'
