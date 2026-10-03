@@ -1,0 +1,62 @@
+round: 1
+executed_at: "2026-10-03T14:32:12+09:00"
+scope:
+  review_mode: diff
+  base_commit: 9f03f4ba67146eabcd44fd2912e16232bf537625
+  head_commit: a5f9caf87426e92b2ed62ca28b18773895fa05c5
+  changed_files:
+    - src-tauri/src/app/chooser.rs
+    - src-tauri/src/app/tests/chooser.rs
+    - src-tauri/src/render/overlays.rs
+    - src-tauri/src/ui/keybinds.rs
+    - src-tauri/src/ui/keybinds/tests.rs
+    - src-tauri/src/ui/profile_selector.rs
+    - test-docs/new-tab-menu-shortcut-hints/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+    - perspective: performance
+      reason: "Chooser rows compute shortcut labels on every egui frame in the render path (A3); check per-frame cost."
+  cross_validation: false
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: failed}
+  - {run_id: "comprehensive#fallback", perspective: comprehensive, role: fallback, source: claude, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "spec#1", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+  # comprehensive#0: result failed schema validation (extra fields line_end_note / per-finding source) -> Claude fallback dispatched
+findings:
+  - stable_id: afdb7bee655251a6
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/ui/keybinds.rs
+    line: 431
+    title: "reachable_label ignores the fixed Shift+PageUp/PageDown/Home/End scrollback chords, so the chooser can show a hint that does not open anything"
+    description: "KeybindTable::reachable_label hides a label only when collisions() shows a higher-priority KeybindTable action with the same chord. window_host/key_routing.rs::handle_special_chord runs before keybinds::dispatch and consumes Shift-only PageUp/PageDown/Home/End for scrollback without consulting the table. With keybinds.new_tab = \"Shift+Home\" (or new_tab_global set to any of the four), the chooser shows the label but pressing it scrolls and opens no tab. The code matches SPEC FR6's listed conditions but not FR6's general rule / US3. The mux prefix intercept (observe_mux_key) can hide a chord the same way (dynamic)."
+    suggestion: "In reachable_label, also treat the chord as shadowed when it equals one of the four fixed Shift-only scrollback chords; define them once as a shared constant/helper also used by handle_special_chord; add tests for new_tab and new_tab_global bound to each of the four chords; narrow the doc comment."
+    sources: [claude:comprehensive]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix candidate gate (critical/high only); filed as a follow-up task"
+evaluation:
+  round_summary: "Round 1 (diff mode, 7 changed files). One medium comprehensive finding (scrollback-chord gap in reachable_label), reported independently by the fallback and the schema-invalid codex primary. No critical/high sites; dismissed_sites empty; no injection attempts seen. Coverage: comprehensive findings; security corroborated (no trust boundary); spec corroborated (FR1-FR8, NFR1-NFR4 implemented and tested; FR6 follows collisions() order); performance corroborated (two collisions() scans of 18 entries per open-chooser frame)."
+  recommended_action: auto_fix
+  action_rationale: "One localized medium issue with a cheap fix; no critical/high; another full round not needed."
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  # no unresolved vulnerability findings (vulnerability perspective not selected: no manifest/lockfile change)
