@@ -113,7 +113,11 @@ workflow:
   status: completed
   completed_at_commit: da9b029f3f6c9f84ada743db181f5e77bd77797d
 - id: verify
-  status: in_progress
+  status: completed
+  result: pass
+  failed_items: []
+  summary: 'cargo check (default) exit 0; cargo check --no-default-features exit 0; cargo test --lib 4188 passed / 0 failed / 3 ignored (19 overflow_lone_esc tests incl. TS-1..TS-6); TS-8 doc-comment review pass; NFR3 diff limited to task0001 files'
+  completed_at_commit: 025eea0cc165942d077b6b3a0eda8c500900e89c
 - id: retrospect
   status: pending
 tasks:
