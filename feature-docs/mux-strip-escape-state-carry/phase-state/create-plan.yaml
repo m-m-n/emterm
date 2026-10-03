@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-strip-escape-state-carry
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: ca864e9f33cb6bc5917f1f17d335e56fbc7bbe85
+last_input_digest: sha256:0af3e5b96a62bdb06edf9404c1d187c3054f7af264c158fea6e03bd2e844b554
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:0af3e5b96a62bdb06edf9404c1d187c3054f7af264c158fea6e03bd2e844b554
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
