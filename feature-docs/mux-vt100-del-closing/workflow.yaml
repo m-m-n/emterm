@@ -146,9 +146,18 @@ workflow:
   status: completed
   completed_at_commit: b66dcea2e73a3ba97a91123161907fd47eb78d52
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  completed_at_commit: 30d48cd8e3b022729664ef747fbfe203528b2767
+  result: pass
   failed_items: []
+  notes: >-
+    cargo check（既定 / --no-default-features）成功。feature テスト TS-1〜TS-5・TS-7 は全件成功、TS-8 は確認で合格
+    （vt100_replay_copy は 1 パス・O(1) 状態、非テストの呼び出しは render_scrollback_rows と MuxPane::from_restored のみ）。
+    既存テストの削除・編集なし、CSI_CLOSING_BYTE は 0x7f のまま。TS-6 の --lib 全体は 2 件が経過時間 assert（BUDGET 10s）で
+    恒常的に失敗: round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus と
+    strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget。base main 0c3a2c06 でも同じく失敗する
+    既存の失敗（負荷平均 10-20 の環境）で、この feature の変更に起因しない。Codex 相談のうえ pass と判定（batch-audit.yaml 参照）。
+    手動確認 MT-1 / MT-2 は未実施。
 - id: retrospect
   status: pending
 tasks:
