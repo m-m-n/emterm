@@ -25,6 +25,7 @@ packets:
       status: answered
 answers:
   requirement.no-default-global-row:
+    question_id: requirement.no-default-global-row
     packet_id: create-spec-q0001
     answered_at: '2026-10-03T13:45:00+09:00'
     source: batch-codex-consultation
@@ -38,6 +39,7 @@ answers:
       1 turn, converged); opus_escalation: false; chose global_only; Codex: 指定はグローバル設定の行に
       new_tab_global を表示すること。既定なし時の new_tab のフォールバック(tab_lifecycle.rs:80)は表示対象にしない'
   requirement.profile-selector-mode-scope:
+    question_id: requirement.profile-selector-mode-scope
     packet_id: create-spec-q0001
     answered_at: '2026-10-03T13:45:00+09:00'
     source: batch-codex-consultation
@@ -51,6 +53,7 @@ answers:
       1 turn, converged); opus_escalation: false; chose chooser_only; Codex: 対象は +
       のメニュー。include_global で両モードを既に区別している(overlays.rs:32)'
   requirement.label-placement:
+    question_id: requirement.label-placement
     packet_id: create-spec-q0001
     answered_at: '2026-10-03T13:45:00+09:00'
     source: batch-codex-consultation
@@ -63,6 +66,7 @@ answers:
       codex_consultation, record_as_assumption); codex_consulted: true (harness codex,
       1 turn, converged); opus_escalation: false; chose row_right_edge; Codex: シェルパスは残り幅で省略済み(profile_selector.rs:387,394)。右端に幅を確保しパスの省略位置を手前に移す形が「項目の右」に合う'
   requirement.label-format:
+    question_id: requirement.label-format
     packet_id: create-spec-q0001
     answered_at: '2026-10-03T13:45:00+09:00'
     source: batch-codex-consultation
@@ -76,6 +80,7 @@ answers:
       1 turn, converged); opus_escalation: false; chose canonical_from_resolved; Codex:
       resolve は不正値を既定キーに戻す(keybinds.rs:343,354)ため、設定文字列だとキー処理と食い違う'
   requirement.shadowed-chord:
+    question_id: requirement.shadowed-chord
     packet_id: create-spec-q0001
     answered_at: '2026-10-03T13:45:00+09:00'
     source: batch-codex-consultation
@@ -90,6 +95,7 @@ answers:
       dispatch は profile_selector→new_tab_global→new_tab の先勝ち(keybinds.rs:423-429)。開けないキーを案内しない方が目的に合う。analyst
       の仮の立場(show_as_configured)とは異なり、目的への適合を比較して Codex 案を採用'
   design-step.recommendation:
+    question_id: design-step.recommendation
     packet_id: create-spec-q0001
     answered_at: '2026-10-03T13:45:00+09:00'
     source: batch-decision-table
@@ -101,10 +107,11 @@ answers:
     resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option decide_autonomously;
       recommendation skip'
   create-spec.design-system:
+    question_id: create-spec.design-system
     packet_id: null
     answered_at: '2026-10-03T14:05:00+09:00'
     source: batch-decision-table
-    answer_mode: select
+    answer_mode: single_select
     selected_option_ids:
     - top_candidate_or_none
     freeform: null
