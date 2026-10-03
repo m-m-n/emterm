@@ -1,0 +1,56 @@
+round: 1
+executed_at: "2026-10-04T03:03:32+09:00"
+scope:
+  review_mode: diff
+  base_commit: 710a3f29347ed0e54b05a53f49741f18af209402
+  head_commit: 21a199b373d3952f8ff9c73b660434cd1d175684
+  changed_files:
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/strip_join_escape_closure.rs
+  - test-docs/mux-strip-join-escape-closure/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    Round 1 (diff mode, cross_validation=false). All three reviewer runs (comprehensive#0, security#0, spec#0)
+    completed with zero findings; no critical/high sites, so dismissed_sites is empty; no injection attempts
+    observed. The diff is test-only (new strip_join_escape_closure.rs with 5 tests, mod registration in tests.rs,
+    pub(super) of Target/TARGETS in strip_concat_query.rs, test-docs record). No non-test code under src-tauri/src
+    or crates/term_core changed; existing test names and expectations unchanged (NFR2). AC-1/AC-2 compare
+    rows/cursor/responses against the view_after_a_cut oracle (NFR3). Control tests show the DEL-less join
+    triggers the ESC[5n response, ESC c reset and ESC(0 G0 designation (discriminating power). Coverage:
+    comprehensive/security/spec = corroborated. Sub-medium notes (not findings): (1) task0001.tests.yaml AC-6
+    red_reason (~line 80) says the --lib run "finished without error" while lines 10-18 record 3 failed
+    (inherited 10 s budget overruns) - NFR1 "passes" to be judged in verify. (2) DECISIONS.md Residual 1 Condition
+    reads as if nothing follows the scrollback in a non-wrapping main-buffer snapshot, whereas the new tests pin
+    ESC[?1049l (SNAPSHOT_TAIL) after it; the residual may be overstated (not verified, outside changed_files).
+    Read budget 10/10 files. Evaluator did not run tests.
+  recommended_action: complete
+  action_rationale: >-
+    No medium-or-higher issue from reviewers or the evaluator's own inspection; test-only diff consistent with
+    SPEC FR1-FR3, NFR2, NFR3. Only sub-medium wording notes remain.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
