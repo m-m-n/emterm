@@ -1,0 +1,26 @@
+schema_version: 2
+feature: mux-strip-join-escape-closure
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.61
+    confidence: 0.61
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.39
+      '2': 0.61
+      '3': 0.0
+  observed_at: '2026-10-03T22:22:09+09:00'
+decided_at: '2026-10-03T22:22:09+09:00'
+fallback_reason: 'fallback_matrix:jev_only_usable: Codex pre-survey unusable; the
+  final Jev call is skipped (Codex pre-survey exceeded the 540 s timeout, exit 124)'
