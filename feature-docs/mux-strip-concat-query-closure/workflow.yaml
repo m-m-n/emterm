@@ -97,7 +97,8 @@ workflow:
   summary: 'cargo check (default / --no-default-features) ok; cargo test --lib 4187 passed, 0 failed, 3 ignored; TS-1..TS-9 / AC-1..AC-7 / TM-1..TM-3 covered by passing tests; FR8 records: all 9 DECISIONS test paths and all 32 record entries resolve in --lib --list, predecessor DECISIONS.md and test-docs unchanged vs base. Manual reproduction (2 items) needs a release binary and was not run.'
   completed_at_commit: e28ef6fc21cc5108493e55f3be9b870e0e271d9e
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: 85b2594d710e54afb81fe468d58d99ba856379f9
 tasks:
   task0001:
     title: Strip-join closing, lone-ESC neutralization and split-query classification
