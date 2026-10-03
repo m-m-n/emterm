@@ -101,7 +101,7 @@ workflow:
   base_commit: 9f03f4ba67146eabcd44fd2912e16232bf537625
   completed_at_commit: 8aa626751d93b51bc514830bdcdccdbd52b97b30
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -141,7 +141,16 @@ tasks:
     status: merged
     branch: em-workflow/new-tab-menu-shortcut-hints/task0001
 review:
-  status: pending
+  status: in_progress
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary:
+    - perspective: performance
+      reason: Chooser rows compute shortcut labels on every egui frame in the render path (A3); check per-frame cost.
+    cross_validation: false
   rounds_completed: 0
   residual_critical_high: 0
   needs_rework: false
