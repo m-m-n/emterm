@@ -75,7 +75,8 @@ workflow:
   - DESIGN.md
   - design/
   status: skipped
-  skipped_reason: The change only removes an existing button from the profile action row; no new UI element, layout, or design token is introduced.
+  skipped_reason: The change only removes an existing button from the profile action
+    row; no new UI element, layout, or design token is introduced.
 - id: create-plan
   artifacts:
   - IMPLEMENTATION.md
@@ -88,7 +89,7 @@ workflow:
   base_commit: 93cf4405a1a5f6a42cd3d7bf2b8aecf1a8b192ea
   completed_at_commit: fed278aa05a6fe792b91eef21acf32600465170a
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -120,9 +121,15 @@ tasks:
     notes: null
     branch: em-workflow/settings-profile-remove-launch/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
