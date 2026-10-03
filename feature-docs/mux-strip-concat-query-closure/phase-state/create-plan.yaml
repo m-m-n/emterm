@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-strip-concat-query-closure
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: ddc2e47fa8275a544424a1451039fc5b6c0a0688
 last_input_digest: sha256:3b6d0da7025a43c6fcafdca9dd49577fab090fa31edc5d569014ba54419be0eb
