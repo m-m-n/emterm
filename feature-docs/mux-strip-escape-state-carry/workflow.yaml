@@ -128,7 +128,8 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-strip-escape-state-carry/task0001
   task0002:
     title: Decision record for review finding a879a02de382209f
     plan: tasks/task0002.md
@@ -141,7 +142,8 @@ tasks:
     complexity: low
     requirements:
     - FR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-strip-escape-state-carry/task0002
 review:
   status: pending
   rounds_completed: 0
