@@ -1,0 +1,21 @@
+schema_version: 1
+feature: new-tab-menu-shortcut-hints
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: cc05f59f13d529a8989a3154425b91e1a78b07aa
+last_input_digest: sha256:c14512ae6bdf780e7f5b7821e7b5eae93b3a16312e6ec73a462a49725c4143ca
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:c14512ae6bdf780e7f5b7821e7b5eae93b3a16312e6ec73a462a49725c4143ca
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
