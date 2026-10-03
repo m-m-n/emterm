@@ -97,12 +97,16 @@ pub(in crate::mux) struct ScrollbackWriteFilter {
     /// The end state of the bytes the filter WROTE after the strip, as the
     /// client's parser would stand in after replaying the ring so far
     /// (mux-strip-escape-state-carry FR1, D1): ground, right after an `ESC`
-    /// (Escape), right after `ESC (` / `ESC )` (Designator), or inside a CSI's
-    /// entry or parameter state. It was a CSI sub-state alone
-    /// (mux-suppressed-output-round4-fixes FR4, mux-cut-csi-post-strip-closure
-    /// FR2) and is widened to the full state so that a written `ESC` the strip
-    /// follows with a construct it removes is not forgotten (it stays Escape,
-    /// not ground). Nothing is held for any of these: the bytes are written as
+    /// (Escape), right after `ESC (` / `ESC )` (Designator), inside a CSI's
+    /// entry or parameter state, or inside an open OSC body or an open DCS / APC
+    /// body (mux-write-filter-overflow-open-string-cut FR1, D1). It was a CSI
+    /// sub-state alone (mux-suppressed-output-round4-fixes FR4,
+    /// mux-cut-csi-post-strip-closure FR2) and is widened to the full state so
+    /// that a written `ESC` the strip follows with a construct it removes is not
+    /// forgotten (it stays Escape, not ground). A string body is a state of its
+    /// own because the client's parser ended the string at a removed switch's
+    /// `ESC`, so a cut writes `ESC` + CAN ([`STRING_BODY_CLOSING`]) where ground
+    /// writes nothing. Nothing is held for any of these: the bytes are written as
     /// they arrive, and only this O(1) state is carried. Cleared to ground by a
     /// cut, after the closure it decides ([`closure_for`]).
     ///
@@ -117,9 +121,13 @@ pub(in crate::mux) struct ScrollbackWriteFilter {
     /// The state is that of the bytes actually WRITTEN, after the strip, which
     /// reports it while it removes what it removes: a construct it removes
     /// together with its opening `ESC` advances nothing, so it neither clears an
-    /// open CSI nor completes a written `ESC`. A call that drains bytes before the
-    /// held chain sets it from the stripped output of those bytes, started from
-    /// the state carried in; a call that drains nothing leaves it unchanged.
+    /// open CSI, nor completes a written `ESC`, nor ends a written string body. A
+    /// call that drains bytes before the held chain sets it from the stripped
+    /// output of those bytes, started from the state carried in; a call that
+    /// drains nothing leaves it unchanged. A body is left open by an overflow
+    /// flush (it writes a run whose string the strip never closed), and also,
+    /// with no overflow, by a strip that removes the construct whose `ESC`
+    /// aborted a written string or splices a string introducer.
     written: WrittenState,
     /// Chain bookkeeping (mux-suppressed-output-round4-fixes FR1): where the
     /// LAST construct of the held chain starts, as an offset into `pending`.
@@ -147,10 +155,27 @@ pub(in crate::mux) const CSI_CLOSING: &[u8] = &[0x7f];
 /// escape and returns to ground, without a character, a cursor move, a response,
 /// or a change of mode or charset. It is not `ESC`, and with the preceding `ESC`
 /// it does not form ST (`ESC \`), so neither strip reads it as the start of a
-/// strip target nor ends an APC / DCS body at it. It differs from
-/// [`CSI_CLOSING`]: a cut writes at most one of the two. `CSI_CLOSING` is
-/// unchanged.
+/// strip target nor ends an APC / DCS body at it. It differs from the other
+/// closures ([`CSI_CLOSING`], [`STRING_BODY_CLOSING`] and the designator `ESC`):
+/// a cut writes exactly one closure, the one [`closure_for`] chooses.
+/// `CSI_CLOSING` is unchanged.
 pub(in crate::mux) const ESCAPE_CLOSING: &[u8] = &[0x18];
+
+/// The write a cut makes when the written stream ends inside an open OSC body or
+/// an open DCS / APC body (mux-write-filter-overflow-open-string-cut FR2, FR5,
+/// D2): `ESC` followed by CAN (0x18), the [`ESCAPE_CLOSING`] byte after an `ESC`.
+/// `term_core` takes the `ESC` into the string's escape state, and the CAN as
+/// the byte that aborts the string (the string is dispatched, an OSC as
+/// `Unterminated`) and is processed as from the Escape state, where it is an
+/// unknown escape final: the escape completes and the parser returns to ground,
+/// without a character, a cursor move or a response of its own. That is what the
+/// client's parser did at the removed switch's `ESC`, so a replay stands in
+/// ground and the bytes written after the cut are never absorbed into the string
+/// (a later BEL cannot complete it with them). The `ESC` is followed by CAN,
+/// which opens no strip target, and `ESC` + CAN is not ST (`ESC \`), so neither
+/// strip reads the closure as the start of a strip target or ends an APC / DCS
+/// body at it.
+pub(in crate::mux) const STRING_BODY_CLOSING: &[u8] = &[0x1b, 0x18];
 
 /// The write a cut makes when the written stream ends right after `ESC (` /
 /// `ESC )` (mux-suppressed-output-round4-fixes FR3): one `ESC`, which replay
@@ -158,16 +183,18 @@ pub(in crate::mux) const ESCAPE_CLOSING: &[u8] = &[0x18];
 const DESIGNATOR_CLOSING: &[u8] = &[0x1b];
 
 /// The one closure a cut writes for a written stream that ends in `state`
-/// (mux-strip-escape-state-carry FR3, D1): [`CSI_CLOSING`] inside a CSI,
-/// [`ESCAPE_CLOSING`] right after an `ESC`, the designator `ESC` in a designator
-/// wait, and nothing in ground. The decision is the state's alone, so every cut
-/// path writes at most one closure and the boundary scan's awaiting flag decides
-/// none.
+/// (mux-strip-escape-state-carry FR3, D1; mux-write-filter-overflow-open-string-cut
+/// FR5, D2): [`CSI_CLOSING`] inside a CSI, [`ESCAPE_CLOSING`] right after an
+/// `ESC`, the designator `ESC` in a designator wait, [`STRING_BODY_CLOSING`]
+/// inside an open OSC or DCS / APC body, and nothing in ground. The decision is
+/// the state's alone, so every cut path writes exactly one closure (empty in
+/// ground) and the boundary scan's awaiting flag decides none.
 fn closure_for(state: WrittenState) -> &'static [u8] {
     match state {
         WrittenState::Csi(_) => CSI_CLOSING,
         WrittenState::Escape => ESCAPE_CLOSING,
         WrittenState::Designator => DESIGNATOR_CLOSING,
+        WrittenState::OscBody | WrittenState::StBody => STRING_BODY_CLOSING,
         WrittenState::Ground => &[],
     }
 }
@@ -292,13 +319,15 @@ impl ScrollbackWriteFilter {
     ///   later BEL / ST in the ring can never complete what the client already
     ///   closed. The same holds for the whole chain it closes (round4 FR1,
     ///   see "Chains" below): the chain is dropped from its head. The settled
-    ///   bytes before it are emitted through the strip;
+    ///   bytes before it are emitted through the strip (a string the filter
+    ///   already WROTE and left open is not such a chain: the closure below
+    ///   closes it);
     /// - an `ESC (` / `ESC )` that ends the run, awaiting its designator, is
     ///   emitted whole with the rest (nothing is held for it, as-08);
-    /// - the bytes the filter wrote end in a CSI, right after an `ESC` or right
-    ///   after `ESC (` / `ESC )`: ONE closing byte chosen by that end state follows
-    ///   them (see "Closure at a cut" below), and the carried state and the
-    ///   awaiting-designator flag are cleared;
+    /// - the bytes the filter wrote end in a CSI, right after an `ESC`, right
+    ///   after `ESC (` / `ESC )` or inside an open string body: ONE closure chosen
+    ///   by that end state follows them (see "Closure at a cut" below), and the
+    ///   carried state and the awaiting-designator flag are cleared;
     ///
     /// and processing continues from ground with the next fed byte. An empty
     /// `fed` with a non-empty `cuts` still closes whatever is held.
@@ -343,15 +372,18 @@ impl ScrollbackWriteFilter {
     /// never starts a strip target there either.
     ///
     /// **Closure at a cut (mux-strip-escape-state-carry FR3, D1; round4 FR3 and
-    /// FR4 before it).** The client closed whatever it was in at the removed
-    /// switch's `ESC`: a CSI is aborted, an escape is superseded, and a
+    /// FR4 before it; mux-write-filter-overflow-open-string-cut FR2, FR5).** The
+    /// client closed whatever it was in at the removed switch's `ESC`: a CSI is
+    /// aborted, an escape is superseded, an OSC / DCS / APC string is ended, and a
     /// designator wait consumed that `ESC` as the designator. A ring replay must
     /// stand where the client stood, so a cut writes ONE closure chosen by the end
     /// state of the bytes the filter WROTE ([`closure_for`]): [`CSI_CLOSING`]
     /// when they end inside a CSI, [`ESCAPE_CLOSING`] when they end right after an
     /// `ESC`, one designator `ESC` when they end right after `ESC (` / `ESC )`,
-    /// and nothing in ground. The state after the cut is ground and no
-    /// designator is awaited. The same rule holds on every path: a cut inside the
+    /// [`STRING_BODY_CLOSING`] (`ESC` followed by CAN) when they end inside an
+    /// open OSC body or an open DCS / APC body, and nothing in ground. The state
+    /// after the cut is ground and no designator is awaited. The same rule holds
+    /// on every path: a cut inside the
     /// call (the state of the run before the cut, after the strip; the chain the
     /// cut drops is not written and does not affect it), a cut at an empty segment
     /// (the carried state; an earlier read left the wait or the state with an
@@ -362,8 +394,11 @@ impl ScrollbackWriteFilter {
     /// starts a strip target, and it is part of the bytes attributed to the
     /// outcome's dims. Nothing is written when the written stream ends in ground:
     /// after a completed CSI, a complete escape, a complete designation, a
-    /// designator consumed by the segment's first byte, or a run that ends in an
-    /// open string (which the cut drops).
+    /// designator consumed by the segment's first byte, a completed string, or a
+    /// run whose incomplete string is still held (which the cut drops, unwritten).
+    /// A string body that was WRITTEN and is still open is closed, not dropped: an
+    /// overflow flush writes one, and so can the strip when it removes the
+    /// construct whose `ESC` aborted a written string.
     ///
     /// **The boundary scan decides no closure.** Its awaiting-designator result
     /// still decides whether the next run's first byte is copied verbatim (FR2,
@@ -411,21 +446,26 @@ impl ScrollbackWriteFilter {
     /// `ESC` that ends a run flushed in the call's last segment (no cut follows
     /// that segment in this call). A live lone `ESC` is a run's final `ESC` that
     /// leaves the written stream in the Escape state: it follows ground, a
-    /// written `ESC`, an open CSI or an open string body (the written-state
-    /// model counts a string body as ground), not the designator of `ESC (` /
-    /// `ESC )` (written, as before). That `ESC` is NOT written: it is held as a
+    /// written `ESC`, an open CSI or an open string body (an `ESC` in a body also
+    /// leaves the stream in Escape), not the designator of `ESC (` / `ESC )`
+    /// (written, as before). That `ESC` is NOT written: it is held as a
     /// chain of one construct, exactly as a lone trailing `ESC` held by the
     /// non-overflow path, so the next call strips it together with its
     /// continuation (a strip target split right after it is removed; anything
     /// else is written after it, whole; a cut or the reader's fallback closing
-    /// drops it and writes the closure of the state before it). The written state
-    /// is that of the bytes written before it, no designator is awaited, the
-    /// held byte's start dims are this call's current dims, and the call reports
-    /// no carried completion. A flush in a segment a cut follows, and a run whose
-    /// last byte is not such an `ESC`, are written whole and leave no chain
-    /// held; the awaiting-designator flag equals the client-parity state at the
-    /// end of the flushed run (one bounded pass, overflow path only). The held
-    /// bytes stay bounded: the cap, then at most one byte after a flush.
+    /// drops it and writes the closure of the state before it: `ESC` + CAN when
+    /// that state is an open string body). The written state is that of the bytes
+    /// written before it (the body state when the flushed run ends inside a
+    /// string), no designator is awaited, the held byte's start dims are this
+    /// call's current dims, and the call reports no carried completion. A flush in
+    /// a segment a cut follows, and a run whose last byte is not such an `ESC`,
+    /// are written whole and leave no chain held; the awaiting-designator flag
+    /// equals the client-parity state at the end of the flushed run (one bounded
+    /// pass, overflow path only). A flush whose run ends inside a string body
+    /// leaves that body as the written state, and the cut that follows it writes
+    /// `ESC` + CAN (after the run, in the same call, when the cut is in the same
+    /// segment). The held bytes stay bounded: the cap, then at most one byte
+    /// after a flush.
     pub(in crate::mux) fn feed_with_cuts(
         &mut self,
         fed: &[u8],
@@ -472,9 +512,9 @@ impl ScrollbackWriteFilter {
             if self.pending.is_empty() {
                 // Nothing held and nothing fed in this segment; a cut still
                 // closes what the written stream was left in: the closure
-                // follows the carried state (a CSI, an `ESC`, or a designator
-                // wait whose byte the cut's ESC was consumed as, round4 FR3),
-                // and ground writes nothing.
+                // follows the carried state (a CSI, an `ESC`, an open string
+                // body, or a designator wait whose byte the cut's ESC was
+                // consumed as, round4 FR3), and ground writes nothing.
                 if !is_last {
                     out.extend_from_slice(closure_for(self.written));
                     self.written = WrittenState::Ground;
@@ -534,7 +574,8 @@ impl ScrollbackWriteFilter {
                 // trailing `ESC` held back above), started from the state
                 // carried in (post-strip closure FR3): a run that ends in an
                 // incomplete construct is flushed whole, so its end is inside
-                // that construct, not inside a CSI.
+                // that construct (the open string body when it is a string),
+                // not inside a CSI.
                 let (stripped, mut state_at_end) =
                     strip_pty_output_for_scrollback_write_with_written_state(
                         &run,
@@ -545,8 +586,9 @@ impl ScrollbackWriteFilter {
                 // The final `ESC` of the run, decided in O(1) from the state the
                 // strip reported, with the strip's own transitions: it is a live
                 // lone `ESC` when it leaves the written stream in Escape (from
-                // ground, an `ESC`, or inside a CSI; a string body counts as
-                // ground). When it is the designator of `ESC (` / `ESC )` it
+                // ground, an `ESC`, inside a CSI or inside an open string body,
+                // which an `ESC` leaves for Escape too). When it is the
+                // designator of `ESC (` / `ESC )` it
                 // leaves ground instead and is written, as the whole-run strip
                 // wrote it.
                 let mut held_esc = false;
@@ -580,7 +622,8 @@ impl ScrollbackWriteFilter {
                     self.written = state_at_end;
                 } else {
                     // Exactly one closure decision per cut, from the state of
-                    // the flushed run.
+                    // the flushed run (`ESC` + CAN when it ends inside an open
+                    // string body).
                     self.awaiting_designator = false;
                     self.written = WrittenState::Ground;
                     out.extend_from_slice(closure_for(state_at_end));
@@ -629,7 +672,9 @@ impl ScrollbackWriteFilter {
                 // in at the switch's ESC, so write the one closure that state
                 // decides for a replay of the ring: DEL inside a CSI (round4
                 // FR4), the Escape closure right after an `ESC`, the designator
-                // ESC after `ESC (` / `ESC )` (round4 FR3), nothing in ground.
+                // ESC after `ESC (` / `ESC )` (round4 FR3), `ESC` + CAN inside an
+                // open string body (a body an overflow flush wrote, or one a
+                // removal left open), nothing in ground.
                 // The state is that of the bytes written after the strip, so
                 // this also holds when the dropped construct starts right after
                 // them and when the strip removed a construct whose ESC would
