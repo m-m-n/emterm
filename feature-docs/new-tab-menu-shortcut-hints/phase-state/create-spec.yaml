@@ -3,16 +3,108 @@ feature: new-tab-menu-shortcut-hints
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: c0b7bd0d6b8e446047f6236f8e64e838d68cb71f
+base_revision: 150155a71169498c00c0db25e9df3ba5df945c91
 last_input_digest: sha256:16c5b73bc212e8b6d03d5db6884f198ec5d5dcb1b8964f2766dc26f14c9831c2
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-03T13:45:00+09:00'
+    questions:
+    - question_id: requirement.no-default-global-row
+      status: answered
+    - question_id: requirement.profile-selector-mode-scope
+      status: answered
+    - question_id: requirement.label-placement
+      status: answered
+    - question_id: requirement.label-format
+      status: answered
+    - question_id: requirement.shadowed-chord
+      status: answered
+    - question_id: design-step.recommendation
+      status: answered
+answers:
+  requirement.no-default-global-row:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T13:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - global_only
+    freeform: null
+    normalized_answer: 「グローバル設定」の項目には常に new_tab_global のショートカットだけを表示する
+    resolution_note: 'gate: create-spec.requirement-clarification (batch-policies
+      codex_consultation, record_as_assumption); codex_consulted: true (harness codex,
+      1 turn, converged); opus_escalation: false; chose global_only; Codex: 指定はグローバル設定の行に
+      new_tab_global を表示すること。既定なし時の new_tab のフォールバック(tab_lifecycle.rs:80)は表示対象にしない'
+  requirement.profile-selector-mode-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T13:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - chooser_only
+    freeform: null
+    normalized_answer: + ボタンで開く新しいタブのメニューだけに表示し、Ctrl+Shift+P のプロファイル選択は今のまま
+    resolution_note: 'gate: create-spec.requirement-clarification (batch-policies
+      codex_consultation, record_as_assumption); codex_consulted: true (harness codex,
+      1 turn, converged); opus_escalation: false; chose chooser_only; Codex: 対象は +
+      のメニュー。include_global で両モードを既に区別している(overlays.rs:32)'
+  requirement.label-placement:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T13:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - row_right_edge
+    freeform: null
+    normalized_answer: ショートカットを項目の右端に揃えて表示し、シェルのパスはその手前で省略する
+    resolution_note: 'gate: create-spec.requirement-clarification (batch-policies
+      codex_consultation, record_as_assumption); codex_consulted: true (harness codex,
+      1 turn, converged); opus_escalation: false; chose row_right_edge; Codex: シェルパスは残り幅で省略済み(profile_selector.rs:387,394)。右端に幅を確保しパスの省略位置を手前に移す形が「項目の右」に合う'
+  requirement.label-format:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T13:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - canonical_from_resolved
+    freeform: null
+    normalized_answer: 実際に効いているキーから Ctrl+Shift+G の形(修飾キーは Ctrl, Shift, Alt の順)で表示し、不正な設定で既定のキーに戻っている場合は戻った後のキーを表示する
+    resolution_note: 'gate: create-spec.requirement-clarification (batch-policies
+      codex_consultation, record_as_assumption); codex_consulted: true (harness codex,
+      1 turn, converged); opus_escalation: false; chose canonical_from_resolved; Codex:
+      resolve は不正値を既定キーに戻す(keybinds.rs:343,354)ため、設定文字列だとキー処理と食い違う'
+  requirement.shadowed-chord:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T13:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - hide_when_shadowed
+    freeform: null
+    normalized_answer: 優先度の高い別の操作に取られて項目を開けないキーは表示しない
+    resolution_note: 'gate: create-spec.requirement-clarification (batch-policies
+      codex_consultation, record_as_assumption); codex_consulted: true (harness codex,
+      1 turn, converged); opus_escalation: false; chose hide_when_shadowed; Codex:
+      dispatch は profile_selector→new_tab_global→new_tab の先勝ち(keybinds.rs:423-429)。開けないキーを案内しない方が目的に合う。analyst
+      の仮の立場(show_as_configured)とは異なり、目的への適合を比較して Codex 案を採用'
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T13:45:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design_step_recommendation (skip) をそのまま採用する
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option decide_autonomously;
+      recommendation skip'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:16c5b73bc212e8b6d03d5db6884f198ec5d5dcb1b8964f2766dc26f14c9831c2
-  output_digest: null
+  output_digest: sha256:d7ec9469f7eaac7f52ff40ec056f92c4492af9179660d0de1bb4a0b70da97940
 artifacts: []
 patches: []
 progress_fingerprint: null
