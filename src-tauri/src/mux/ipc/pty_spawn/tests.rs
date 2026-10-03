@@ -8849,3 +8849,8 @@ mod post_strip_cut_csi_record;
 // mux-cut-csi-post-strip-closure task0001 (FR1-FR4, FR6): the closing at a cut
 // and the carried CSI state follow the bytes the strip actually writes.
 mod post_strip_cut_csi;
+
+// mux-strip-concat-query-closure task0001 (FR1-FR7): the join the shared strip
+// produces never completes an escape or a CSI device query the raw stream never
+// made (write filter and reader level).
+mod strip_concat_query;
