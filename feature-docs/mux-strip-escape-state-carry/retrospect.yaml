@@ -1,0 +1,91 @@
+feature: mux-strip-escape-state-carry
+collected_at: '2026-10-03T22:02:04+09:00'
+session_ids:
+- 01a101da-955e-7423-a689-ee4da0e121e9
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+  - perspective: performance
+    reason: 変更が PTY 出力の読み取りごとに走る書き込みフィルタ（ホットパス）の状態遷移に及ぶため
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: description_plus_code の最終読みがバケット 2（新しいロジック・複数モジュール）に 0.97 で集中し full
+      と判定した
+    bases:
+    - basis: description_only
+      score:
+        type: score
+        score: 1.65
+        confidence: 0.64
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread
+            across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to
+            an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+            or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.35
+          '2': 0.65
+          '3': 0.0
+      observed_at: '2026-10-03T20:04:00+09:00'
+    - basis: description_plus_code
+      score:
+        type: score
+        score: 1.97
+        confidence: 0.96
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread
+            across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to
+            an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+            or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.03
+          '2': 0.97
+          '3': 0.0
+      observed_at: '2026-10-03T20:11:00+09:00'
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/mux/scrollback_filter.rs
+      - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+      - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs
+      - src-tauri/src/mux/scrollback_filter/tests.rs
+      - feature-docs/mux-cut-csi-post-strip-closure/DECISIONS.md
+      changed_lines_approx: 0
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules:
+      - mux::scrollback_filter::tests
+      work_still_required: true
+      work_still_required_evidence: HEAD は 493baf7999b247a2f52e62fe38e42882af100239。欠陥はコードに残っている。src-tauri/src/mux/scrollback_filter.rs:121
+        は Escape を None に変換し、同ファイル:280 がその値を返す。src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:554
+        が self.csi に保存し、scrollback_filter.rs:87 では None から Ground を開始する。カット閉鎖は write_filter.rs:412、:469、:524
+        のいずれも CSI の有無で判断するため、書き込まれた Escape を閉じる処理がない。静的に再現手順を追うと、分割時は ESC[6、まとめて末尾カット付きで渡すと
+        ESC[6 DEL が出力される。必要な対応は Escape を含む状態の引継ぎと、同一呼び出し・空入力での閉鎖・上限超過経路の閉鎖処理の更新。関連テストは存在するが、post_strip_cut_csi.rs:215
+        の分割テスト群には ESC と除去対象を連結する再現入力がない。同ファイル:88 の比較状態も Escape を表現できない。scrollback_filter/tests.rs:1221
+        は末尾 Escape の返却状態を None としている。feature-docs/mux-cut-csi-post-strip-closure/reviews/round1.yaml:42
+        は当該 stable_id を unresolved と記録し、DECISIONS.md:9 の対応済み記録は別の stable_id なので、当該指摘の判断記録も必要。調査は静的確認のみで、テストは実行していない。ファイル変更は行っていない
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 0
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 1
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+- security#0 (codex) が JSON 以外を返し fallback に回った
+- 評価者が low に下げて機械ゲートで除外した security 指摘（cut の無い run での除去の継ぎ目）は triage_filing 未実行のまま。別タスク起票の要否は要確認
+- task0001 が残余 EC-6 のコーパス 1 件を削除した（post_strip_cut_csi.rs の ESC T ( ESC ( T abc）
