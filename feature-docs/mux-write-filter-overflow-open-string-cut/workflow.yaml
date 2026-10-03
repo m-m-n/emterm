@@ -128,7 +128,7 @@ tasks:
     status: merged
     branch: em-workflow/mux-write-filter-overflow-open-string-cut/task0001
 review:
-  status: in_progress
+  status: completed
   plan:
     floor:
     - comprehensive
@@ -139,6 +139,15 @@ review:
     - perspective: performance
       reason: write_filter.rs runs on every PTY output chunk in the mux daemon; the new open-body state tracking adds per-byte work on that hot path (NFR1)
     cross_validation: true
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  - performance
+  residual_critical_high: 0
+  needs_rework: false
 requirements:
   FR1:
     title: Written state distinguishes an open string body
