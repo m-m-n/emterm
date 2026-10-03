@@ -2,55 +2,32 @@ schema_version: 1
 feature: mux-write-filter-overflow-open-string-cut
 created: '2026-10-04'
 base_branch: main
-goal: 'Notion: https://www.notion.so/3ee3509ec8ee811bbd12c2bebf80256e
-
+goal: |
+  Notion: https://www.notion.so/3ee3509ec8ee811bbd12c2bebf80256e
 
   # mux: 書き込みフィルタの上限超過フラッシュが開いた文字列本体の中で終わり保留した ESC をカットで捨てると、リングの文字列が閉じられずリプレイがずれる
 
-
   ## 現象 (必須)
-
   feature `mux-write-filter-overflow-lone-esc`（ブランチ `em-workflow/mux-write-filter-overflow-lone-esc/integration`）の review round 1 で残った medium 指摘 `ed366a655164f747`。本 feature が持ち込んだ退行。
-
   書き込みフィルタの上限超過フラッシュが開いた OSC/DCS/APC 文字列本体の中で終わり（`ESC]0;` + 512 KiB 超の本体 + 最後の `ESC`）、末尾の `ESC` を保留した場合、次の呼び出しのカットや fallback closing で保留 `ESC` を捨てると、書き込み状態モデルが文字列本体を Ground と数えるため `closure_for(Ground)` となり何も書かれない。リングには開いた `ESC]` が残る。
-
   リプレイでは、カット後に書かれたメインバッファの平文が次の `ESC` か `BEL` まで OSC 本体に吸い込まれて表示されない。`BEL` が先に来ると、吸い込んだ文字列で OSC が完了扱いになる（タイトルが設定される）。変更前は `ESC CAN` が書かれ、OSC は Unterminated として閉じてクライアントと一致していた。
-
   ## 再現手順 (必須)
-
   1. mux の pane に `ESC]0;` + 512 KiB 超の本体を出力し、上限を越える read の末尾を `ESC` で終える
-
   2. 次の read の先頭で画面切替（`ESC[?1049h` 等、カットを起こす列）を出力する
-
   3. 続けてメインバッファに平文を出力する
-
   4. snapshot を復元すると、平文が OSC 本体に吸い込まれて表示されない
-
   ## 期待する挙動 (必須)
-
   上限超過フラッシュが開いた文字列本体の中で終わった場合も、カット時にリングの文字列が閉じられ、リプレイがクライアントの見た状態と一致する。
-
   ## 完了の定義 (必須)
-
   - [ ] 再現手順で現象が起きない
-
   - [ ] 再発を検出するテストがある
-
   ## 該当箇所 (任意)
-
   - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:560`（オーバーフロー時の保留 ESC と閉鎖）
-
-  - `src-tauri/src/mux/ipc/pty_spawn/tests/overflow_lone_esc.rs` の `overflow_lone_esc_the_fallback_closing_follows_the_written_state`（''inside an open string body'' の closing `[]` を固定している）
-
+  - `src-tauri/src/mux/ipc/pty_spawn/tests/overflow_lone_esc.rs` の `overflow_lone_esc_the_fallback_closing_follows_the_written_state`（'inside an open string body' の closing `[]` を固定している）
   - `crates/term_core/src/parser/osc.rs:10-55`（osc_string / osc_escape）
-
   ## 実害・発生条件 (任意)
-
   発生条件は狭い（512 KiB 超の未終端文字列、キャップを越える read が ESC で終わる、次の read が画面切替）。影響は表示だけで、照会やビューア起動は成立しない。IMPLEMENTATION.md の Risk Assessment（Low / Low）と Open Questions で後続対応として受け入れ済み。
-
-  根本原因は、オーバーフローで生のまま書いた開いた文字列本体を書き込み状態モデルが Ground に畳むこと。本体が平文で終わるオーバーフローにカットが続く場合も、以前から同じく閉じ処理が無い。修正案: 開いた文字列本体を書き込み状態（または別フラグ）に持たせ、カット時に `ESC` + `CAN` で閉じる（保留 ESC の ending と平文本体の ending の両方が直る）。AC に ''inside an open string body'' の view_after_a_cut 比較を追加する。
-
-  '
+  根本原因は、オーバーフローで生のまま書いた開いた文字列本体を書き込み状態モデルが Ground に畳むこと。本体が平文で終わるオーバーフローにカットが続く場合も、以前から同じく閉じ処理が無い。修正案: 開いた文字列本体を書き込み状態（または別フラグ）に持たせ、カット時に `ESC` + `CAN` で閉じる（保留 ESC の ending と平文本体の ending の両方が直る）。AC に 'inside an open string body' の view_after_a_cut 比較を追加する。
 parent_branch: em-workflow/mux-write-filter-overflow-open-string-cut/integration
 tier: full
 tier_decision:
