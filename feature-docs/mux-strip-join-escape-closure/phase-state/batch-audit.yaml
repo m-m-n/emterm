@@ -9,3 +9,13 @@ records:
   selected_option_ids:
   - stop_until_inflight_merges
   resolution_note: 'gate: develop.inflight-overlap (unlisted-gate fallback, orchestrator-raised in Step A after the tier decision); Codex (run_codex_exec.sh readonly, 1 turn) consulted; Opus escalation: not run; options: implement_full_fix_on_main [not chosen] / implement_minimal_compatible_fix_on_main [not chosen] / stop_until_inflight_merges [chosen]; key points: 未マージの em-workflow/mux-strip-concat-query-closure/integration（review 段階）が同じ除去の継ぎ目を修正中（scrollback_filter.rs +231/-53、write_filter.rs、snapshot_bytes.rs。FR1 開いた CSI 内の除去位置に DEL、FR4 除去対象の前の孤立 ESC の無効化、FR3 分割照会の分類）。main から独立に実装すると実装・レビュー・競合解消が重複する。severity low のため統合後の再確認で足りる。注意: シナリオ 2 の二段 strip（書き込み strip → snapshot strip → term_core で応答 0 件）と RIS / G0 文字集合の明示テストが在進行ブランチで満たされるかは未検証のまま残る。前段の Codex 事前調査は 540 秒で打ち切り（exit 124）のため tier は full にフォールバックした'
+- question_id: develop.resume-existing-branch
+  packet_id: null
+  answered_at: '2026-10-04T02:06:22+09:00'
+  source: batch-safe-default
+  answer_mode: single_select
+  selected_option_ids:
+  - resume_and_fast_forward
+  freeform: null
+  normalized_answer: 既存の em-workflow/mux-strip-join-escape-closure/integration（前回 develop.inflight-overlap で停止）で再開し、main（0c3a2c06、mux-strip-concat-query-closure マージ済み）へ fast-forward してから create-spec に再突入する
+  resolution_note: 'gate: develop.resume-existing-branch (起動指示「em-workflow/*/integration の goal が一致するブランチが 1 本なら再開」に基づく; gate_id なし); options: resume_and_fast_forward [chosen] / new_feature [not chosen]; codex_consulted: false; opus_escalation: false; key points: 3 本中 workflow.yaml を持たないのは本ブランチのみで、batch-audit.yaml の停止記録が本タスク（共有 strip の除去の継ぎ目）を指す。他 2 本の goal は別 Notion タスク。停止理由の在進行ブランチは main にマージ済み。ブランチは main の祖先のため fast-forward で履歴を失わない。tier.yaml は既存の判定（full）を再利用'
