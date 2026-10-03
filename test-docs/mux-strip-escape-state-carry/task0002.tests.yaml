@@ -1,0 +1,66 @@
+task_id: task0002
+# From step 4a, before any change: `cargo test --lib` exited 0 with 4159 passed, 0 failed,
+# 3 ignored.
+baseline_failures: []
+# Re-executed after the record test and DECISIONS.md were added: `cargo test --lib` exited 0
+# with 4160 passed, 0 failed, 3 ignored (the baseline plus R12).
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry_record::escape_carry_the_decision_record_states_the_verdict_and_the_residuals
+    red_confirmed: true
+    red_reason: >-
+      Observed with the record absent (R12 and its module declaration written, DECISIONS.md not
+      yet written): R12 failed with 'the decision record .../feature-docs/mux-strip-escape-state-carry/DECISIONS.md
+      is unreadable: No such file or directory'. After the record was written R12 passed. With
+      the record present, changing the requirement cell to `FR1, FR2, FR3` made R12 fail on the
+      requirement-cell assertion, renaming the R11 path in the regression-test cell made it fail
+      on 'the regression-test cell lists ...', and renaming "IMPLEMENTATION.md D2" in the
+      rationale made it fail on 'the rationale names "IMPLEMENTATION.md D2"'; the record was
+      restored after each check and R12 passed again.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry_record::escape_carry_the_decision_record_states_the_verdict_and_the_residuals
+    red_confirmed: true
+    red_reason: >-
+      Observed with the record absent: R12 failed with 'the decision record ... is unreadable:
+      No such file or directory'. With the record present, emptying the "Out of scope because:"
+      line of Residual 1 made R12 fail on 'the "Out of scope because:" line carries text'; the
+      record was restored afterwards.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry_record::escape_carry_the_decision_record_states_the_verdict_and_the_residuals
+    red_confirmed: true
+    red_reason: >-
+      Observed with the record absent: R12 failed with 'the decision record ... is unreadable:
+      No such file or directory'; the behavior-changing-tests assertions sit in the same test and
+      run after the reads above them, so this failure is the one observed for them.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry_record::escape_carry_the_decision_record_states_the_verdict_and_the_residuals
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi_record::post_strip_the_decision_record_states_the_verdict_and_the_residuals
+    red_confirmed: true
+    red_reason: >-
+      The record half (the predecessor-records section names both predecessor files and states
+      "not modified"): observed with the record absent, R12 failed with 'the decision record ...
+      is unreadable: No such file or directory'. The half "the predecessor's record test passes
+      unchanged and this task changes no file under feature-docs/mux-cut-csi-post-strip-closure/"
+      has no executable check that can be made to fail here: a search of src-tauri/src and
+      src-tauri/tests by the path `feature-docs/mux-cut-csi-post-strip-closure/DECISIONS.md` and
+      by the basenames `DECISIONS.md` and `round1.yaml` finds the existing
+      post_strip_cut_csi_record test, which reads that DECISIONS.md and passed unchanged in the
+      baseline and in the final run (no red state occurred for this change), and no test that
+      reads the predecessor round1.yaml. That half is checked in verify with `git diff
+      --name-only`; this task's own diff lists no file under
+      feature-docs/mux-cut-csi-post-strip-closure/.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry_record::escape_carry_the_decision_record_states_the_verdict_and_the_residuals
+    red_confirmed: true
+    red_reason: >-
+      Observed: R12 failed with the record absent ('the decision record ... is unreadable: No such
+      file or directory') and passed after DECISIONS.md was written. The `--lib -- --list` output
+      prints the exact R12 name as a test, the module declaration sits directly after
+      `mod post_strip_cut_csi_record;` in tests.rs (the only tests.rs change, two added lines),
+      and the full `--lib` run passed (4160 passed, 0 failed).
