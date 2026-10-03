@@ -583,3 +583,344 @@ fn parse_chord_view_action_default_specs() {
     assert_eq!(parse_chord("F11").unwrap().key, Key::F11);
     assert_eq!(parse_chord("Ctrl+Shift+B").unwrap().key, Key::B);
 }
+
+// ── format_chord: canonical shortcut label text ────────────────────
+//
+// new-tab-menu-shortcut-hints task0001 AC-1 / AC-2 (FR5, NFR4).
+
+/// Build a table from the defaults with `edit` applied to the keybind
+/// settings (the pattern the `from_settings_*` tests above use).
+fn table_with(edit: impl FnOnce(&mut KeybindSettings)) -> KeybindTable {
+    let mut kb = KeybindSettings::default();
+    edit(&mut kb);
+    KeybindTable::from_settings(&kb)
+}
+
+fn chord(ctrl: bool, shift: bool, alt: bool, key: Key) -> Chord {
+    Chord {
+        ctrl,
+        shift,
+        alt,
+        key,
+    }
+}
+
+// AC-1: default table labels for the two chooser actions.
+#[test]
+fn format_chord_default_table_new_tab_global_and_new_tab() {
+    let table = KeybindTable::default();
+    assert_eq!(format_chord(&table.new_tab_global), "Ctrl+Shift+G");
+    assert_eq!(format_chord(&table.new_tab), "Ctrl+Shift+T");
+}
+
+// AC-1: the label follows the resolved chord, not the spec's spelling.
+#[test]
+fn format_chord_lowercase_spec_is_canonicalized() {
+    let table = table_with(|kb| kb.new_tab_global = "ctrl+shift+g".to_string());
+    assert_eq!(format_chord(&table.new_tab_global), "Ctrl+Shift+G");
+}
+
+// AC-1: modifiers in the fixed order Ctrl, Shift, Alt.
+#[test]
+fn format_chord_orders_modifiers_ctrl_shift_alt_then_key() {
+    assert_eq!(
+        format_chord(&chord(true, true, true, Key::T)),
+        "Ctrl+Shift+Alt+T"
+    );
+}
+
+// AC-1: only the enabled modifiers appear; a bare key has no prefix.
+#[test]
+fn format_chord_omits_disabled_modifiers() {
+    assert_eq!(format_chord(&chord(true, false, false, Key::T)), "Ctrl+T");
+    assert_eq!(format_chord(&chord(false, true, false, Key::T)), "Shift+T");
+    assert_eq!(format_chord(&chord(false, false, true, Key::T)), "Alt+T");
+    assert_eq!(
+        format_chord(&chord(true, false, true, Key::T)),
+        "Ctrl+Alt+T"
+    );
+    assert_eq!(format_chord(&chord(false, false, false, Key::F11)), "F11");
+}
+
+// AC-1: an unparseable spec resolves to the built-in default, and the
+// label shows that resolved chord.
+#[test]
+fn format_chord_unparseable_new_tab_spec_shows_fallback_default() {
+    let table = table_with(|kb| kb.new_tab = "not a chord!!".to_string());
+    assert_eq!(format_chord(&table.new_tab), "Ctrl+Shift+T");
+}
+
+// AC-1: no symbol alias is emitted; word tokens are CamelCase.
+#[test]
+fn format_chord_uses_word_tokens_not_symbols() {
+    assert_eq!(
+        format_chord(&chord(true, false, false, Key::Plus)),
+        "Ctrl+Plus"
+    );
+    assert_eq!(
+        format_chord(&chord(true, false, false, Key::Minus)),
+        "Ctrl+Minus"
+    );
+    assert_eq!(
+        format_chord(&chord(true, false, false, Key::Comma)),
+        "Ctrl+Comma"
+    );
+    assert_eq!(
+        format_chord(&chord(true, false, false, Key::Backslash)),
+        "Ctrl+Backslash"
+    );
+    assert_eq!(
+        format_chord(&chord(true, false, false, Key::PageDown)),
+        "Ctrl+PageDown"
+    );
+    assert_eq!(
+        format_chord(&chord(true, true, false, Key::ArrowUp)),
+        "Ctrl+Shift+ArrowUp"
+    );
+    assert_eq!(
+        format_chord(&chord(true, false, false, Key::Num0)),
+        "Ctrl+0"
+    );
+}
+
+/// Every chord of a table, for round-trip checks.
+fn all_chords(t: &KeybindTable) -> Vec<Chord> {
+    vec![
+        t.copy,
+        t.paste,
+        t.profile_selector,
+        t.new_tab_global,
+        t.new_tab,
+        t.close_tab,
+        t.next_tab,
+        t.prev_tab,
+        t.select_all,
+        t.search,
+        t.jump_to_prev_prompt,
+        t.jump_to_next_prompt,
+        t.zoom_in,
+        t.zoom_out,
+        t.zoom_reset,
+        t.toggle_fullscreen,
+        t.toggle_tab_bar,
+        t.open_settings,
+    ]
+}
+
+// AC-2: parsing the label returns the original chord for every chord of
+// the default table.
+#[test]
+fn format_chord_round_trips_every_default_table_chord() {
+    for c in all_chords(&KeybindTable::default()) {
+        let label = format_chord(&c);
+        assert_eq!(parse_chord(&label), Some(c), "label {label:?}");
+    }
+}
+
+// AC-2: the named samples the SPEC calls out.
+#[test]
+fn format_chord_round_trips_named_samples() {
+    for c in [
+        chord(true, false, false, Key::PageDown),
+        chord(true, true, false, Key::ArrowUp),
+        chord(true, false, false, Key::Plus),
+        chord(false, false, false, Key::F11),
+        chord(true, false, false, Key::Num7),
+        chord(true, false, false, Key::Comma),
+    ] {
+        let label = format_chord(&c);
+        assert_eq!(parse_chord(&label), Some(c), "label {label:?}");
+    }
+}
+
+/// Every main-key token `parse_main_key` accepts, as the word / letter /
+/// digit spellings (symbol aliases are listed separately because they
+/// parse to the same keys).
+fn parseable_main_key_tokens() -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    tokens.extend(('a'..='z').map(|c| c.to_string()));
+    tokens.extend(('0'..='9').map(|c| c.to_string()));
+    tokens.extend((1..=20).map(|n| format!("f{n}")));
+    tokens.extend(
+        [
+            "plus",
+            "minus",
+            "comma",
+            "period",
+            "slash",
+            "backslash",
+            "space",
+            "enter",
+            "escape",
+            "tab",
+            "backspace",
+            "delete",
+            "insert",
+            "arrowup",
+            "arrowdown",
+            "arrowleft",
+            "arrowright",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+            "equals",
+            "semicolon",
+            "colon",
+            // Symbol aliases that `parse_chord` can read inside a spec
+            // (`+` cannot: specs are split on it).
+            "-",
+            ",",
+            ".",
+            "/",
+            "\\",
+            "=",
+            ";",
+            ":",
+        ]
+        .map(String::from),
+    );
+    tokens
+}
+
+// AC-2: every main key `parse_chord` can produce survives
+// parse -> format -> parse under every modifier combination.
+#[test]
+fn format_chord_round_trips_every_parseable_main_key() {
+    for token in parseable_main_key_tokens() {
+        let key = parse_chord(&token)
+            .unwrap_or_else(|| panic!("token {token:?} must parse"))
+            .key;
+        for bits in 0..8u8 {
+            let c = chord(bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, key);
+            let label = format_chord(&c);
+            assert_eq!(
+                parse_chord(&label),
+                Some(c),
+                "token {token:?} chord {c:?} label {label:?}"
+            );
+        }
+    }
+}
+
+// The formatter never panics and never returns an empty label, even for
+// a key `parse_chord` cannot produce (no round-trip guarantee there).
+#[test]
+fn format_chord_non_empty_for_every_egui_key() {
+    for &key in Key::ALL {
+        let label = format_chord(&chord(false, false, false, key));
+        assert!(!label.is_empty(), "key {key:?}");
+        // A label that does parse must never come back as another chord.
+        if let Some(parsed) = parse_chord(&label) {
+            assert_eq!(parsed, chord(false, false, false, key), "label {label:?}");
+        }
+    }
+}
+
+// ── reachable shortcut labels for the new-tab chooser ──────────────
+//
+// new-tab-menu-shortcut-hints task0001 AC-4 (FR6): a label is withheld
+// exactly when an action earlier in the runtime match priority owns the
+// same resolved chord.
+
+#[test]
+fn reachable_labels_default_table_shows_both() {
+    let table = KeybindTable::default();
+    assert_eq!(
+        table.new_tab_global_label().as_deref(),
+        Some("Ctrl+Shift+G")
+    );
+    assert_eq!(table.new_tab_label().as_deref(), Some("Ctrl+Shift+T"));
+}
+
+#[test]
+fn reachable_labels_follow_the_resolved_table() {
+    let table = table_with(|kb| {
+        kb.new_tab_global = "Ctrl+Alt+G".to_string();
+        kb.new_tab = "Ctrl+Alt+N".to_string();
+    });
+    assert_eq!(table.new_tab_global_label().as_deref(), Some("Ctrl+Alt+G"));
+    assert_eq!(table.new_tab_label().as_deref(), Some("Ctrl+Alt+N"));
+}
+
+#[test]
+fn new_tab_global_label_hidden_by_copy() {
+    let table = table_with(|kb| kb.new_tab_global = kb.copy.clone());
+    assert_eq!(table.new_tab_global_label(), None);
+}
+
+#[test]
+fn new_tab_global_label_hidden_by_paste() {
+    let table = table_with(|kb| kb.new_tab_global = kb.paste.clone());
+    assert_eq!(table.new_tab_global_label(), None);
+}
+
+#[test]
+fn new_tab_global_label_hidden_by_profile_selector() {
+    let table = table_with(|kb| kb.new_tab_global = kb.profile_selector.clone());
+    assert_eq!(table.new_tab_global_label(), None);
+}
+
+#[test]
+fn new_tab_label_hidden_by_copy() {
+    let table = table_with(|kb| kb.new_tab = kb.copy.clone());
+    assert_eq!(table.new_tab_label(), None);
+}
+
+#[test]
+fn new_tab_label_hidden_by_paste() {
+    let table = table_with(|kb| kb.new_tab = kb.paste.clone());
+    assert_eq!(table.new_tab_label(), None);
+}
+
+#[test]
+fn new_tab_label_hidden_by_profile_selector() {
+    let table = table_with(|kb| kb.new_tab = kb.profile_selector.clone());
+    assert_eq!(table.new_tab_label(), None);
+}
+
+#[test]
+fn new_tab_label_hidden_by_new_tab_global() {
+    let table = table_with(|kb| kb.new_tab = kb.new_tab_global.clone());
+    assert_eq!(table.new_tab_label(), None);
+    // The winner keeps its label.
+    assert_eq!(
+        table.new_tab_global_label().as_deref(),
+        Some("Ctrl+Shift+G")
+    );
+}
+
+// A collision with a LOWER-priority action does not hide the label.
+#[test]
+fn new_tab_label_kept_when_only_a_lower_priority_action_shares_the_chord() {
+    let table = table_with(|kb| kb.new_tab = kb.close_tab.clone());
+    assert_eq!(table.collisions(), vec![("new_tab", "close_tab")]);
+    assert_eq!(table.new_tab_label().as_deref(), Some("Ctrl+Shift+W"));
+}
+
+#[test]
+fn new_tab_global_label_kept_when_only_a_lower_priority_action_shares_the_chord() {
+    let table = table_with(|kb| kb.new_tab_global = kb.new_tab.clone());
+    // new_tab_global outranks new_tab, so new_tab is the dead binding.
+    assert_eq!(
+        table.new_tab_global_label().as_deref(),
+        Some("Ctrl+Shift+T")
+    );
+    let table = table_with(|kb| kb.new_tab_global = kb.close_tab.clone());
+    assert_eq!(
+        table.new_tab_global_label().as_deref(),
+        Some("Ctrl+Shift+W")
+    );
+}
+
+// The query leaves the collision report (and so the warn logging built
+// on it) exactly as it was.
+#[test]
+fn label_queries_do_not_change_the_collision_report() {
+    let table = table_with(|kb| kb.new_tab = kb.new_tab_global.clone());
+    let before = table.collisions();
+    let _ = table.new_tab_global_label();
+    let _ = table.new_tab_label();
+    assert_eq!(table.collisions(), before);
+    assert_eq!(before, vec![("new_tab_global", "new_tab")]);
+}

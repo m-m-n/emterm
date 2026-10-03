@@ -222,6 +222,82 @@ fn fn_key(n: u8) -> Option<Key> {
     })
 }
 
+/// Canonical label text of a resolved [`Chord`], e.g. `Ctrl+Shift+T`.
+///
+/// Enabled modifiers come first in the fixed order Ctrl, Shift, Alt, then
+/// the main-key name, joined with `+` and no spaces. The main-key name is
+/// the token [`parse_chord`] accepts for the key (letters upper-case,
+/// digits as the digit, `F1`..`F20`, every other key as its CamelCase
+/// word such as `PageDown` or `Plus`). A symbol alias (`+`, `,`) is never
+/// emitted: `+` could not be read back because specs are split on it.
+///
+/// For every main key `parse_chord` can produce, `parse_chord` applied to
+/// the returned label gives back the original chord. A key outside that
+/// set cannot appear in a resolved table; it still gets a non-empty name
+/// (egui's variant name) without a round-trip guarantee.
+///
+/// Pure: no locale, no platform input, no logging.
+pub fn format_chord(chord: &Chord) -> String {
+    let mut label = String::new();
+    for (enabled, name) in [
+        (chord.ctrl, "Ctrl"),
+        (chord.shift, "Shift"),
+        (chord.alt, "Alt"),
+    ] {
+        if enabled {
+            label.push_str(name);
+            label.push('+');
+        }
+    }
+    label.push_str(&main_key_name(chord.key));
+    label
+}
+
+/// The main-key part of a chord label: the CamelCase word token
+/// [`parse_main_key`] accepts for `key`. Letters (`A`..`Z`) and function
+/// keys (`F1`..`F35`) already carry their token as the egui variant name,
+/// as does every other key outside the set `parse_main_key` produces.
+fn main_key_name(key: Key) -> String {
+    let token = match key {
+        Key::Num0 => "0",
+        Key::Num1 => "1",
+        Key::Num2 => "2",
+        Key::Num3 => "3",
+        Key::Num4 => "4",
+        Key::Num5 => "5",
+        Key::Num6 => "6",
+        Key::Num7 => "7",
+        Key::Num8 => "8",
+        Key::Num9 => "9",
+        Key::Plus => "Plus",
+        Key::Minus => "Minus",
+        Key::Comma => "Comma",
+        Key::Period => "Period",
+        Key::Slash => "Slash",
+        Key::Backslash => "Backslash",
+        Key::Space => "Space",
+        Key::Enter => "Enter",
+        Key::Escape => "Escape",
+        Key::Tab => "Tab",
+        Key::Backspace => "Backspace",
+        Key::Delete => "Delete",
+        Key::Insert => "Insert",
+        Key::ArrowUp => "ArrowUp",
+        Key::ArrowDown => "ArrowDown",
+        Key::ArrowLeft => "ArrowLeft",
+        Key::ArrowRight => "ArrowRight",
+        Key::Home => "Home",
+        Key::End => "End",
+        Key::PageUp => "PageUp",
+        Key::PageDown => "PageDown",
+        Key::Equals => "Equals",
+        Key::Semicolon => "Semicolon",
+        Key::Colon => "Colon",
+        _ => return format!("{key:?}"),
+    };
+    token.to_string()
+}
+
 /// The resolved chords native-poc dispatches today. `copy` / `paste`
 /// are consumed in `window_host::handle_special_chord`; the tab-roster
 /// chords are matched in [`dispatch`].
@@ -327,6 +403,38 @@ impl KeybindTable {
             }
         }
         out
+    }
+}
+
+impl KeybindTable {
+    /// Label of the `new_tab_global` shortcut for the new-tab chooser, or
+    /// `None` when a higher-priority action owns the same chord (see
+    /// [`Self::reachable_label`]).
+    pub fn new_tab_global_label(&self) -> Option<String> {
+        self.reachable_label("new_tab_global", &self.new_tab_global)
+    }
+
+    /// Label of the `new_tab` shortcut for the new-tab chooser, or `None`
+    /// when a higher-priority action owns the same chord.
+    pub fn new_tab_label(&self) -> Option<String> {
+        self.reachable_label("new_tab", &self.new_tab)
+    }
+
+    /// Shortcut label for `action` (whose resolved chord is `chord`), or
+    /// `None` when the shortcut cannot open that action: an action that
+    /// comes earlier in the runtime match priority has the same chord, so
+    /// the chord fires that action instead. Derived from
+    /// [`Self::collisions`] (the `(winner, loser)` pairs in match
+    /// priority) rather than from a second priority list; a collision
+    /// where `action` is the winner leaves its label in place. Pure: the
+    /// collision logging in [`Self::from_settings`] is not repeated here.
+    fn reachable_label(&self, action: &'static str, chord: &Chord) -> Option<String> {
+        let shadowed = self.collisions().iter().any(|&(_, loser)| loser == action);
+        if shadowed {
+            None
+        } else {
+            Some(format_chord(chord))
+        }
     }
 }
 
