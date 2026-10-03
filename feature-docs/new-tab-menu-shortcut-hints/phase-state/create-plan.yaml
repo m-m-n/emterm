@@ -12,14 +12,18 @@ answers:
     question_id: create-plan.long-name-clipping
     packet_id: null
     answered_at: '2026-10-03T13:58:00+09:00'
-    source: batch-planner-assumption
+    source: batch-codex-consultation
     answer_mode: single_select
     selected_option_ids:
-    - clip_before_label
+    - ellipsize_name
     freeform: null
-    normalized_answer: ラベル付きの行では、長いプロファイル名と Default バッジをラベルの手前 (ROW_INNER_GAP) でクリップする
-    resolution_note: implementation-planner が batch で置いた計画上の仮定。FR7 は重なり禁止だけを定め、長い名前の扱いは定めていない。task0001
-      Row painting contract に明記し、TS-9 で目視確認する
+    normalized_answer: ラベル付きの行では、バッジの幅を先に確保し、残り幅で長いプロファイル名を末尾 … で省略する (シェルパスと同じ LayoutJob
+      方式)
+    resolution_note: 'gate: create-plan.long-name-clipping (unlisted, planner assumption);
+      options: A) 名前とバッジをラベル手前でクリップ (planner の仮定) / B) 名前を末尾 … で省略 / C) 長い名前の行はラベルを出さない;
+      codex_consulted: true (1 turn); opus_escalation: false; chose B. Codex: シェルパスも
+      LayoutJob の幅制限+1行で … 省略しており方式が揃う。A は文字やバッジが途中で切れる。C は FR1/FR2 に反する。task0001.md
+      Row painting contract を orchestrator が更新'
 worker_runs:
 - request_id: create-plan-run-0001
   status: completed
@@ -36,7 +40,7 @@ artifacts:
   sha256: sha256:fec083b00b6738ee4e5acf1d5bdcdaf7e226e0146607868fe9d5c498033dbe02
   produced_by: create-plan-run-0001
 - path: feature-docs/new-tab-menu-shortcut-hints/tasks/task0001.md
-  sha256: sha256:6e7005fbeb1bb0510189b8f5d04826988b3d442b90daf4ae93f5eb1bfd16e636
+  sha256: sha256:14e9f29f6c50e6a8b5119d7012e97e1e67871b62d610635ee8402a71ca1acc82
   produced_by: create-plan-run-0001
 patches:
 - patch_id: create-plan-p0001
