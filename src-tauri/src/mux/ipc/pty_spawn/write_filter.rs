@@ -70,7 +70,8 @@ pub(super) const SCROLLBACK_FILTER_PENDING_CAP: usize = 512 * 1024;
 /// `pending` is capped at [`SCROLLBACK_FILTER_PENDING_CAP`]; on overflow the
 /// pending bytes are forwarded raw (the escape hatch — the ring may then
 /// contain a partial sequence, but that is strictly better than an
-/// unbounded per-pane buffer).
+/// unbounded per-pane buffer). What the flush leaves in `pending` is stated
+/// once, in [`ScrollbackWriteFilter::feed_with_cuts`]'s "Overflow" paragraph.
 ///
 /// Live-forwarded `data.to_vec()` to the connected client is intentionally
 /// untouched, so viewer launch on the client side is unaffected. The
@@ -254,7 +255,9 @@ impl ScrollbackWriteFilter {
     /// early WITHOUT waiting for a safe boundary. This trades "flush at a
     /// structurally clean boundary" for a bounded per-pane memory footprint
     /// — a wedged / adversarial stream cannot pin arbitrary bytes in the
-    /// buffer.
+    /// buffer. What the flush leaves in `pending` (nothing, or one held live
+    /// lone `ESC`) is stated in [`Self::feed_with_cuts`]'s "Overflow"
+    /// paragraph.
     ///
     /// task0003 D1 (review round-2 finding `a6ab9b340119beed`, critical):
     /// the flushed bytes still go through
@@ -397,15 +400,32 @@ impl ScrollbackWriteFilter {
     /// carried in ([`strip_pty_output_for_scrollback_write_with_written_state`]);
     /// the boundary scan keeps the boundary, the held chain and the
     /// awaiting-designator state, and decides neither the closure nor the carried
-    /// state. The same holds on the overflow flush: the whole flushed run is
-    /// stripped with the same form, and in the last segment its reported state is
-    /// carried.
+    /// state. The same holds on the overflow flush: the flushed run is stripped,
+    /// once, with the same form (without its final byte when that byte is a held
+    /// live lone `ESC`, see "Overflow"), and in the last segment its reported
+    /// state is carried.
     ///
     /// **Overflow.** Past [`SCROLLBACK_FILTER_PENDING_CAP`] the run is
     /// flushed exactly as [`Self::feed`] documents, whole chain included;
-    /// afterwards `pending` is empty, no chain is held and the
-    /// awaiting-designator flag equals the client-parity state at the end of
-    /// the flushed run (one bounded pass, overflow path only).
+    /// afterwards `pending` is empty, or holds exactly one byte: the live lone
+    /// `ESC` that ends a run flushed in the call's last segment (no cut follows
+    /// that segment in this call). A live lone `ESC` is a run's final `ESC` that
+    /// leaves the written stream in the Escape state: it follows ground, a
+    /// written `ESC`, an open CSI or an open string body (the written-state
+    /// model counts a string body as ground), not the designator of `ESC (` /
+    /// `ESC )` (written, as before). That `ESC` is NOT written: it is held as a
+    /// chain of one construct, exactly as a lone trailing `ESC` held by the
+    /// non-overflow path, so the next call strips it together with its
+    /// continuation (a strip target split right after it is removed; anything
+    /// else is written after it, whole; a cut or the reader's fallback closing
+    /// drops it and writes the closure of the state before it). The written state
+    /// is that of the bytes written before it, no designator is awaited, the
+    /// held byte's start dims are this call's current dims, and the call reports
+    /// no carried completion. A flush in a segment a cut follows, and a run whose
+    /// last byte is not such an `ESC`, are written whole and leave no chain
+    /// held; the awaiting-designator flag equals the client-parity state at the
+    /// end of the flushed run (one bounded pass, overflow path only). The held
+    /// bytes stay bounded: the cap, then at most one byte after a flush.
     pub(in crate::mux) fn feed_with_cuts(
         &mut self,
         fed: &[u8],
@@ -490,25 +510,72 @@ impl ScrollbackWriteFilter {
                 overflowed = true;
                 pending_untouched = false;
                 self.held_construct_start = None;
-                let run = std::mem::take(&mut self.pending);
+                let mut run = std::mem::take(&mut self.pending);
                 // Client-parity wait at the end of the flushed run (one
                 // bounded pass, overflow path only). In the last segment it
                 // is carried as the new flag; before a cut it decides the
-                // closing write instead (round4 FR3).
+                // closing write instead (round4 FR3). For a run that ends in
+                // an `ESC` it is always false.
                 let awaiting_at_end =
                     scan_boundary(&run, scan_start, carried_run).awaiting_designator;
-                // The end state comes from the strip of the whole run, started
-                // from the state carried in (post-strip closure FR3): a run that
-                // ends in an incomplete construct is flushed whole, so its end
-                // is inside that construct, not inside a CSI.
-                let (stripped, state_at_end) =
+                // In the last segment no cut follows, so a run whose last byte
+                // is an `ESC` leaves that byte to the next call when it is a
+                // live lone `ESC` (below): the strip below then sees it
+                // together with its continuation. A trailing `ESC` is always
+                // written verbatim and never changes an earlier strip
+                // decision, so stripping the run without it, once, and then
+                // deciding that one byte, equals today's strip of the whole run.
+                let last_esc = if is_last && run.last() == Some(&0x1b) {
+                    run.pop()
+                } else {
+                    None
+                };
+                // The end state comes from the strip of the run (without the
+                // trailing `ESC` held back above), started from the state
+                // carried in (post-strip closure FR3): a run that ends in an
+                // incomplete construct is flushed whole, so its end is inside
+                // that construct, not inside a CSI.
+                let (stripped, mut state_at_end) =
                     strip_pty_output_for_scrollback_write_with_written_state(
                         &run,
                         skip == 1,
                         self.written,
                     );
                 out.extend_from_slice(&stripped);
-                if is_last {
+                // The final `ESC` of the run, decided in O(1) from the state the
+                // strip reported, with the strip's own transitions: it is a live
+                // lone `ESC` when it leaves the written stream in Escape (from
+                // ground, an `ESC`, or inside a CSI; a string body counts as
+                // ground). When it is the designator of `ESC (` / `ESC )` it
+                // leaves ground instead and is written, as the whole-run strip
+                // wrote it.
+                let mut held_esc = false;
+                if last_esc.is_some() {
+                    let (esc, state_after_esc) =
+                        strip_pty_output_for_scrollback_write_with_written_state(
+                            &[0x1b],
+                            false,
+                            state_at_end,
+                        );
+                    if state_after_esc == WrittenState::Escape {
+                        held_esc = true;
+                    } else {
+                        out.extend_from_slice(&esc);
+                        state_at_end = state_after_esc;
+                    }
+                }
+                if held_esc {
+                    // Held as a chain of one construct, in the state of a lone
+                    // trailing `ESC` held by the non-overflow path: the written
+                    // state is that of the bytes before it, no designator is
+                    // awaited, and the held bytes' start dims become this
+                    // call's current dims at the end of the call. The call
+                    // still reports no carried completion (overflow).
+                    self.pending = vec![0x1b];
+                    self.held_construct_start = Some(0);
+                    self.awaiting_designator = awaiting_at_end;
+                    self.written = state_at_end;
+                } else if is_last {
                     self.awaiting_designator = awaiting_at_end;
                     self.written = state_at_end;
                 } else {
@@ -690,8 +757,10 @@ impl ScrollbackWriteFilter {
     /// never holds a settled sequence (complete, or closed by something that
     /// is not the opening of another construct), and never any byte after
     /// the chain. The only exception is right after the
-    /// [`SCROLLBACK_FILTER_PENDING_CAP`] overflow flush, when it is always
-    /// empty.
+    /// [`SCROLLBACK_FILTER_PENDING_CAP`] overflow flush, when it is empty, or
+    /// holds exactly the one live lone `ESC` that ends a run flushed in the
+    /// call's last segment (a chain of one construct; see
+    /// [`Self::feed_with_cuts`]'s "Overflow" paragraph).
     pub(in crate::mux) fn pending(&self) -> &[u8] {
         &self.pending
     }

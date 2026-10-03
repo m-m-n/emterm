@@ -1,0 +1,122 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib` finished with 4169 passed, 0 failed, 3 ignored.
+baseline_failures: []
+# Re-executed after the implementation: `cargo test --lib` finished with 4188 passed, 0 failed,
+# 3 ignored (the baseline's 4169 plus the 19 tests of the new module `overflow_lone_esc`). The
+# default-features `cargo check` and the `--no-default-features` cargo check were each run once
+# after the implementation: no error, no warning from this change.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_split_cursor_position_query_is_not_written_in_executable_form
+    red_confirmed: true
+    red_reason: >-
+      Observed on the unmodified write filter (the new module compiled and ran): failed at 'the
+      written bytes hold no ESC[6n'. The overflow flush wrote the final ESC and the next call wrote
+      `[6n` as plain text, so the concatenated bytes held `ESC[6n`.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_every_continuation_is_removed_and_the_total_equals_the_reference
+    red_confirmed: true
+    red_reason: >-
+      Observed on the unmodified write filter: failed at 'after plain text, continuation csi 6n: the
+      construct is absent from the written bytes'. The test stops at its first failing assertion, so
+      the other continuations and the three extra endings (after a written ESC, after an open CSI,
+      inside an open string body) were not observed failing on their own; they share the cause (the
+      final ESC was written, so the continuation reached the next strip alone).
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_the_hold_leaves_the_state_of_a_held_lone_esc
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_every_live_ending_holds_exactly_one_byte
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_the_held_esc_is_attributed_to_the_overflowing_calls_dims
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_fresh_or_designator_started_flush_holds_its_final_esc
+    red_confirmed: true
+    red_reason: >-
+      Observed on the unmodified write filter: the first test failed at 'exactly the one ESC is held'
+      (`pending()` was empty), the second at 'after plain text' (`pending()` empty), the third at the
+      `pending()` assertion after call 1 (empty, so the dims assertions behind it were not reached),
+      the fourth at 'the run without its ESC is written' (the flush wrote the ESC too). Each stops at
+      its first failing assertion; the later assertions (written state, held construct start,
+      awaiting flag, absent carried completion, the dims A / B of the two outcomes, the three extra
+      endings) were not observed red on their own.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_non_strip_continuation_is_written_after_the_esc
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_completing_continuation_is_reported_as_a_carried_completion
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_backslash_after_an_open_string_body_is_written_as_st
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_next_call_that_overflows_strips_the_held_esc_with_its_bytes
+    red_confirmed: true
+    red_reason: >-
+      Observed on the unmodified write filter, each at its per-call assertion: the first failed at
+      'continuation "x": the ESC and the continuation, whole' (call 2 wrote `x`, left `[120]`), the
+      second at `.expect("the held ESC's string completed")` (no carried completion), the third on
+      call 2 of `\` (left `[92]`), the fourth at 'the held ESC and the query behind it are removed
+      from the flushed run'. The total-bytes assertions of these tests (ESC and the continuation
+      written with no byte lost) hold before and after the change: they pin unchanged behavior and
+      were not reached on the unmodified filter.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_the_fallback_closing_drops_the_held_esc
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_cut_at_fed_zero_drops_the_held_esc
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_the_fallback_closing_follows_the_written_state
+    red_confirmed: true
+    red_reason: >-
+      Observed on the unmodified write filter: the first failed at 'switch [?47h: nothing is written
+      for the held ESC' (the fallback closing wrote the Escape closure for the already written ESC),
+      the second at 'switch [?47h: nothing for the held ESC, then the text' (left `[24, 91, 54, 110]`,
+      the closure before `[6n`), the third at 'after plain text' (closing `[24]` where nothing is
+      expected). The term_core replay comparisons (`view_after_a_cut` against the raw stream with the
+      47 / 1047 / 1049 pair for the cut) and the DEL / Escape-closure rows for the open-CSI and
+      written-ESC endings were not reached on the unmodified filter.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_run_ending_in_esc_and_a_removed_construct_flushes_whole
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_run_ending_in_a_designator_esc_flushes_whole
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_run_ending_in_an_open_csi_and_a_removed_construct_flushes_whole
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_flush_followed_by_a_cut_writes_the_run_and_one_closure
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_a_run_ending_in_plain_bytes_flushes_whole
+    red_confirmed: false
+    red_reason: >-
+      Regression pins: these five tests assert the bytes and state the overflow flush already
+      produced outside the new hold (R9 form, `ESC ( ESC`, `ESC[6` + a removed construct, a flush
+      followed by a cut, plain bytes), and all five passed on the unmodified write filter (observed
+      in the same run that failed the AC-1 to AC-5 and AC-7 tests). No red state occurred for this
+      change; they pin the unchanged behavior.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_the_production_reader_leaves_no_query_in_the_ring
+    red_confirmed: true
+    red_reason: >-
+      Observed on the unmodified write filter, through `run_reader_without_owner`: failed at 'the
+      ring holds no ESC[6n' (the read that crossed the cap wrote its final ESC and the next read's
+      `[6n` followed it in the ring).
+  AC-8:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_an_overflow_flush_ending_in_a_written_escape_carries_or_closes_it
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_an_overflow_flush_followed_by_a_cut_closes_an_open_csi
+      - mux::ipc::pty_spawn::tests::round3_write_path::round3_195916fd_write_filter_output_is_split_invariant_across_a_designator_esc
+      - mux::ipc::pty_spawn::tests::round3_write_path::an_osc_held_near_the_cap_is_dropped_at_a_cut_and_at_the_fallback
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the five existing tests detect the overflow
+      flush's bytes, closure and budget behavior (the criterion names them), and the whole `--lib`
+      suite is the gate (4188 passed, 0 failed, 3 ignored, no existing expectation changed). The
+      `--no-default-features` cargo check also succeeded. No red state occurred for this change:
+      the five tests passed before and after it. The single-pass clause (each flushed run stripped
+      once, O(1) extra work) has no executable check; it is verified by reading the diff of the
+      overflow branch in `write_filter.rs`.
+  AC-9:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Documentation-only criterion about doc comments in `write_filter.rs`; no executable check can
+      be made to fail. Searched the test directory by the repository-relative path
+      `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs` and by the filename `write_filter.rs`: no
+      test names the file by path. The only test that reads source text across the tree,
+      `every_d7_registry_test_name_is_defined_as_a_test_function_in_crate_source`, looks for `fn NAME(`
+      definitions and never reads a doc comment, and the `write_filter_*` tests exercise filter
+      behavior; none covers this criterion. Verified by reading the doc comments (the cut-aware
+      feed's "Overflow." paragraph and the postcondition of `pending()` state: empty, or exactly the
+      one held live lone ESC when the flush was in the call's last segment).
