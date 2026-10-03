@@ -89,7 +89,8 @@ workflow:
   base_commit: 93cf4405a1a5f6a42cd3d7bf2b8aecf1a8b192ea
   completed_at_commit: fed278aa05a6fe792b91eef21acf32600465170a
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 802fd675afbb7ea5b615cfeb5fba162ccb4e7c7a
 - id: verify
   status: pending
   result: null
@@ -121,8 +122,8 @@ tasks:
     notes: null
     branch: em-workflow/settings-profile-remove-launch/task0001
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor:
     - comprehensive
@@ -130,7 +131,10 @@ review:
     - spec
     discretionary: []
     cross_validation: false
-  perspectives: {}
+  perspectives:
+    security: completed
+    comprehensive: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 requirements:
