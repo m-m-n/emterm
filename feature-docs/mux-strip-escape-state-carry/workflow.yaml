@@ -128,7 +128,7 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-strip-escape-state-carry/task0001
   task0002:
     title: Decision record for review finding a879a02de382209f
