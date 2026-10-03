@@ -101,7 +101,7 @@ workflow:
     and Windows) not executed in batch'
   completed_at_commit: 09771e671d54ffd07c154f7287af703ba894b587
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Remove the profile Launch action and its locale key
