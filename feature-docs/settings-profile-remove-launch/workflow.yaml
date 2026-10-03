@@ -115,9 +115,9 @@ tasks:
     - FR4
     - NFR1
     - NFR2
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/settings-profile-remove-launch/task0001
 review:
   status: pending
   rounds_completed: 0
