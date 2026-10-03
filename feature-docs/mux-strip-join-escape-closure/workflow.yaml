@@ -134,7 +134,7 @@ workflow:
   base_commit: 710a3f29347ed0e54b05a53f49741f18af209402
   completed_at_commit: b704b529971f84243bdea0c924a48246c34a6773
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -166,8 +166,15 @@ tasks:
     status: merged
     branch: em-workflow/mux-strip-join-escape-closure/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
 requirements:
   FR1:
     title: 'DoD-2 test: write strip, snapshot strip, term_core gives zero responses'
