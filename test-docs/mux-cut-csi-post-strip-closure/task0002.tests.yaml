@@ -1,0 +1,56 @@
+task_id: task0002
+# From step 4a, before any change: `cargo test --lib` finished with 4091 passed, 0 failed,
+# 3 ignored.
+baseline_failures: []
+# Re-executed after the record and R8 were added: `cargo test --lib` finished with 4092
+# passed, 0 failed, 3 ignored (the baseline plus R8).
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi_record::post_strip_the_decision_record_states_the_verdict_and_the_residuals
+    red_confirmed: true
+    red_reason: >-
+      Observed with the record absent (module declared, DECISIONS.md not yet written): R8 failed
+      with 'the decision record .../feature-docs/mux-cut-csi-post-strip-closure/DECISIONS.md is
+      unreadable: No such file or directory'. After the record was written R8 passed. With the
+      record present, replacing the verdict `resolved` made R8 fail on 'verdict cell', and
+      renaming the R5 path in the regression-test cell made it fail on 'the regression-test cell
+      lists ...post_strip_reader_restore_matches_the_raw_stream_reference'.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi_record::post_strip_the_decision_record_states_the_verdict_and_the_residuals
+    red_confirmed: true
+    red_reason: >-
+      Observed with the record absent: R8 failed with 'the decision record ... is unreadable: No
+      such file or directory'. With the record present, emptying the "Out of scope because:" line
+      of Residual 1 made R8 fail on 'the "Out of scope because:" line carries text'.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi_record::post_strip_the_decision_record_states_the_verdict_and_the_residuals
+    red_confirmed: true
+    red_reason: >-
+      Observed with the record absent: R8 failed with 'the decision record ... is unreadable: No
+      such file or directory'; the behavior-changing-tests assertions sit in the same test and
+      run after the reads above them, so this failure is the one observed for them.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi_record::post_strip_the_decision_record_states_the_verdict_and_the_residuals
+    red_confirmed: true
+    red_reason: >-
+      The record half (the section names both predecessor files as not modified): observed with
+      the record absent, R8 failed with 'the decision record ... is unreadable: No such file or
+      directory'. The half "this task changes neither file" has no executable check that can be
+      made to fail here: a search of src-tauri/src and test-docs by the path
+      `feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md` and by the basenames
+      `DECISIONS.md` and `round1.yaml` finds only round4_cut_csi.rs and round4_designator_slot.rs,
+      which read sections of the predecessor DECISIONS.md and detect a change to those sections
+      only, and no test that reads the predecessor round1.yaml. That half is checked in verify with
+      `git diff --name-only` (VERIFICATION.md AC-6). This task's own diff lists neither file.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi_record::post_strip_the_decision_record_states_the_verdict_and_the_residuals
+    red_confirmed: true
+    red_reason: >-
+      Observed: R8 failed with the record absent ('the decision record ... is unreadable: No such
+      file or directory') and passed after DECISIONS.md was written.

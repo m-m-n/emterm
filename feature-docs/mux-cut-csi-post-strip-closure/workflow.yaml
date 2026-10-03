@@ -122,8 +122,8 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/mux-cut-csi-post-strip-closure/task0001
     notes: null
   task0002:
     title: Decision record for finding 4c0ad9058a983648 and the FR6 residuals
@@ -138,8 +138,8 @@ tasks:
     requirements:
     - FR5
     - FR6
-    status: pending
-    branch: null
+    status: merged
+    branch: em-workflow/mux-cut-csi-post-strip-closure/task0002
     notes: null
 review:
   status: pending
