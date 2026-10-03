@@ -1,0 +1,63 @@
+schema_version: 1
+feature: settings-profile-remove-launch
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: cedf73a0d870c36d5cd2aa6f6ed2277aaf105c5a
+last_input_digest: sha256:1820e18186033309f6df31c3587d6b439acd4d617106ce29c9bb8845807ebcc6
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:1820e18186033309f6df31c3587d6b439acd4d617106ce29c9bb8845807ebcc6
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:4e1eacc8d98b4165cfc8a1d7d04785f0d935cee32afc8ac8720dd23ecf21325c
+    resolved_at_generation: 1
+    paths:
+    - src-tauri/web-shared/styles.css
+    - src-tauri/web-shared/styles/settings-panel.css
+    - src-tauri/settings/web/settings.css
+    - src-tauri/web-shared/settings/ui-theme-presets.ts
+    digests:
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
+      src-tauri/web-shared/styles/settings-panel.css: sha256:9888a9d5f95bcbe97d182a57674a6de1070a92e22e7ef9600711ffc89298d2ce
+      src-tauri/settings/web/settings.css: sha256:14a24ffc96a6fe451966f815c72d7522b2b120074a75fdc8484456550d287687
+      src-tauri/web-shared/settings/ui-theme-presets.ts: sha256:5e1afbad9942f28348372986ffcb0a77f7992edb67c5d760637c0019404a3094
+    truncated: false
+  reference_scan_targets:
+    generation_digest: sha256:9d7763317aeb9015e233c352040529516e5eba3493c6178de544d142f6d13dd6
+    resolved_at_generation: 1
+    paths:
+    - src-tauri/web-shared/settings/sections/profiles-section.ts
+    - src-tauri/web-shared/settings/sections/profiles-section.test.ts
+    - src-tauri/web-shared/settings/settings-panel.ts
+    - src-tauri/web-shared/settings/settings-panel.test.ts
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/settings/web/entry.ts
+    - src-tauri/src/settings_window/commands.rs
+    digests:
+      src-tauri/web-shared/settings/sections/profiles-section.ts: sha256:d598cd194c9d7a92d63f4f406efaad8222183a7ed227be9ea8b5c27a08c9cbe2
+      src-tauri/web-shared/settings/sections/profiles-section.test.ts: sha256:e307a92f343d5fc8c489f46660aacfabfce4845e17bf47fa46a64ca847a3bbc7
+      src-tauri/web-shared/settings/settings-panel.ts: sha256:f0db9fbc1201d7ce75c4c3ff22f963b9ff5b45daa2f702df2569103bf1796ba8
+      src-tauri/web-shared/settings/settings-panel.test.ts: sha256:7bc6c5f83ff4a4f83a95e85ceeca0640203c9f98bb5a2da272976bf3c17bccb3
+      src-tauri/web-shared/i18n/locales/en.json: sha256:503c48dcc6e79af7dcd4307e373e39d025ae6032bd27e1176768b47e3a6def57
+      src-tauri/web-shared/i18n/locales/ja.json: sha256:f7935122c087dd73e0405a4eadc4d31f0030d36afed4e04c732935dcf58f9c6f
+      src-tauri/settings/web/entry.ts: sha256:f60ea9cb5d253102bc11a09539b81ee898e6a3d3bd40076b23edbfac8268bb0c
+      src-tauri/src/settings_window/commands.rs: sha256:1b0e2526db1c06c0f1da84e00d33914f14d901f2426a68cfa41261614300f1bf
+    truncated: false
+  e2e:
+    generation_digest: sha256:549cc09a68bbf8d8c433c1c74704a68ce7dbbb4799a0847bc88f825b613d91f7
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+last_error: null
