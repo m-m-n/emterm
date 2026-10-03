@@ -129,7 +129,8 @@ workflow:
   completed_at_commit: 0012916fce3a4940ffe96bfac339b28f03829344
   base_commit: 493baf7999b247a2f52e62fe38e42882af100239
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: fef2fe96232597f3d823656c954eb385a74f327e
 - id: verify
   status: pending
   result: null
@@ -183,8 +184,8 @@ tasks:
     status: merged
     branch: em-workflow/mux-strip-escape-state-carry/task0002
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   residual_critical_high: 0
   needs_rework: false
   plan:
@@ -197,6 +198,12 @@ review:
     - perspective: performance
       reason: 変更が PTY 出力の読み取りごとに走る書き込みフィルタ（ホットパス）の状態遷移に及ぶため
     cross_validation: true
+  perspectives:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  - performance
 requirements:
   FR1:
     title: 書かれたストリームの終端状態の引き継ぎ
