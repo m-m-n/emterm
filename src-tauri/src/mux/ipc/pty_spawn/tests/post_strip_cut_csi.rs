@@ -20,6 +20,12 @@
 //! carried state, R4 the overflow flush, R5 the production reader, R6 the
 //! closing rules for the edge cases, R7 the budget. R1 and R2 live in
 //! `round4_cut_csi`, R9 in `scrollback_filter::tests`.
+//!
+//! mux-strip-escape-state-carry task0001 extends R3 in place (identifier R1 of
+//! that feature): the carried state is the full written end state, so the
+//! split-invariance corpus also holds a written `ESC` followed by a removed
+//! construct, and the state after every cut-free call is compared with the
+//! term_core end-state oracle (`scrollback_filter::tests::client_written_state`).
 
 use super::round3_write_path::{
     DIMS, client_view, new_core, reference_view, run_visibility_restore_at, switch_pairs,
@@ -29,29 +35,30 @@ use super::round4_cut_csi::{
     view_after_a_cut,
 };
 use super::*;
+use crate::mux::scrollback_filter::tests::client_written_state;
 
-const BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+pub(super) const BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 
 const ESC_BYTE: &[u8] = &[0x1b];
 
 /// OSC 777 emterm markdown launch, BEL terminated.
-const LAUNCH: &[u8] = b"\x1b]777;emterm;markdown;begin;id=x\x07";
+pub(super) const LAUNCH: &[u8] = b"\x1b]777;emterm;markdown;begin;id=x\x07";
 /// OSC 9999 emterm-md, ST terminated.
-const MD_LAUNCH: &[u8] = b"\x1b]9999;emterm-md;begin\x1b\\";
+pub(super) const MD_LAUNCH: &[u8] = b"\x1b]9999;emterm-md;begin\x1b\\";
 /// OSC 777 agent-status report, BEL terminated.
-const AGENT_STATUS: &[u8] = b"\x1b]777;emterm;agent-status;v=1;state=idle\x07";
+pub(super) const AGENT_STATUS: &[u8] = b"\x1b]777;emterm;agent-status;v=1;state=idle\x07";
 /// Kitty graphics APC with a payload that neither answers nor places an image.
-const KITTY: &[u8] = b"\x1b_Gi=1,a=d;AAAA\x1b\\";
+pub(super) const KITTY: &[u8] = b"\x1b_Gi=1,a=d;AAAA\x1b\\";
 /// SIXEL DCS.
-const SIXEL: &[u8] = b"\x1bPq#0;2;0;0;0\x1b\\";
+pub(super) const SIXEL: &[u8] = b"\x1bPq#0;2;0;0;0\x1b\\";
 /// An answered CSI device query (cursor-position report request).
-const QUERY: &[u8] = b"\x1b[6n";
+pub(super) const QUERY: &[u8] = b"\x1b[6n";
 
 /// The strip targets the write filter HOLDS across calls until they are
 /// complete. A CSI device query is not among them: CSI bytes are never held,
 /// so a query split across calls is written to the ring as it arrives and only
 /// the snapshot strip removes it (IMPLEMENTATION.md D2, SPEC FR6 item 3).
-const HELD_TARGETS: &[(&str, &[u8])] = &[
+pub(super) const HELD_TARGETS: &[(&str, &[u8])] = &[
     ("osc 777 launch", LAUNCH),
     ("osc 9999 emterm-md", MD_LAUNCH),
     ("agent-status", AGENT_STATUS),
@@ -60,7 +67,7 @@ const HELD_TARGETS: &[(&str, &[u8])] = &[
 ];
 
 /// Every strip target a single call removes whole, the query included.
-fn all_targets() -> Vec<(&'static str, &'static [u8])> {
+pub(super) fn all_targets() -> Vec<(&'static str, &'static [u8])> {
     let mut all = HELD_TARGETS.to_vec();
     all.push(("csi query", QUERY));
     all
@@ -90,11 +97,29 @@ struct State {
     pending: Vec<u8>,
     awaiting: bool,
     csi: Option<CsiPhase>,
+    /// The full written end state (mux-strip-escape-state-carry D1).
+    written: WrittenState,
+}
+
+/// The term_core end-state oracle on `stream`, memoized: the split-invariance
+/// corpus asks for the same emitted stream at every split position.
+fn oracle_state(stream: &[u8]) -> WrittenState {
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<Vec<u8>, WrittenState>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if let Some(state) = CACHE.with(|cache| cache.borrow().get(stream).copied()) {
+        return state;
+    }
+    let state = client_written_state(stream);
+    CACHE.with(|cache| cache.borrow_mut().insert(stream.to_vec(), state));
+    state
 }
 
 /// Feed `pieces` as consecutive calls (`cut_at_end`: the last call carries a
-/// cut at its end). With `check_oracle`, after every call the carried CSI state
-/// is compared with term_core's on the bytes emitted so far.
+/// cut at its end). With `check_oracle`, after every cut-free call the carried
+/// full written state is compared with term_core's end state on the bytes
+/// emitted so far.
 fn run_pieces(pieces: &[&[u8]], cut_at_end: bool, check_oracle: bool) -> State {
     let mut filter = ScrollbackWriteFilter::new();
     let mut emitted = Vec::new();
@@ -106,18 +131,21 @@ fn run_pieces(pieces: &[&[u8]], cut_at_end: bool, check_oracle: bool) -> State {
             Vec::new()
         };
         emitted.extend_from_slice(&filter.feed_with_cuts(piece, DIMS, &cuts).bytes);
-        if check_oracle && !filter.awaiting_designator() {
-            // After a cut the state is cleared and the emitted stream carries
-            // the closing, so the oracle applies to the cut-free calls.
-            if !(cut_at_end && last) {
-                assert_eq!(
-                    filter.csi_phase(),
-                    client_csi_phase(&emitted),
-                    "after call {idx} of {pieces:?}: the carried state is term_core's on the \
-                     emitted bytes {:?}",
-                    text(&emitted)
-                );
-            }
+        // After a cut the state is cleared and the emitted stream carries the
+        // closing, so the oracle applies to the cut-free calls.
+        if check_oracle && !(cut_at_end && last) {
+            assert_eq!(
+                filter.written_state(),
+                oracle_state(&emitted),
+                "after call {idx} of {pieces:?}: the carried state is term_core's end state \
+                 on the emitted bytes {:?}",
+                text(&emitted)
+            );
+            assert_eq!(
+                filter.csi_phase(),
+                filter.written_state().csi(),
+                "after call {idx} of {pieces:?}: the CSI accessor projects the full state"
+            );
         }
     }
     State {
@@ -125,6 +153,7 @@ fn run_pieces(pieces: &[&[u8]], cut_at_end: bool, check_oracle: bool) -> State {
         pending: filter.pending().to_vec(),
         awaiting: filter.awaiting_designator(),
         csi: filter.csi_phase(),
+        written: filter.written_state(),
     }
 }
 
@@ -149,6 +178,13 @@ const OPEN_HEADS: &[(&[u8], CsiPhase)] = &[
 /// and byte-by-byte feeding give the same written bytes, pending bytes,
 /// awaiting-designator state and CSI state as one call, and after every call
 /// the state equals term_core's on the bytes written so far.
+///
+/// mux-strip-escape-state-carry AC-2 (FR1, FR2, FR5, TS-2): the corpus also
+/// holds a written `ESC` (and `ESC ESC`) followed by each held target, the same
+/// followed by `[6`, by `(` and by `)`. The compared state is the full carried
+/// written state (ground, escape, designator wait, CSI entry / parameter), and
+/// after every cut-free call it equals the term_core end-state oracle's on the
+/// bytes emitted so far.
 #[test]
 fn post_strip_the_carried_csi_state_follows_the_stripped_output() {
     // (a) One cut-free call: the open CSI, then a complete strip target.
@@ -166,10 +202,16 @@ fn post_strip_the_carried_csi_state_follows_the_stripped_output() {
                 Some(phase),
                 "{label}: the written bytes end inside the CSI"
             );
+            assert_eq!(
+                filter.written_state(),
+                WrittenState::Csi(phase),
+                "{label}: the full carried state"
+            );
             assert_eq!(client_csi_phase(&out), Some(phase), "{label}: term_core");
             let closing = filter.feed_with_cuts(b"", DIMS, &[0]).bytes;
             assert_eq!(closing, CSI_CLOSING, "{label}: the fallback closing");
             assert_eq!(filter.csi_phase(), None, "{label}");
+            assert_eq!(filter.written_state(), WrittenState::Ground, "{label}");
             assert!(
                 filter.feed_with_cuts(b"", DIMS, &[0]).bytes.is_empty(),
                 "{label}: one closing"
@@ -235,13 +277,33 @@ fn post_strip_the_carried_csi_state_follows_the_stripped_output() {
         .concat(),
     );
     corpus.push(b"abc\x1b[6m\x1b[".to_vec());
+    // mux-strip-escape-state-carry AC-2 (FR1, FR2, FR5): a written `ESC`
+    // followed by a held target (the target's own `ESC` is removed, so the
+    // written bytes end in Escape), the same followed by `[6` (the state decides
+    // whether the `[` opens a CSI) and by `(` (a splice-made designator wait).
+    // `ESC ESC` + target is the same with a second written `ESC`. The CSI query
+    // is not in this corpus (EC-7).
+    for (_, target) in HELD_TARGETS.iter().copied() {
+        for lead in [&b"\x1b"[..], b"\x1b\x1b"] {
+            corpus.push([lead, target].concat());
+            corpus.push([lead, target, b"[6"].concat());
+            corpus.push([lead, target, b"("].concat());
+            corpus.push([lead, target, b")"].concat());
+        }
+        // A splice-made designator wait whose `ESC` is consumed as the
+        // designator (EC-5). Nothing follows it that a string introducer could
+        // start from: that splice (EC-6) is outside the model.
+        corpus.push([&b"\x1b"[..], target, b"(\x1b("].concat());
+        corpus.push([&b"\x1b[6\x1b"[..], target, b"[7"].concat());
+        corpus.push([&b"\x1b"[..], target, b"\x1b", target].concat());
+    }
     for input in &corpus {
         for cut_at_end in [false, true] {
             let whole = run_pieces(&[input], cut_at_end, true);
             if !cut_at_end {
                 assert_eq!(
-                    whole.csi,
-                    client_csi_phase(&whole.emitted),
+                    whole.written,
+                    oracle_state(&whole.emitted),
                     "{:?}: the state after one call is term_core's on the written bytes",
                     text(input)
                 );
@@ -369,7 +431,7 @@ fn post_strip_an_overflow_flush_followed_by_a_cut_closes_an_open_csi() {
 /// the query to the live client (`own_answer_on_client` is then `own_answer`,
 /// otherwise empty). The responses are otherwise equal, so no second answer is
 /// produced by the later `n`.
-fn assert_client_equals_reference_except(
+pub(super) fn assert_client_equals_reference_except(
     received: &[PtyOutputChunk],
     chunks: &[Vec<u8>],
     own_answer: &[u8],
@@ -409,7 +471,7 @@ fn assert_client_equals_reference_except(
 
 /// What term_core answers the bytes before the cut (the removed construct's
 /// own answer): empty for every form but the CSI query.
-fn own_answer_of(prefix: &[u8]) -> Vec<u8> {
+pub(super) fn own_answer_of(prefix: &[u8]) -> Vec<u8> {
     let mut core = new_core();
     core.process_pty_data_fully(prefix);
     core.take_response()

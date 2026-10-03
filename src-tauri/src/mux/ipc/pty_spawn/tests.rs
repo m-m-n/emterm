@@ -8849,3 +8849,7 @@ mod post_strip_cut_csi_record;
 // mux-cut-csi-post-strip-closure task0001 (FR1-FR4, FR6): the closing at a cut
 // and the carried CSI state follow the bytes the strip actually writes.
 mod post_strip_cut_csi;
+
+// mux-strip-escape-state-carry task0001 (FR1-FR5): the full written end state is
+// carried and the closure at a cut follows it.
+mod escape_state_carry;
