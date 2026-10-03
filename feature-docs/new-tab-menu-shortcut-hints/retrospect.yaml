@@ -1,0 +1,36 @@
+feature: new-tab-menu-shortcut-hints
+collected_at: "2026-10-03T14:45:00+09:00"
+session_ids: [01a10044-bec6-7042-a9f4-90984ddc12c2]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "Chooser rows compute shortcut labels on every egui frame in the render path (A3); check per-frame cost."
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code read put bucket 2 at 0.71 (new logic across several modules), so no reduction was applied."
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.2, confidence: 0.77, probabilities: {'0': 0.01, '1': 0.77, '2': 0.22, '3': 0.0}}
+        observed_at: "2026-10-03T13:29:55+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.71, confidence: 0.7, probabilities: {'0': 0.0, '1': 0.29, '2': 0.71, '3': 0.0}}
+        observed_at: "2026-10-03T13:29:55+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/render/overlays.rs
+        - src-tauri/src/ui/profile_selector.rs
+        - src-tauri/src/render/tests.rs
+      changed_lines_approx: 120
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      change_containment: multiple_modules
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "comprehensive の codex primary が出力スキーマ外のフィールド (line_end_note / per-finding source) を付けて検査に落ち、Claude フォールバックで再実行した"
+  - "medium 指摘 afdb7bee655251a6 (固定の Shift+PageUp/PageDown/Home/End スクロールキーとの衝突) は別タスクとして起票済み"
