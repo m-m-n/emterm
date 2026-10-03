@@ -1,20 +1,48 @@
 schema_version: 1
 feature: new-tab-menu-shortcut-hints
 phase: create-plan
-status: dispatching
+status: applying_patch
 generation: 1
-base_revision: cc05f59f13d529a8989a3154425b91e1a78b07aa
+base_revision: b5ef9e8f1b4e7c769f56972a830bf404a8773d61
 last_input_digest: sha256:c14512ae6bdf780e7f5b7821e7b5eae93b3a16312e6ec73a462a49725c4143ca
 active_request_id: create-plan-run-0001
 packets: {}
-answers: {}
+answers:
+  create-plan.long-name-clipping:
+    question_id: create-plan.long-name-clipping
+    packet_id: null
+    answered_at: '2026-10-03T13:58:00+09:00'
+    source: batch-planner-assumption
+    answer_mode: single_select
+    selected_option_ids:
+    - clip_before_label
+    freeform: null
+    normalized_answer: ラベル付きの行では、長いプロファイル名と Default バッジをラベルの手前 (ROW_INNER_GAP) でクリップする
+    resolution_note: implementation-planner が batch で置いた計画上の仮定。FR7 は重なり禁止だけを定め、長い名前の扱いは定めていない。task0001
+      Row painting contract に明記し、TS-9 で目視確認する
 worker_runs:
 - request_id: create-plan-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:c14512ae6bdf780e7f5b7821e7b5eae93b3a16312e6ec73a462a49725c4143ca
-  output_digest: null
-artifacts: []
-patches: []
+  output_digest: sha256:ce2b265154fc5cee86486fa7f1ee338feafa196851ed75141cdc3e790b58c03d
+artifacts:
+- path: feature-docs/new-tab-menu-shortcut-hints/IMPLEMENTATION.md
+  sha256: sha256:8a029311fee0f9ae2c341026e4136468e15df3fcd98abe67df69f9b1f990d22a
+  produced_by: create-plan-run-0001
+- path: feature-docs/new-tab-menu-shortcut-hints/VERIFICATION.md
+  sha256: sha256:d4318865bc12e7748fc79ed0c0bcb6237eef53ba8b820a4e496fcd7c460c4571
+  produced_by: create-plan-run-0001
+- path: feature-docs/new-tab-menu-shortcut-hints/THREAT-MODEL.md
+  sha256: sha256:fec083b00b6738ee4e5acf1d5bdcdaf7e226e0146607868fe9d5c498033dbe02
+  produced_by: create-plan-run-0001
+- path: feature-docs/new-tab-menu-shortcut-hints/tasks/task0001.md
+  sha256: sha256:6e7005fbeb1bb0510189b8f5d04826988b3d442b90daf4ae93f5eb1bfd16e636
+  produced_by: create-plan-run-0001
+patches:
+- patch_id: create-plan-p0001
+  status: validated
+  base_input_digest: sha256:c14512ae6bdf780e7f5b7821e7b5eae93b3a16312e6ec73a462a49725c4143ca
+  base_workflow_blob: 5c0845ba45a09c329102aac09c0ff1672f7df9c6
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
