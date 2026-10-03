@@ -91,7 +91,8 @@ workflow:
   base_commit: 385d920b60f849cbeb16dcc3d57ff4e9aeb63069
   completed_at_commit: 275f9c345015a804e124a7e4a2409c10a8b4673f
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 57d50d888bb6965b6f75e752ef01e4084e8997c2
 - id: verify
   status: pending
 - id: retrospect
@@ -143,8 +144,14 @@ tasks:
     branch: em-workflow/mux-cut-csi-post-strip-closure/task0002
     notes: null
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  - performance
   residual_critical_high: 0
   needs_rework: false
   plan:

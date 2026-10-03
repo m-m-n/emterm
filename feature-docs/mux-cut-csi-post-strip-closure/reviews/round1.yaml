@@ -1,0 +1,67 @@
+round: 1
+executed_at: "2026-10-03T09:51:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 385d920b60f849cbeb16dcc3d57ff4e9aeb63069
+  head_commit: 57d50d888bb6965b6f75e752ef01e4084e8997c2
+  changed_files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi_record.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+    - test-docs/mux-cut-csi-post-strip-closure/task0001.tests.yaml
+    - test-docs/mux-cut-csi-post-strip-closure/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+    - perspective: performance
+      reason: "write_filter.rs はリーダー通常経路（PTY 出力のホットパス）上にあり、NFR2 が負荷要件を持つため"
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "vulnerability#tool", perspective: vulnerability, role: tool, source: tool, status: skipped, skip_reason: "not selected: diff touches no dependency manifest or lockfile"}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: a879a02de382209f
+    severity: medium
+    category: security
+    file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    line: 554
+    title: "strip が除去した構文の直前に書いた ESC（WrittenState::Escape）が引き継がれず、カット時の閉鎖が読み取りの分割位置で変わる"
+    description: "strip_pty_output_for_scrollback_write_with_csi_state（scrollback_filter.rs:280）は strip の終端状態を `state.csi()` で Option<CsiPhase> に縮めるため、WrittenState::Escape は None になる。Escape になるのは、strip が ESC を書いた直後の構文を除去した場合（例: `ESC` + `ESC]777;emterm;markdown;…BEL`、`ESC` + `ESC[6n`、Kitty APC、SIXEL）。その None が self.csi に入り（write_filter.rs:554）、次の呼び出しの strip は Ground から始まる。呼び出し1 `ESC ESC]777;emterm;markdown;begin;id=x BEL`（カット無し）→ `ESC` を書き csi_phase() は None。呼び出し2 `[6`＋末尾カット → `[6` を書き DEL を書かない。リングとスナップショットは `ESC[6` で終わり、後続の `n` で CPR が出る。同じバイト列を 1 回で渡すと Some(Param) になりカットは DEL を書く。AC-3 / FR1 / FR2 がこの入力で成り立たず、カット経路で NFR3/TM-1 にかかる。また、その呼び出しの直後がカットだとリングは単独の ESC で終わり、閉じられない。旧来の scan ベースの状態にも同じ欠落があった。post_strip_cut_csi.rs の分割不変性コーパスに `ESC ESC`+対象の入力が無い。"
+    suggestion: "strip の終端状態を Ground / Escape / Csi(phase) を区別できる形で ScrollbackWriteFilter に持たせ、state form はそれを受け取って返す。書かれたストリームが Escape で終わる位置でカットするときの閉鎖バイトを決めて書くか、DECISIONS.md の残件として明記する。分割不変性コーパスに `ESC ESC`+各保持対象（+`[6`）と、カット・フォールバック閉鎖のケースを加える。"
+    sources: [claude:evaluator]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium のため auto-fix 対象外（R4 候補ゲートは critical/high のみ）。evaluator 単独起点。別タスクとして起票する"
+evaluation:
+  round_summary: "5 観点（security#0, comprehensive#0, architecture#0, spec#0, performance#0）はいずれも指摘 0 件。cross_validation=true のため evaluator が独立検査を行い、strip の終端状態のうち Escape が Option<CsiPhase> に縮められて引き継がれない問題（medium）を見つけた。ほかに comprehensive の low 指摘（scrollback_filter/tests.rs:1246 の doc コメントが古い記述のまま）を返したが、R3b step 2 の severity ゲートで除外した。architecture / performance は corroborated。spec はこの medium 指摘が AC-3/FR1/FR2 にも反するとした。BYTE_BY_BYTE_EXPECTATIONS の除外は IMPLEMENTATION D2 / SPEC FR6(3) の残件として記録済みのため指摘にしなかった。プロンプトインジェクションの試みは無かった。"
+  recommended_action: "auto_fix"
+  action_rationale: "critical/high は無く、medium が 1 件。修正は write_filter.rs と scrollback_filter.rs の局所的な変更で済む。どちらの指摘も evaluator 起点なので、auto-fix の可否は orchestrator のゲートに従う。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+r3b_gate_notes:
+  - "evaluator が返した file は project_root 配下の絶対パスだったため、project_root 接頭辞を外した相対パスに正規化してから step 1 を適用した"
+  - "evaluator の confidence は 0-1 の小数（0.75）で返ったため 0-100 尺度（75）に換算した"
+  - "comprehensive の low 指摘（src-tauri/src/mux/scrollback_filter/tests.rs:1246）は step 2 で除外した"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-mux-cut-csi-post-strip-closure-20261003T005050Z.md
