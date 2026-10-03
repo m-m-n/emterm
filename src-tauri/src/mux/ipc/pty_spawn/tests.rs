@@ -8859,3 +8859,6 @@ mod escape_state_carry;
 // mux-write-filter-overflow-lone-esc task0001 (FR1-FR6): the overflow flush holds the
 // final live lone ESC of its run.
 mod overflow_lone_esc;
+
+// mux-write-filter-overflow-open-string-cut task0001 (FR1-FR7): open string body state, ESC + CAN.
+mod overflow_open_string_cut;

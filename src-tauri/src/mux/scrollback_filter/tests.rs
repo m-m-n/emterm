@@ -1091,24 +1091,32 @@ fn client_csi_phase(stream: &[u8]) -> Option<CsiPhase> {
     })
 }
 
-/// The end-state oracle (mux-strip-escape-state-carry, D1): the end state of
-/// `stream` as a fresh term_core stands in after it, classified into the five
-/// written states by term_core's observable behavior only.
+/// The end-state oracle (mux-strip-escape-state-carry, D1; extended to the two
+/// string-body states by mux-write-filter-overflow-open-string-cut, D1): the end
+/// state of `stream` as a fresh term_core stands in after it, classified into the
+/// seven written states by term_core's observable behavior only.
 ///
 /// Probe continuations are fed to a fresh client that has been fed `stream`, and
 /// the number of displayed `m` characters tells the states apart:
 /// - `m`: displayed in ground; consumed as an unknown escape final in the
-///   escape state, as the charset designator in the designator wait and as the
-///   final byte (SGR) of a CSI;
+///   escape state, as the charset designator in the designator wait, as the
+///   final byte (SGR) of a CSI and as body data inside a string body;
 /// - `[m`: in the escape state `[` opens a CSI that `m` completes; in the
 ///   designator wait `[` is the designator and in a CSI it is a final byte, so
-///   `m` is displayed in both;
+///   `m` is displayed in both; inside a string body both are data;
+/// - `\m` (only when `[m` showed nothing, which leaves the escape state and the
+///   string bodies): after an `ESC` the backslash completes an escape and `m` is
+///   displayed; inside a body both are data;
+/// - BEL `m` (only inside a body): BEL ends an OSC body and `m` is displayed; in
+///   a DCS / APC body BEL and `m` are both data;
 /// - `6m`: in the designator wait `6` is the designator (an unknown one: ASCII)
 ///   and `m` is displayed; in a CSI `6` is a parameter and `m` completes it;
 /// - `!m`: `!` is an intermediate the parameter state accepts, and the entry
 ///   state cancels on it.
 /// No probe provokes a response (asserted) or designates the line-drawing
-/// charset, which would change the glyph compared. The count is compared with
+/// charset, which would change the glyph compared; a stream that opens a string
+/// body must therefore be one whose completion or abort answers nothing (an OSC 0
+/// title, a DCS / APC that term_core does not answer). The count is compared with
 /// the count after `stream` alone, so a stream that displays `m` itself is fine.
 /// Defined once, here, for this module's tables and for
 /// `mux::ipc::pty_spawn::tests`.
@@ -1133,7 +1141,14 @@ pub(in crate::mux) fn client_written_state(stream: &[u8]) -> WrittenState {
     if shows(b"m") {
         WrittenState::Ground
     } else if !shows(b"[m") {
-        WrittenState::Escape
+        // The escape state and the two string bodies absorb both `m` and `[m`.
+        if shows(b"\\m") {
+            WrittenState::Escape
+        } else if shows(b"\x07m") {
+            WrittenState::OscBody
+        } else {
+            WrittenState::StBody
+        }
     } else if shows(b"6m") {
         WrittenState::Designator
     } else if shows(b"!m") {
@@ -1148,7 +1163,7 @@ pub(in crate::mux) fn client_written_state(stream: &[u8]) -> WrittenState {
 #[test]
 fn escape_carry_the_end_state_oracle_classifies_the_reference_streams() {
     use CsiPhase::{Entry, Param};
-    use WrittenState::{Csi, Designator, Escape, Ground};
+    use WrittenState::{Csi, Designator, Escape, Ground, OscBody, StBody};
     let cases: &[(&[u8], WrittenState)] = &[
         (b"", Ground),
         (b"abc", Ground),
@@ -1169,6 +1184,40 @@ fn escape_carry_the_end_state_oracle_classifies_the_reference_streams() {
         (b"\x1b[6", Csi(Param)),
         (b"\x1b[?25", Csi(Param)),
         (b"\x1b[6 ", Csi(Param)),
+        // An open OSC body, an open DCS / APC body, and the states a body's
+        // `ESC` and BEL lead to (mux-write-filter-overflow-open-string-cut).
+        (b"\x1b]", OscBody),
+        (b"\x1b]0;", OscBody),
+        (b"\x1b]0;title", OscBody),
+        (b"abc\x1b]0;title", OscBody),
+        (b"\x1b]0;t\x07", Ground),
+        (b"\x1b]0;t\x07abc", Ground),
+        (b"\x1b]0;t\x1b", Escape),
+        (b"\x1b]0;t\x1b\\", Ground),
+        (b"\x1b]0;t\x1b[", Csi(Entry)),
+        (b"\x1b]0;t\x1b(", Designator),
+        (b"\x1b]0;t\x1b]0;u", OscBody),
+        (b"\x1bP", StBody),
+        (b"\x1bPx", StBody),
+        (b"\x1b_", StBody),
+        (b"\x1b_x", StBody),
+        (b"\x1b_Gi=1,a=d;AAAA", StBody),
+        (b"\x1bPq#0;2;0;0;0", StBody),
+        (b"\x1bPx\x07", StBody),
+        (b"\x1b_x\x07", StBody),
+        (b"\x1bPx\x07abc\x07", StBody),
+        (b"\x1bPx\x1b", Escape),
+        (b"\x1b_x\x1b", Escape),
+        (b"\x1bPx\x1b\\", Ground),
+        (b"\x1b_x\x1b\\", Ground),
+        (b"\x1bPx\x1b[", Csi(Entry)),
+        (b"\x1bPx\x1b]0;u", OscBody),
+        (b"\x1b]0;t\x1b_x", StBody),
+        // SOS / PM are not strings in term_core: `ESC X` / `ESC ^` complete an
+        // escape.
+        (b"\x1bX", Ground),
+        (b"\x1b^", Ground),
+        (b"\x1b]0;t\x1bXabc", Ground),
     ];
     for (stream, expected) in cases {
         assert_eq!(
@@ -1226,6 +1275,10 @@ fn bytes_entering_state(state: WrittenState) -> &'static [u8] {
         WrittenState::Escape => b"\x1b",
         WrittenState::Designator => b"\x1b(",
         WrittenState::Csi(phase) => bytes_entering(Some(phase)),
+        // The strings these open are completed or aborted by no probe in a
+        // way that answers: an OSC 0 title, an APC term_core does not answer.
+        WrittenState::OscBody => b"\x1b]0;",
+        WrittenState::StBody => b"\x1b_x",
     }
 }
 
@@ -1267,7 +1320,7 @@ fn assert_state_row(
 #[test]
 fn post_strip_state_form_reports_the_csi_state_of_the_written_bytes() {
     use CsiPhase::{Entry, Param};
-    use WrittenState::{Csi, Designator, Escape, Ground};
+    use WrittenState::{Csi, Designator, Escape, Ground, OscBody, StBody};
     let cases: &[StateCase] = &[
         // Nothing written, nothing changes.
         (Ground, false, b"", b"", Ground, true),
@@ -1411,6 +1464,172 @@ fn post_strip_state_form_reports_the_csi_state_of_the_written_bytes() {
             Ground,
             true,
         ),
+        // String bodies (mux-write-filter-overflow-open-string-cut FR1): an
+        // introducer and body bytes written open the OSC body or the
+        // ST-terminated body.
+        (Ground, false, b"\x1b]", b"\x1b]", OscBody, true),
+        (Ground, false, b"\x1b]0;t", b"\x1b]0;t", OscBody, true),
+        (Ground, false, b"abc\x1b]0;t", b"abc\x1b]0;t", OscBody, true),
+        (Ground, false, b"\x1bP", b"\x1bP", StBody, true),
+        (Ground, false, b"\x1bPx", b"\x1bPx", StBody, true),
+        (Ground, false, b"\x1b_", b"\x1b_", StBody, true),
+        (Ground, false, b"\x1b_x", b"\x1b_x", StBody, true),
+        // A string that is kept (not a strip target) stays open the same way.
+        (Ground, false, b"\x1b_Gx", b"\x1b_Gx", StBody, true),
+        (Ground, false, b"\x1bPq", b"\x1bPq", StBody, true),
+        // BEL returns an OSC body to ground and is data in a DCS / APC body.
+        (
+            Ground,
+            false,
+            b"\x1b]0;t\x07",
+            b"\x1b]0;t\x07",
+            Ground,
+            true,
+        ),
+        (
+            Ground,
+            false,
+            b"\x1b]0;t\x07x",
+            b"\x1b]0;t\x07x",
+            Ground,
+            true,
+        ),
+        (Ground, false, b"\x1bPx\x07", b"\x1bPx\x07", StBody, true),
+        (Ground, false, b"\x1b_x\x07", b"\x1b_x\x07", StBody, true),
+        // A body's written `ESC` leaves it for Escape; `\` completes ST.
+        (
+            Ground,
+            false,
+            b"\x1b]0;t\x1b",
+            b"\x1b]0;t\x1b",
+            Escape,
+            true,
+        ),
+        (Ground, false, b"\x1bPx\x1b", b"\x1bPx\x1b", Escape, true),
+        (Ground, false, b"\x1b_x\x1b", b"\x1b_x\x1b", Escape, true),
+        (
+            Ground,
+            false,
+            b"\x1b]0;t\x1b\\",
+            b"\x1b]0;t\x1b\\",
+            Ground,
+            true,
+        ),
+        (
+            Ground,
+            false,
+            b"\x1bPx\x1b\\",
+            b"\x1bPx\x1b\\",
+            Ground,
+            true,
+        ),
+        (
+            Ground,
+            false,
+            b"\x1b_x\x1b\\",
+            b"\x1b_x\x1b\\",
+            Ground,
+            true,
+        ),
+        // Any other byte after a body's `ESC` aborts the string and is read as
+        // from Escape.
+        (
+            Ground,
+            false,
+            b"\x1b]0;t\x1b[",
+            b"\x1b]0;t\x1b[",
+            Csi(Entry),
+            true,
+        ),
+        (
+            Ground,
+            false,
+            b"\x1bPx\x1b[6",
+            b"\x1bPx\x1b[6",
+            Csi(Param),
+            true,
+        ),
+        (
+            Ground,
+            false,
+            b"\x1b]0;t\x1b(",
+            b"\x1b]0;t\x1b(",
+            Designator,
+            true,
+        ),
+        (
+            Ground,
+            false,
+            b"\x1b]0;t\x1b]0;u",
+            b"\x1b]0;t\x1b]0;u",
+            OscBody,
+            true,
+        ),
+        (
+            Ground,
+            false,
+            b"\x1bPx\x1b_y",
+            b"\x1bPx\x1b_y",
+            StBody,
+            true,
+        ),
+        (
+            Ground,
+            false,
+            b"\x1b]0;t\x1bXabc",
+            b"\x1b]0;t\x1bXabc",
+            Ground,
+            true,
+        ),
+        (
+            Ground,
+            false,
+            b"\x1bPx\x1b\x1b",
+            b"\x1bPx\x1b\x1b",
+            Escape,
+            true,
+        ),
+        // From a carried body the next written bytes advance it.
+        (OscBody, false, b"abc", b"abc", OscBody, true),
+        (OscBody, false, b"", b"", OscBody, true),
+        (OscBody, false, b"\x07", b"\x07", Ground, true),
+        (OscBody, false, b"\x1b", b"\x1b", Escape, true),
+        (OscBody, false, b"\x1b\\", b"\x1b\\", Ground, true),
+        (OscBody, false, b"\x1b[", b"\x1b[", Csi(Entry), true),
+        (StBody, false, b"abc", b"abc", StBody, true),
+        (StBody, false, b"", b"", StBody, true),
+        (StBody, false, b"\x07", b"\x07", StBody, true),
+        (StBody, false, b"\x1b", b"\x1b", Escape, true),
+        (StBody, false, b"\x1b\\", b"\x1b\\", Ground, true),
+        (StBody, false, b"\x1b[", b"\x1b[", Csi(Entry), true),
+        // The C0 bytes re-emitted from a removed query execute in a body: a
+        // re-emitted BEL ends an OSC body and is data in a DCS / APC body
+        // (the strip's removal and output do not read the state).
+        (OscBody, false, b"\x1b[6\x07n", b"\x07", Ground, true),
+        (OscBody, false, b"\x1b[6\rn", b"\r", OscBody, true),
+        (StBody, false, b"\x1b[6\x07n", b"\x07", StBody, true),
+        (
+            Ground,
+            false,
+            b"\x1b]0;t\x1b[6\x07n",
+            b"\x1b]0;t\x07",
+            Ground,
+            true,
+        ),
+        // A removed construct leaves an open body as it was: its `ESC` is not
+        // written.
+        (
+            Ground,
+            false,
+            b"\x1b]0;t\x1b[6n",
+            b"\x1b]0;t",
+            OscBody,
+            true,
+        ),
+        (Ground, false, b"\x1bPx\x1b[6n", b"\x1bPx", StBody, true),
+        (Ground, false, b"\x1bPx\x1b[6nab", b"\x1bPxab", StBody, true),
+        // The designator flag with a carried body is not allowed (a designator
+        // is awaited only from Designator or Ground), so it is not tabled.
     ];
     for (state_in, designator, input, expected_out, expected_state, confirm) in cases {
         assert_state_row(
@@ -1453,6 +1672,15 @@ fn post_strip_state_form_reports_the_csi_state_of_the_written_bytes() {
         // start is still removed (the carried state never decides a removal)
         // and the state stays Designator.
         assert_state_row(Designator, false, construct, b"", Designator, true);
+        // From a carried open body the construct is removed whole and the body
+        // stays open: the removed `ESC` neither ends the string nor aborts it.
+        assert_state_row(OscBody, false, construct, b"", OscBody, true);
+        assert_state_row(StBody, false, construct, b"", StBody, true);
+        // The same for a body the pass itself writes open before the construct.
+        let open_osc = [b"\x1b]0;t".as_slice(), construct].concat();
+        assert_state_row(Ground, false, &open_osc, b"\x1b]0;t", OscBody, true);
+        let open_dcs = [b"\x1bPx".as_slice(), construct].concat();
+        assert_state_row(Ground, false, &open_dcs, b"\x1bPx", StBody, true);
         // With the flag set, byte 0 is the designator and is copied whatever it
         // is; the rest of the construct is then plain text.
         let (out, _) =
@@ -1464,6 +1692,38 @@ fn post_strip_state_form_reports_the_csi_state_of_the_written_bytes() {
             ctx("the flag set: byte 0 is verbatim")
         );
     }
+}
+
+/// mux-write-filter-overflow-open-string-cut FR1, AC-1: the transitions of the
+/// string-body states are term_core's. Every string of up to four bytes over an
+/// alphabet of the string introducers, ESC, `\`, BEL, `[`, `(` and a body byte
+/// (none of which forms a strip target, so the pass writes the input whole) ends
+/// in the state the term_core end-state oracle reports for it.
+#[test]
+fn post_strip_string_body_states_agree_with_term_core_on_every_short_string() {
+    let alphabet: [u8; 9] = [0x1b, b']', b'P', b'_', b'\\', 0x07, b'[', b'(', b'x'];
+    let mut input: Vec<u8> = Vec::new();
+    fn walk(alphabet: &[u8], input: &mut Vec<u8>, depth: usize, check: &mut impl FnMut(&[u8])) {
+        check(input);
+        if depth == 0 {
+            return;
+        }
+        for &byte in alphabet {
+            input.push(byte);
+            walk(alphabet, input, depth - 1, check);
+            input.pop();
+        }
+    }
+    let mut check = |input: &[u8]| {
+        let (out, state) = strip_pty_output_for_scrollback_write_with_written_state(
+            input,
+            false,
+            WrittenState::Ground,
+        );
+        assert_eq!(out, input, "{input:?}: nothing is stripped");
+        assert_eq!(state, client_written_state(input), "end state of {input:?}");
+    };
+    walk(&alphabet, &mut input, 4, &mut check);
 }
 
 /// `csi_step` is the per-byte CSI transition both the write filter's scan and
@@ -1536,20 +1796,22 @@ fn post_strip_identity_corpus() -> Vec<Vec<u8>> {
 /// R9 (AC-7, NFR1, FR6) and mux-strip-escape-state-carry AC-1 (FR2): the
 /// state-reporting form returns output byte-identical to the existing write-path
 /// form over the scrollback_filter corpora, from every allowed pair of the
-/// designator flag and the carried state: the flag clear with each of the five
-/// states, the flag set with Designator, and the flag set with Ground (a splice
-/// made the wait). The carried state never influences a removal decision. The
+/// designator flag and the carried state: the flag clear with each of the seven
+/// states (the two string-body states included), the flag set with Designator,
+/// and the flag set with Ground (a splice made the wait). The carried state never influences a removal decision. The
 /// existing forms keep their signatures and outputs.
 #[test]
 fn post_strip_state_form_output_equals_the_write_path_strip() {
     use CsiPhase::{Entry, Param};
-    use WrittenState::{Csi, Designator, Escape, Ground};
-    let configs: [(bool, WrittenState); 7] = [
+    use WrittenState::{Csi, Designator, Escape, Ground, OscBody, StBody};
+    let configs: [(bool, WrittenState); 9] = [
         (false, Ground),
         (false, Escape),
         (false, Designator),
         (false, Csi(Entry)),
         (false, Csi(Param)),
+        (false, OscBody),
+        (false, StBody),
         (true, Designator),
         (true, Ground),
     ];
