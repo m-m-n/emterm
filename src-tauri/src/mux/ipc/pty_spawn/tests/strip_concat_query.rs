@@ -37,14 +37,14 @@ const DEL: u8 = 0x7f;
 const ESC: u8 = 0x1b;
 
 /// A construct the shared strip removes together with its opening `ESC`.
-struct Target {
-    name: &'static str,
-    bytes: &'static [u8],
+pub(super) struct Target {
+    pub(super) name: &'static str,
+    pub(super) bytes: &'static [u8],
     /// The C0 bytes the strip re-emits from the removed construct, in order.
-    c0: &'static [u8],
+    pub(super) c0: &'static [u8],
     /// The write filter holds it across calls until it is complete. A CSI
     /// query is never held: its bytes are written as they arrive.
-    held: bool,
+    pub(super) held: bool,
 }
 
 impl Target {
@@ -53,7 +53,7 @@ impl Target {
     }
 }
 
-const TARGETS: &[Target] = &[
+pub(super) const TARGETS: &[Target] = &[
     Target {
         name: "osc 777 launch (BEL)",
         bytes: b"\x1b]777;emterm;markdown;begin;id=x\x07",
