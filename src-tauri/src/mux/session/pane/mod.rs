@@ -880,8 +880,13 @@ impl MuxPane {
         if !replay_bytes.is_empty() {
             let mut parser = lock_shadow_parser(&pane.shadow_parser);
             let (parser_rows, parser_cols) = parser.screen().size();
+            // The ring above keeps the bytes verbatim (DEL included); the shadow
+            // parser is vt100, which ignores DEL, so it gets the DEL-to-CAN
+            // replay copy (mux-vt100-del-closing FR2). Same length, so the logged
+            // byte count below is the same either way.
+            let vt100_bytes = crate::mux::scrollback_filter::vt100_replay_copy(&replay_bytes);
             let processed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                parser.process(&replay_bytes);
+                parser.process(&vt100_bytes);
             }));
             if processed.is_err() {
                 *parser = new_shadow_parser(parser_rows, parser_cols);
