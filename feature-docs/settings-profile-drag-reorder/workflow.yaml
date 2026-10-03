@@ -97,7 +97,8 @@ workflow:
   base_commit: b8555a00acf53d838e384f73393617f859cf9e02
   completed_at_commit: 12369fce00bbe01d0037c5498025ef541b77f674
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: daf9062e30eaa6c1daaa232f3746dd3074117265
 - id: verify
   status: pending
   result: null
@@ -154,8 +155,8 @@ tasks:
     branch: em-workflow/settings-profile-drag-reorder/task0002
     notes: null
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor:
     - comprehensive
@@ -163,7 +164,10 @@ review:
     - spec
     discretionary: []
     cross_validation: false
-  perspectives: {}
+  perspectives:
+    security: completed
+    comprehensive: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 requirements:

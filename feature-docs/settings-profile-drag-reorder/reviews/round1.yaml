@@ -1,0 +1,71 @@
+round: 1
+executed_at: '2026-10-03T11:01:30+09:00'
+scope:
+  review_mode: diff
+  base_commit: b8555a00acf53d838e384f73393617f859cf9e02
+  head_commit: daf9062e30eaa6c1daaa232f3746dd3074117265
+  changed_files:
+  - src-tauri/web-shared/settings/sections/profiles-section.test.ts
+  - src-tauri/web-shared/settings/sections/profiles-section.ts
+  - src-tauri/web-shared/settings/sections/ssh-section.test.ts
+  - src-tauri/web-shared/settings/sections/ssh-section.ts
+  - test-docs/settings-profile-drag-reorder/task0001.tests.yaml
+  - test-docs/settings-profile-drag-reorder/task0002.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - spec
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings: []
+evaluation:
+  round_summary: 'Round 1 (diff mode, cross_validation=false). All three runs (security#0,
+    comprehensive#0, spec#0) completed with empty findings; no injection attempts.
+    Evaluator independently inspected both dragstart handlers, drop handlers, the
+    two new test files and test-docs records: each handler sets only its own custom
+    MIME type with effectAllowed=move, no text/plain, drop handlers unchanged (in-memory
+    dragIndex). Minor below-threshold note: profiles handler passes item.dataset.index
+    ?? "" while SSH passes String(dragIndex); equivalent for rendered items. Coverage:
+    security/comprehensive/spec corroborated.'
+  recommended_action: complete
+  action_rationale: No reviewer reported a finding and independent inspection confirmed
+    each empty result; change matches SPEC FR1-FR6 and NFR1. AC-8 manual WebKitGTK
+    check belongs to verification.
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
