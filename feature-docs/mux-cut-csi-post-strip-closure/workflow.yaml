@@ -93,7 +93,52 @@ workflow:
   status: pending
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Post-strip CSI state for the cut closing and the carry
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR6
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    status: pending
+    branch: null
+    notes: null
+  task0002:
+    title: Decision record for finding 4c0ad9058a983648 and the FR6 residuals
+    plan: tasks/task0002.md
+    files:
+    - feature-docs/mux-cut-csi-post-strip-closure/DECISIONS.md
+    - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi_record.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    skills: []
+    domains: []
+    complexity: low
+    requirements:
+    - FR5
+    - FR6
+    status: pending
+    branch: null
+    notes: null
 review:
   status: pending
   rounds_completed: 0
@@ -105,75 +150,106 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-5
   FR2:
     title: 引き継ぐ CSI 状態を除去後の出力で決める
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+    - TS-5
   FR3:
     title: オーバーフロー経路も同じ規則にする
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   FR4:
     title: 回帰テストの追加
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
   FR5:
     title: 判断の記録
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-6
   FR6:
     title: カットの無い strip 連結は残件として記録
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-6
+    - TS-9
   NFR1:
     title: 互換性
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-9
   NFR2:
     title: リーダー通常経路の負荷
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-7
   NFR3:
     title: セキュリティ（TM-1）
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-5
   NFR4:
     title: セキュリティ（TM-2）
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-7
   NFR5:
     title: ビルドとプラットフォーム
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-8
