@@ -1,0 +1,48 @@
+schema_version: 1
+feature: mux-strip-escape-state-carry
+phase: create-spec
+status: completed
+generation: 1
+base_revision: f9197c26e67c1e459c2b6c3b962379ea06c4d30c
+last_input_digest: sha256:4dcea318df4b113bbb4f9de49354a61a894f3ef8e483be9240986c6c46ba1547
+active_request_id: null
+packets: {}
+answers:
+  create-spec.feature-identity:
+    packet_id: null
+    answered_at: '2026-10-03T20:12:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - derive_from_task_description
+    freeform: null
+    normalized_answer: 'feature name derived from the task description: mux-strip-escape-state-carry'
+    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option
+      derive_from_task_description; codex_consulted: false'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:a9cfe3418e4f7fcca2d643738cf4bfd2170581e59bc501b38cacf8384c34bc01
+  output_digest: sha256:708a81833beb356a1ae6f704116a04483c0b9b91d16265d525b8867233599e4c
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:4dcea318df4b113bbb4f9de49354a61a894f3ef8e483be9240986c6c46ba1547
+  output_digest: sha256:9f2781d975b8985a595c9fefa27a56ecc699c5a92b67229a33dda56b15392733
+artifacts:
+- path: feature-docs/mux-strip-escape-state-carry/REQUIREMENTS.md
+  sha256: sha256:38e47c64eb839eaa4472b2e100ff36167095492254cb1416b11abf5e96d1ae19
+  produced_by: create-spec-run-0002
+- path: feature-docs/mux-strip-escape-state-carry/SPEC.md
+  sha256: sha256:608de558b8576e6a135cdd40d5af2f9abd2b6b3e01d454ee2ab3d533b04347b3
+  produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: sha256:c9cefcd8c4be91b8ba4d122151eb811eda3f3ee3c19d69dd0c18ffad04213d7b
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:4ce95370e221ea0a3ef42ee0992d28ac44cbae9b311b7e310061d35b819bb093
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+last_error: null
