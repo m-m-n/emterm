@@ -1,0 +1,94 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib` finished with 4194 passed, 3 failed, 3 ignored.
+# The 3 failures are per-test time budgets (10 s) exceeded in the unoptimized parallel run, the
+# same tests each time: post_strip_cut_csi 11.97 s, round4_chain 16.99 s, strip_concat_query
+# 19.73 s. They are inherited and not touched by this task.
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# Re-executed after the implementation (new test module, DECISIONS.md and this record in the
+# tree): `cargo test --lib` finished with 4199 passed, 3 failed, 3 ignored (the baseline's 4194
+# plus the 5 tests this task adds). The 3 failures are the baseline's, again on the 10 s budgets
+# (10.19 s, 15.19 s, 20.91 s); the 5 new tests pass. `cargo check` and
+# `cargo check --no-default-features` finished with no error.
+final_failures:
+  - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# Reds: none of the criteria below has an observed red. mux-strip-concat-query-closure D1
+# (`Written::close_before_removal`) already exists on the parent branch, so the new tests passed
+# on their first run (REQUIREMENTS.md A6). The AC-7 controls are the evidence that the AC-1 and
+# AC-2 assertions can detect the attacks they guard against.
+#
+# Supplementary observation, not a red: with `close_before_removal` temporarily narrowed to
+# write the DEL inside a CSI only (the `WrittenState::Escape` arm removed), the AC-1 and AC-2
+# tests failed while the three AC-7 controls stayed green. AC-1 failed with: the ring holds
+# "ESC ESC [6 DEL [5n", expected "ESC ESC DEL [6n[5n". AC-2 failed at its first case with: osc 777
+# launch (BEL) + c: the ring holds "keep-me CR LF ESC c", expected "keep-me CR LF ESC DEL c". The
+# narrowing was reverted afterwards (`git checkout` of src-tauri/src/mux/scrollback_filter.rs);
+# the diff of this task contains no production change.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_join_escape_closure::join_closure_two_stage_strip_gives_zero_responses
+    red_confirmed: false
+    red_reason: >-
+      The test passed on its first run: mux-strip-concat-query-closure D1 already writes the DEL
+      for `ESC ESC ESC[6n[6n[5n`, so no red state exists for this change (REQUIREMENTS.md A6). The
+      AC-7 control `join_closure_control_the_replay_core_answers_the_joined_query` shows the
+      replay setup answers the joined query `ESC[5n`.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_join_escape_closure::join_closure_a_removal_after_a_lone_esc_neither_resets_nor_switches_g0_nor_answers
+    red_confirmed: false
+    red_reason: >-
+      The test passed on its first run: mux-strip-concat-query-closure D1 already writes the DEL
+      after a lone ESC at each of the eight removed construct kinds, so no red state exists for
+      this change (REQUIREMENTS.md A6). The AC-7 controls
+      `join_closure_control_a_closure_less_join_with_c_resets_the_terminal` and
+      `join_closure_control_a_closure_less_join_with_a_designation_switches_g0` show that the
+      closure-less joins reset the terminal and switch G0.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_one_call_closes_an_open_csi_at_every_removed_construct
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing
+      `mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_one_call_closes_an_open_csi_at_every_removed_construct`
+      detects an open CSI left unclosed at a removed construct (DoD 1); no red state occurred
+      for this change. The test body and name are unchanged; it is rerun by the full `--lib` run.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Document content of feature-docs/mux-strip-join-escape-closure/DECISIONS.md; no executable
+      check of it is in this task's scope. A search of the Rust test directories by that path
+      and by the basename DECISIONS.md found only the record tests of other features, which read
+      their own features' files, so no existing test reads this document.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Document content of feature-docs/mux-strip-join-escape-closure/DECISIONS.md (the
+      kept-string-body join residual); no executable check of it is in this task's scope. The
+      search described under AC-4 found no existing test that reads this document.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build, scope and timing outcome. The `--lib` run and `cargo check --no-default-features`
+      finished without error; the diff contains no non-test code under src-tauri/src and
+      nothing under crates/term_core. No failure of these checks was observed before the
+      change. The only edit to an existing test file is the `pub(super)` visibility of `Target`
+      and `TARGETS` in strip_concat_query.rs; the file's tests are unchanged.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_join_escape_closure::join_closure_control_the_replay_core_answers_the_joined_query
+      - mux::ipc::pty_spawn::tests::strip_join_escape_closure::join_closure_control_a_closure_less_join_with_c_resets_the_terminal
+      - mux::ipc::pty_spawn::tests::strip_join_escape_closure::join_closure_control_a_closure_less_join_with_a_designation_switches_g0
+    red_confirmed: false
+    red_reason: >-
+      The controls assert behavior of term_core that already exists (it answers `ESC[5n`, `ESC c`
+      resets, `ESC(0` switches G0) and passed on their first run; they are the discriminating
+      evidence for AC-1 and AC-2 rather than tests with a red state of their own.
