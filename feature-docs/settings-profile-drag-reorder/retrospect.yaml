@@ -1,0 +1,43 @@
+feature: settings-profile-drag-reorder
+collected_at: "2026-10-03T11:05:00+09:00"
+session_ids:
+  - 01a0ff80-618e-7756-bc17-9211b47d864d
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "Final read (description_plus_code) put P(2)=0.85; threshold row selected full."
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.56, confidence: 0.54, probabilities: {"0": 0.0, "1": 0.45, "2": 0.54, "3": 0.01}}
+        observed_at: "2026-10-03T10:20:52+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.85, confidence: 0.85, probabilities: {"0": 0.0, "1": 0.15, "2": 0.85, "3": 0.0}}
+        observed_at: "2026-10-03T10:24:17+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/web-shared/settings/sections/profiles-section.ts
+        - src-tauri/web-shared/settings/sections/profiles-section.test.ts
+      changed_lines_approx: 140
+      new_functions_needed: 0
+      new_files_needed: 1
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules:
+        - src-tauri/web-shared/settings/sections/ssh-section.ts
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 5
+      body_change_kind: new_logic
+      change_containment: single_module
+      caller_and_dependency_count: 4
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+  - "Root cause (setData missing in dragstart blocks WebKitGTK drag start) is inferred from code; Linux manual check (TS-7) and Windows check (TS-9) remain for the human."

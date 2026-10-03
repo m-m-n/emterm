@@ -105,7 +105,8 @@ workflow:
   completed_at_commit: 5269dc164730b15d56095a1ac5186681a48760bf
   failed_items: []
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: c1f50508a90524794ff4247db9cb77e75e43ee16
 tasks:
   task0001:
     title: Profiles list dragstart sets drag data, with regression tests
