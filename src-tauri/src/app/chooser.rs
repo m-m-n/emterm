@@ -62,6 +62,24 @@ impl App {
             + usize::from(self.profile_selector.include_global)
     }
 
+    /// Shortcut label per row of the open selector (`Global -> profiles
+    /// -> tmux rows`), `None` for rows without one. Runs the row-label
+    /// assignment against the App state as it is NOW — the current
+    /// keybind table, the profiles' `is_default` flags and the selector
+    /// state — and stores nothing, so the call after a settings apply
+    /// reflects the new table. Takes no locale: label text is the same in
+    /// every language.
+    pub fn profile_selector_shortcut_labels(&self) -> Vec<Option<String>> {
+        let default_flags: Vec<bool> = self
+            .settings
+            .profiles
+            .iter()
+            .map(|p| p.is_default)
+            .collect();
+        self.profile_selector
+            .row_shortcut_labels(&default_flags, &self.keybinds)
+    }
+
     /// Selector confirmed: resolve the chosen row and spawn a tab. The
     /// row→choice decode (including the chooser-mode "Global Settings" /
     /// tmux-entry offsets) lives in `ProfileSelectorState::row_to_choice`,
