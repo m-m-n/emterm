@@ -19,7 +19,7 @@ bases:
       '1': 0.41
       '2': 0.59
       '3': 0.0
-  observed_at: '2026-10-03T20:12:00+09:00'
+  observed_at: '2026-10-03T20:08:00+09:00'
 - basis: description_plus_code
   score:
     type: score
@@ -37,7 +37,7 @@ bases:
       '1': 0.02
       '2': 0.98
       '3': 0.0
-  observed_at: '2026-10-03T20:22:00+09:00'
+  observed_at: '2026-10-03T20:14:30+09:00'
 pre_survey_estimate:
   files_expected:
   - src-tauri/src/mux/scrollback_filter.rs
@@ -95,4 +95,4 @@ pre_survey_estimate:
   caller_and_dependency_count: 6
   changes_external_contract: false
   changes_behavior: true
-decided_at: '2026-10-03T20:22:30+09:00'
+decided_at: '2026-10-03T20:14:40+09:00'
