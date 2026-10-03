@@ -291,7 +291,6 @@
       "delete": "削除",
       "setDefault": "デフォルトに設定",
       "unsetDefault": "デフォルトを解除",
-      "launch": "起動",
       "defaultBadge": "デフォルト",
       "nameRequired": "プロファイル名は必須です",
       "dragHandle": "ドラッグで並び替え",
