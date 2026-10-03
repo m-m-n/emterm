@@ -137,7 +137,7 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: in_progress
+    status: merged
     branch: em-workflow/new-tab-menu-shortcut-hints/task0001
 review:
   status: pending
