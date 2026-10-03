@@ -107,8 +107,8 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/settings-profile-drag-reorder/task0001
     notes: null
   task0002:
     title: SSH connection list dragstart sets drag data, with regression tests
@@ -131,8 +131,8 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/settings-profile-drag-reorder/task0002
     notes: null
 review:
   status: pending
