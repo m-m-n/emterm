@@ -1,0 +1,29 @@
+schema_version: 1
+feature: mux-strip-escape-state-carry
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: c4d579a59ab5b711a1a036e9c258cc2ee61a1cab
+last_input_digest: sha256:a9cfe3418e4f7fcca2d643738cf4bfd2170581e59bc501b38cacf8384c34bc01
+active_request_id: create-spec-run-0001
+packets: {}
+answers:
+  create-spec.feature-identity:
+    packet_id: null
+    answered_at: "2026-10-03T20:12:00+09:00"
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids: [derive_from_task_description]
+    freeform: null
+    normalized_answer: "feature name derived from the task description: mux-strip-escape-state-carry"
+    resolution_note: "gate: create-spec.feature-identity; batch-policies.yaml option derive_from_task_description; codex_consulted: false"
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:a9cfe3418e4f7fcca2d643738cf4bfd2170581e59bc501b38cacf8384c34bc01
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
