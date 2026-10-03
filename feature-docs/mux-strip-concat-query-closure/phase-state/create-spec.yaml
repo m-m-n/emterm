@@ -76,9 +76,15 @@ worker_runs:
   status: completed
   input_digest: sha256:3dc80ccbceb62242619f1367b8707c6131cb811f620c44778d02220ef83f0c9c
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:7caaa90d3c4c832b96fc742a7574433d0553a860c53b53cc32db4ba94695e2ce
-artifacts: []
+artifacts:
+- path: feature-docs/mux-strip-concat-query-closure/REQUIREMENTS.md
+  sha256: sha256:9ebee211929aa709aeb58bdcdf83a30a697a5fa96738eab94e564a8de9645cf8
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-strip-concat-query-closure/SPEC.md
+  sha256: sha256:90df46211957b6acce2e3697c461f65a52143719b2eef682ea47ece83ebe6f32
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
