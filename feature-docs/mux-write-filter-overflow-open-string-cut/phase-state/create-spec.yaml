@@ -5,7 +5,7 @@ status: in_progress
 generation: 1
 base_revision: e42a0a651708f4f45ce242cf64a36c2a0f118129
 last_input_digest: sha256:e25849f4a4abfa9b3bfdc692563d8ba351f0b9c44df3413a21a9f9b7a23cfb40
-active_request_id: create-spec-run-0001
+active_request_id: null
 packets: {}
 answers:
   create-spec.feature-identity:
@@ -19,7 +19,33 @@ answers:
     normalized_answer: 'feature name derived from the task description: mux-write-filter-overflow-open-string-cut'
     resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option
       derive_from_task_description; codex_consulted: false'
-worker_runs: []
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-10-04T02:58:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step skipped per analyst recommendation (no UI surface)
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option decide_autonomously;
+      codex_consulted: false'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-10-04T02:58:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: kind none (zero candidates, design skipped)
+    resolution_note: 'gate: create-spec.design-system; batch-policies.yaml option
+      top_candidate_or_none; codex_consulted: false'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:e25849f4a4abfa9b3bfdc692563d8ba351f0b9c44df3413a21a9f9b7a23cfb40
+  output_digest: sha256:f3a093445b3e3addba49d28fec4b7ff429165c9e9f0c0e951fb37d1c656c4cf6
 artifacts: []
 patches: []
 progress_fingerprint: null
