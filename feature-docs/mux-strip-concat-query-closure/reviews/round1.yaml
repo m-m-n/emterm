@@ -1,0 +1,80 @@
+round: 1
+executed_at: "2026-10-03T22:29:51+09:00"
+scope:
+  review_mode: diff
+  base_commit: 32706c8615f83b72f9fce09e1f26a90927108d73
+  head_commit: a29d3dd7e8519a88400d6241945ee269015a1632
+  changed_files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - test-docs/mux-strip-concat-query-closure/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+    - perspective: performance
+      reason: "共有 strip と書き込みフィルタは PTY 出力のホットパスで、NFR1（線形・O(1) 状態）と NFR2（敵対入力予算）を持つため"
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: failed}
+  - {run_id: "comprehensive#fallback", perspective: comprehensive, role: fallback, source: claude, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+# comprehensive#0: Codex CLI が JSON でない出力を返した（reviewer の summary が "codex returned non-JSON output"）。
+# ハーネス層の失敗として扱い、Claude fallback を 1 回 dispatch した。
+findings:
+  - stable_id: f5176c335e8e18f8
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 284
+    title: "D2 で ring に書く DEL を vt100 (vte) 側の ring 消費者は CSI の取り消しとして扱わず、後続バイトを最終バイトとして飲み込む"
+    description: "D2 (Written::push, scrollback_filter.rs:284-294) は、読み込み境界で分割された応答対象の問い合わせの最終バイトを DEL に置き換えて ring に書く (例: ESC[6 | n が ESC[6 DEL になる)。DEL で CSI が取り消されるのは term_core だけの前提になっている。ring は vt100 0.16.2 / vte 0.15.0 にも渡される。渡し先は agent_api.rs:110-117 の render_scrollback_rows (mux read の ReadPane) と、session/pane/mod.rs:878-884 の from_restored で行う shadow parser の再生の 2 か所。evaluator が vt100 =0.16.2 で実測: 変更前の ring の形 ESC[6n + Hello は 1 行目に Hello、変更後の形 ESC[6 DEL Hello は 6 行目に ello と表示された (CUP 6 として解釈)。変更前は分割された問い合わせが ESC[6n のまま ring に残り、vt100 は無害な DSR として無視していた。D2 によって、通常の読み込み分割だけで mux read の描画と復元後の shadow 画面が崩れる。D1 と既存の cut の closing (D3) も同じ DEL を使うが、vt100 には変更前から ESC[6 に後続バイトが連結された形で渡っていたので、悪化するのは D2 の経路だけ。"
+    suggestion: "案 (a): vt100 に ring を渡す 2 か所 (agent_api::render_scrollback_rows と MuxPane::from_restored の parser.process) の直前で、0x7F を CAN (0x18) に置き換えたコピーを渡す (vt100 で ESC[6 CAN Hello が 1 行目に Hello と出ることは実測済み)。案 (b): closing を DEL + CAN の 2 バイトにする (SPEC A1 と 1 対 1 置換の前提から外れる)。CAN 単独は term_core が CSI 内の CAN で取り消さないため使えない。どちらの案でも、ESC[6 + 閉じバイト + Hello を vt100 で描画して 1 行目に Hello が出るテストを追加する。"
+    sources: ["claude:comprehensive"]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium のため auto-fix 対象外（R4 の候補条件は critical/high）。evaluator の推奨は rework だが recommended_action は助言であり完了ゲートを上書きしない。残件として別タスクで扱う"
+  - stable_id: d69ef2ca8d34e20b
+    severity: medium
+    category: security
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 669
+    title: "ST 探索が見つけた終端位置をキャッシュしないため、SIXEL でない DCS を反復すると strip が二乗時間になる"
+    description: "find_st_terminator (scrollback_filter.rs:669-683) がキャッシュするのは ST が見つからなかった場合だけで、見つかった ST の位置は再利用されない。SIXEL でない DCS は fallback に落ちて ESC を 1 バイト書くだけで先に進む (scrollback_filter.rs:597-608)。(ESC P x) を N 回繰り返して最後に ESC \\ を置くと、走査量は約 N^2 x 3/2 バイト。書き込み経路では pending 上限 512 KiB の範囲で約 3.8e10 回、スナップショット経路は 2 MiB の ring 全体で約 7e11 回になる。今回の差分で変更された関数ではない既存の問題だが、モジュール doc の single O(n) pass、THREAT-MODEL.md TB-1/TM-3、SPEC NFR1 と矛盾する。"
+    suggestion: "見つけた ST の位置をキャッシュする（from は単調増加なので、from が直前に見つけた ST の ESC 位置以下ならその終端を返す。strip 対象の判定は変わらず FR5 を保てる）。ESC P x の反復と末尾 ST を、書き込み経路とスナップショット経路の両方の時間予算テスト (TS-9 / TM-3) に追加する。"
+    sources: ["codex:security"]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium のため auto-fix 対象外（R4 の候補条件は critical/high）。既存関数の問題で残件として別タスクで扱う"
+# 補足: evaluator は 3 件目として「未完了 OSC 本文内での除去による 2 段階 strip の連結（OSC 777 起動列の生成）」を
+# medium から low に下げて返した。R3b step 2 (severity ∈ {critical, high, medium}) により findings からは除外したが、
+# 残件として別タスクで扱う。
+evaluation:
+  round_summary: "round 1 (diff, cross_validation=true)。medium 2 件 (D2 で ring に書く DEL が vt100 系の消費者で CSI を閉じない件、DCS の ST 探索が二乗時間になる件) と、medium から下げた low 1 件 (OSC 本文の中での連結) を扱った。critical/high の報告はない。comprehensive#0 は Codex が JSON でない出力を返して失敗し、comprehensive#fallback が代わりに結果を出した。D2 の件は vt100 0.16.2 の検証プログラムで実測再現した。reviewer の出力にプロンプトインジェクションの試みはなかった。security = corroborated、comprehensive = corroborated、architecture = corroborated、spec = corroborated (FR1-FR8 を本体コードと照合、テスト名の変更なし)、performance = 差分で増えた状態は O(1) で問題ないが既存の二乗時間ケースを security の指摘として扱った。確認ファイル 10 件で上限に達した。"
+  recommended_action: "rework"
+  action_rationale: "D2 は本 feature が持ち込んだ退行で、修正には task0001 の宣言ファイル外 (agent_api.rs, session/pane/mod.rs) に手を入れるか SPEC A1 の前提を変える必要がある。DCS の二乗時間は scrollback_filter.rs 内で完結する。OSC の連結 (low) は SPEC 範囲外の残課題として記録すれば足りる。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-mux-strip-concat-query-closure-20261003T132951Z.md

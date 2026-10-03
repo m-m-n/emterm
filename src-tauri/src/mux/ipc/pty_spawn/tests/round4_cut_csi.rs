@@ -599,26 +599,30 @@ const CLOSING_CASES: &[(&[u8], &[u8], bool)] = &[
     (b"abc", b"abc", false),
     (b"\x1b]0;t", b"", false),
     // mux-cut-csi-post-strip-closure FR1/FR4: an open CSI followed by a
-    // construct the strip removes together with its opening ESC. The removed
-    // ESC would have aborted the CSI, so the written bytes still end inside it
-    // and the cut closes it: a complete OSC 777 emterm markdown launch (BEL
-    // terminated), a complete Kitty APC, and an answered CSI device query.
+    // construct the strip removes together with its opening ESC: a complete OSC
+    // 777 emterm markdown launch (BEL terminated), a complete Kitty APC, and an
+    // answered CSI device query. The removed ESC would have aborted the CSI.
+    // mux-strip-concat-query-closure FR1: the strip writes one closing in place
+    // of the removed construct, so the written bytes already end in ground and
+    // the cut closes nothing (before, they ended inside the CSI and the cut
+    // wrote the DEL).
     (
         b"\x1b[6\x1b]777;emterm;markdown;begin;id=x\x07",
-        b"\x1b[6",
-        true,
+        b"\x1b[6\x7f",
+        false,
     ),
-    (b"\x1b[6\x1b_Gi=1,a=d;AAAA\x1b\\", b"\x1b[6", true),
-    (b"\x1b[6\x1b[6n", b"\x1b[6", true),
+    (b"\x1b[6\x1b_Gi=1,a=d;AAAA\x1b\\", b"\x1b[6\x7f", false),
+    (b"\x1b[6\x1b[6n", b"\x1b[6\x7f", false),
 ];
 
 /// Rows of [`CLOSING_CASES`] whose byte-by-byte feeding is not the strip of the
 /// whole run. A CSI device query is never held: fed one byte at a time it is
 /// written across calls and is not stripped by the write path (the snapshot
 /// strip removes it later; mux-cut-csi-post-strip-closure D2, SPEC FR6 item 3).
-/// The ring then holds the fed bytes whole, ends in ground after the query's
-/// final byte, and the cut has nothing to close.
-const BYTE_BY_BYTE_EXPECTATIONS: &[(&[u8], &[u8])] = &[(b"\x1b[6\x1b[6n", b"\x1b[6\x1b[6n")];
+/// Its final byte completes the carried CSI as an answered query, so the filter
+/// writes the DEL in its place (mux-strip-concat-query-closure FR3): the ring
+/// ends in ground and the cut has nothing to close.
+const BYTE_BY_BYTE_EXPECTATIONS: &[(&[u8], &[u8])] = &[(b"\x1b[6\x1b[6n", b"\x1b[6\x1b[6\x7f")];
 
 /// AC-3 (FR4): the closing is written after the emitted bytes exactly when
 /// the emitted stream ends inside a CSI at the cut, and once; the state is

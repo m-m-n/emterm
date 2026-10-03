@@ -8855,3 +8855,8 @@ mod post_strip_cut_csi;
 // mux-strip-escape-state-carry task0001 (FR1-FR5): the full written end state is
 // carried and the closure at a cut follows it.
 mod escape_state_carry;
+
+// mux-strip-concat-query-closure task0001 (FR1-FR7): the join the shared strip
+// produces never completes an escape or a CSI device query the raw stream never
+// made (write filter and reader level).
+mod strip_concat_query;

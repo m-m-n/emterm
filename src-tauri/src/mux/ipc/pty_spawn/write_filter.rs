@@ -5,7 +5,9 @@ use std::borrow::Cow;
 
 // The CSI sub-state and the written end state are defined in the shared strip
 // module (so that module never depends on the IPC layer); both stay nameable
-// here. The CSI sub-state is named by the tests only, through `csi_phase()`.
+// here. Inside a CSI the written end state carries the strip's classification
+// (`OpenCsi`); the CSI sub-state is named by the tests only, through
+// `csi_phase()`.
 #[cfg(test)]
 pub(in crate::mux) use crate::mux::scrollback_filter::CsiPhase;
 pub(in crate::mux) use crate::mux::scrollback_filter::WrittenState;
@@ -114,11 +116,19 @@ pub(in crate::mux) struct ScrollbackWriteFilter {
     /// designator already consumed the byte the scan awaits one for (EC-5).
     ///
     /// The state is that of the bytes actually WRITTEN, after the strip, which
-    /// reports it while it removes what it removes: a construct it removes
-    /// together with its opening `ESC` advances nothing, so it neither clears an
-    /// open CSI nor completes a written `ESC`. A call that drains bytes before the
-    /// held chain sets it from the stripped output of those bytes, started from
-    /// the state carried in; a call that drains nothing leaves it unchanged.
+    /// reports it while it removes what it removes. A construct it removes
+    /// together with its opening `ESC` while the written stream is inside a CSI
+    /// or right after a written `ESC` is replaced by one [`CSI_CLOSING`], which
+    /// leaves the state in ground (mux-strip-concat-query-closure D1). A call that
+    /// drains bytes before the held chain sets it from the stripped output of
+    /// those bytes, started from the state carried in; a call that drains nothing
+    /// leaves it unchanged.
+    ///
+    /// mux-strip-concat-query-closure D4: inside a CSI the state carries the
+    /// strip's classification of the open CSI (its sub-state, private marker,
+    /// intermediate and first parameter), not the bare sub-state, so the byte
+    /// that completes an answered device query in a later call is written as
+    /// [`CSI_CLOSING`] in its place (D2).
     written: WrittenState,
     /// Chain bookkeeping (mux-suppressed-output-round4-fixes FR1): where the
     /// LAST construct of the held chain starts, as an offset into `pending`.
@@ -131,14 +141,12 @@ pub(in crate::mux) struct ScrollbackWriteFilter {
     held_construct_start: Option<usize>,
 }
 
-/// The write a cut makes when the emitted stream ends inside a CSI
-/// (mux-suppressed-output-round4-fixes FR4, D3): DEL. In both CSI sub-states
-/// `term_core` treats it as invalid, cancels the CSI without dispatching it
-/// and returns to ground — no character, cursor move or response — and in
-/// ground it is ignored. It is not an `ESC`, so neither strip reads it as
-/// the start of a strip target, and the CSI scan of the strip treats it as
-/// outside the CSI grammar.
-pub(in crate::mux) const CSI_CLOSING: &[u8] = &[0x7f];
+// CSI_CLOSING is defined once, in the shared strip module (mux-strip-concat-
+// query-closure): the strip writes it at a removed construct (D1) and in place
+// of the final byte of a split device query (D2), and the cut writes it when the
+// emitted stream ends inside a CSI (mux-suppressed-output-round4-fixes FR4, D3).
+// It stays nameable here under its current name.
+pub(in crate::mux) use crate::mux::scrollback_filter::CSI_CLOSING;
 
 /// The write a cut makes when the written stream ends right after an `ESC`
 /// (mux-strip-escape-state-carry FR4, D2): CAN (0x18). Read right after that
@@ -392,8 +400,11 @@ impl ScrollbackWriteFilter {
     /// OSC 9999 emterm-md, an agent-status report, a Kitty APC, a SIXEL DCS, an
     /// answered CSI device query) advances nothing: it does not abort the CSI
     /// the written stream is inside, and it does not complete an `ESC` the strip
-    /// wrote just before it, so the written stream still ends in that CSI or that
-    /// `ESC`. The state is reported by the strip's own pass, started from the state
+    /// wrote just before it. Since mux-strip-concat-query-closure FR1 the strip
+    /// writes one [`CSI_CLOSING`] at the removed construct in either case, so the
+    /// written stream is back in ground and the cut closes nothing more; the
+    /// cut's own closure remains for a state the written stream genuinely ends
+    /// in. The state is reported by the strip's own pass, started from the state
     /// carried in ([`strip_pty_output_for_scrollback_write_with_written_state`]);
     /// the boundary scan keeps the boundary, the held chain and the
     /// awaiting-designator state, and decides neither the closure nor the carried
