@@ -196,6 +196,12 @@ function setupDragReorder(list: HTMLElement, ctx: SectionContext): void {
     item.classList.add("dragging");
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";
+      // WebKitGTK starts a drag only when the dragstart handler sets drag
+      // data. Nothing reads this entry; drop uses the in-memory dragIndex.
+      e.dataTransfer.setData(
+        "application/x-emterm-profile-index",
+        item.dataset.index ?? "",
+      );
     }
   }) as EventListener);
 
