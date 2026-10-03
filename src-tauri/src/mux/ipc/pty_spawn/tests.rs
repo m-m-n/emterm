@@ -8855,3 +8855,7 @@ mod post_strip_cut_csi;
 // mux-strip-escape-state-carry task0001 (FR1-FR5): the full written end state is
 // carried and the closure at a cut follows it.
 mod escape_state_carry;
+
+// mux-write-filter-overflow-lone-esc task0001 (FR1-FR6): the overflow flush holds the
+// final live lone ESC of its run.
+mod overflow_lone_esc;
