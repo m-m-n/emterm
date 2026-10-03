@@ -1,11 +1,16 @@
 task_id: task0001
 # From step 4a, before any change: `cargo test --lib` finished with 4091 passed, 0 failed,
-# 3 ignored.
+# 3 ignored. After the first merge attempt hit a conflict in the test module registry
+# (src-tauri/src/mux/ipc/pty_spawn/tests.rs) and the parent side was adopted (task0002 had
+# merged), the suite was run again on the adopted tree: 4097 passed, 0 failed, 3 ignored (the
+# parent's R8 test and this task's tests that live outside the new module file; the adopted
+# registry did not yet name this task's new module). The refreshed baseline has no failures.
 baseline_failures: []
-# Re-executed after the implementation (the whole lib suite, after the last source edit):
-# 4101 passed, 0 failed, 3 ignored (the 4091 of the baseline plus the 10 tests this task adds;
-# the extended R1 test is one of the baseline's). The `--no-default-features` cargo check also
-# finished with no error and no warning of this task's code.
+# Re-executed after the re-implementation on the updated parent (the registry line for
+# post_strip_cut_csi appended after the parent's): `cargo test --lib` finished with 4102 passed,
+# 0 failed, 3 ignored - the parent's 4092 plus the 10 tests this task adds. The
+# `--no-default-features` cargo check also finished with no error and no warning of this
+# task's code (run before the conflict; the re-implementation changes only the registry line).
 final_failures: []
 acceptance_tests:
   AC-1:
