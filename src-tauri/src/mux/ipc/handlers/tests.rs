@@ -1,6 +1,9 @@
 use super::*;
 use crate::agent_status::AgentState as CoreAgentState;
 use crate::mux::ipc::reattach::build_shadow_parser_snapshot;
+use crate::mux::scrollback_filter::{
+    WrittenState, strip_pty_output_for_scrollback_write_with_written_state,
+};
 use crate::mux::session::pane::{
     AgentWaiter, DeferredOutputItem, MuxPane, PaneOutputTarget, SharedOutputTarget,
 };
@@ -2717,6 +2720,49 @@ fn render_pane_tail_renders_cursor_movement_overwrite_to_final_state() {
     let scrollback = b"Hello World\x1b[5DEarth\r\n";
     let text = render_pane_tail(scrollback, "", 5, 80);
     assert_eq!(text, "Hello Earth");
+}
+
+/// mux-vt100-del-closing AC-1 (FR1, FR5): a DEL that closes a CSI parameter
+/// state in the ring (the strip's CSI_CLOSING) does not turn the following
+/// `H` into a cursor-position final byte in the scratch vt100 parser.
+#[test]
+fn render_pane_tail_renders_the_text_after_a_closed_csi_parameter() {
+    let scrollback = b"\x1b[6\x7fHello\r\n";
+    let text = render_pane_tail(scrollback, "", 5, 80);
+    assert_eq!(text, "Hello");
+}
+
+/// mux-vt100-del-closing AC-2 (FR4, FR5): a DEL right after a lone ESC (the
+/// closing of a pending escape) does not turn the following `H` into the
+/// escape's final byte (ESC H, HTS) in the scratch vt100 parser.
+#[test]
+fn render_pane_tail_renders_the_text_after_a_closed_lone_escape() {
+    let scrollback = b"\x1b\x7fHello\r\n";
+    let text = render_pane_tail(scrollback, "", 5, 80);
+    assert_eq!(text, "Hello");
+}
+
+/// mux-vt100-del-closing AC-5 (FR5): the state-reporting strip, called in two
+/// pieces with the returned state carried over, writes the D2 closing in
+/// place of the answered query's final byte; ReadPane renders the text that
+/// follows it.
+#[test]
+fn render_pane_tail_renders_the_text_after_a_strip_written_query_closing() {
+    let (head, state) = strip_pty_output_for_scrollback_write_with_written_state(
+        b"\x1b[6",
+        false,
+        WrittenState::Ground,
+    );
+    let (tail, _) =
+        strip_pty_output_for_scrollback_write_with_written_state(b"nHello\r\n", false, state);
+    let mut written = head;
+    written.extend_from_slice(&tail);
+    assert!(
+        written.contains(&0x7f),
+        "the carried CSI must close with DEL in place of the final byte, got {written:?}"
+    );
+    let text = render_pane_tail(&written, "", 5, 80);
+    assert_eq!(text, "Hello");
 }
 
 #[tokio::test]
