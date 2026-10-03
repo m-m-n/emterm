@@ -1,7 +1,7 @@
 schema_version: 1
 feature: new-tab-menu-shortcut-hints
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 150155a71169498c00c0db25e9df3ba5df945c91
 last_input_digest: sha256:705245e90e53e5cd46693e8033012454a735f0e845b0ef277728c599bddaff10
@@ -100,6 +100,19 @@ answers:
     normalized_answer: design_step_recommendation (skip) をそのまま採用する
     resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option decide_autonomously;
       recommendation skip'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-10-03T14:05:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'kind: project_native, paths: [doc/UI-DESIGN-GUIDELINES.yaml]
+      (top of 4 candidates)'
+    resolution_note: 'gate: create-spec.design-system; batch-policies.yaml top_candidate_or_none;
+      design step skipped with 4 candidates, so 11a requires confirmation; chose top
+      candidate doc/UI-DESIGN-GUIDELINES.yaml'
 worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
