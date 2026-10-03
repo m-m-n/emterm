@@ -319,6 +319,48 @@ impl Written {
     }
 }
 
+/// CAN: the byte a vt100 parser cancels a CSI or an escape on.
+const CAN_BYTE: u8 = 0x18;
+
+/// The copy of a byte run that is handed to a vt100 parser (mux-vt100-del-closing
+/// FR3, FR4).
+///
+/// `term_core` cancels a CSI on DEL ([`CSI_CLOSING_BYTE`]) and ends a lone `ESC`
+/// on it, but a vt100 parser ignores DEL and keeps the sequence open, so the
+/// next byte becomes its final byte. The ring (and everything the client's
+/// `term_core` receives) keeps the single DEL; this copy is the one place where
+/// it becomes CAN, which vt100 cancels on:
+///
+/// - An input DEL becomes CAN when the scan state just before it is inside a CSI
+///   (entry or parameter sub-state) or right after an `ESC` ([`WrittenState::Csi`]
+///   / [`WrittenState::Escape`]).
+/// - A DEL in ground, in an OSC / DCS / APC body (ground for [`WrittenState`]) and
+///   while a charset designator is pending is kept.
+/// - Every other byte is copied unchanged, including a CAN already in the input.
+///
+/// The scan starts in ground and advances by each ORIGINAL input byte through
+/// [`WrittenState`]'s transition, never by the replacing CAN: after a replaced
+/// DEL the scan is in ground, so a second DEL right after it is kept. It does
+/// not go through the strip's [`Written`] writer, so the D2 rewrite of an
+/// answered query's final byte never applies: the copy differs from the input
+/// only by DEL becoming CAN.
+///
+/// Returns a new vector of the input's length, in one pass with O(1) state
+/// besides the output; it has no error case and does not panic. The ring and the
+/// bytes sent to the client are not affected: call it only at the vt100
+/// hand-off, right before a vt100 parser processes the bytes.
+pub(in crate::mux) fn vt100_replay_copy(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut state = WrittenState::Ground;
+    for &byte in bytes {
+        let replace = byte == CSI_CLOSING_BYTE
+            && matches!(state, WrittenState::Escape | WrittenState::Csi(_));
+        out.push(if replace { CAN_BYTE } else { byte });
+        state.advance(byte);
+    }
+    out
+}
+
 /// Remove rich-content viewer launch sequences from a completed byte run so a
 /// reattach / window-switch snapshot replays plain-text history WITHOUT
 /// re-spawning child WebView viewers or re-rendering inline images.
