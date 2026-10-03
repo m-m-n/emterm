@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-strip-escape-state-carry
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 5e90ce378a03040437d8784b3415a4ac85938ac5
 last_input_digest: sha256:0af3e5b96a62bdb06edf9404c1d187c3054f7af264c158fea6e03bd2e844b554
@@ -11,7 +11,7 @@ answers:
   create-plan.escape-closure-byte:
     question_id: create-plan.escape-closure-byte
     packet_id: null
-    answered_at: '2026-10-03T21:00:00+09:00'
+    answered_at: '2026-10-03T20:55:00+09:00'
     source: batch-codex-consultation
     answer_mode: single_select
     selected_option_ids:
