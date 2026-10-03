@@ -1,0 +1,74 @@
+schema_version: 2
+feature: new-tab-menu-shortcut-hints
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.2
+    confidence: 0.77
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.01
+      '1': 0.77
+      '2': 0.22
+      '3': 0.0
+  observed_at: '2026-10-03T13:29:55+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.71
+    confidence: 0.7
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.29
+      '2': 0.71
+      '3': 0.0
+  observed_at: '2026-10-03T13:29:55+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/render/overlays.rs
+  - src-tauri/src/ui/profile_selector.rs
+  - src-tauri/src/render/tests.rs
+  changed_lines_approx: 120
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules:
+  - render::overlays
+  - render::tests
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 4
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 4
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: src-tauri/src/ui/tab_bar/mod.rs:355 の「+」は TabEvent::New を発行し、src-tauri/src/app/tab_lifecycle.rs:379
+    から一覧を開く。src-tauri/src/render/overlays.rs:32 は Global Settings を先頭に追加し、同:42 は設定済みプロファイルを追加する。src-tauri/src/ui/profile_selector.rs:205
+    の行データにはショートカットがなく、同:357、同:363、同:385 は名前・デフォルト表示・シェルパスだけを描画する。src-tauri/src/settings/types.rs:401
+    と同:402 に Ctrl+Shift+T、Ctrl+Shift+G が定義され、src-tauri/src/ui/keybinds.rs:261 と同:426
+    が設定値を解決・振り分けする。Global Settings は new_tab_global に対応し、設定画面を開く open_settings は別操作となる。src-tauri/src/app/tab_lifecycle.rs:79
+    は new_tab で最初のデフォルトプロファイルを開く。src-tauri/src/app/font_settings.rs:551 は設定変更時にキー割り当てを再構築する。通常の
+    Chord 用の独自整形関数は確認できず、既存の egui 0.29 の KeyboardShortcut と Context::format_shortcut
+    を利用できる。src-tauri/src/ui/profile_selector.rs:385 ではシェルパスが右端まで使用しているため、右側表示用の幅確保が必要になる。src-tauri/src/ui/profile_selector.rs:414
+    と src-tauri/src/app/tests/chooser.rs:51 の既存テストは状態・選択を検証し、ショートカット表示を検証していない。推奨する変更は解決済みキー割り当てを行データに渡して右側へ描画することで、数値はこの変更と表示テスト追加の概算となる。呼び出し元・依存数は描画入口の呼び出し元、一覧描画の呼び出し元、KeybindTable、egui
+    を数えている
+decided_at: '2026-10-03T13:29:55+09:00'
