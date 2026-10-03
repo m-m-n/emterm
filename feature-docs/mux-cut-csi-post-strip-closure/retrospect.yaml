@@ -1,0 +1,88 @@
+feature: mux-cut-csi-post-strip-closure
+collected_at: '2026-10-03T09:58:00+09:00'
+session_ids:
+- 01a0ff19-9dbd-75e4-9b33-1187aeb8d63f.jsonl
+- 01a0ff43-a5d6-74fa-ab66-b319659a158e.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks:
+  - task: task0001
+    retries: 1
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+  - perspective: performance
+    reason: write_filter.rs はリーダー通常経路（PTY 出力のホットパス）上にあり、NFR2 が負荷要件を持つため
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: description_plus_code の最終読みが bucket 2（新ロジック・複数モジュール）に確率 0.96 で集中し、評価器が full を選んだ
+    bases:
+    - basis: description_only
+      score:
+        type: score
+        score: 1.47
+        confidence: 0.53
+        legend:
+          '0': '0: Only a wording or rule-text change: no new logic, and no test change.'
+          '1': '1: A rule addition combined with a test addition, or a small change spread across a few
+            files together with a small test change.'
+          '2': '2: New logic, a change reaching across several modules, or a change to an external contract.'
+          '3': '3: A broad cross-cutting change: new files, new modules, a new dependency, or a change
+            to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.53
+          '2': 0.46
+          '3': 0.01
+      observed_at: '2026-10-03T08:32:48+09:00'
+    - basis: description_plus_code
+      score:
+        type: score
+        score: 1.96
+        confidence: 0.95
+        legend:
+          '0': '0: Only a wording or rule-text change: no new logic, and no test change.'
+          '1': '1: A rule addition combined with a test addition, or a small change spread across a few
+            files together with a small test change.'
+          '2': '2: New logic, a change reaching across several modules, or a change to an external contract.'
+          '3': '3: A broad cross-cutting change: new files, new modules, a new dependency, or a change
+            to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.04
+          '2': 0.96
+          '3': 0.0
+      observed_at: '2026-10-03T08:36:37+09:00'
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+      - src-tauri/src/mux/scrollback_filter.rs
+      - src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs
+      - feature-docs/mux-suppressed-output-round4-fixes/DECISIONS.md
+      - feature-docs/mux-suppressed-output-round4-fixes/reviews/round1.yaml
+      changed_lines_approx: 180
+      new_functions_needed: 2
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules: []
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 6
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 4
+      changes_external_contract: false
+      changes_behavior: true
+      evidence: main HEAD は 0fefa5fa3068428dd7815c068582a2e4825b2717。静的確認で欠陥は残っている。write_filter.rs:512
+        の閉鎖判定と同:520 の状態引き継ぎは除去前の scan.csi を使用し、scrollback_filter.rs:195、同:217、同:229 は対象構文の ESC ごと除去する（各ファイルは
+        files_expected 記載のパス）。round4_cut_csi.rs:460 の CLOSING_CASES には指定３例がなく、同:488 の完了 OSC は除去対象外。生ストリーム比較とフォールバック閉鎖の既存処理は同:282、同:312
+        にある。追加ケース数は３種類×２経路で６。reviews/round1.yaml:41、同:51 では対象 stable_id が unresolved。DECISIONS.md:27 はカット時の残課題なしと記載している。直接呼出元２・主要依存２は
+        write_filter.rs:237、同:448、同:468、src-tauri/src/mux/ipc/pty_spawn/mod.rs:575 で確認できる。変更行数・新関数数は除去後
+        CSI 状態を strip から渡し、既存入口を維持する案の概算。ファイル変更・ビルド・テスト実行は行っていない
+follow_up_drafts: []
+lessons_candidates:
+- review round 1 の medium 指摘 a879a02de382209f（strip 除去構文の直前の ESC が引き継がれずカット閉鎖が読み取り分割位置で変わる）は unresolved
+  のまま。別タスク起票候補
+- task0001 は parent 更新（task0002 先行マージ）で conflict_retries=1。両タスクが pty_spawn/tests.rs を共有宣言していた
