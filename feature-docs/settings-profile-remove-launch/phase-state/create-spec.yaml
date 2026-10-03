@@ -1,7 +1,7 @@
 schema_version: 1
 feature: settings-profile-remove-launch
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: cedf73a0d870c36d5cd2aa6f6ed2277aaf105c5a
 last_input_digest: sha256:e1febcec0e4bb90f544293a621f9bb918e839b2436bec73c87957ddcca55fde5
