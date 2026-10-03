@@ -1,0 +1,191 @@
+schema_version: 1
+feature: new-tab-menu-shortcut-hints
+created: '2026-10-03'
+base_branch: main
+goal: |
+  + アイコンのメニュー項目の右に、項目を開くショートカットを表示する
+
+  ## やりたいこと (必須)
+  メインウィンドウの + アイコンをクリックして表示されるメニューの項目の右側に、その項目を開くショートカットを表示する。
+  - 「グローバル設定」の項目の右: グローバル設定を開くショートカット（現在の設定では Ctrl+Shift+G）
+  - デフォルト項目の右: デフォルトを開くショートカット（現在の設定では Ctrl+Shift+T）
+  ## 背景・なぜ (必須)
+  - アイコンのメニューには「グローバル設定」とプロファイルで設定した項目が表示されるが、各項目に割り当てられたショートカットが表示されていない。
+  ## 受け入れ条件 / 完了の定義 (必須)
+  - [ ] 「グローバル設定」の項目の右に、グローバル設定を開くショートカットが表示される
+  - [ ] デフォルト項目の右に、デフォルトを開くショートカットが表示される
+  - [ ] 表示されるショートカットは現在のキー設定の値に従う
+  ## スコープ外 (任意)
+  \<今回やらないこと。あれば\>
+  ## 制約・前提 (任意)
+  \<触ってほしくない箇所 / 使う技術 / 互換性など。あれば\>
+parent_branch: em-workflow/new-tab-menu-shortcut-hints/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.01
+      '1': 0.77
+      '2': 0.22
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.29
+      '2': 0.71
+      '3': 0.0
+  at: '2026-10-03T13:29:55+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    cli_only:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      test_command: ''
+      format_command: ''
+      e2e_test_command: ''
+    typescript:
+      language: typescript
+      build_command: bun run typecheck
+      test_command: bun test
+      format_command: bunx biome format .
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 3a4df5906922e8de363ce72226f5ccf1b3bce4f4
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: A single secondary text label is added to an existing egui dialog row using existing tokens (label-small 12px, on-surface-variant). No new component or token.
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Global Settings row shows the new_tab_global shortcut
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Default profile row shows the new_tab shortcut
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Rows without a direct shortcut show no label
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Labels follow the current keybind settings
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: Label text is the canonical rendering of the resolved chord
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Shadowed chords are not shown
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: Label placement
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: Chooser only
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Existing design tokens
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: Platform parity
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Feature-gate integrity
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Testable decision core
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
