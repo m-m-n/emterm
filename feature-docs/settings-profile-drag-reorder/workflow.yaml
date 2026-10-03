@@ -2,27 +2,45 @@ schema_version: 1
 feature: settings-profile-drag-reorder
 created: '2026-10-03'
 base_branch: main
-goal: |
-  設定画面のプロファイル項目をドラッグで並べ替えられない（Linux）
+goal: '設定画面のプロファイル項目をドラッグで並べ替えられない（Linux）
+
 
   Notion タスク: https://www.notion.so/3ed3509ec8ee81b18f86c8ac7bb4c480
+
   種別: バグ
 
+
   ## 現象 (必須)
+
   Linux 環境で、設定画面のプロファイルの項目をドラッグして並べ替えることができない。
+
   ## 再現手順 (必須)
+
   1. Linux 環境で eMterm を起動する
+
   2. 設定画面を開き、プロファイルの一覧を表示する
+
   3. プロファイルの項目をドラッグして別の位置へ移動させる
+
   ## 期待する挙動 (必須)
+
   ドラッグした項目がドロップ先の位置に移動し、プロファイルの順序が入れ替わる。
+
   ## 完了の定義 (必須)
+
   - [ ] 再現手順で現象が起きない
+
   - [ ] 再発を検出するテストがある
+
   ## 該当箇所 (任意)
+
   \<file:line / モジュール名。分かっていれば\>
+
   ## 実害・発生条件 (任意)
+
   Linux 環境で発生する。
+
+  '
 parent_branch: em-workflow/settings-profile-drag-reorder/integration
 tier: full
 tier_decision:
@@ -79,7 +97,7 @@ workflow:
   base_commit: b8555a00acf53d838e384f73393617f859cf9e02
   completed_at_commit: 12369fce00bbe01d0037c5498025ef541b77f674
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -136,9 +154,15 @@ tasks:
     branch: em-workflow/settings-profile-drag-reorder/task0002
     notes: null
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
