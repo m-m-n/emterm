@@ -138,7 +138,7 @@ tasks:
     requirements:
     - FR5
     - FR6
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-cut-csi-post-strip-closure/task0002
     notes: null
 review:
