@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-strip-join-escape-closure
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 007a94d288443868a1beef431c67956cb169bf9f
+last_input_digest: sha256:96266ede1c56e29840c0e56ac043f7547c8c33427e815c6f8e23a4614c3af18b
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:96266ede1c56e29840c0e56ac043f7547c8c33427e815c6f8e23a4614c3af18b
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
