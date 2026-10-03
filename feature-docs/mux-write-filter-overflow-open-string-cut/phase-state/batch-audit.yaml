@@ -20,3 +20,13 @@ records:
   freeform: null
   normalized_answer: 'Integration branch created from em-workflow/mux-write-filter-overflow-lone-esc/integration tip 3bcf727e (code to fix exists only there; PR #120 open). PR targets main; it includes the predecessor''s commits until #120 merges, and needs rebasing if #120 is squash/rebase-merged.'
   resolution_note: 'unlisted fallback (orchestrator-raised, no gate_id); options: A main HEAD (fix impossible) / B predecessor tip + PR to main / C predecessor tip + stacked PR to predecessor branch; chosen B; Codex consulted: yes (C needs predecessor branch deletion for auto-retarget, extra management unattended); opus escalation: no. Recorded as Notion comment.'
+- question_id: verify.timing-budget-failures
+  packet_id: null
+  answered_at: '2026-10-04T05:05:00+09:00'
+  source: codex-consultation
+  answer_mode: select
+  selected_option_ids:
+  - pass_with_documented_preexisting_timing_failures
+  freeform: null
+  normalized_answer: 'verify recorded as pass with an exception to TS-7: 6 wall-clock budget/timeout failures under machine load; 5 pass alone; the token-corpus test (~24s vs 10s) fails identically on base 220881f4 and main 0c3a2c06 (pre-existing). Follow-up task filed for the slow test.'
+  resolution_note: 'unlisted fallback (orchestrator-raised, no gate_id); options: A pass with documented pre-existing timing failures + follow-up task / B fail with failed_items triggering auto-rework on unrelated tests; chosen A; Codex consulted: yes (B would add unrelated timing fixes to this feature; failures are environmental or pre-existing on base and main); opus escalation: no. Recorded as Notion comment.'
