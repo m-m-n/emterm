@@ -1,7 +1,7 @@
 schema_version: 1
 feature: settings-profile-drag-reorder
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 7087f4a47719363518d5323377aa6a4b81e72974
 last_input_digest: sha256:207c72e464e5a25868acf58d52a8c617d98773fce0f790632cf904e9b30471ba
