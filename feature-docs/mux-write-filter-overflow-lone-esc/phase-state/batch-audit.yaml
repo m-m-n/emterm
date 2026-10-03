@@ -1,0 +1,19 @@
+schema_version: 1
+feature: mux-write-filter-overflow-lone-esc
+records:
+  - question_id: create-spec.command-approval
+    packet_id: null
+    answered_at: "2026-10-03T22:48:00+09:00"
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids: []
+    freeform: null
+    normalized_answer: >-
+      All project.components commands were already in the approval store; no new
+      --record was needed. Commands: "CARGO_TARGET_DIR=src-tauri/target cargo check
+      --manifest-path src-tauri/Cargo.toml" (build_command) and
+      "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+      --lib" (test_command).
+    resolution_note: >-
+      gate: create-spec.command-approval; batch auto-approval path; both strings
+      matched bash_guard.py --list exactly; codex_consulted: false.
