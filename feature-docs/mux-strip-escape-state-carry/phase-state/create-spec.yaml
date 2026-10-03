@@ -3,27 +3,36 @@ feature: mux-strip-escape-state-carry
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: c4d579a59ab5b711a1a036e9c258cc2ee61a1cab
+base_revision: da8b203abd5c30837267955cccfea72f142f3fcd
 last_input_digest: sha256:a9cfe3418e4f7fcca2d643738cf4bfd2170581e59bc501b38cacf8384c34bc01
-active_request_id: create-spec-run-0001
+active_request_id: null
 packets: {}
 answers:
   create-spec.feature-identity:
     packet_id: null
-    answered_at: "2026-10-03T20:12:00+09:00"
+    answered_at: '2026-10-03T20:12:00+09:00'
     source: batch-decision-table
     answer_mode: select
-    selected_option_ids: [derive_from_task_description]
+    selected_option_ids:
+    - derive_from_task_description
     freeform: null
-    normalized_answer: "feature name derived from the task description: mux-strip-escape-state-carry"
-    resolution_note: "gate: create-spec.feature-identity; batch-policies.yaml option derive_from_task_description; codex_consulted: false"
+    normalized_answer: 'feature name derived from the task description: mux-strip-escape-state-carry'
+    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option
+      derive_from_task_description; codex_consulted: false'
 worker_runs:
-  - request_id: create-spec-run-0001
-    status: dispatched
-    input_digest: sha256:a9cfe3418e4f7fcca2d643738cf4bfd2170581e59bc501b38cacf8384c34bc01
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:a9cfe3418e4f7fcca2d643738cf4bfd2170581e59bc501b38cacf8384c34bc01
+  output_digest: sha256:708a81833beb356a1ae6f704116a04483c0b9b91d16265d525b8867233599e4c
 artifacts: []
 patches: []
-progress_fingerprint: null
+progress_fingerprint: sha256:c9cefcd8c4be91b8ba4d122151eb811eda3f3ee3c19d69dd0c18ffad04213d7b
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:4ce95370e221ea0a3ef42ee0992d28ac44cbae9b311b7e310061d35b819bb093
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
 last_error: null
