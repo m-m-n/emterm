@@ -1,0 +1,52 @@
+schema_version: 2
+feature: settings-profile-remove-launch
+tier: full
+bases:
+- basis: description_only
+  score:
+    score: 1.14
+    confidence: 0.79
+    probabilities:
+      '0': 0.04
+      '1': 0.78
+      '2': 0.18
+      '3': 0.0
+  observed_at: '2026-10-03T12:46:38+09:00'
+- basis: description_plus_code
+  score:
+    score: 2.0
+    confidence: 1.0
+    probabilities:
+      '0': 0.0
+      '1': 0.0
+      '2': 1.0
+      '3': 0.0
+  observed_at: '2026-10-03T12:49:29+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/web-shared/settings/sections/profiles-section.ts
+  - src-tauri/web-shared/i18n/locales/en.json
+  - src-tauri/web-shared/i18n/locales/ja.json
+  changed_lines_approx: 11
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules:
+  - src-tauri/web-shared/i18n/locales
+  work_still_required: true
+  test_change_kind: none
+  added_test_cases_approx: 0
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 2
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: src-tauri/web-shared/settings/sections/profiles-section.ts:156–163 に起動ボタンと
+    profile:launch の送出処理が存在する。src-tauri/web-shared/i18n/locales/en.json:294 と ja.json:294
+    に起動専用の翻訳キーが存在する。TS・Rustの検索で profile:launch の受信処理は見つからない。src-tauri/src/settings_window/commands.rs:37–68
+    に設定画面からプロファイルを起動する専用コマンドは存在しない。renderProfilesSection の呼び出しは settings-panel.ts:291
+    と sections/profiles-section.test.ts:179 の2か所で確認した。sections/profiles-section.test.ts:222–292
+    は並び替えを検証し、起動操作を参照するテストは見つからない。src-tauri/src/app/chooser.rs:103 と app/tab_lifecycle.rs:84
+    は別の操作から共通の resolve_spawn を使用する
+decided_at: '2026-10-03T12:49:45+09:00'
