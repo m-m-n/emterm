@@ -1,0 +1,161 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib` finished with 4183 passed, 5 failed, 3 ignored.
+# The five failures are wall-clock budget tests that exceed their budget on this heavily loaded
+# machine (load average 13 to 20); none of them reads the open-string-body state.
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_every_continuation_is_removed_and_the_total_equals_the_reference
+  - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus
+  - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_filter_output_at_a_cut_replays_like_the_raw_stream
+# Re-executed after the implementation and after the last source edit (rustfmt of the two test
+# files): `cargo test --lib` finished with 4202 passed, 5 failed, 3 ignored (the baseline's 4183
+# plus the 19 new tests: 18 in the module `overflow_open_string_cut` and the short-string walk in
+# scrollback_filter/tests.rs). The five failures are the same wall-clock budget tests as the
+# baseline. The default-features `cargo check` and the `--no-default-features` cargo check were
+# each run after the implementation: no error, no warning from this change.
+final_failures:
+  - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_every_continuation_is_removed_and_the_total_equals_the_reference
+  - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus
+  - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_filter_output_at_a_cut_replays_like_the_raw_stream
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::scrollback_filter::tests::post_strip_state_form_reports_the_csi_state_of_the_written_bytes
+      - mux::scrollback_filter::tests::post_strip_string_body_states_agree_with_term_core_on_every_short_string
+      - mux::scrollback_filter::tests::post_strip_state_form_output_equals_the_write_path_strip
+      - mux::scrollback_filter::tests::escape_carry_the_end_state_oracle_classifies_the_reference_streams
+    red_confirmed: true
+    red_reason: >-
+      Observed with the two body states added to the enum but the strip not yet advancing into
+      them: post_strip_state_form_reports_the_csi_state_of_the_written_bytes failed at 'state
+      Ground, designator false, input "\u{1b}]": reported state' (reported Ground, the open OSC body
+      expected); post_strip_string_body_states_agree_with_term_core_on_every_short_string failed at
+      'end state of [27, 27, 27, 93]' (reported Ground, the oracle says the open OSC body). Each
+      stops at its first failing assertion, so the later rows (DCS / APC bodies, BEL, the held
+      Escape, the carried-in body state across removed constructs) were not observed red on their
+      own. The other two tests were green before the change and stay green: the output-equals-the-
+      write-path-strip test pins that the strip's output never reads the carried state (NFR2), and
+      the oracle reference-table test pins that the existing reference streams keep their
+      classification.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_the_fallback_closing_after_a_held_esc_writes_esc_can
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_cut_at_fed_zero_after_a_held_esc_writes_esc_can_then_the_text
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: the first failed at 'the written state is the open OSC
+      body' (the filter reported Ground), the second at 'ESC and CAN, then the text' (the call wrote
+      only the text, `after the cut`, with no closure). Each stops at its first failing assertion;
+      the second fallback closing writing nothing, the Ground end state and the per-pair replay
+      comparisons behind them were not observed red on their own.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_plain_body_ending_is_closed_by_a_cut_and_by_the_fallback
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_flush_then_a_cut_in_the_same_call_closes_the_open_osc_body
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: the first failed at its written-state assertion (the
+      filter reported Ground for an overflow run ending in plain OSC body bytes), the second at 'the
+      strip of the run, then ESC and CAN' (the same-call flush plus cut wrote the strip of the run
+      alone). The second test carries the input of the case moved out of round4_designator_cut.rs.
+      Each stops at its first failing assertion; the holds-nothing, awaits-no-designator and
+      per-pair replay assertions were not observed red on their own.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_non_strip_target_dcs_left_open_past_the_cap_is_closed_at_a_cut
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_non_strip_target_apc_left_open_past_the_cap_is_closed_at_a_cut
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_kitty_apc_left_open_past_the_cap_is_closed_at_a_cut
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_sixel_dcs_left_open_past_the_cap_is_closed_at_a_cut
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_bel_inside_a_dcs_or_apc_body_does_not_close_it
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: the four per-body tests each failed at '<kind>: the
+      open ST-terminated body' (the filter reported Ground), and the BEL test failed at its first
+      assertion 'non-strip-target dcs' (Ground reported, the ST-terminated body expected). Each
+      stops at its first failing assertion; the cut closure and the per-pair replay comparisons were
+      not observed red on their own.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_the_open_osc_body_state_is_carried_and_advanced_by_later_calls
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: failed at 'plain bytes' (the state after a later call
+      of plain bytes was Ground, the open OSC body expected). The BEL, ESC-backslash and ESC-[
+      continuations behind it were not observed red on their own.
+  AC-6:
+    # Superseded: the 'inside an open string body' ending expecting Ground and no closing, and the
+    # round4 same-call open-OSC case expecting no closure, are replaced by
+    # feature-docs/mux-write-filter-overflow-open-string-cut/SPEC.md FR1/FR2/FR4/FR6.
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_every_live_ending_holds_exactly_one_byte
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_the_fallback_closing_follows_the_written_state
+      - mux::ipc::pty_spawn::tests::overflow_lone_esc::overflow_lone_esc_every_continuation_is_removed_and_the_total_equals_the_reference
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_overflow_flush_then_a_cut_without_a_wait_writes_nothing_extra
+    red_confirmed: true
+    red_reason: >-
+      Observed after updating the `endings()` entry and before the production change:
+      overflow_lone_esc_every_live_ending_holds_exactly_one_byte failed at 'inside an open string
+      body: the written state is that of the bytes written before the ESC' (Ground reported, the
+      open OSC body expected), and overflow_lone_esc_the_fallback_closing_follows_the_written_state
+      failed at 'inside an open string body' (empty closing written, ESC and CAN expected). The
+      round4 change is the removal of the open-OSC case, whose behavior moved to the new module
+      (AC-3): the remaining two Ground-ending cases are unchanged and green before and after, so
+      that part has no red of its own. overflow_lone_esc_every_continuation_is_removed_and_the_total_equals_the_reference
+      is a wall-clock budget test already failing in the baseline on this loaded machine; it was
+      not observed red for this change.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_the_production_reader_closes_the_overflowed_osc_at_switch_47
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_the_production_reader_closes_the_overflowed_osc_at_switch_1047
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_the_production_reader_closes_the_overflowed_osc_at_switch_1049
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: each failed at 'switch [?<n>h: the body, the closure
+      once, the text' (the ring held the body and the text with no string-body closure between
+      them). The replay-equals-reference assertions behind it were not observed red on their own.
+  AC-8:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_the_string_body_closure_is_esc_then_can_and_distinct
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_the_closure_returns_every_open_body_to_ground
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_neither_strip_reads_the_closure_as_a_target_or_as_st
+    red_confirmed: false
+    red_reason: >-
+      These three tests passed on their first run. The reds of the other criteria were observed on
+      a stub stage in which the two body states and the constant `STRING_BODY_CLOSING` existed so
+      the new tests compile, while the strip did not yet advance into the body states and
+      `closure_for` still mapped them to nothing. The three tests check the closure's bytes, its
+      effect on term_core and the strips' reading of those bytes, none of which depend on the
+      written state, so they pass on that stage and no executable red exists for them. They pin
+      properties that must hold of the closure the cut paths write.
+  AC-9:
+    tests:
+      - mux::ipc::pty_spawn::tests::round3_write_path::an_osc_held_near_the_cap_is_dropped_at_a_cut_and_at_the_fallback
+      - mux::scrollback_filter::tests::strip_pty_output_for_scrollback_write_matches_snapshot_strip_for_everything
+      - mux::scrollback_filter::tests::post_strip_state_form_output_equals_the_write_path_strip
+    red_confirmed: false
+    red_reason: >-
+      The criterion is the unchanged surroundings (the full `--lib` suite, the cap, the warning log,
+      live forwarding, the snapshot-time strip, the reader's cut derivation) plus the
+      `--no-default-features` cargo check. These pre-existing tests pass before and after the
+      change and pin the unchanged parts; the suite run and the cargo check are the executable
+      checks, and neither can fail on an absent implementation. No red exists.
+  AC-10:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_the_doc_comments_state_the_open_body_model
+    red_confirmed: true
+    red_reason: >-
+      Observed before the doc comments were rewritten: failed with `scrollback_filter.rs: a comment
+      still says "for this question, is ground"` (the module-owned stale phrase list is checked
+      first against the strip's comments, then against write_filter.rs).
+  AC-11:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_non_overflow_strip_then_cut_closes_the_open_osc_body
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: failed at the written-state assertion after the call
+      carrying `ESC ]0;x` and `ESC [6n` (the filter reported Ground, the open OSC body expected).
+      The cut-at-fed-0, the fallback closing and the per-pair replay assertions behind it were not
+      observed red on their own.

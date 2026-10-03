@@ -95,8 +95,8 @@ fn endings() -> Vec<Ending> {
         Ending {
             name: "inside an open string body",
             call1: [&b"pppppppppp"[..], ESC].concat(),
-            state_before_esc: WrittenState::Ground,
-            closing: &[],
+            state_before_esc: WrittenState::OscBody,
+            closing: STRING_BODY_CLOSING,
         },
     ]
 }
@@ -484,8 +484,9 @@ fn overflow_lone_esc_a_cut_at_fed_zero_drops_the_held_esc() {
 /// AC-5 (SPEC AC-5; FR4, IMPLEMENTATION.md Risk row 2): the closure the fallback
 /// closing writes after the held `ESC` is dropped follows the written state of
 /// the bytes before it: DEL after the open-CSI ending, the Escape closure after
-/// a written `ESC`, and nothing after plain text or inside an open string body.
-/// After the CSI closing the later `[6n` gives no cursor-position report.
+/// a written `ESC`, `ESC` + CAN (the string-body closure) inside an open string
+/// body, and nothing after plain text. After the CSI closing the later `[6n`
+/// gives no cursor-position report.
 #[test]
 fn overflow_lone_esc_the_fallback_closing_follows_the_written_state() {
     let held = osc_held_at_the_cap();
