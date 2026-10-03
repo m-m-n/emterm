@@ -37,6 +37,24 @@ pub(in crate::mux) enum CsiStep {
     Abort,
 }
 
+/// The single closing byte (DEL), defined once here: the strip writes it at a
+/// removed construct when the written stream is inside a CSI or right after a
+/// written lone `ESC` (mux-strip-concat-query-closure D1) and in place of the
+/// final byte of a device query completed in a later call (D2); the write
+/// filter writes it at a cut when the emitted stream ends inside a CSI
+/// (mux-suppressed-output-round4-fixes FR4, D3).
+///
+/// In both CSI sub-states `term_core` treats DEL as invalid, cancels the CSI
+/// without dispatching it and returns to ground, and right after a lone `ESC`
+/// it ends the escape - no character, cursor move or response; in ground it is
+/// ignored. It is not an `ESC`, so neither strip reads it as the start of a
+/// strip target, and the CSI scan of the strip treats it as outside the CSI
+/// grammar.
+pub(in crate::mux) const CSI_CLOSING_BYTE: u8 = 0x7f;
+
+/// [`CSI_CLOSING_BYTE`] as a slice, for writing it into a byte run.
+pub(in crate::mux) const CSI_CLOSING: &[u8] = &[CSI_CLOSING_BYTE];
+
 /// The per-byte CSI transition of `term_core` (`csi_entry` / `csi_param`),
 /// defined once: the state-reporting strip
 /// ([`strip_pty_output_for_scrollback_write_with_csi_state`]) follows it, and
@@ -60,6 +78,123 @@ pub(in crate::mux) fn csi_step(phase: CsiPhase, byte: u8) -> CsiStep {
     }
 }
 
+/// The accumulation of a CSI's first parameter, defined once: the scan of a
+/// complete candidate ([`scan_csi_device_query`]) and the classification of an
+/// open CSI ([`OpenCsi`]) both feed their parameter bytes through it, so they
+/// cannot drift apart.
+///
+/// The leading decimal run is accumulated with saturation, mirroring
+/// `term_core`'s `ParamParser::add_digit` (`saturating_mul` / `saturating_add`,
+/// `crates/term_core/src/parser_params.rs`): an arbitrarily long digit run can
+/// never overflow or panic. A saturated value never equals a small target
+/// constant (5/6/14/16/18), so an oversized parameter is simply preserved, never
+/// stripped (the `n` arm of [`csi_is_device_query`] additionally clamps to
+/// `term_core`'s `MAX_PARAM_VALUE` before truncating to `u8`). An empty run is
+/// 0, as `ParamParser::get_first_or_zero` has it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FirstParam {
+    value: u32,
+    /// The leading digit run is still being collected: no `;` / `:` has been
+    /// seen yet.
+    collecting: bool,
+}
+
+impl FirstParam {
+    const START: Self = Self {
+        value: 0,
+        collecting: true,
+    };
+
+    /// Take one parameter-region byte (`0x30..=0x3b`: a digit, `;` or `:`).
+    /// Digits feed the first parameter while the leading run lasts; `;` / `:`,
+    /// and a digit past the first run, end it. Intermediate bytes seen before
+    /// do not matter (`term_core`'s digit arm has no such guard).
+    #[inline]
+    fn feed(&mut self, byte: u8) {
+        if self.collecting && byte.is_ascii_digit() {
+            self.value = self
+                .value
+                .saturating_mul(10)
+                .saturating_add(u32::from(byte - b'0'));
+        } else {
+            self.collecting = false;
+        }
+    }
+}
+
+/// An O(1) description of the CSI the written stream is inside (mux-strip-
+/// concat-query-closure): the sub-state, the private marker, the first
+/// parameter and the first intermediate. Only written bytes advance it, through
+/// the transitions of [`csi_step`] and the accumulation the scan uses
+/// ([`FirstParam`]); the decision "this final byte completes an answered device
+/// query" is [`csi_is_device_query`], unchanged.
+///
+/// It is what the write filter carries across calls instead of holding the CSI
+/// bytes: a final byte that completes an answered query in a later call is
+/// written as CSI_CLOSING in place of itself (D2), so the ring never holds an
+/// executable query.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::mux) struct OpenCsi {
+    phase: CsiPhase,
+    /// The private marker (`< = > ?`), accepted only right after `ESC [`.
+    marker: Option<u8>,
+    first: FirstParam,
+    /// The first intermediate byte (`0x20..=0x2F`); `csi_is_device_query` looks
+    /// at whether there is one and, for DECRPM, at whether it is `$`.
+    first_intermediate: Option<u8>,
+}
+
+impl OpenCsi {
+    /// The CSI right after `ESC [`.
+    fn entry() -> Self {
+        Self {
+            phase: CsiPhase::Entry,
+            marker: None,
+            first: FirstParam::START,
+            first_intermediate: None,
+        }
+    }
+
+    /// The CSI sub-state.
+    pub(in crate::mux) fn phase(self) -> CsiPhase {
+        self.phase
+    }
+
+    /// One written byte, by [`csi_step`]. The classification changes only when
+    /// the CSI stays open; C0 controls other than `ESC` execute inside the CSI
+    /// and leave it alone.
+    #[inline]
+    fn advance(&mut self, byte: u8) -> CsiStep {
+        let step = csi_step(self.phase, byte);
+        if let CsiStep::Open(next) = step {
+            self.phase = next;
+            match byte {
+                0x20..=0x2f => {
+                    self.first_intermediate.get_or_insert(byte);
+                }
+                0x30..=0x3b => self.first.feed(byte),
+                // Only the entry state accepts a private marker.
+                0x3c..=0x3f => self.marker = Some(byte),
+                _ => {}
+            }
+        }
+        step
+    }
+
+    /// Whether `byte`, written next, completes this CSI as a device query that
+    /// `term_core` answers.
+    #[inline]
+    fn completes_an_answered_query(&self, byte: u8) -> bool {
+        matches!(byte, 0x40..=0x7e)
+            && csi_is_device_query(
+                self.marker,
+                self.first_intermediate.as_slice(),
+                self.first.value,
+                byte,
+            )
+    }
+}
+
 /// Where a parser replaying the bytes written so far stands, as far as the
 /// CSI question needs it (mux-cut-csi-post-strip-closure D1). In ground only
 /// `ESC` matters; an OSC / DCS / APC body needs no state of its own, because
@@ -73,14 +208,14 @@ enum WrittenState {
     /// consumed whatever it is.
     Designator,
     /// Inside a CSI.
-    Csi(CsiPhase),
+    Csi(OpenCsi),
 }
 
 impl WrittenState {
     /// The state a pass starts in: `pending_designator` (the first byte is a
-    /// pending charset designator) wins; otherwise the CSI sub-state of the
-    /// stream written before, or ground. The two are never given together.
-    fn start(pending_designator: bool, csi: Option<CsiPhase>) -> Self {
+    /// pending charset designator) wins; otherwise the open CSI of the stream
+    /// written before, or ground. The two are never given together.
+    fn start(pending_designator: bool, csi: Option<OpenCsi>) -> Self {
         if pending_designator {
             Self::Designator
         } else {
@@ -100,7 +235,7 @@ impl WrittenState {
                 }
             }
             Self::Escape => match byte {
-                b'[' => Self::Csi(CsiPhase::Entry),
+                b'[' => Self::Csi(OpenCsi::entry()),
                 b'(' | b')' => Self::Designator,
                 // Another ESC restarts the escape.
                 0x1b => return,
@@ -109,18 +244,18 @@ impl WrittenState {
                 _ => Self::Ground,
             },
             Self::Designator => Self::Ground,
-            Self::Csi(phase) => match csi_step(phase, byte) {
-                CsiStep::Open(next) => Self::Csi(next),
+            Self::Csi(mut open) => match open.advance(byte) {
+                CsiStep::Open(_) => Self::Csi(open),
                 CsiStep::End => Self::Ground,
                 CsiStep::Abort => Self::Escape,
             },
         };
     }
 
-    /// The CSI sub-state, `None` outside a CSI.
-    fn csi(self) -> Option<CsiPhase> {
+    /// The open CSI, `None` outside a CSI.
+    fn csi(self) -> Option<OpenCsi> {
         match self {
-            Self::Csi(phase) => Some(phase),
+            Self::Csi(open) => Some(open),
             _ => None,
         }
     }
@@ -136,17 +271,52 @@ struct Written {
 }
 
 impl Written {
+    /// Write one byte and advance the state by it.
+    ///
+    /// D2 (mux-strip-concat-query-closure FR3): a byte that completes the open
+    /// CSI the written stream is inside as a device query `term_core` answers is
+    /// written as [`CSI_CLOSING_BYTE`] in place of itself, one for one. Inside
+    /// one pass this fires only for a CSI carried in from an earlier pass: a
+    /// complete query whose bytes are all in the pass is already removed by
+    /// [`scan_csi_device_query`]. A CSI that completes as a non-query is written
+    /// unchanged.
     #[inline]
     fn push(&mut self, byte: u8) {
+        if let WrittenState::Csi(open) = &self.state {
+            if open.completes_an_answered_query(byte) {
+                self.state = WrittenState::Ground;
+                self.bytes.push(CSI_CLOSING_BYTE);
+                return;
+            }
+        }
         self.state.advance(byte);
         self.bytes.push(byte);
     }
 
     fn extend(&mut self, bytes: &[u8]) {
         for &byte in bytes {
-            self.state.advance(byte);
+            self.push(byte);
         }
-        self.bytes.extend_from_slice(bytes);
+    }
+
+    /// D1 (mux-strip-concat-query-closure FR1, FR4): called before the pass
+    /// removes a construct together with its opening `ESC`. When the written
+    /// stream is inside a CSI (entry or parameter state) or right after a
+    /// written lone `ESC`, the bytes before the construct and the bytes after
+    /// it would otherwise be joined: one [`CSI_CLOSING_BYTE`] is written first.
+    /// It cancels the CSI, or ends the pending escape, in `term_core` without a
+    /// display, cursor or response effect, and leaves the written stream in
+    /// ground, so further constructs removed in the same run write nothing. In
+    /// ground, or after a complete string, nothing is written.
+    ///
+    /// It is written BEFORE any C0 byte re-emitted from a removed query: a C0
+    /// byte right after a lone `ESC` would be consumed as that escape's final
+    /// byte instead of executing.
+    #[inline]
+    fn close_before_removal(&mut self) {
+        if matches!(self.state, WrittenState::Csi(_) | WrittenState::Escape) {
+            self.push(CSI_CLOSING_BYTE);
+        }
     }
 }
 
@@ -196,6 +366,12 @@ impl Written {
 /// `bytes` is assumed to be a completed byte run (the scrollback ring stores
 /// whole sequences). A sequence whose terminator never arrives is treated as
 /// non-matching and left intact, so plain text is never accidentally dropped.
+///
+/// Where a construct is removed together with its opening `ESC` while the
+/// written stream is inside a CSI, or right after a written lone `ESC`, one
+/// CSI_CLOSING (DEL) is written at its position first, so the bytes before and
+/// after it are never joined into an escape or a device query the raw stream
+/// never made (mux-strip-concat-query-closure D1). In ground nothing is added.
 ///
 /// Runs in a single O(n) pass: once an `ESC \` (ST) terminator search runs off
 /// the end of the buffer, that "no more ST terminators" fact is cached in
@@ -252,26 +428,36 @@ pub(in crate::mux) fn strip_pty_output_for_scrollback_write_with_designator(
 ///
 /// - `pending_designator`: `bytes[0]` is a pending charset designator (as in
 ///   the designator form).
-/// - `csi_in`: the CSI sub-state of the written stream before `bytes`.
-///   Precondition: the designator flag and an open CSI sub-state are never
-///   given together (the client is never inside a CSI while a designator is
-///   awaited).
+/// - `csi_in`: the open CSI of the written stream before `bytes` (the
+///   classification [`OpenCsi`]: sub-state, private marker, first parameter and
+///   first intermediate), `None` outside a CSI. Precondition: the designator
+///   flag and an open CSI are never given together (the client is never inside
+///   a CSI while a designator is awaited).
 ///
-/// Returns the stripped bytes - byte-identical to what the designator form
-/// returns for the same bytes and flag - and the CSI sub-state the written
-/// bytes leave the stream in (`None` outside a CSI).
+/// Returns the stripped bytes and the open CSI the written bytes leave the
+/// stream in (`None` outside a CSI; never an escape state).
 ///
 /// The state is advanced by every byte the pass writes (copied bytes,
-/// designator bytes, and the C0 bytes re-emitted from a removed CSI query, which
-/// execute without ending an open CSI), and never by a byte the pass removes: a
-/// removed construct's opening `ESC` does not abort a CSI the written stream is
-/// inside. The transitions are `term_core`'s ([`csi_step`] and the escape
-/// states of [`WrittenState`]). Extra state is O(1); there is no second pass.
+/// designator bytes, the closing bytes and the C0 bytes re-emitted from a
+/// removed CSI query, which execute without ending an open CSI), and never by a
+/// byte the pass removes. A removed construct's opening `ESC` therefore does
+/// not abort a CSI the written stream is inside, so the pass closes it first
+/// (D1, [`Written::close_before_removal`]) and the stream leaves the removal in
+/// ground; a byte that completes the carried CSI as an answered device query is
+/// written as CSI_CLOSING in place of itself (D2, [`Written::push`]). The
+/// transitions are `term_core`'s ([`csi_step`] and the escape states of
+/// [`WrittenState`]). Extra state is O(1); there is no second pass.
+///
+/// Started from an open CSI, the output may differ from the ground-started
+/// strip of the carried bytes followed by `bytes` only by what D1 and D2 write:
+/// the ground-started strip removes a query the carried CSI completes together
+/// with the carried bytes, the state-reporting form (which does not see the
+/// carried bytes) closes the CSI in place of the final byte.
 pub(in crate::mux) fn strip_pty_output_for_scrollback_write_with_csi_state(
     bytes: &[u8],
     pending_designator: bool,
-    csi_in: Option<CsiPhase>,
-) -> (Vec<u8>, Option<CsiPhase>) {
+    csi_in: Option<OpenCsi>,
+) -> (Vec<u8>, Option<OpenCsi>) {
     debug_assert!(
         !(pending_designator && csi_in.is_some()),
         "a designator wait and an open CSI are never given together"
@@ -299,11 +485,15 @@ fn strip_rich_content(bytes: &[u8]) -> Vec<u8> {
 /// without it, a segment's `offset` would point past whatever content the
 /// strip removed before it, misaligning every later segment.
 ///
-/// An offset falling strictly inside a sequence this pass REMOVES maps to
-/// the output position immediately after whatever content preceded it (the
-/// removed span contributes nothing, so nothing exists there any more — the
-/// closest faithful stand-in). An offset at or past `bytes.len()` maps to
-/// `out.len()` (the end of the stripped output).
+/// An offset at the first byte of a sequence this pass REMOVES maps to the
+/// output position before whatever the removal writes (the closing byte D1
+/// inserts, see [`Written::close_before_removal`]). An offset strictly inside the
+/// removed span, or right after it, maps to the output position after the
+/// closing byte and the C0 bytes re-emitted from a removed query (mux-strip-
+/// concat-query-closure D5): the removed span contributes only those bytes.
+/// Remapped offsets are non-decreasing and within the output. An offset at or
+/// past `bytes.len()` maps to `out.len()` (the end of the stripped output).
+/// These forms start in ground, so the D2 replacement never occurs in them.
 pub(in crate::mux) fn strip_rich_content_and_remap(
     bytes: &[u8],
     watch_offsets: &[usize],
@@ -396,6 +586,7 @@ fn strip_pass(
                 // APC: ESC _ ... ESC \  — remove only Kitty graphics (ESC _ G).
                 if i + 2 < n && bytes[i + 2] == b'G' {
                     if let Some(end) = find_st_terminator(bytes, i + 2, &mut st_search_from) {
+                        out.close_before_removal();
                         i = end; // consume through the ST terminator
                         continue;
                     }
@@ -407,6 +598,7 @@ fn strip_pass(
                 // DCS: ESC P ... ESC \ — remove only SIXEL.
                 if let Some(end) = find_st_terminator(bytes, i + 2, &mut st_search_from) {
                     if dcs_is_sixel(&bytes[i + 2..end - 2]) {
+                        out.close_before_removal();
                         i = end;
                         continue;
                     }
@@ -419,6 +611,7 @@ fn strip_pass(
                 if let Some(end) = find_osc_terminator(bytes, i + 2) {
                     let body = &bytes[i + 2..osc_body_end(bytes, end)];
                     if is_replayable_osc_body(body) {
+                        out.close_before_removal();
                         i = end;
                         continue;
                     }
@@ -431,6 +624,7 @@ fn strip_pass(
                 // term_core answers (see the module doc comment's "Removed"
                 // list / `scan_csi_device_query`).
                 if let Some(strip) = scan_csi_device_query(bytes, i + 2) {
+                    out.close_before_removal();
                     out.extend(&strip.embedded_c0);
                     i = strip.end;
                     continue;
@@ -630,8 +824,7 @@ pub(in crate::mux) struct CsiStrip {
 pub(in crate::mux) fn scan_csi_device_query(bytes: &[u8], from: usize) -> Option<CsiStrip> {
     let mut j = from;
     let mut private_prefix: Option<u8> = None;
-    let mut first_param: u32 = 0;
-    let mut collecting_first_param = true;
+    let mut first_param = FirstParam::START;
     let mut param_bytes_seen = 0usize;
     let mut intermediates: Vec<u8> = Vec::new();
     let mut embedded_c0: Vec<u8> = Vec::new();
@@ -664,25 +857,9 @@ pub(in crate::mux) fn scan_csi_device_query(bytes: &[u8], from: usize) -> Option
                 // Digit, ';', or ':'. Accumulates into the first-parameter
                 // tracking regardless of intermediates seen so far — mirrors
                 // term_core's `ParamParser`, where digits feed `current`
-                // independently of the separate intermediates vec.
-                if collecting_first_param && b.is_ascii_digit() {
-                    // Saturating accumulation mirrors term_core's
-                    // `ParamParser::add_digit` (saturating_mul/saturating_add
-                    // — crates/term_core/src/parser_params.rs): an
-                    // arbitrarily long digit run can never overflow or panic.
-                    // A saturated value never equals a small target constant
-                    // (5/6/14/16/18), so an oversized parameter is simply
-                    // preserved, never stripped (the `n` arm additionally
-                    // clamps to term_core's MAX_PARAM_VALUE before
-                    // truncating to u8 — see `csi_is_device_query`).
-                    first_param = first_param
-                        .saturating_mul(10)
-                        .saturating_add(u32::from(b - b'0'));
-                } else {
-                    // ';' / ':' / a digit past the first run — the leading
-                    // decimal run is over either way.
-                    collecting_first_param = false;
-                }
+                // independently of the separate intermediates vec. The
+                // accumulation is [`FirstParam`], shared with [`OpenCsi`].
+                first_param.feed(b);
                 param_bytes_seen += 1;
                 j += 1;
             }
@@ -693,7 +870,8 @@ pub(in crate::mux) fn scan_csi_device_query(bytes: &[u8], from: usize) -> Option
             }
             0x40..=0x7e => {
                 // Final byte — the CSI is complete.
-                return if csi_is_device_query(private_prefix, &intermediates, first_param, b) {
+                return if csi_is_device_query(private_prefix, &intermediates, first_param.value, b)
+                {
                     Some(CsiStrip {
                         end: j + 1,
                         embedded_c0,
