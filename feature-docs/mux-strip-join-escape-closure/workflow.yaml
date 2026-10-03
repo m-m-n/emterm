@@ -2,40 +2,80 @@ schema_version: 1
 feature: mux-strip-join-escape-closure
 created: '2026-10-04'
 base_branch: main
-goal: |
-  # mux: 共有 strip の除去の継ぎ目が cut の無い run で再生時に問い合わせ・RIS を成立させる
+goal: '# mux: 共有 strip の除去の継ぎ目が cut の無い run で再生時に問い合わせ・RIS を成立させる
+
 
   Notion task: https://www.notion.so/3ee3509ec8ee817cb667fecd900b359d
+
   種別: セキュリティ
 
+
   ## 脆弱性の概要 (必須)
+
   共有 strip（`strip_pass`）は除去の継ぎ目で閉じるバイトを書かない。cut の無い run でも、書き込み済みの ESC / 開いた CSI に除去後ろのバイトがつながり、リング再生時に問い合わせ・RIS・文字集合の切り替えが成立する。
+
   ## 参照 (必須)
+
   - CVE / GHSA ID: 該当なし
+
   - アドバイザリ URL: 該当なし
-  - severity: low（mux-strip-escape-state-carry の review round 1 で security 観点が medium で報告し、評価者が対象外として low に下げた）
+
+  - severity: low（mux-strip-escape-state-carry の review round 1 で security 観点が medium で報告し、評価者が対象外として
+  low に下げた）
+
   - 該当パッケージ: 該当なし
+
   - 現在のバージョン: main（493baf79 時点）
+
   - 修正済みバージョン: 無し
+
   ## 攻撃シナリオ (必須)
+
   細工した出力を表示させる（例: 細工したファイルを `cat`）だけで成立する。
-  1. `ESC[6` + `ESC]777;emterm;markdown;x BEL` + `n` を cut 無しで与えると、リングが `ESC[6n` になる（前任 mux-cut-csi-post-strip-closure の Residual 1 として記録済み）
-  2. `ESC ESC ESC[6n [6n [5n` は書き込み strip で `ESC ESC [6n [5n`、`snapshot_bytes.rs` の再 strip（`strip_rich_content_and_remap`）で `ESC [5n` になる。strip を 2 段かけると、前任 Residual 3 が前提とする「スナップショット時の strip が問い合わせを除去する」防壁が破れる。この点はどの決定記録にも無い
-  3. `ESC` + 除去対象 + `c` で RIS、`ESC` + 除去対象 + `(0` で G0 の文字集合切り替え（問い合わせではないため、mux-strip-escape-state-carry の DECISIONS.md の Residuals のどれにも当てはまらない）
+
+  1. `ESC[6` + `ESC]777;emterm;markdown;x BEL` + `n` を cut 無しで与えると、リングが `ESC[6n` になる（前任 mux-cut-csi-post-strip-closure
+  の Residual 1 として記録済み）
+
+  2. `ESC ESC ESC[6n [6n [5n` は書き込み strip で `ESC ESC [6n [5n`、`snapshot_bytes.rs` の再 strip（`strip_rich_content_and_remap`）で
+  `ESC [5n` になる。strip を 2 段かけると、前任 Residual 3 が前提とする「スナップショット時の strip が問い合わせを除去する」防壁が破れる。この点はどの決定記録にも無い
+
+  3. `ESC` + 除去対象 + `c` で RIS、`ESC` + 除去対象 + `(0` で G0 の文字集合切り替え（問い合わせではないため、mux-strip-escape-state-carry
+  の DECISIONS.md の Residuals のどれにも当てはまらない）
+
   ## 影響範囲 (必須)
-  reattach やウィンドウ切り替えのたびに、再生側の term_core が定型の端末応答（CPR / DA / DSR / DECRPM / XTWINOPS）をその時点の前景プログラムの PTY 入力へ書き込む。RIS では再生側の端末状態がリセットされる。応答の形式は固定で改行を含まない。
+
+  reattach やウィンドウ切り替えのたびに、再生側の term_core が定型の端末応答（CPR / DA / DSR / DECRPM / XTWINOPS）をその時点の前景プログラムの PTY
+  入力へ書き込む。RIS では再生側の端末状態がリセットされる。応答の形式は固定で改行を含まない。
+
   ## 完了の定義 (必須)
+
   - [ ] 攻撃シナリオが成立しない
+
   - [ ] 修正版に追随している（修正版が無い場合は暫定緩和策の欄に対応を記載）
+
   - [ ] cut 無しの 1 回の feed で `ESC[6` + 除去対象 + `n` を与えたとき、リングに問い合わせが含まれないことを検出するテストがある
+
   - [ ] `ESC ESC ESC[6n [6n [5n` を書き込み strip、スナップショット strip、term_core の順に通したとき、応答が 0 件であることを検出するテストがある
+
   ## 該当箇所 (任意)
-  - `src-tauri/src/mux/scrollback_filter.rs:398`（`strip_pass` の match。除去分岐 403/414/426/439 行の `i = end; continue;`）
+
+  - `src-tauri/src/mux/scrollback_filter.rs:398`（`strip_pass` の match。除去分岐 403/414/426/439 行の `i = end;
+  continue;`）
+
   - `src-tauri/src/mux/snapshot_bytes.rs:330`（スナップショット時の再 strip）
-  - `src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry.rs` 1-6 行のモジュール説明「a ring replay never completes a query or a reset the client did not start」は cut の経路にしか成り立たない
+
+  - `src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry.rs` 1-6 行のモジュール説明「a ring replay never completes
+  a query or a reset the client did not start」は cut の経路にしか成り立たない
+
   - 詳細: ブランチ `em-workflow/mux-strip-escape-state-carry/integration` の `feature-docs/mux-strip-escape-state-carry/reviews/round1.yaml`
+
   ## 暫定緩和策 (任意)
-  修正候補: `strip_pass` の除去分岐で、書き込み済みの状態が Ground でなければ状態に応じた閉じるバイト（CSI の中なら DEL、ESC の直後なら CAN）を 1 つ書く。`closure_for` を `scrollback_filter` 側へ移して `write_filter` の cut 処理と共有する。共有 strip の出力を変えるため、mux-strip-escape-state-carry の NFR1 の範囲外として別タスクにした。
+
+  修正候補: `strip_pass` の除去分岐で、書き込み済みの状態が Ground でなければ状態に応じた閉じるバイト（CSI の中なら DEL、ESC の直後なら CAN）を 1 つ書く。`closure_for`
+  を `scrollback_filter` 側へ移して `write_filter` の cut 処理と共有する。共有 strip の出力を変えるため、mux-strip-escape-state-carry
+  の NFR1 の範囲外として別タスクにした。
+
+  '
 parent_branch: em-workflow/mux-strip-join-escape-closure/integration
 tier: full
 tier_decision:
@@ -57,7 +97,8 @@ project:
     src-tauri:
       language: rust
       build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
-      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
       format_command: ''
       e2e_test_command: ''
 batch:
@@ -95,7 +136,31 @@ workflow:
   status: pending
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Regression tests and decision record for the strip join-escape closure
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_join_escape_closure.rs
+    - feature-docs/mux-strip-join-escape-closure/DECISIONS.md
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs
+    skills: []
+    domains:
+    - input-handling
+    complexity: medium
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - NFR1
+    - NFR2
+    - NFR3
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -105,54 +170,71 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
   FR2:
     title: 'Scenario-3 test: no RIS and no G0 designation across a removal'
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
   FR3:
     title: DoD-1 test is the existing test
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-3
   FR4:
     title: 'Decision record: scenario-to-D1 mapping'
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
   FR5:
     title: 'Decision record: kept-string-body join residual'
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-6
   NFR1:
     title: Test and CLI-only check pass
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   NFR2:
     title: No change to production code or existing expectations
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-7
   NFR3:
     title: Oracle convention
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
