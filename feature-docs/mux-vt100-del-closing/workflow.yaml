@@ -159,7 +159,8 @@ workflow:
     既存の失敗（負荷平均 10-20 の環境）で、この feature の変更に起因しない。Codex 相談のうえ pass と判定（batch-audit.yaml 参照）。
     手動確認 MT-1 / MT-2 は未実施。
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: a7f5e1de4b0f71776ed15bddfa2133ac2408436c
 tasks:
   task0001:
     title: vt100 replay copy for ReadPane and restore
