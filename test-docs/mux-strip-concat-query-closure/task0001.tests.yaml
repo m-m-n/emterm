@@ -1,0 +1,128 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib` finished with 4159 passed, 0 failed, 3 ignored.
+baseline_failures: []
+# Re-executed after the implementation: `cargo test --lib` finished with 4187 passed, 0 failed,
+# 3 ignored (the baseline's 4159 plus the 28 tests this task adds). `cargo check` and
+# `cargo check --no-default-features` finished with no error and no warning.
+final_failures: []
+# Reds: the write-filter tests were first observed failing on the tree with only the CSI_CLOSING
+# constant added (no strip or filter change). The messages below come from a final run with the two
+# production branches that write the closing (at a removed construct, D1, and in place of the
+# completing final byte, D2) switched off with `if false &&`; the switch was restored afterwards.
+# Tests listed under an AC all failed in that run. Tests that passed in it (guards of behavior that
+# existed before) are not listed: strip_concat_a_construct_removed_in_ground_adds_no_closing,
+# strip_concat_a_construct_removed_in_ground_or_a_kept_string_adds_no_closing,
+# strip_concat_a_split_non_query_csi_is_written_unchanged,
+# strip_concat_a_cut_clears_the_carried_classification and the updated
+# post_strip_state_form_output_equals_the_write_path_strip.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::scrollback_filter::tests::strip_concat_every_entry_point_closes_an_open_csi_at_every_removed_construct
+      - mux::scrollback_filter::tests::strip_concat_several_constructs_in_one_open_csi_write_one_closing
+      - mux::scrollback_filter::tests::post_strip_state_form_reports_the_csi_state_of_the_written_bytes
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_one_call_closes_an_open_csi_at_every_removed_construct
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_several_constructs_in_one_open_csi_write_one_closing
+    red_confirmed: true
+    red_reason: >-
+      Observed failing: `"ESC[" + osc 777 launch (BEL) + "n"`: strip_replayable_rich_content wrote
+      "ESC[n", expected "ESC[ DEL n" (scrollback_filter), and the write filter wrote "ESC[n",
+      expected "ESC[ DEL n" (pty_spawn). Several constructs in one open CSI wrote "ESC[ CR n",
+      expected "ESC[ DEL CR n". The state-reporting form wrote [27, 91, 54] for
+      "ESC[6 ESC]777;emterm;markdown;begin;id=x BEL", expected [27, 91, 54, 127].
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_reader_restore_matches_the_raw_stream_reference
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_a_held_construct_split_across_reads_matches_the_raw_stream_reference
+      - mux::snapshot_bytes::tests::build_snapshot_bytes_writes_no_closing_at_the_snapshot_end
+    red_confirmed: true
+    red_reason: >-
+      Observed failing: through the production reader and the visibility restore, case (b1) osc
+      777 launch: the client answered [27, 91, 49, 59, 49, 82] (ESC[1;1R) where the raw-stream
+      reference answers []. The held-construct variant failed the same way for an agent-status
+      report split at 1 with the restore at read 1 (the launch and md variants with the restore
+      at read 0 passed before the change: suppressed_output re-delivers the held head). The
+      snapshot builder wrote "abc ESC[6 ESC[?1049l" for a ring ending in a construct removed
+      inside an open CSI, expected "abc ESC[6 DEL ESC[?1049l". The other half of that test (a ring
+      that genuinely ends in an open CSI gets no closing at the snapshot end) passed before the
+      change.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_an_answered_form_split_at_every_position_never_reaches_the_ring_answerable
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_an_answered_form_fed_byte_by_byte_is_closed_in_place_of_its_final_byte
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_c0_bytes_inside_a_split_answered_form_keep_their_effect_once_and_in_order
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_a_query_in_a_later_call_closes_the_csi_carried_in
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_the_classification_matches_term_core_over_every_prefix_and_next_byte
+      - mux::scrollback_filter::tests::strip_concat_the_state_form_replaces_the_completing_final_byte_of_a_carried_csi
+    red_confirmed: true
+    red_reason: >-
+      Observed failing: `ESC[6n` split at 2 left the ring "ESC[6n", expected "ESC[6 DEL"; fed
+      byte by byte the ring was "ab ESC[6n", expected "ab ESC[6 DEL"; with a CR inside the
+      continuation the ring was "ab ESC[ CR 6n"; `ESC[6` in one call, then `ESC[6n` and "x" in the
+      next, left the ring "ESC[6x", expected "ESC[6 DEL x". Parity over every prefix and next byte failed at prefix "ESC[" then 0x63: term_core
+      answers the raw stream, so the byte is written as DEL; written "c". The state-reporting
+      form from a carried "ESC[6" with input "n" wrote "n". The tests for split non-query CSIs
+      written unchanged and for a cut clearing the carried classification passed before the
+      change and are not listed.
+  AC-4:
+    tests:
+      - mux::scrollback_filter::tests::strip_concat_a_lone_esc_before_a_removed_construct_is_neutralized
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_a_lone_esc_before_a_removed_construct_is_neutralized
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_a_lone_esc_held_across_calls_is_resolved_in_one_pass
+    red_confirmed: true
+    red_reason: >-
+      Observed failing: `1 ESC + osc 777 launch (BEL) + "[c"` in one call: wrote "ESC[c", expected
+      "ESC DEL [c" (both the strip entry point and the write filter); a lone trailing ESC held
+      across calls resolved to "ESC[c" in the ring.
+  AC-5:
+    tests:
+      - mux::scrollback_filter::tests::strip_concat_the_state_form_from_a_carried_head_equals_the_ground_started_strip
+      - mux::scrollback_filter::tests::strip_concat_remap_offsets_around_a_construct_removed_inside_an_open_csi
+      - mux::snapshot_bytes::tests::build_snapshot_bytes_segments_follow_a_construct_removed_inside_an_open_csi
+      - mux::snapshot_bytes::tests::build_snapshot_bytes_segments_follow_a_construct_removed_after_a_lone_esc
+    red_confirmed: true
+    red_reason: >-
+      Observed failing: the state form started from a carried "ESC[" with input "c" answered
+      (the replay of its output produced a response); the remap test's output was "ESC[6xyz" with
+      no closing at the removed launch; the snapshot builder wrote "ab ESC [ c tail" for a lone
+      ESC before a removed launch, expected "ab ESC DEL [ c tail", and wrote no closing for the
+      construct removed inside an open CSI, so the payload did not match. The existing predicate tests
+      (scan_csi_device_query, csi_is_device_query, is_replayable_osc_body, dcs_is_sixel, the
+      kept-byte set) are unchanged and pass; they are not listed.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_the_carried_csi_state_follows_the_stripped_output
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_an_overflow_flush_followed_by_a_cut_closes_an_open_csi
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_the_closing_follows_the_stripped_output
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_closing_is_written_only_when_the_emitted_stream_ends_inside_a_csi
+      - mux::scrollback_filter::tests::strip_bare_esc_in_csi_body_aborts_then_strips_following_query
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_a_cut_after_a_strip_written_closing_writes_no_second_closing
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_the_overflow_flush_writes_the_strips_closing_in_place
+    red_confirmed: true
+    red_reason: >-
+      Observed failing with the updated expectations (each listed in DECISIONS.md under
+      Behavior-changing tests): case (b), the EC-1 inversion, left [27, 91] where the new
+      expectation is [27, 91, 127]; EC-3 wrote [ESC, '[', '6', 0x00, DEL] where the new order is
+      DEL before the C0 byte; the byte-by-byte ring of `ESC[6 ESC[6n` ended in `n` where the new
+      expectation ends in DEL; strip_bare_esc_in_csi_body_aborts_then_strips_following_query
+      left [27, 91, 53] where the new expectation is [27, 91, 53, 127]; the overflow flush run did
+      not end in "abc ESC[6 DEL". A cut after a strip-written closing: the cut-free output of
+      `ESC[` + launch was "ESC[", without the strip's closing. The unchanged cut-rule tests (at most one
+      closing per cut, never with the designator ESC, empty-segment and fallback paths) pass
+      before and after and are not listed, and neither is the updated
+      post_strip_state_form_output_equals_the_write_path_strip, whose new expectation also holds
+      without the change.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_a_long_csi_parameter_run_is_never_held
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+      - mux::scrollback_filter::tests::post_strip_state_form_is_one_linear_pass
+    red_confirmed: true
+    red_reason: >-
+      Observed failing: an open CSI + osc 777 launch alternation wrote "ESC[6" per unit where the
+      strip now writes "ESC[6 DEL"; after a 300000-byte parameter run the filter fed "c" wrote
+      "c", expected CSI_CLOSING; the 100000-unit state-form pass wrote "ESC[6 ESC[7" per unit
+      where the new expectation is "ESC[6 DEL ESC[7 DEL". The budget is 10 s; the whole new module
+      runs in about 4 s. `cargo check --manifest-path src-tauri/Cargo.toml --no-default-features`
+      passed before and after the change and has no red.

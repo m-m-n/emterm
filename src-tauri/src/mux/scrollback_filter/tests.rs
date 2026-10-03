@@ -410,9 +410,12 @@ fn strip_removes_csi_query_reemits_embedded_c0() {
 fn strip_bare_esc_in_csi_body_aborts_then_strips_following_query() {
     // "\x1b[5" has no final byte before a fresh ESC starts a new CSI;
     // the aborted prefix is kept and the following ESC[6n is stripped.
+    // mux-strip-concat-query-closure FR1: the strip writes one CSI_CLOSING in
+    // place of the removed query, so the kept prefix does not stay open (before:
+    // the output was `ESC[5` alone and a later `n` completed it into a query).
     let input = b"\x1b[5\x1b[6n";
     let out = strip_replayable_rich_content(input);
-    assert_eq!(out, b"\x1b[5");
+    assert_eq!(out, b"\x1b[5\x7f");
 }
 
 /// AC-9: a mixed payload of plain text, SGR, viewer OSC, and device
@@ -1115,10 +1118,18 @@ fn bytes_entering(phase: Option<CsiPhase>) -> &'static [u8] {
     }
 }
 
+/// The open CSI (the classification the write filter carries) the bytes
+/// [`bytes_entering`] leave the written stream in: `ESC[` is the entry state
+/// with no parameter, `ESC[6` the parameter state with the first parameter 6.
+fn carried(phase: Option<CsiPhase>) -> Option<OpenCsi> {
+    strip_pty_output_for_scrollback_write_with_csi_state(bytes_entering(phase), false, None).1
+}
+
 /// The reported state is the CSI sub-state of the stream formed by the state
 /// given followed by the bytes written: bytes the pass removes never advance
 /// it; copied bytes, designator bytes and the C0 bytes re-emitted from a
-/// removed CSI query do.
+/// removed CSI query do. A construct removed while the written stream is inside
+/// a CSI writes one CSI_CLOSING first, which ends the CSI.
 #[test]
 fn post_strip_state_form_reports_the_csi_state_of_the_written_bytes() {
     use CsiPhase::{Entry, Param};
@@ -1161,61 +1172,52 @@ fn post_strip_state_form_reports_the_csi_state_of_the_written_bytes() {
             None,
             true,
         ),
-        // An ESC that is not written (a removed construct) leaves it open.
+        // An ESC that is not written (a removed construct) would have aborted
+        // the open CSI. The removal writes one CSI_CLOSING first, so the
+        // written stream is in ground (mux-strip-concat-query-closure FR1;
+        // before, these rows left the written bytes open and the state
+        // reported the open sub-state).
         (
             None,
             false,
             b"\x1b[6\x1b]777;emterm;markdown;begin;id=x\x07",
-            b"\x1b[6",
-            Some(Param),
+            b"\x1b[6\x7f",
+            None,
             true,
         ),
         (
             None,
             false,
             b"\x1b[6\x1b_Gi=1,a=d;AAAA\x1b\\",
-            b"\x1b[6",
-            Some(Param),
-            true,
-        ),
-        (None, false, b"\x1b[6\x1b[6n", b"\x1b[6", Some(Param), true),
-        (None, false, b"\x1b[\x1b[6n", b"\x1b[", Some(Entry), true),
-        (
-            Some(Param),
-            false,
-            POST_STRIP_LAUNCH,
-            b"",
-            Some(Param),
-            true,
-        ),
-        (Some(Entry), false, POST_STRIP_KITTY, b"", Some(Entry), true),
-        (Some(Param), false, b"\x1b[6n", b"", Some(Param), true),
-        (Some(Param), false, b"\x1b[c", b"", Some(Param), true),
-        // The C0 bytes re-emitted from a removed query execute inside an
-        // open CSI and leave it open (EC-3).
-        (
+            b"\x1b[6\x7f",
             None,
-            false,
-            b"\x1b[6\x1b[6\rn",
-            b"\x1b[6\r",
-            Some(Param),
             true,
         ),
+        (None, false, b"\x1b[6\x1b[6n", b"\x1b[6\x7f", None, true),
+        (None, false, b"\x1b[\x1b[6n", b"\x1b[\x7f", None, true),
+        (Some(Param), false, POST_STRIP_LAUNCH, b"\x7f", None, true),
+        (Some(Entry), false, POST_STRIP_KITTY, b"\x7f", None, true),
+        (Some(Param), false, b"\x1b[6n", b"\x7f", None, true),
+        (Some(Param), false, b"\x1b[c", b"\x7f", None, true),
+        // The strip writes its closing before the C0 bytes re-emitted from a
+        // removed query, so they execute in ground (EC-3; before, they
+        // executed inside the open CSI and left it open).
+        (None, false, b"\x1b[6\x1b[6\rn", b"\x1b[6\x7f\r", None, true),
         (
             None,
             false,
             b"\x1b[6\x1b[\x086n",
-            b"\x1b[6\x08",
-            Some(Param),
+            b"\x1b[6\x7f\x08",
+            None,
             true,
         ),
-        (Some(Entry), false, b"\x1b[6\rn", b"\r", Some(Entry), true),
+        (Some(Entry), false, b"\x1b[6\rn", b"\x7f\r", None, true),
         // The designator flag: byte 0 is copied whatever it is, and the
         // stream continues from ground.
         (None, true, b"B", b"B", None, true),
         (None, true, b"B\x1b[6", b"B\x1b[6", Some(Param), true),
         (None, true, b"\x1b[6n", b"\x1b[6n", None, true),
-        (None, true, b"B\x1b[6\x1b[6n", b"B\x1b[6", Some(Param), true),
+        (None, true, b"B\x1b[6\x1b[6n", b"B\x1b[6\x7f", None, true),
         // A trailing escape or designation start is not a CSI.
         (None, false, b"\x1b[6\x1b(", b"\x1b[6\x1b(", None, false),
         (None, false, b"\x1b[6\x1b", b"\x1b[6\x1b", None, false),
@@ -1226,8 +1228,12 @@ fn post_strip_state_form_reports_the_csi_state_of_the_written_bytes() {
             "state {csi_in:?}, designator {designator}, input {:?}",
             String::from_utf8_lossy(input)
         );
-        let (out, state) =
-            strip_pty_output_for_scrollback_write_with_csi_state(input, *designator, *csi_in);
+        let (out, state) = strip_pty_output_for_scrollback_write_with_csi_state(
+            input,
+            *designator,
+            carried(*csi_in),
+        );
+        let state = state.map(OpenCsi::phase);
         assert_eq!(out, *expected_out, "{label}: written bytes");
         assert_eq!(state, *expected_state, "{label}: reported state");
         if *confirm && !*designator {
@@ -1303,8 +1309,15 @@ fn post_strip_identity_corpus() -> Vec<Vec<u8>> {
 
 /// R9 (AC-7, NFR1, FR6): the state-reporting form returns output byte-identical
 /// to the existing write-path form over the scrollback_filter corpora, with the
-/// designator flag on and off and from every CSI state given. The existing
-/// forms keep their signatures and outputs.
+/// designator flag on and off from the ground state. mux-strip-concat-query-
+/// closure FR1/FR3: from a carried open CSI the output depends on the carried
+/// classification (a removal writes the closing, a completing query's final
+/// byte becomes the closing), so the identity there is with the ground-started
+/// strip of the head and the input, minus the head's written bytes, for input
+/// whose bytes before the first `ESC` hold no final byte (such input cannot
+/// complete the carried CSI; the completing input is checked in
+/// `strip_concat_the_state_form_from_a_carried_head_equals_the_ground_started_strip`).
+/// The existing forms keep their signatures.
 #[test]
 fn post_strip_state_form_output_equals_the_write_path_strip() {
     let configs: [(bool, Option<CsiPhase>); 4] = [
@@ -1315,8 +1328,24 @@ fn post_strip_state_form_output_equals_the_write_path_strip() {
     ];
     let mut check = |input: &[u8]| {
         for (designator, csi_in) in configs {
-            let (out, _state) =
-                strip_pty_output_for_scrollback_write_with_csi_state(input, designator, csi_in);
+            let (out, _state) = strip_pty_output_for_scrollback_write_with_csi_state(
+                input,
+                designator,
+                carried(csi_in),
+            );
+            if csi_in.is_some() {
+                let head = bytes_entering(csi_in);
+                let lead_len = input.iter().position(|&b| b == 0x1b).unwrap_or(input.len());
+                if input[..lead_len].iter().any(|b| (0x40..=0x7e).contains(b)) {
+                    continue;
+                }
+                let ground = strip_pty_output_for_scrollback_write(&[head, input].concat());
+                let rest = ground
+                    .strip_prefix(head)
+                    .unwrap_or_else(|| panic!("{input:?}: state {csi_in:?}: the head is kept"));
+                assert_eq!(out, rest, "{input:?}: state {csi_in:?}");
+                continue;
+            }
             assert_eq!(
                 out,
                 strip_pty_output_for_scrollback_write_with_designator(input, designator),
@@ -1372,6 +1401,480 @@ fn post_strip_state_form_is_one_linear_pass() {
         "took {:?}",
         start.elapsed()
     );
-    assert_eq!(out, b"\x1b[6\x1b[7".repeat(100_000));
-    assert_eq!(state, Some(CsiPhase::Param));
+    // Each removed target closes the CSI the unit opened before it.
+    assert_eq!(out, b"\x1b[6\x7f\x1b[7\x7f".repeat(100_000));
+    assert_eq!(state.map(OpenCsi::phase), None);
+}
+
+// ── mux-strip-concat-query-closure task0001 (FR1, FR4, FR5, FR6) ────────────
+//
+// The join the shared strip produces never completes an escape or a CSI device
+// query the raw stream never made: a construct removed together with its
+// opening `ESC` writes one CSI_CLOSING first when the written stream is inside
+// a CSI or right after a written lone `ESC` (D1). The oracle is term_core fed
+// the raw stream with the removed construct's own effect excluded (SPEC A3).
+
+/// What term_core shows and answers after `before` and then `after`, with the
+/// answers to `before` (a removed construct's own effect) discarded.
+#[derive(Debug, PartialEq)]
+struct ConcatView {
+    rows: Vec<String>,
+    cursor: (u16, u16),
+    responses: Vec<u8>,
+}
+
+fn concat_view(before: &[u8], after: &[u8]) -> ConcatView {
+    let mut core = term_core::terminal_core::TerminalCore::new(80, 24, 10);
+    core.process_pty_data_fully(before);
+    let _own_answers = core.take_response();
+    core.process_pty_data_fully(after);
+    ConcatView {
+        rows: (0..24)
+            .map(|r| core.get_line_text(r).trim_end().to_string())
+            .collect(),
+        cursor: (core.get_cursor_row(), core.get_cursor_col()),
+        responses: core.take_response(),
+    }
+}
+
+/// Replaying `ring` gives no response and the rows and cursor of the raw stream
+/// `raw_before` + `after`, the answers to `raw_before` excluded.
+#[track_caller]
+fn assert_concat_replay(ring: &[u8], raw_before: &[u8], after: &[u8], ctx: &str) {
+    let replayed = concat_view(b"", ring);
+    let reference = concat_view(raw_before, after);
+    assert!(
+        replayed.responses.is_empty(),
+        "{ctx}: replaying {:?} answers {:?}",
+        String::from_utf8_lossy(ring),
+        replayed.responses
+    );
+    assert!(
+        reference.responses.is_empty(),
+        "{ctx}: the raw stream answers"
+    );
+    assert_eq!(replayed.rows, reference.rows, "{ctx}: rows");
+    assert_eq!(replayed.cursor, reference.cursor, "{ctx}: cursor");
+}
+
+/// Every removed construct kind: name, bytes, and the C0 bytes the strip
+/// re-emits from it.
+const CONCAT_TARGETS: &[(&str, &[u8], &[u8])] = &[
+    (
+        "osc 777 launch (BEL)",
+        b"\x1b]777;emterm;markdown;begin;id=x\x07",
+        b"",
+    ),
+    (
+        "osc 777 launch (ST)",
+        b"\x1b]777;emterm;markdown;begin;id=x\x1b\\",
+        b"",
+    ),
+    (
+        "osc 9999 emterm-md",
+        b"\x1b]9999;emterm-md;begin\x1b\\",
+        b"",
+    ),
+    (
+        "agent-status",
+        b"\x1b]777;emterm;agent-status;v=1;state=idle\x07",
+        b"",
+    ),
+    ("kitty apc", b"\x1b_Gi=1,a=d;AAAA\x1b\\", b""),
+    ("sixel dcs", b"\x1bPq#0;2;0;0;0\x1b\\", b""),
+    ("csi query", b"\x1b[6n", b""),
+    ("csi query with an embedded CR", b"\x1b[6\rn", b"\r"),
+];
+
+/// The open CSIs of the plan.
+const CONCAT_HEADS: &[&[u8]] = &[
+    b"\x1b[",
+    b"\x1b[6",
+    b"\x1b[?25",
+    b"\x1b[6 ",
+    b"abc\x1b[12;3",
+];
+
+/// What follows the removed construct.
+const CONCAT_CONTINUATIONS: &[&[u8]] = &[b"n", b"c", b"t", b"m", b"text"];
+
+/// What every strip entry point returns for `input`, started in ground.
+fn every_entry_point(input: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
+    let (state_form, _state) =
+        strip_pty_output_for_scrollback_write_with_csi_state(input, false, None);
+    vec![
+        (
+            "strip_replayable_rich_content",
+            strip_replayable_rich_content(input),
+        ),
+        (
+            "strip_pty_output_for_scrollback_write",
+            strip_pty_output_for_scrollback_write(input),
+        ),
+        (
+            "strip_pty_output_for_scrollback_write_with_designator",
+            strip_pty_output_for_scrollback_write_with_designator(input, false),
+        ),
+        (
+            "strip_rich_content_and_remap",
+            strip_rich_content_and_remap(input, &[]).0,
+        ),
+        (
+            "strip_rich_content_and_remap_with_designator",
+            strip_rich_content_and_remap_with_designator(input, &[], false).0,
+        ),
+        (
+            "strip_pty_output_for_scrollback_write_with_csi_state",
+            state_form,
+        ),
+    ]
+}
+
+/// Every entry point returns exactly `expected` for `input`, and the
+/// state-reporting form reports no open CSI after it.
+#[track_caller]
+fn assert_every_entry_point(input: &[u8], expected: &[u8], ctx: &str) {
+    for (name, out) in every_entry_point(input) {
+        assert!(
+            out == expected,
+            "{ctx}: {name} wrote {:?}, expected {:?}",
+            String::from_utf8_lossy(&out),
+            String::from_utf8_lossy(expected)
+        );
+    }
+    let (_out, state) = strip_pty_output_for_scrollback_write_with_csi_state(input, false, None);
+    assert!(state.is_none(), "{ctx}: the reported state is no open CSI");
+}
+
+/// AC-1 (FR1, FR5, NFR3, TM-1, TS-1): an open head, a removed construct of every
+/// kind and a continuation, as one cut-free input to every strip entry point.
+/// In every output exactly one CSI_CLOSING sits at the construct's position,
+/// before any re-emitted C0 byte (EC-3); `ESC[` + launch + `c` forms no DA1
+/// (EC-5); the state-reporting form reports no open CSI after the closing;
+/// replaying the output gives no response and the rows and cursor of the raw
+/// stream with the construct's own effect excluded. All entry points are
+/// byte-identical for equal start states (FR5).
+#[test]
+fn strip_concat_every_entry_point_closes_an_open_csi_at_every_removed_construct() {
+    for head in CONCAT_HEADS {
+        for (name, target, c0) in CONCAT_TARGETS {
+            for cont in CONCAT_CONTINUATIONS {
+                let ctx = format!(
+                    "{:?} + {name} + {:?}",
+                    String::from_utf8_lossy(head),
+                    String::from_utf8_lossy(cont)
+                );
+                let input = [*head, *target, *cont].concat();
+                let expected = [*head, CSI_CLOSING, *c0, *cont].concat();
+                assert_every_entry_point(&input, &expected, &ctx);
+                assert_eq!(
+                    expected.iter().filter(|b| **b == 0x7f).count(),
+                    1,
+                    "{ctx}: exactly one closing"
+                );
+                assert_concat_replay(&expected, &[*head, *target].concat(), cont, &ctx);
+            }
+        }
+    }
+}
+
+/// EC-4 (FR1): several removed constructs inside one open CSI produce exactly
+/// one closing, and the C0 bytes the removed queries re-emit follow it in order.
+#[test]
+fn strip_concat_several_constructs_in_one_open_csi_write_one_closing() {
+    let all: Vec<u8> = CONCAT_TARGETS
+        .iter()
+        .flat_map(|(_, bytes, _)| bytes.to_vec())
+        .collect();
+    let c0: Vec<u8> = CONCAT_TARGETS
+        .iter()
+        .flat_map(|(_, _, c0)| c0.to_vec())
+        .collect();
+    for head in CONCAT_HEADS {
+        let input = [*head, &all[..], b"n"].concat();
+        let expected = [*head, CSI_CLOSING, &c0[..], b"n"].concat();
+        let ctx = String::from_utf8_lossy(head).into_owned();
+        assert_every_entry_point(&input, &expected, &ctx);
+        assert_concat_replay(&expected, &[*head, &all[..]].concat(), b"n", &ctx);
+    }
+    // Two queries that each embed a C0 byte.
+    let input = b"\x1b[6\x1b[5\rn\x1b[6\x08n!";
+    let expected = [&b"\x1b[6"[..], CSI_CLOSING, b"\r\x08!"].concat();
+    assert_every_entry_point(input, &expected, "two queries with C0 bytes");
+}
+
+/// FR1: a construct removed in ground, after a completed CSI or after a kept
+/// string adds no byte (a construct removed inside a kept string body adds none
+/// either: its opening ESC leaves the written state in ground).
+#[test]
+fn strip_concat_a_construct_removed_in_ground_adds_no_closing() {
+    for ground in [
+        &b"abc"[..],
+        b"\x1b[1m",
+        b"abc\x1b[12;3H",
+        b"\x1b]0;t\x07",
+        b"\x1b]0;t\x1b\\",
+        b"\x1b(B",
+        b"\x1b]0;t",
+    ] {
+        for (name, target, c0) in CONCAT_TARGETS {
+            let ctx = format!("{:?} + {name}", String::from_utf8_lossy(ground));
+            let input = [ground, *target, b"n"].concat();
+            let expected = [ground, *c0, b"n"].concat();
+            assert_every_entry_point(&input, &expected, &ctx);
+        }
+    }
+}
+
+/// AC-4 (FR4, NFR3, TM-1, TS-6): `ESC` and `ESC ESC` chains before each removed
+/// construct and `[c` / `[6n` after it, as one cut-free input to every strip
+/// entry point. The neutralizing CSI_CLOSING sits at the removal position,
+/// before any re-emitted C0 byte; replay gives no response and equals the
+/// raw-stream reference; every entry point agrees byte for byte (FR5).
+#[test]
+fn strip_concat_a_lone_esc_before_a_removed_construct_is_neutralized() {
+    for (name, target, c0) in CONCAT_TARGETS {
+        for cont in [&b"[c"[..], b"[6n"] {
+            for escs in 1..=5usize {
+                let lead = vec![0x1bu8; escs];
+                let ctx = format!("{escs} ESC + {name} + {:?}", String::from_utf8_lossy(cont));
+                let input = [&lead[..], *target, cont].concat();
+                let expected = [&lead[..], CSI_CLOSING, *c0, cont].concat();
+                assert_every_entry_point(&input, &expected, &ctx);
+                assert_concat_replay(&expected, &[&lead[..], *target].concat(), cont, &ctx);
+            }
+        }
+    }
+    // A lone ESC that something kept follows is not neutralized: no construct
+    // is removed there.
+    for kept in [&b"\x1b[31m"[..], b"\x1b]0;t\x07", b"\x1bX", b"\x1b7"] {
+        let input = [&b"\x1b"[..], kept, b"[c"].concat();
+        let (out, _) = strip_pty_output_for_scrollback_write_with_csi_state(&input, false, None);
+        // The `[c` after a kept sequence is text, not a query: nothing changes.
+        assert_eq!(out, input, "{:?}", String::from_utf8_lossy(&input));
+    }
+}
+
+/// FR6, TS-7 (AC-5): watch offsets at the first byte of, strictly inside and
+/// right after a construct removed inside an open CSI, and after a lone ESC.
+/// The remapped offsets are non-decreasing and within the output; the offset at
+/// the first byte maps before the closing, the others after it and after the
+/// re-emitted C0 bytes (D5).
+#[test]
+fn strip_concat_remap_offsets_around_a_construct_removed_inside_an_open_csi() {
+    for lead in [
+        &b"\x1b[6"[..],
+        b"\x1b[",
+        b"abc\x1b[12;3",
+        // After a lone ESC.
+        b"abc\x1b",
+        b"\x1b\x1b",
+    ] {
+        for (name, target, c0) in CONCAT_TARGETS {
+            let ctx = format!("{:?} + {name}", String::from_utf8_lossy(lead));
+            let input = [lead, *target, b"xyz"].concat();
+            let first = lead.len();
+            let after = first + target.len();
+            let mut watch = vec![0, first.saturating_sub(1), first, first + 1];
+            watch.push(first + target.len() / 2);
+            watch.push(after - 1);
+            watch.push(after);
+            watch.push(after + 1);
+            watch.push(input.len());
+            watch.push(input.len() + 10);
+            watch.sort_unstable();
+            watch.dedup();
+
+            let expected = [lead, CSI_CLOSING, *c0, b"xyz"].concat();
+            let (out, remapped) = strip_rich_content_and_remap(&input, &watch);
+            assert!(
+                out == expected,
+                "{ctx}: {:?}",
+                String::from_utf8_lossy(&out)
+            );
+            let (out_designator, remapped_designator) =
+                strip_rich_content_and_remap_with_designator(&input, &watch, false);
+            assert!(out_designator == expected, "{ctx}");
+            assert_eq!(remapped_designator, remapped, "{ctx}: the designator form");
+
+            assert_eq!(remapped.len(), watch.len(), "{ctx}");
+            assert!(
+                remapped.windows(2).all(|w| w[0] <= w[1]),
+                "{ctx}: non-decreasing: {remapped:?}"
+            );
+            assert!(
+                remapped.iter().all(|&o| o <= out.len()),
+                "{ctx}: within the output: {remapped:?} of {}",
+                out.len()
+            );
+            let at = |offset: usize| remapped[watch.iter().position(|&w| w == offset).unwrap()];
+            // The offset at the construct's first byte maps before the closing.
+            assert_eq!(at(first), first, "{ctx}: first byte");
+            // Strictly inside and right after: after the closing and the C0
+            // bytes the strip re-emits.
+            let past = first + CSI_CLOSING.len() + c0.len();
+            assert_eq!(at(first + 1), past, "{ctx}: inside");
+            assert_eq!(at(first + target.len() / 2), past, "{ctx}: inside, middle");
+            assert_eq!(at(after - 1), past, "{ctx}: inside, last byte");
+            assert_eq!(at(after), past, "{ctx}: right after");
+            // The bytes after the construct are one-to-one.
+            assert_eq!(at(after + 1), past + 1, "{ctx}: after + 1");
+            // Offsets before the construct are untouched.
+            assert_eq!(at(0), 0, "{ctx}: start");
+            // At or past the end: the end of the output.
+            assert_eq!(at(input.len()), out.len(), "{ctx}: end");
+            assert_eq!(at(input.len() + 10), out.len(), "{ctx}: past the end");
+        }
+    }
+}
+
+/// Inputs that follow a head in the state-form identity check: the AC-1 and
+/// AC-4 shapes (a removed construct and a continuation, with a lone ESC before
+/// it) and bytes that complete, extend or cancel an open CSI.
+fn concat_state_form_inputs() -> Vec<Vec<u8>> {
+    let mut inputs: Vec<Vec<u8>> = Vec::new();
+    for (_, target, _) in CONCAT_TARGETS {
+        for cont in CONCAT_CONTINUATIONS {
+            inputs.push([*target, *cont].concat());
+        }
+        for cont in [&b"[c"[..], b"[6n"] {
+            for escs in 1..=2usize {
+                inputs.push([&vec![0x1bu8; escs][..], *target, cont].concat());
+            }
+        }
+    }
+    for extra in [
+        &b"n"[..],
+        b"c",
+        b"t",
+        b"m",
+        b"p",
+        b"6n",
+        b"5n",
+        b"1m",
+        b";5n",
+        b";5c",
+        b"$p",
+        b"\rn",
+        b"\r6n",
+        b"\x086n",
+        b"\x7fn",
+        b"!n",
+        b"?n",
+        b"?c",
+        b">c",
+        b"=c",
+        b" n",
+        b"text",
+        b"\x1b[6n",
+        b"\x1b[c",
+        b"\x1b[7m",
+        b"\x1b[6\rn",
+        b"\x1b",
+        b"\x1b(",
+        b"\x1b(B",
+    ] {
+        inputs.push(extra.to_vec());
+    }
+    inputs
+}
+
+/// AC-5 (FR5, D3, TS-7): the state-reporting form started from a head's carried
+/// classification returns the ground-started strip of head + input minus the
+/// head's written bytes, and the same end state. The exception is input that
+/// completes the head's CSI as an answered query: the ground-started strip then
+/// removes the head together with the query, and the two outputs are
+/// replay-equivalent in term_core (rows, cursor, no response).
+#[test]
+fn strip_concat_the_state_form_from_a_carried_head_equals_the_ground_started_strip() {
+    let mut completed_as_query = 0usize;
+    for head in CONCAT_HEADS {
+        let (head_written, carried_csi) =
+            strip_pty_output_for_scrollback_write_with_csi_state(head, false, None);
+        assert_eq!(head_written, *head);
+        assert!(carried_csi.is_some(), "{:?} leaves a CSI open", head);
+        for input in concat_state_form_inputs() {
+            let ctx = format!(
+                "{:?} then {:?}",
+                String::from_utf8_lossy(head),
+                String::from_utf8_lossy(&input)
+            );
+            let joined = [*head, &input[..]].concat();
+            let (ground_out, ground_state) =
+                strip_pty_output_for_scrollback_write_with_csi_state(&joined, false, None);
+            let (out, state) =
+                strip_pty_output_for_scrollback_write_with_csi_state(&input, false, carried_csi);
+            if let Some(rest) = ground_out.strip_prefix(&head_written[..]) {
+                assert_eq!(out, rest, "{ctx}: the output");
+                assert_eq!(state, ground_state, "{ctx}: the end state");
+            } else {
+                // The head was removed together with a query it completes.
+                completed_as_query += 1;
+                let ring = [&head_written[..], &out[..]].concat();
+                let replayed = concat_view(b"", &ring);
+                let reference = concat_view(b"", &ground_out);
+                assert!(
+                    replayed.responses.is_empty(),
+                    "{ctx}: the state form answers"
+                );
+                assert!(reference.responses.is_empty(), "{ctx}: the strip answers");
+                assert_eq!(replayed.rows, reference.rows, "{ctx}: rows");
+                assert_eq!(replayed.cursor, reference.cursor, "{ctx}: cursor");
+            }
+        }
+    }
+    assert!(
+        completed_as_query > 0,
+        "the corpus has input that completes a head as a query"
+    );
+}
+
+/// D2 (FR3, TS-7): the state-reporting form writes CSI_CLOSING in place of the
+/// final byte that completes the carried CSI as an answered query, and no
+/// closing in place of a final byte that completes it as a non-query; the C0
+/// bytes in between are written once, in order.
+#[test]
+fn strip_concat_the_state_form_replaces_the_completing_final_byte_of_a_carried_csi() {
+    let cases: &[(&[u8], &[u8], &[u8])] = &[
+        // (head, input, written)
+        (b"\x1b[6", b"n", b"\x7f"),
+        (b"\x1b[6", b"\rn", b"\r\x7f"),
+        (b"\x1b[6", b"\x08\rn", b"\x08\r\x7f"),
+        (b"\x1b[", b"c", b"\x7f"),
+        (b"\x1b[", b"6n", b"6\x7f"),
+        (b"\x1b[?", b"c", b"\x7f"),
+        (b"\x1b[>", b"c", b"\x7f"),
+        (b"\x1b[1", b"4t", b"4\x7f"),
+        (b"\x1b[?1$", b"p", b"\x7f"),
+        (b"\x1b[261", b"n", b"\x7f"),
+        // Not answered: the final byte is written as it is.
+        (b"\x1b[3", b"1m", b"1m"),
+        (b"\x1b[", b"=c", b"=c"),
+        (b"\x1b[0", b"n", b"n"),
+        (b"\x1b[15", b"t", b"t"),
+        (b"\x1b[6", b"m", b"m"),
+        (b"\x1b[6 ", b"n", b"n"),
+        (b"\x1b[?6", b"n", b"n"),
+        (b"\x1b[>1", b"p", b"p"),
+    ];
+    for (head, input, written) in cases {
+        let ctx = format!(
+            "{:?} then {:?}",
+            String::from_utf8_lossy(head),
+            String::from_utf8_lossy(input)
+        );
+        let (_, carried_csi) =
+            strip_pty_output_for_scrollback_write_with_csi_state(head, false, None);
+        let (out, state) =
+            strip_pty_output_for_scrollback_write_with_csi_state(input, false, carried_csi);
+        assert!(
+            out == *written,
+            "{ctx}: wrote {:?}",
+            String::from_utf8_lossy(&out)
+        );
+        assert!(
+            state.is_none(),
+            "{ctx}: no CSI is open after the final byte"
+        );
+    }
 }

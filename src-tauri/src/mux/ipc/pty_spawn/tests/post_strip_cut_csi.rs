@@ -71,7 +71,7 @@ fn all_targets() -> Vec<(&'static str, &'static [u8])> {
 /// state cancels on an intermediate `!`; the parameter state accepts it. Only
 /// meaningful for a stream that ends in a CSI or in ground (not after a bare
 /// `ESC`, not inside a charset designator wait).
-fn client_csi_phase(stream: &[u8]) -> Option<CsiPhase> {
+pub(super) fn client_csi_phase(stream: &[u8]) -> Option<CsiPhase> {
     if !client_is_inside_a_csi(stream) {
         return None;
     }
@@ -141,35 +141,44 @@ const OPEN_HEADS: &[(&[u8], CsiPhase)] = &[
 
 /// AC-4 (FR2, TM-1, R3): after a cut-free call that ends in an open CSI
 /// followed by a complete strip target, the filter's CSI state is the state of
-/// the CSI the written bytes end in, and a following fallback closing writes
-/// one DEL. With the CSI in one call, the strip target held and completed in a
-/// later call, the state after the later call is still that state (EC-1: the
-/// target strips to nothing, so the CSI carried in is not aborted). Over a
-/// corpus mixing open CSIs, held strip targets and text, every split position
-/// and byte-by-byte feeding give the same written bytes, pending bytes,
+/// the CSI the written bytes end in. mux-strip-concat-query-closure FR1: the
+/// strip writes one CSI_CLOSING at the removed target, so the written bytes end
+/// in ground, the state is clear and a following fallback closing writes
+/// nothing. With the CSI in one call, the strip target held and completed in a
+/// later call, the completing call's strip starts from the carried CSI and
+/// writes the closing, so the state after it is clear (EC-1, inverted from the
+/// carried-open expectation of mux-cut-csi-post-strip-closure). Over a corpus
+/// mixing open CSIs, held strip targets and text, every split position and
+/// byte-by-byte feeding give the same written bytes, pending bytes,
 /// awaiting-designator state and CSI state as one call, and after every call
 /// the state equals term_core's on the bytes written so far.
 #[test]
 fn post_strip_the_carried_csi_state_follows_the_stripped_output() {
     // (a) One cut-free call: the open CSI, then a complete strip target.
-    for (head, phase) in OPEN_HEADS.iter().copied() {
+    for (head, _phase) in OPEN_HEADS.iter().copied() {
         for (name, target) in all_targets() {
             let label = format!("{:?} then {name}", text(head));
             let fed = [head, target].concat();
             let mut filter = ScrollbackWriteFilter::new();
             let out = filter.feed(&fed, DIMS).1;
-            assert_eq!(out, head, "{label}: the target is stripped");
+            assert_eq!(
+                out,
+                [head, CSI_CLOSING].concat(),
+                "{label}: the target is stripped and the strip closes the CSI (FR1)"
+            );
             assert!(filter.pending().is_empty(), "{label}");
             assert!(!filter.awaiting_designator(), "{label}");
             assert_eq!(
                 filter.csi_phase(),
-                Some(phase),
-                "{label}: the written bytes end inside the CSI"
+                None,
+                "{label}: the written bytes end in ground"
             );
-            assert_eq!(client_csi_phase(&out), Some(phase), "{label}: term_core");
+            assert_eq!(client_csi_phase(&out), None, "{label}: term_core");
             let closing = filter.feed_with_cuts(b"", DIMS, &[0]).bytes;
-            assert_eq!(closing, CSI_CLOSING, "{label}: the fallback closing");
-            assert_eq!(filter.csi_phase(), None, "{label}");
+            assert!(
+                closing.is_empty(),
+                "{label}: the fallback closing finds nothing to close"
+            );
             assert!(
                 filter.feed_with_cuts(b"", DIMS, &[0]).bytes.is_empty(),
                 "{label}: one closing"
@@ -177,9 +186,10 @@ fn post_strip_the_carried_csi_state_follows_the_stripped_output() {
         }
     }
 
-    // (b) EC-1: the CSI in one call, the strip target held in a later call and
-    // completed in another. The held target strips to nothing, so the CSI the
-    // filter carried in stays open.
+    // (b) EC-1 (inverted by mux-strip-concat-query-closure): the CSI in one
+    // call, the strip target held in a later call and completed in another. The
+    // completing call's strip starts from the carried CSI, writes the closing
+    // at the removed target and leaves the stream in ground.
     for (head, phase) in OPEN_HEADS.iter().copied() {
         for (name, target) in HELD_TARGETS.iter().copied() {
             for split in 1..target.len() {
@@ -197,15 +207,22 @@ fn post_strip_the_carried_csi_state_follows_the_stripped_output() {
                 );
 
                 emitted.extend_from_slice(&filter.feed(&target[split..], DIMS).1);
-                assert_eq!(emitted, head, "{label}: the target strips to nothing");
+                assert_eq!(
+                    emitted,
+                    [head, CSI_CLOSING].concat(),
+                    "{label}: the target strips to the closing"
+                );
                 assert!(filter.pending().is_empty(), "{label}");
                 assert_eq!(
                     filter.csi_phase(),
-                    Some(phase),
-                    "{label}: EC-1, the carried-in CSI is still open"
+                    None,
+                    "{label}: EC-1 inverted, the carried-in CSI is closed by the strip"
                 );
                 let closing = filter.feed_with_cuts(b"", DIMS, &[0]).bytes;
-                assert_eq!(closing, CSI_CLOSING, "{label}: the fallback closing");
+                assert!(
+                    closing.is_empty(),
+                    "{label}: the fallback closing finds nothing to close"
+                );
             }
         }
     }
@@ -270,13 +287,14 @@ fn post_strip_the_carried_csi_state_follows_the_stripped_output() {
 
 /// AC-5 (FR3, TM-1, R4): the held OSC grows to the 512 KiB cap, and the next
 /// call completes it past the cap and ends in `ESC[6` with a complete strip
-/// target. The overflow flush strips the run, so the written bytes end inside
-/// the CSI the target's `ESC` would have aborted:
-/// - a cut at the end of that call writes the stripped run and one DEL;
-/// - a cut followed by `n` in the same call writes the stripped run, one DEL
-///   and the `n`;
-/// - without a cut the flush carries the state, and a later fallback closing
-///   writes the DEL.
+/// target. The overflow flush strips the run, and the strip writes its closing
+/// at the removed target (mux-strip-concat-query-closure FR1, EC-7: the closing
+/// the cut fallback wrote before is now written in place by the strip):
+/// - a cut at the end of that call writes the stripped run, which already ends
+///   in the one DEL;
+/// - a cut followed by `n` in the same call writes the stripped run and the `n`;
+/// - without a cut the flush carries a clear state, and a later fallback closing
+///   writes nothing.
 /// term_core replaying the ring and a later `n` gives no cursor-position
 /// report and equals the raw stream (the target's own effect kept out).
 #[test]
@@ -291,10 +309,10 @@ fn post_strip_an_overflow_flush_followed_by_a_cut_closes_an_open_csi() {
         let tail: Vec<u8> = [&b"pppppppppp"[..], b"\x07", b"abc", b"\x1b[6", target].concat();
         let stripped = strip_pty_output_for_scrollback_write(&[&held[..], &tail[..]].concat());
         assert!(
-            stripped.ends_with(b"abc\x1b[6"),
-            "{form}: the run is stripped"
+            stripped.ends_with(b"abc\x1b[6\x7f"),
+            "{form}: the run is stripped and closed in place"
         );
-        let expected = [&stripped[..], CSI_CLOSING].concat();
+        let expected = stripped.clone();
         let before_raw = [&held[..], &tail[..], &pair[..]].concat();
         let reference = view_after_a_cut(&before_raw, b"n");
         assert!(
@@ -338,8 +356,8 @@ fn post_strip_an_overflow_flush_followed_by_a_cut_closes_an_open_csi() {
             "{form}"
         );
 
-        // No cut: the flush carries the state; the fallback closing writes
-        // the DEL.
+        // No cut: the flush carries a clear state; the fallback closing finds
+        // nothing to close.
         let mut filter = ScrollbackWriteFilter::new();
         assert!(filter.feed(&held, DIMS).1.is_empty());
         let outcome = filter.feed_with_cuts(&tail, DIMS, &[]);
@@ -349,12 +367,15 @@ fn post_strip_an_overflow_flush_followed_by_a_cut_closes_an_open_csi() {
         );
         assert_eq!(
             filter.csi_phase(),
-            Some(CsiPhase::Param),
-            "{form}: the flush carries the post-strip state"
+            None,
+            "{form}: the flush carries the post-strip state, clear"
         );
         assert!(!filter.awaiting_designator(), "{form}");
         let closing = filter.feed_with_cuts(b"", DIMS, &[0]).bytes;
-        assert_eq!(closing, CSI_CLOSING, "{form}: the fallback closing");
+        assert!(
+            closing.is_empty(),
+            "{form}: the fallback closing finds nothing to close"
+        );
     }
 }
 
@@ -369,7 +390,7 @@ fn post_strip_an_overflow_flush_followed_by_a_cut_closes_an_open_csi() {
 /// the query to the live client (`own_answer_on_client` is then `own_answer`,
 /// otherwise empty). The responses are otherwise equal, so no second answer is
 /// produced by the later `n`.
-fn assert_client_equals_reference_except(
+pub(super) fn assert_client_equals_reference_except(
     received: &[PtyOutputChunk],
     chunks: &[Vec<u8>],
     own_answer: &[u8],
@@ -548,11 +569,14 @@ fn assert_closing_on_every_path(
 ///   `ESC[6` and one DEL (the OSC is dropped by the cut, the launch is
 ///   stripped).
 /// - EC-3: `ESC[6` with a stripped CSI device query that embeds a C0 byte,
-///   then a cut, writes `ESC[6`, that C0 byte and one DEL (the C0 byte
-///   executes inside the open CSI and leaves it open).
+///   then a cut, writes `ESC[6`, one DEL and that C0 byte (the strip writes
+///   its closing before the re-emitted C0 byte, mux-strip-concat-query-closure
+///   FR1, so the C0 byte executes in ground; before it executed inside the open
+///   CSI and a later DEL closed it).
 /// - EC-4: `ESC[6` with `ESC]0;t` and BEL, and `ESC[6` with `ESC X`, each
 ///   followed by a cut, write no DEL (the written bytes end in ground).
-/// - EC-6: no cut writes both the designator `ESC` and a DEL.
+/// - EC-6: no cut writes both the designator `ESC` and a DEL (the DEL is the
+///   strip's closing, written in place at the removed target).
 #[test]
 fn post_strip_the_closing_follows_the_stripped_output() {
     // EC-2.
@@ -565,13 +589,17 @@ fn post_strip_the_closing_follows_the_stripped_output() {
         for body in [&[b'6', c0, b'n'][..], &[c0, b'6', b'n'][..]] {
             let query = [&b"\x1b["[..], body].concat();
             let fed = [&b"\x1b[6"[..], &query].concat();
-            let expected = [&b"\x1b[6"[..], &[c0], CSI_CLOSING].concat();
+            let expected = [&b"\x1b[6"[..], CSI_CLOSING, &[c0]].concat();
             let label = format!("EC-3, C0 {c0:#04x}, query {:?}", text(&query));
             let mut filter = ScrollbackWriteFilter::new();
             let out = filter.feed_with_cuts(&fed, DIMS, &[fed.len()]).bytes;
-            assert_eq!(out, expected, "{label}: the C0 byte stays, the DEL follows");
-            // Fed byte by byte the query is written across calls (D2): the
-            // ring holds the fed bytes and ends in ground.
+            assert_eq!(
+                out, expected,
+                "{label}: the DEL closes, the C0 byte follows"
+            );
+            // Fed byte by byte the query is written across calls: its final
+            // byte completes the carried CSI as an answered query and is
+            // written as the DEL in its place (FR3).
             let mut filter = ScrollbackWriteFilter::new();
             let mut got = Vec::new();
             let (init, last) = fed.split_at(fed.len() - 1);
@@ -579,19 +607,32 @@ fn post_strip_the_closing_follows_the_stripped_output() {
                 got.extend_from_slice(&filter.feed(&[*byte], DIMS).1);
             }
             got.extend_from_slice(&filter.feed_with_cuts(last, DIMS, &[1]).bytes);
-            assert_eq!(got, fed, "{label}: byte by byte");
-            // Replay: the C0 byte executes, the DEL cancels the CSI, `n` is text.
+            let mut in_place = fed.clone();
+            *in_place.last_mut().expect("fed is not empty") = CSI_CLOSING[0];
+            assert_eq!(got, in_place, "{label}: byte by byte");
+            // Replay: the DEL cancels the CSI, the C0 byte executes once, `n`
+            // is text.
             let (before, after) = (&out[..], &b"n"[..]);
             let raw_before = [&fed[..], b"\x1b[?1049h\x1b[?1049l"].concat();
+            let reference = view_after_a_cut(&raw_before, after);
             assert_eq!(
                 view_after_a_cut(before, after),
-                view_after_a_cut(&raw_before, after),
+                reference,
                 "{label}: the ring replays like the raw stream"
+            );
+            assert_eq!(
+                view_after_a_cut(&got, after),
+                reference,
+                "{label}: the byte-by-byte ring replays like the raw stream"
             );
             // The fallback closing after a cut-free call.
             let mut filter = ScrollbackWriteFilter::new();
             let mut got = filter.feed(&fed, DIMS).1;
-            assert_eq!(filter.csi_phase(), Some(CsiPhase::Param), "{label}");
+            assert_eq!(
+                filter.csi_phase(),
+                None,
+                "{label}: the strip closed the CSI"
+            );
             got.extend_from_slice(&filter.feed_with_cuts(b"", DIMS, &[0]).bytes);
             assert_eq!(got, expected, "{label}: fallback closing");
         }
@@ -613,7 +654,7 @@ fn post_strip_the_closing_follows_the_stripped_output() {
             // In one call: a stripped target between the CSI and the designation.
             let designation = [&b"\x1b"[..], brace].concat();
             let fed = [&b"\x1b[6"[..], target, &designation].concat();
-            let expected = [&b"\x1b[6"[..], &designation, ESC_BYTE].concat();
+            let expected = [&b"\x1b[6"[..], CSI_CLOSING, &designation, ESC_BYTE].concat();
             let ctx = format!("EC-6, {:?}", text(&fed));
             let mut filter = ScrollbackWriteFilter::new();
             assert_eq!(
@@ -627,7 +668,7 @@ fn post_strip_the_closing_follows_the_stripped_output() {
             // the designation and the cut in the next.
             let mut filter = ScrollbackWriteFilter::new();
             let mut got = filter.feed(&[&b"\x1b[6"[..], target].concat(), DIMS).1;
-            assert_eq!(filter.csi_phase(), Some(CsiPhase::Param), "{ctx}");
+            assert_eq!(filter.csi_phase(), None, "{ctx}: the strip closed the CSI");
             got.extend_from_slice(&filter.feed_with_cuts(&designation, DIMS, &[2]).bytes);
             assert_eq!(got, expected, "{ctx}: designation and cut in a later call");
             assert_eq!(filter.csi_phase(), None, "{ctx}");
@@ -669,8 +710,10 @@ fn alternating(target: &[u8], reps: usize) -> Vec<u8> {
 #[test]
 fn post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget() {
     let start = std::time::Instant::now();
-    let strip_closing =
-        |bytes: &[u8]| -> Vec<u8> { bytes.strip_suffix(CSI_CLOSING).unwrap_or(bytes).to_vec() };
+    // Every unit writes its open `ESC[6` and the strip's closing in place of the
+    // removed target (mux-strip-concat-query-closure FR1); a cut at the end
+    // finds the written bytes in ground and adds nothing.
+    let unit_written = [&b"\x1b[6"[..], CSI_CLOSING].concat();
 
     for (name, target) in HELD_TARGETS.iter().copied() {
         let unit_len = 3 + target.len();
@@ -678,10 +721,10 @@ fn post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget()
         let reps = 8_000;
         let input = alternating(target, reps);
         assert!(input.len() < SCROLLBACK_FILTER_PENDING_CAP, "{name}");
-        let expected = b"\x1b[6".repeat(reps);
+        let expected = unit_written.repeat(reps);
         for cut_at_end in [false, true] {
             let whole = run_pieces(&[&input], cut_at_end, false);
-            assert_eq!(strip_closing(&whole.emitted), expected, "{name}: one call");
+            assert_eq!(whole.emitted, expected, "{name}: one call");
             assert!(whole.pending.is_empty(), "{name}");
             for at in [
                 1,
@@ -717,14 +760,10 @@ fn post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget()
         let reps = 40_000usize.max(SCROLLBACK_FILTER_PENDING_CAP / unit_len + 10);
         let input = alternating(target, reps);
         assert!(input.len() > SCROLLBACK_FILTER_PENDING_CAP, "{name}");
-        let expected = b"\x1b[6".repeat(reps);
+        let expected = unit_written.repeat(reps);
         for cut_at_end in [false, true] {
             let whole = run_pieces(&[&input], cut_at_end, false);
-            assert_eq!(
-                strip_closing(&whole.emitted),
-                expected,
-                "{name}: overflow, one call"
-            );
+            assert_eq!(whole.emitted, expected, "{name}: overflow, one call");
             let at = unit_len * (reps / 2);
             let (a, b) = input.split_at(at);
             assert_eq!(
@@ -739,10 +778,6 @@ fn post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget()
     let reps = 8_000;
     let input = alternating(QUERY, reps);
     let out = emitted_through(&input, &[input.len()], &[]);
-    assert_eq!(
-        out.strip_suffix(CSI_CLOSING).unwrap_or(&out),
-        b"\x1b[6".repeat(reps).as_slice(),
-        "query: one call"
-    );
+    assert_eq!(out, unit_written.repeat(reps), "query: one call");
     assert!(start.elapsed() < BUDGET, "took {:?}", start.elapsed());
 }
