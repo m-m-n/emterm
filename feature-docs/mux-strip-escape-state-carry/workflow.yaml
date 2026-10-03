@@ -1,0 +1,201 @@
+schema_version: 1
+feature: mux-strip-escape-state-carry
+created: '2026-10-03'
+base_branch: main
+goal: |
+  # mux: post-strip-closure review で残った medium 指摘 a879a02de382209f（strip の終端状態 Escape が引き継がれず分割位置でカット閉鎖が変わる）の対応
+
+  Notion: https://www.notion.so/3ee3509ec8ee81b7bbd0dc35a37ee3bc
+
+  ## 現象 (必須)
+  mux-cut-csi-post-strip-closure の review round 1 で、medium 指摘 `a879a02de382209f`（security、evaluator 起点）が `unresolved` のまま残った。
+  `strip_pty_output_for_scrollback_write_with_csi_state`（`src-tauri/src/mux/scrollback_filter.rs:280`）は strip の終端状態を `state.csi()` で `Option<CsiPhase>` に縮める。このため、strip が ESC を書いた直後の構文を除去したときの終端状態 `WrittenState::Escape` は `None` になり、`self.csi` に入って（`src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:554`）次の呼び出しの strip は Ground から始まる。
+  結果として、同じバイト列でも読み取りの分割位置によってカット時の閉鎖（DEL）の有無が変わる。1 回で渡すと `Some(Param)` になり DEL が書かれるが、分割して渡すと DEL が書かれず、リングとスナップショットが `ESC[6` で終わる。後続の `n` で `ESC[6n` が成立し、生ストリームには無い CPR 応答をクライアントが返す。
+  また、そのような呼び出しの直後がカットだと、リングは書かれた単独の ESC で終わり、閉じられない。リプレイではカット後の最初のバイトがエスケープを作る（例: `[6n` は照会、`c` は RIS）。旧来の scan ベースの状態にも同じ欠落があった。
+  ## 再現手順 (必須)
+  1. 書き込みフィルタの呼び出し 1 に `ESC ESC]777;emterm;markdown;begin;id=x BEL` をカット無しで渡す（`ESC` が書かれ、引き継ぐ状態は `None` になる）
+  2. 呼び出し 2 に `[6` を末尾カット付きで渡す（`[6` が書かれ、DEL は書かれない）
+  3. 後続の出力で `n` が届くと、クライアントが開始していない CPR 応答（`ESC[row;colR`）を返す
+  `ESC` + `ESC[6n`、`ESC` + Kitty APC、`ESC` + SIXEL DCS でも同じ。
+  ## 期待する挙動 (必須)
+  strip の終端状態を Ground / Escape / Csi(phase) を区別できる形で引き継ぎ、分割位置によらず出力と状態が 1 回で渡した結果と等しくなる（AC-3 / FR1 / FR2）。書かれたストリームが Escape で終わる位置でカットするときは、エスケープを無害に完了させる閉鎖を書く。
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある（`post_strip_cut_csi.rs` の分割不変性コーパスに `ESC ESC`+各除去対象（+`[6`）を加え、同一呼び出しのカットとフォールバック閉鎖の両方のケースを追加）
+  - [ ] stable_id `a879a02de382209f` について、対応済みか・対応不要かを判断して記録する
+  ## 該当箇所 (任意)
+  - `src-tauri/src/mux/scrollback_filter.rs:280`（`strip_pty_output_for_scrollback_write_with_csi_state` が終端状態を `Option<CsiPhase>` に縮める）
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:554`（`self.csi = csi_after`）
+  - `src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs`（分割不変性コーパス）
+  - 詳細: ブランチ `em-workflow/mux-cut-csi-post-strip-closure/integration` の `feature-docs/mux-cut-csi-post-strip-closure/reviews/round1.yaml`
+  ## 実害・発生条件 (任意)
+  ESC の直後に strip 対象の完全な構文が続き、その直後で PTY 読み取りの分割が起き、さらに snapshot 取得のカットが重なったときにだけ起きる。
+parent_branch: em-workflow/mux-strip-escape-state-carry/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.35
+      '2': 0.65
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.03
+      '2': 0.97
+      '3': 0.0
+  at: '2026-10-03T20:11:30+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 06eee944b3acd8e4d6b01640cf3f608ce93382a4
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI に触れない。変更は mux デーモンの書き込みフィルタと共有 strip の状態報告に限られる。
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: 493baf7999b247a2f52e62fe38e42882af100239
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: 書かれたストリームの終端状態の引き継ぎ
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+    - TS-2
+    - TS-5
+    - TS-6
+  FR2:
+    title: 引き継いだ指定子待ちは strip の除去判定を変えない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+    - TS-4
+  FR3:
+    title: カット時の閉鎖を書かれたストリームの終端状態で決める
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+    - TS-3
+    - TS-4
+    - TS-5
+    - TS-7
+  FR4:
+    title: Escape で終わる位置の閉鎖
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-3
+  FR5:
+    title: 回帰テストの追加
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+  FR6:
+    title: 判断の記録
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-9
+  NFR1:
+    title: 互換性
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: リーダー通常経路の負荷
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-8
+  NFR3:
+    title: セキュリティ（TM-1）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-7
+  NFR4:
+    title: セキュリティ（TM-2）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-8
+  NFR5:
+    title: ビルドとプラットフォーム
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-10

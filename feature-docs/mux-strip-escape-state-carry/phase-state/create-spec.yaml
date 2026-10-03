@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-strip-escape-state-carry
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: f9197c26e67c1e459c2b6c3b962379ea06c4d30c
 last_input_digest: sha256:4dcea318df4b113bbb4f9de49354a61a894f3ef8e483be9240986c6c46ba1547
