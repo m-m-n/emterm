@@ -142,7 +142,7 @@ tasks:
     complexity: low
     requirements:
     - FR6
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-strip-escape-state-carry/task0002
 review:
   status: pending
