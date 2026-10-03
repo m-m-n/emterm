@@ -175,7 +175,7 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-vt100-del-closing/task0001
 review:
