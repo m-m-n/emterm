@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-write-filter-overflow-open-string-cut
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: cef378721e4da165ff333cca51fea93f74cc7b3e
+last_input_digest: sha256:674dd9c3061da8eb8e683b8c723fff47f7bf5a0c01c7e32795b925a9f9651574
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:674dd9c3061da8eb8e683b8c723fff47f7bf5a0c01c7e32795b925a9f9651574
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
