@@ -902,4 +902,159 @@ mod tests {
         assert!(contains(&out, b"done"), "trailing plain text preserved");
         assert!(contains(&out, b"SCREEN"), "screen contents preserved (alt)");
     }
+
+    // ── mux-strip-concat-query-closure task0001 (FR1, FR5, D5, D6): a ring with
+    // a construct removed inside an open CSI, and the snapshot end ───────────
+
+    const CONCAT_LAUNCH: &[u8] = b"\x1b]777;emterm;markdown;begin;id=x\x07";
+    const REATTACH_CLEAR: &[u8] = b"\x1b[3J\x1b[H\x1b[2J";
+
+    /// A construct the strip removes inside an open CSI is replaced by one
+    /// CSI_CLOSING, and the segment offsets follow it (D5): an offset at the
+    /// construct's first byte maps before the closing, an offset strictly inside
+    /// it or right after it maps after the closing. Every offset points at the
+    /// same content in the payload as in the ring, and replaying the payload
+    /// with its segments and then a continuation `n` gives no response.
+    #[test]
+    fn build_snapshot_bytes_segments_follow_a_construct_removed_inside_an_open_csi() {
+        use term_core::terminal_core::TerminalCore;
+
+        let head = b"before\x1b[6";
+        let scrollback = [&head[..], CONCAT_LAUNCH, b"tail"].concat();
+        let first = head.len();
+        let inside = first + 3;
+        let after = first + CONCAT_LAUNCH.len();
+        let segments = [
+            (0usize, 80u16, 24u16),
+            (first, 90, 25),
+            (inside, 100, 26),
+            (after, 110, 27),
+        ];
+
+        let layouts: [(&str, Vec<u8>, (Vec<u8>, Vec<(usize, u16, u16)>)); 2] = [
+            (
+                "reattach",
+                REATTACH_CLEAR.to_vec(),
+                build_snapshot_bytes(&scrollback, &segments, b"", false, (80, 24)),
+            ),
+            (
+                "resume",
+                b"\x1b[H\x1b[2J".to_vec(),
+                build_resume_snapshot_bytes(&scrollback, &segments, b"", false, (80, 24)),
+            ),
+        ];
+        for (name, clear, (payload, mapped)) in layouts {
+            let body = clear.len();
+            let closing_at = body + head.len();
+            assert!(
+                payload[body..].starts_with(&[head.as_slice(), b"\x7ftail"].concat()),
+                "{name}: the construct is replaced by one closing"
+            );
+            assert_eq!(payload[closing_at], 0x7f, "{name}");
+            assert_eq!(
+                mapped,
+                vec![
+                    (0usize, 80u16, 24u16),
+                    (closing_at, 90, 25),
+                    (closing_at + 1, 100, 26),
+                    (closing_at + 1, 110, 27),
+                ],
+                "{name}: first byte maps before the closing, inside and right after \
+                 map after it"
+            );
+            assert!(mapped.windows(2).all(|w| w[0].0 <= w[1].0), "{name}");
+            assert!(
+                mapped.iter().all(|&(off, _, _)| off <= payload.len()),
+                "{name}"
+            );
+            assert!(payload[mapped[3].0..].starts_with(b"tail"), "{name}");
+
+            let mut client = TerminalCore::new(80, 24, 10_000);
+            client.reset_and_replay_segments(&payload, &[]);
+            client.process_pty_data_fully(b"n");
+            assert!(
+                client.take_response().is_empty(),
+                "{name}: the `n` after the replayed ring is plain text"
+            );
+        }
+    }
+
+    /// A lone `ESC` kept in front of a removed construct is neutralized by one
+    /// CSI_CLOSING (D1); the offsets at and before the lone `ESC` are unchanged,
+    /// the offset at the construct's first byte maps before the closing, and
+    /// offsets inside or right after it map after the closing.
+    #[test]
+    fn build_snapshot_bytes_segments_follow_a_construct_removed_after_a_lone_esc() {
+        let head = b"ab\x1b";
+        let scrollback = [&head[..], CONCAT_LAUNCH, b"[ctail"].concat();
+        let (esc_at, first) = (2usize, head.len());
+        let (inside, after) = (first + 3, first + CONCAT_LAUNCH.len());
+        let segments = [
+            (0usize, 80u16, 24u16),
+            (esc_at, 90, 25),
+            (first, 100, 26),
+            (inside, 110, 27),
+            (after, 120, 28),
+        ];
+        let (payload, mapped) = build_snapshot_bytes(&scrollback, &segments, b"", false, (80, 24));
+        let body = REATTACH_CLEAR.len();
+        assert_eq!(
+            &payload[body..body + b"ab\x1b\x7f[ctail".len()],
+            b"ab\x1b\x7f[ctail",
+            "the lone ESC is closed by one DEL"
+        );
+        assert_eq!(
+            mapped,
+            vec![
+                (0usize, 80u16, 24u16),
+                (body + esc_at, 90, 25),
+                (body + first, 100, 26),
+                (body + first + 1, 110, 27),
+                (body + first + 1, 120, 28),
+            ]
+        );
+        assert!(payload[mapped[4].0..].starts_with(b"[ctail"));
+    }
+
+    /// D6: no closing is written at the snapshot end. A ring that genuinely ends
+    /// inside a CSI keeps its bytes as they are in front of the trailing toggle
+    /// (reattach) and at the end (resume); a ring that ends in a construct
+    /// removed inside an open CSI gets the strip's one closing and no second
+    /// one.
+    #[test]
+    fn build_snapshot_bytes_writes_no_closing_at_the_snapshot_end() {
+        let open = b"abc\x1b[6";
+        assert_eq!(
+            build_snapshot_bytes(open, &[], b"SC", false, (80, 24)).0,
+            [REATTACH_CLEAR, &open[..], b"\x1b[?1049l"].concat(),
+            "reattach, main buffer"
+        );
+        assert_eq!(
+            build_snapshot_bytes(open, &[], b"SC", true, (80, 24)).0,
+            [REATTACH_CLEAR, &open[..], b"SC\x1b[?1049h"].concat(),
+            "reattach, alt screen"
+        );
+        assert_eq!(
+            build_resume_snapshot_bytes(open, &[], b"SC", false, (80, 24)).0,
+            [&b"\x1b[H\x1b[2J"[..], &open[..]].concat(),
+            "resume, main buffer"
+        );
+        assert_eq!(
+            build_resume_snapshot_bytes(open, &[], b"SC", true, (80, 24)).0,
+            [&b"\x1b[H\x1b[2J"[..], &open[..], b"\x1b[?1049hSC"].concat(),
+            "resume, alt screen"
+        );
+
+        let ends_in_removed = [&open[..], CONCAT_LAUNCH].concat();
+        assert_eq!(
+            build_snapshot_bytes(&ends_in_removed, &[], b"", false, (80, 24)).0,
+            [REATTACH_CLEAR, &open[..], b"\x7f\x1b[?1049l"].concat(),
+            "reattach: the strip's closing only"
+        );
+        assert_eq!(
+            build_resume_snapshot_bytes(&ends_in_removed, &[], b"", false, (80, 24)).0,
+            [&b"\x1b[H\x1b[2J"[..], &open[..], b"\x7f"].concat(),
+            "resume: the strip's closing only"
+        );
+    }
 }
