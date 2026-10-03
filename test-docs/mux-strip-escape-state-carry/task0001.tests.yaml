@@ -1,0 +1,129 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib` finished with 4159 passed, 0 failed, 3 ignored.
+baseline_failures: []
+# Re-executed after the implementation: `cargo test --lib` finished with 4168 passed, 0 failed,
+# 3 ignored (the baseline's 4159 plus the 9 tests this task adds: the 8 tests of the new module
+# `escape_state_carry` and the oracle validation test in `scrollback_filter::tests`). The
+# `--no-default-features` cargo check was run once after the implementation: no error, no warning.
+# One earlier post-implementation run, made while the machine's load average was about 10
+# (sibling worktree builds), failed two tests that passed on re-run and alone:
+# `mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master`
+# (a PTY echo timing test) and
+# `mux::ipc::pty_spawn::tests::round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus`
+# (a 10-second budget; 2.6 s alone). This task touches neither; the later full runs report no failure.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::scrollback_filter::tests::post_strip_state_form_reports_the_csi_state_of_the_written_bytes
+      - mux::scrollback_filter::tests::post_strip_state_form_output_equals_the_write_path_strip
+      - mux::scrollback_filter::tests::escape_carry_the_end_state_oracle_classifies_the_reference_streams
+    red_confirmed: true
+    red_reason: >-
+      Observed before any production change: the lib test target did not compile (E0425 for
+      `strip_pty_output_for_scrollback_write_with_written_state`, E0433 for `WrittenState`). The two
+      existing tests were extended in place to the full written state and the successor strip form,
+      and the oracle validation test names `WrittenState`; none of the three existed against the old
+      API, so a compile failure is the red observed for them, not an assertion failure. The
+      assertions: every row of the state table is confirmed with the term_core end-state oracle
+      (`client_written_state`), including the two D4 rows (`ESC[6 ESC` gives Escape, `ESC[6 ESC(`
+      gives Designator) and the `ESC` + removed-construct rows for six constructs; the output is
+      compared over every allowed pair of verbatim flag and carried state.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_the_carried_csi_state_follows_the_stripped_output
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change filter (the new strip API compiled, the filter still carried only
+      the CSI sub-state): after call 0 of `ESC` + launch the carried state was Ground where the
+      term_core end state of the emitted bytes is Escape. The test stops at its first failing
+      assertion, so the later corpus entries (`ESC ESC` + target + `[6`, and the rest of the
+      extended corpus) were not observed failing on their own; they share the cause.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_a_cut_after_a_written_escape_writes_the_escape_closure
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change filter: failed at 'osc 777 launch: cut at the end of the call' with
+      left `[27]` and right `[27, 24]` (no closure followed the written ESC). The test stops at its
+      first failing assertion, so the other constructs, the three-cuts case and the EC-1, EC-2, EC-3
+      and EC-8 parts were not observed red on their own; they share the cause.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_a_splice_made_designator_wait_closes_with_the_designator_esc
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change filter: failed at 'cut at the end writes the designator ESC only'
+      with left `[27, 40]` and right `[27, 40, 27]`. The EC-5 part (the splice that sets the scan
+      flag while the written stream is in ground, where nothing is written at a cut) was not reached
+      before the first assertion failed and was not observed red on its own.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_an_overflow_flush_ending_in_a_written_escape_carries_or_closes_it
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change filter: failed at 'osc 777 launch: the stripped run and one Escape
+      closure' (the overflow flush at a cut wrote no closure). The no-cut carried-state part and the
+      other constructs were not reached before the first assertion failed.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_the_escape_closure_has_no_effect_in_term_core
+    red_confirmed: true
+    red_reason: >-
+      Observed before any production change: the lib test target did not compile (E0425 for
+      `ESCAPE_CLOSING`, E0599 for `written_state`), the compile-time red the plan's test notes expect
+      for this test. With the constant in place the test passes, which confirms CAN (0x18) is ignored
+      by term_core and returns it to ground (`escape()`'s unknown-final arm emits `EscDispatch(None,
+      0x18)`, which `handle_esc_internal` ignores), so no plan deviation arises. For streams ending
+      in an open CSI (`ESC[6 ESC`) the reference is the stream with the CSI cancelled by DEL,
+      because the stream without its trailing ESC is still inside the CSI.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_the_reproduction_closes_the_csi_and_replays_no_query
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_the_escape_closure_replays_like_the_raw_stream
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_reader_restore_matches_the_raw_stream_reference
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change filter. The reproduction test failed at 'osc 777 launch: the
+      written ESC is carried as Escape' (the carried state was Ground). The ring-replay test failed
+      at the first layout of 'osc 777 launch, switch [?47h, continuation "[6n"' with left `[27]` and
+      right `[27, 24]`. The reader-restore test failed at '(a) agent-status, [?47h, [6n: response
+      bytes differ from the raw-stream reference': the client answered with a cursor-position report
+      (`ESC [ 1 ; 1 R`) that the raw stream never provokes. Later parts of each test, and the other
+      construct forms, were not reached before the first assertion failed.
+  AC-8:
+    tests:
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget
+      - mux::scrollback_filter::tests::post_strip_state_form_is_one_linear_pass
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::round3_write_path::designator_chains_finish_within_the_budget_in_the_strip_and_the_filter
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_long_csi_parameter_runs_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_many_csis_straddling_calls_with_cuts_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_many_open_csis_through_the_reader_finish_within_the_budget
+    red_confirmed: true
+    red_reason: >-
+      The new test failed on the pre-change filter on its written-state assertion (left `Ground`,
+      right `Escape`), not on split invariance: its other claims (every feeding of the same input
+      writes the same bytes, the 10-second budget, no panic) are regression guards that the
+      pre-change filter was not observed failing, as the plan's test notes say of this test. The
+      other listed tests are existing guards that pass before and after the change;
+      `post_strip_state_form_is_one_linear_pass` only moved to the successor strip form. That no
+      loop over the fed bytes was added to the write filter is a property of the code, checked by
+      inspection: the state advances inside the strip's single pass.
+  AC-9:
+    tests:
+      - mux::scrollback_filter::tests::post_strip_state_form_output_equals_the_write_path_strip
+      - mux::scrollback_filter::tests::the_state_taking_form_with_the_flag_clear_equals_the_existing_entry_points
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_carried_state_names_the_csi_sub_state
+      - mux::ipc::pty_spawn::tests::round4_chain::the_csi_state_is_captured_at_the_chain_head_and_follows_the_settled_chain
+      - mux::ipc::pty_spawn::tests::round4_chain::chains_and_csis_are_split_invariant_and_the_csi_state_matches_term_core
+    red_confirmed: false
+    red_reason: >-
+      The behavior this criterion states (the other strip forms' outputs equal the successor form's,
+      `csi_phase()` keeps returning the CSI sub-state and None for every other state) pre-existed
+      and the change preserves it, so no red state occurs; the listed existing tests guard it. The
+      remaining outcomes are build and suite results that were not observed failing: the full
+      `--lib` suite finished with 4168 passed, 0 failed, 3 ignored, no existing test was renamed
+      (the existing R1, R2 and R3 tests were extended in place under their names; the only
+      expectations whose meaning changed are the two D4 rows in R2), and the
+      `--no-default-features` cargo check finished with no error and no warning.
