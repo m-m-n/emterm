@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-strip-join-escape-closure
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 0c3a2c06deb717868a10473cd0a4e72d6b14d58d
 last_input_digest: sha256:17a8961baab4dbe2423a5741dd6dc1ff1a339026b73d6799ee3df64dd129ca99
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
