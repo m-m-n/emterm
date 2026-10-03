@@ -78,32 +78,58 @@ ground (SPEC A1). Affected tasks: task0001.
 ### D3: The model covers every written byte, not only overflow output
 
 Decision: the body states follow the written bytes on every path; they are not
-gated on the overflow branch. Consequence beyond SPEC A3: a non-overflow run
-whose written bytes end inside an open body, because the strip removed the
-construct whose `ESC` aborted that body or because removals spliced a string
-introducer, also carries the body state, and a cut after it writes `ESC` + CAN.
-The replay then matches the client, which also saw an Unterminated dispatch.
-The cut-free case stays out of scope (SPEC A4). Affected tasks: task0001.
+gated on the overflow branch. A cut chooses its closure from the written end
+state alone, whatever path wrote the bytes (FR1, FR2, FR5). Affected tasks:
+task0001.
 
-### D4: Predecessor expectations that change
+Known deviation from SPEC A3 / NFR3: SPEC A3 (only an overflow flush leaves an
+open string body written) and NFR3's parenthetical "every non-overflow path"
+do not hold. A non-overflow run can leave an open body written. Example, below
+the cap: `ESC ]0;x` followed by `ESC [6n`. The boundary scan holds nothing (the
+`ESC [` aborts the string and, as a complete CSI, settles the chain), and the
+write-path strip removes the device query, so the call writes `ESC ]0;x`.
+Removals that splice a string introducer have the same effect. Such a run now
+carries the open-body state, and a cut after it writes `ESC` + CAN where it
+wrote nothing before. NFR3 is accepted in this form: the bytes written by paths
+that never leave an open string body written are unchanged. task0001 AC-11
+pins the non-overflow case.
 
-- `overflow_lone_esc.rs`, the `endings()` entry 'inside an open string body':
-  the open OSC body state and the `ESC` + CAN closing (FR6).
-- `round4_designator_cut.rs`, the third case of
-  `round4_overflow_flush_then_a_cut_without_a_wait_writes_nothing_extra`
-  ("Ends inside the still-open OSC"): it pins the old empty closure for an
-  overflow flush followed by a cut in the same call whose run ends inside an
-  open OSC body, which is SPEC AC-5's case. The case moves to the new
-  regression module with the new expectation; the predecessor test keeps its
-  name and its two ground-ending cases.
+Replay guarantee: at a cut that finds the written stream inside an open body,
+the closure returns the replay to Ground, and bytes written after the cut are
+not absorbed into the body. Not restored: bytes written before the cut that the
+ring's still-open body absorbs while the client's string had already been
+aborted by a removed construct's `ESC`, and display differences produced by the
+strip's splices. These are treated as SPEC A4 treats its case. The cut-free
+case stays out of scope (SPEC A4).
 
+### D4: Predecessor expectations that change (FR6)
+
+The two changes below are the FR6 predecessor-expectation updates and the only
+planned exceptions to SPEC AC-9's "no other existing expectation changed":
+
+1. `overflow_lone_esc.rs`, the `endings()` entry 'inside an open string body':
+   the open OSC body state and the `ESC` + CAN closing.
+2. `round4_designator_cut.rs`, the third case of
+   `round4_overflow_flush_then_a_cut_without_a_wait_writes_nothing_extra`
+   ("Ends inside the still-open OSC"): it pins the old empty closure for SPEC
+   AC-5's input (an overflow flush followed by a cut in the same call whose run
+   ends inside an open OSC body). The case moves to the new regression module,
+   where the same input is checked by exact-bytes equality against the
+   write-path strip of the run followed by `ESC` + CAN. The predecessor test
+   keeps its name and its two cases that end in Ground (a complete
+   designation, plain text), and its doc comment describes only those two
+   cases.
+
+No test is renamed, so no predecessor test-docs record changes. Any other
+existing expectation that changes is handled under task0001's rule for an
+unforeseen failing test and reported as a plan deviation.
 Affected tasks: task0001.
 
 ## Risk Assessment
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| An existing test outside D4 pins the old empty closure for written bytes that end inside an open body (D3) | Low | Low | task0001's rule for such a failure: confirm parity with the oracle / view_after_a_cut, update the expectation, keep the name, report the file as a plan deviation |
+| An existing test outside D4 pins the old empty closure for written bytes that end inside an open body, including a non-overflow run (D3's SPEC A3 / NFR3 deviation) | Low | Low | task0001's rule for such a failure: confirm with the end-state oracle and view_after_a_cut that the replay is in Ground after the closure and the bytes after the cut are displayed, update the expectation, keep the name, report the file as a plan deviation |
 | The extended end-state oracle reclassifies an existing reference stream | Low | Medium | The oracle's reference-stream table keeps its rows and gains body rows (task0001 AC-1) |
 | A Kitty APC / SIXEL DCS left open past the cap is dispatched on replay at the closure | Medium | Low | The client dispatched the same payload at the switch's `ESC` (parity); tests use payloads that neither answer nor place an image |
 | The snapshot-time strip's ST search from a Kitty APC / SIXEL DCS left open still spans over the closure up to a later ST in the ring | Low | Low | Pre-existing behavior; the closure adds no ST; the snapshot-time strip is unchanged (NFR5) |
@@ -111,5 +137,4 @@ Affected tasks: task0001.
 
 ## Open Questions
 
-- [ ] D3 widens the `ESC` + CAN closure beyond SPEC A3 / NFR3's parenthetical "every non-overflow path": a non-overflow cut after written bytes that end inside an open body (removed aborting construct, string-introducer splice) now writes it. Confirm at review that this is accepted as within FR1 / FR2.
-- [ ] D4's second item changes a predecessor expectation that FR6 does not name (mux-suppressed-output-round4-fixes' open-OSC case). Confirm at review.
+- None.
