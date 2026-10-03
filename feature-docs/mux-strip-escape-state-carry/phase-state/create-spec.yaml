@@ -3,9 +3,9 @@ feature: mux-strip-escape-state-carry
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: da8b203abd5c30837267955cccfea72f142f3fcd
-last_input_digest: sha256:a9cfe3418e4f7fcca2d643738cf4bfd2170581e59bc501b38cacf8384c34bc01
-active_request_id: null
+base_revision: 62770603438882a77d4a145ce2ccf0a0f118b64c
+last_input_digest: sha256:4dcea318df4b113bbb4f9de49354a61a894f3ef8e483be9240986c6c46ba1547
+active_request_id: create-spec-run-0002
 packets: {}
 answers:
   create-spec.feature-identity:
@@ -24,6 +24,9 @@ worker_runs:
   status: completed
   input_digest: sha256:a9cfe3418e4f7fcca2d643738cf4bfd2170581e59bc501b38cacf8384c34bc01
   output_digest: sha256:708a81833beb356a1ae6f704116a04483c0b9b91d16265d525b8867233599e4c
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:4dcea318df4b113bbb4f9de49354a61a894f3ef8e483be9240986c6c46ba1547
 artifacts: []
 patches: []
 progress_fingerprint: sha256:c9cefcd8c4be91b8ba4d122151eb811eda3f3ee3c19d69dd0c18ffad04213d7b
