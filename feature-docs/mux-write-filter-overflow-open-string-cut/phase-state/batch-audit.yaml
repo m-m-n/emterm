@@ -1,0 +1,22 @@
+schema_version: 1
+feature: mux-write-filter-overflow-open-string-cut
+records:
+- question_id: create-spec.command-approval
+  packet_id: null
+  answered_at: '2026-10-04T03:05:00+09:00'
+  source: batch-decision-table
+  answer_mode: select
+  selected_option_ids: []
+  freeform: null
+  normalized_answer: 'All project.components commands were already in the approval store; no new --record was needed. Commands: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml" (build_command) and "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib" (test_command).'
+  resolution_note: 'gate: create-spec.command-approval; batch auto-approval path; both strings matched bash_guard.py --list exactly; codex_consulted: false.'
+- question_id: develop.integration-branch-base
+  packet_id: null
+  answered_at: '2026-10-04T02:40:00+09:00'
+  source: codex-consultation
+  answer_mode: select
+  selected_option_ids:
+  - branch_from_predecessor_tip_pr_to_main
+  freeform: null
+  normalized_answer: 'Integration branch created from em-workflow/mux-write-filter-overflow-lone-esc/integration tip 3bcf727e (code to fix exists only there; PR #120 open). PR targets main; it includes the predecessor''s commits until #120 merges, and needs rebasing if #120 is squash/rebase-merged.'
+  resolution_note: 'unlisted fallback (orchestrator-raised, no gate_id); options: A main HEAD (fix impossible) / B predecessor tip + PR to main / C predecessor tip + stacked PR to predecessor branch; chosen B; Codex consulted: yes (C needs predecessor branch deletion for auto-retarget, extra management unattended); opus escalation: no. Recorded as Notion comment.'
