@@ -1,11 +1,11 @@
 schema_version: 1
 feature: settings-profile-drag-reorder
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: c259c05aad2d72414f74f43d1622e127e91fe679
 last_input_digest: sha256:3c48ca28c8897ded7719dbb801de778363ddbb184e62b2b814b8572a79a54ab1
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
