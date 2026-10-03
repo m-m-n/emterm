@@ -110,7 +110,7 @@ workflow:
   base_commit: 3e6eec1f7bcf0ce8ac80a9e3e29422a32ee567a1
   completed_at_commit: 50980f84c6ff5eddecc6ccbabd4566190c4ab56c
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -144,7 +144,18 @@ tasks:
     status: merged
     branch: em-workflow/mux-write-filter-overflow-lone-esc/task0001
 review:
-  status: pending
+  status: in_progress
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary:
+    - perspective: performance
+      reason: write_filter.rs is on the per-read PTY output hot path and NFR1 bounds overflow-path work
+        to O(1) with no extra pass over fed bytes
+    cross_validation: true
 requirements:
   FR1:
     title: 'Overflow flush ending in a lone ESC: the ESC is classified together with the next read'
