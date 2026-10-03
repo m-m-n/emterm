@@ -115,7 +115,7 @@ tasks:
     - FR4
     - NFR1
     - NFR2
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/settings-profile-remove-launch/task0001
 review:
