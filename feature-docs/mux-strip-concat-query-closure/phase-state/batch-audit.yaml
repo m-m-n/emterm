@@ -1,0 +1,43 @@
+schema_version: 1
+feature: mux-strip-concat-query-closure
+records:
+- gate_id: create-spec.requirement-clarification
+  question_id: requirement.residual3.split-query-handling
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-03T20:45:00+09:00'
+  source: batch-codex-consultation
+  selected_option_ids:
+  - carry_query_state
+  resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (codex harness, 1 turn) consulted; Opus escalation: not run; options: carry_query_state
+    [chosen] / hold_csi_bytes [not chosen]; key points: 完成バイトの DEL 置換で既出の ESC[6 を保持したまま照会の実行を防げる(write_filter.rs:826, round4_cut_csi.rs:621)。CSI 非保持の既存契約と長い CSI の検証(round4_cut_csi.rs:1017)、suppressed_output
+    の保留末尾の扱い(suppressed_output.rs:227)を維持。置換は長さ不変で位置補正への影響が小さい。注意: 分類は term_core の状態遷移と応答条件に合わせる。既存の分割照会期待値(round4_cut_csi.rs:621)は変更する'
+- gate_id: create-spec.requirement-clarification
+  question_id: requirement.scope.escape-state-concatenation
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-03T20:45:00+09:00'
+  source: batch-codex-consultation
+  selected_option_ids:
+  - include
+  resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (codex harness, 1 turn) consulted; Opus escalation: not run; options: include [chosen]
+    / exclude [not chosen]; key points: ESC + ESC[6n + [c が DA1 になる連結は現行コードで成立(scrollback_filter.rs:433,:449, term_core csi_dispatch.rs:144)。除外すると期待挙動「共有 strip 由来の連結でも開始されていない照会を成立させない」を満たせない。WrittenState
+    に Escape が既にあり共有処理の拡張に収まる(scrollback_filter.rs:71)。注意: state.csi() が Escape を失う扱いを明示し、除去区間の開始・内部・直後の位置補正を検証する'
+- gate_id: create-spec.requirement-clarification
+  question_id: requirement.residual2.snapshot-end-closing
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-03T20:45:00+09:00'
+  source: batch-codex-consultation
+  selected_option_ids:
+  - rely_on_strip_closing
+  resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (codex harness, 1 turn) consulted; Opus escalation: not run; options: rely_on_strip_closing
+    [chosen] / close_at_snapshot_end [not chosen]; key points: 除去位置で閉鎖すれば除去由来の未完 CSI は snapshot 前に解消し、末尾閉鎖では同一入力内で完成済みの偽照会を防げない(scrollback_filter.rs:422)。主画面 visibility-resume は末尾制御列を付けず(snapshot_bytes.rs:231)、一律閉鎖はアプリの継続中
+    CSI まで取り消す。snapshot 構成の追加変更を避け、suppressed_output の末尾比較(suppressed_output.rs:296)も維持しやすい。注意: hot-upgrade の旧リングは範囲外、reattach 末尾(snapshot_bytes.rs:337)と折り返し時の復元(:466)は維持'
+- gate_id: create-plan.overflow-lone-esc-residual
+  question_id: create-plan.overflow-lone-esc-residual
+  packet_id: null
+  answered_at: '2026-10-03T21:40:00+09:00'
+  source: batch-codex-consultation
+  selected_option_ids:
+  - keep_residual
+  resolution_note: 'gate: create-plan.overflow-lone-esc-residual (unlisted, planner open question); options: A) keep_residual [chosen] / B) include_in_task0001 [not chosen]; codex_consulted: true (1 turn);
+    opus_escalation: false; key points: SPEC FR4 は除去位置の無効化のみを定め task0001.md:219 でも対象外(SPEC.md:76)。保留上限は 512 KiB で通常利用での到達は限られる(write_filter.rs:38)が大きな未完了列で到達可能。超過時は全量書き出しで Escape は CSI 状態として報告されず引き継ぎが欠ける(write_filter.rs:445,
+    scrollback_filter.rs:121)。B は超過時規則の見直しが要り回帰リスクを足す(SPEC.md:391, task0001.md:58)。注意: Notion の期待挙動に例外が残るため完全達成とは評価しない。後続タスク起票: https://app.notion.com/p/mux-lone-ESC-6n-CPR-3ee3509ec8ee818f8984d20bd6b4064b'

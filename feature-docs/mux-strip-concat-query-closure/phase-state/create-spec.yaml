@@ -1,0 +1,92 @@
+schema_version: 1
+feature: mux-strip-concat-query-closure
+phase: create-spec
+status: completed
+generation: 1
+base_revision: b3c8a567a04017ea66066394dd72dba939ffc7b3
+last_input_digest: sha256:7caaa90d3c4c832b96fc742a7574433d0553a860c53b53cc32db4ba94695e2ce
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-03T20:35:00+09:00'
+    questions:
+    - question_id: requirement.residual3.split-query-handling
+      status: answered
+    - question_id: requirement.scope.escape-state-concatenation
+      status: answered
+    - question_id: requirement.residual2.snapshot-end-closing
+      status: answered
+    - question_id: design-step.recommendation
+      status: answered
+answers:
+  requirement.residual3.split-query-handling:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T20:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - carry_query_state
+    freeform: null
+    normalized_answer: 呼び出しをまたいで分割された CSI 照会は、CSI バイトを保持せず、開いている CSI の小さな分類（private marker・第1パラメータ・中間バイト）を O(1) で引き継ぐ。完成時に応答対象の照会になる場合は完成バイトの代わりに CSI_CLOSING を書き、埋め込み C0 は順序を保って一度だけ出す。禁止対象は実行可能な照会とし、ESC[6+DEL
+      の残存は許容する。分割入力と一括入力のバイト一致は要求しない。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (codex harness, 1 turn) consulted; Opus escalation: not run; options: carry_query_state
+      [chosen] / hold_csi_bytes [not chosen]; key points: 完成バイトの DEL 置換で既出の ESC[6 を保持したまま照会の実行を防げる(write_filter.rs:826, round4_cut_csi.rs:621)。CSI 非保持の既存契約と長い CSI の検証(round4_cut_csi.rs:1017)、suppressed_output
+      の保留末尾の扱い(suppressed_output.rs:227)を維持。置換は長さ不変で位置補正への影響が小さい。注意: 分類は term_core の状態遷移と応答条件に合わせる。既存の分割照会期待値(round4_cut_csi.rs:621)は変更する'
+  requirement.scope.escape-state-concatenation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T20:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - include
+    freeform: null
+    normalized_answer: 後続の ESC に置き換えられて書かれた単独 ESC の直後の構文が除去される場合も、共有 strip はその ESC を中和し、後続バイトと照会を形成させない。同一呼び出しと呼び出し間分割の両方を対象とし、閉鎖バイトは表示・カーソル・応答に影響しない。追加バイトは位置補正に含める。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (codex harness, 1 turn) consulted; Opus escalation: not run; options: include [chosen]
+      / exclude [not chosen]; key points: ESC + ESC[6n + [c が DA1 になる連結は現行コードで成立(scrollback_filter.rs:433,:449, term_core csi_dispatch.rs:144)。除外すると期待挙動「共有 strip 由来の連結でも開始されていない照会を成立させない」を満たせない。WrittenState
+      に Escape が既にあり共有処理の拡張に収まる(scrollback_filter.rs:71)。注意: state.csi() が Escape を失う扱いを明示し、除去区間の開始・内部・直後の位置補正を検証する'
+  requirement.residual2.snapshot-end-closing:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T20:45:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - rely_on_strip_closing
+    freeform: null
+    normalized_answer: snapshot の末尾では閉鎖を追加しない。strip が除去位置で閉鎖を書くことで、除去が原因の未完 CSI は snapshot 前に解消する。アプリが実際に開いたままの CSI は開いたまま残す。修正前のデーモンで除去済みの履歴を hot-upgrade で持ち越す場合は範囲外とする。reattach の末尾制御列とリング折り返し時の画面復元処理は維持する。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (codex harness, 1 turn) consulted; Opus escalation: not run; options: rely_on_strip_closing
+      [chosen] / close_at_snapshot_end [not chosen]; key points: 除去位置で閉鎖すれば除去由来の未完 CSI は snapshot 前に解消し、末尾閉鎖では同一入力内で完成済みの偽照会を防げない(scrollback_filter.rs:422)。主画面 visibility-resume は末尾制御列を付けず(snapshot_bytes.rs:231)、一律閉鎖はアプリの継続中
+      CSI まで取り消す。snapshot 構成の追加変更を避け、suppressed_output の末尾比較(suppressed_output.rs:296)も維持しやすい。注意: hot-upgrade の旧リングは範囲外、reattach 末尾(snapshot_bytes.rs:337)と折り返し時の復元(:466)は維持'
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-03T20:45:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: design step は推奨どおり skip（mux デーモンのバイト列フィルタのみの変更で UI に触れない）
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously (= analyst の推奨を受け入れる)。packet の options が skip/run で decide_autonomously を含まないため、その意味どおり recommended
+      の skip に写像した'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:8d111efd353b07369254b4311f31fec6bf6a46afc41cc1ff29e87a9a5ff0e837
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:3dc80ccbceb62242619f1367b8707c6131cb811f620c44778d02220ef83f0c9c
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:7caaa90d3c4c832b96fc742a7574433d0553a860c53b53cc32db4ba94695e2ce
+artifacts:
+- path: feature-docs/mux-strip-concat-query-closure/REQUIREMENTS.md
+  sha256: sha256:9ebee211929aa709aeb58bdcdf83a30a697a5fa96738eab94e564a8de9645cf8
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-strip-concat-query-closure/SPEC.md
+  sha256: sha256:90df46211957b6acce2e3697c461f65a52143719b2eef682ea47ece83ebe6f32
+  produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

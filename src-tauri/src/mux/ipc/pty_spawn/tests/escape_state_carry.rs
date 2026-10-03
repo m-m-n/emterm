@@ -13,6 +13,12 @@
 //! ring ending in a bare `ESC` that a replayed `[6n` / `c` completes into a
 //! cursor-position report or a full reset.
 //!
+//! Since mux-strip-concat-query-closure (D1, FR4) the strip itself closes that
+//! `ESC`: it writes one CSI_CLOSING (DEL) at the removed construct, so the written
+//! bytes end in ground and a cut writes no closure after them. These tests pin
+//! that merged behavior; the Escape closure (CAN) stays the cut's closure for a
+//! written stream that genuinely ends in an `ESC` (R7).
+//!
 //! Oracle convention (IMPLEMENTATION.md): the TM-1 tests (R4, R6, R7, R10)
 //! compare against term_core, never against expected bytes alone; the reference
 //! is term_core fed the raw stream with a 47 / 1047 / 1049 `h` / `l` pair in
@@ -50,7 +56,14 @@ fn esc_then(target: &[u8]) -> Vec<u8> {
     [ESC, target].concat()
 }
 
-/// What the cut writes after `ESC`, when the written stream ends in it.
+/// What the filter writes for `ESC` + a removed construct: the `ESC` and the
+/// strip's closing at the removal (mux-strip-concat-query-closure D1).
+fn esc_closed() -> Vec<u8> {
+    [ESC, CSI_CLOSING].concat()
+}
+
+/// `ESC` followed by the Escape closure, the cut's closure for a written stream
+/// that ends in an `ESC`.
 fn esc_and_closure() -> Vec<u8> {
     [ESC, ESCAPE_CLOSING].concat()
 }
@@ -110,29 +123,34 @@ fn assert_at_most_one_closure(out: &[u8], stripped_run: &[u8], ctx: &str) {
 // ── R4 (AC-7, TS-1): the reproduction ─────────────────────────────────────
 
 /// AC-7 (FR3, FR5, NFR3, TM-1, TS-1, R4): for each held target T and for the CSI
-/// query, call 1 `ESC` + T without a cut and call 2 `[6` with a trailing cut
-/// emit exactly `ESC[6` + DEL in total (the carried Escape makes the `[` open a
-/// CSI, which the cut closes). term_core replaying the ring and then a later
-/// `n` gives no response (no cursor-position report) and displays `n`.
+/// query, call 1 `ESC` + T without a cut writes `ESC` + DEL (the strip closes the
+/// written `ESC` at the removal, mux-strip-concat-query-closure D1) and leaves
+/// ground, and call 2 `[6` with a trailing cut writes `[6` as text and no
+/// closure. term_core replaying the ring and then a later `n` gives no response
+/// (no cursor-position report) and displays `[6n`.
 #[test]
 fn escape_carry_the_reproduction_closes_the_csi_and_replays_no_query() {
     for (name, target) in all_targets() {
         let mut filter = ScrollbackWriteFilter::new();
         let mut ring = filter.feed(&esc_then(target), DIMS).1;
-        assert_eq!(ring, ESC, "{name}: call 1 writes the ESC only");
+        assert_eq!(
+            ring,
+            esc_closed(),
+            "{name}: call 1 writes the ESC and the closing"
+        );
         assert!(filter.pending().is_empty(), "{name}");
         assert_eq!(
             filter.written_state(),
-            WrittenState::Escape,
-            "{name}: the written ESC is carried as Escape"
+            WrittenState::Ground,
+            "{name}: the closing leaves the written stream in ground"
         );
 
         let cut = filter.feed_with_cuts(b"[6", DIMS, &[2]);
         ring.extend_from_slice(&cut.bytes);
         assert_eq!(
             ring,
-            [&b"\x1b[6"[..], CSI_CLOSING].concat(),
-            "{name}: call 2 writes `[6` and the DEL that closes the CSI"
+            [&esc_closed()[..], b"[6"].concat(),
+            "{name}: call 2 writes `[6` as text and no closure"
         );
         assert_eq!(filter.written_state(), WrittenState::Ground, "{name}");
         assert!(!filter.awaiting_designator(), "{name}");
@@ -153,23 +171,27 @@ fn escape_carry_the_reproduction_closes_the_csi_and_replays_no_query() {
             "{name}: the replay answers no cursor-position report: {:?}",
             view.responses
         );
-        assert_eq!(view.rows[0], "n", "{name}: `n` is displayed as text");
+        assert_eq!(view.rows[0], "[6n", "{name}: `[6n` is displayed as text");
     }
 }
 
 // ── R5 (AC-3, AC-4 first rows, TS-3, EC-1..EC-3, EC-8): the Escape closure ──
 
 /// AC-3 (FR3, FR4, NFR3, TM-1, TS-3, R5, EC-1, EC-2, EC-3, EC-8): after `ESC` +
-/// each removed construct a cut writes exactly `ESC` followed by one Escape
-/// closure, whichever way the cut arrives; a second fallback closing writes
+/// each removed construct the written bytes are `ESC` + DEL (the strip's closing,
+/// mux-strip-concat-query-closure D1) and end in ground, so a cut writes no
+/// closure after them, whichever way the cut arrives; a fallback closing writes
 /// nothing; afterwards the state is Ground and no designator is awaited.
 #[test]
 fn escape_carry_a_cut_after_a_written_escape_writes_the_escape_closure() {
-    let closing = esc_and_closure();
+    let closing = esc_closed();
     for (name, target) in all_targets() {
         let fed = esc_then(target);
         let stripped = strip_pty_output_for_scrollback_write(&fed);
-        assert_eq!(stripped, ESC, "{name}: the strip writes the ESC only");
+        assert_eq!(
+            stripped, closing,
+            "{name}: the strip writes the ESC and the closing"
+        );
 
         // A cut at the end of the call.
         let mut filter = ScrollbackWriteFilter::new();
@@ -193,8 +215,11 @@ fn escape_carry_a_cut_after_a_written_escape_writes_the_escape_closure() {
         // writes nothing.
         let mut filter = ScrollbackWriteFilter::new();
         let mut got = filter.feed(&fed, DIMS).1;
-        assert_eq!(got, ESC, "{name}: the cut-free call writes the ESC");
-        assert_eq!(filter.written_state(), WrittenState::Escape, "{name}");
+        assert_eq!(
+            got, closing,
+            "{name}: the cut-free call writes the ESC and the closing"
+        );
+        assert_eq!(filter.written_state(), WrittenState::Ground, "{name}");
         got.extend_from_slice(&filter.feed_with_cuts(b"", DIMS, &[0]).bytes);
         assert_eq!(got, closing, "{name}: fallback closing");
         assert_at_most_one_closure(&got, &stripped, name);
@@ -215,20 +240,22 @@ fn escape_carry_a_cut_after_a_written_escape_writes_the_escape_closure() {
             "{name}: the cut inside the call, then plain text"
         );
 
-        // EC-1: a CSI interrupted by the written ESC. The written bytes end
-        // in Escape (not in the CSI), so the cut writes the Escape closure and
-        // no DEL.
+        // EC-1: a CSI interrupted by the written ESC. The written ESC aborts
+        // the CSI and the strip closes it at the removal, so the cut writes no
+        // closure.
         let fed = [&b"\x1b[6"[..], &esc_then(target)].concat();
         let stripped = strip_pty_output_for_scrollback_write(&fed);
-        assert_eq!(stripped, b"\x1b[6\x1b", "{name}: EC-1 strip");
+        assert_eq!(stripped, b"\x1b[6\x1b\x7f", "{name}: EC-1 strip");
         let mut filter = ScrollbackWriteFilter::new();
         let out = filter.feed_with_cuts(&fed, DIMS, &[fed.len()]).bytes;
         assert_eq!(
-            out,
-            [&b"\x1b[6\x1b"[..], ESCAPE_CLOSING].concat(),
-            "{name}: EC-1 writes `ESC[6 ESC` and the Escape closure"
+            out, stripped,
+            "{name}: EC-1 writes `ESC[6 ESC` and the strip's closing"
         );
-        assert!(!out.contains(&CSI_CLOSING[0]), "{name}: EC-1 writes no DEL");
+        assert!(
+            !out.contains(&ESCAPE_CLOSING[0]),
+            "{name}: EC-1 writes no Escape closure"
+        );
         assert_at_most_one_closure(&out, &stripped, name);
 
         // EC-2: a construct held after the written ESC and dropped by the cut.
@@ -237,27 +264,27 @@ fn escape_carry_a_cut_after_a_written_escape_writes_the_escape_closure() {
         let out = filter.feed_with_cuts(&fed, DIMS, &[fed.len()]).bytes;
         assert_eq!(
             out, closing,
-            "{name}: EC-2 writes `ESC` and the Escape closure, not the held OSC"
+            "{name}: EC-2 writes `ESC` and the closing, not the held OSC"
         );
         assert!(filter.pending().is_empty(), "{name}: EC-2");
         assert_eq!(filter.written_state(), WrittenState::Ground, "{name}");
 
-        // EC-3: after a carried Escape a call of `ESC` + the construct writes
-        // an `ESC` and leaves Escape.
+        // EC-3: a second call of `ESC` + the construct writes `ESC` + DEL
+        // again and leaves ground.
         let mut filter = ScrollbackWriteFilter::new();
         let first = filter.feed(&esc_then(target), DIMS).1;
-        assert_eq!(first, ESC, "{name}: EC-3 first call");
+        assert_eq!(first, closing, "{name}: EC-3 first call");
         let second = filter.feed(&esc_then(target), DIMS).1;
-        assert_eq!(second, ESC, "{name}: EC-3 second call writes an ESC");
-        assert_eq!(filter.written_state(), WrittenState::Escape, "{name}");
+        assert_eq!(second, closing, "{name}: EC-3 second call");
+        assert_eq!(filter.written_state(), WrittenState::Ground, "{name}");
         assert!(filter.pending().is_empty(), "{name}: EC-3");
         // The next removed construct is still removed.
         let third = filter.feed(target, DIMS).1;
         assert!(
             third.is_empty(),
-            "{name}: EC-3 a following construct is removed"
+            "{name}: EC-3 a following construct is removed in ground, without a closing"
         );
-        assert_eq!(filter.written_state(), WrittenState::Escape, "{name}");
+        assert_eq!(filter.written_state(), WrittenState::Ground, "{name}");
     }
 }
 
@@ -269,7 +296,7 @@ fn escape_carry_a_cut_after_a_written_escape_writes_the_escape_closure() {
 const COMPLETING_CONTINUATIONS: &[&[u8]] = &[b"[6n", b"n", b"c"];
 
 /// AC-7 (FR3, NFR3, TM-1, TS-3, R6, EC-9): at a cut right after `ESC` + each
-/// removed construct - the cut ending the call, the cut and the continuation in
+/// removed construct (written as `ESC` + the strip's closing) - the cut ending the call, the cut and the continuation in
 /// one call, and the reader's fallback closing - term_core fed the emitted ring
 /// and then each of `[6n`, `n` and `c` shows the same rows and cursor and gives
 /// the same responses after the cut as term_core fed the raw stream with the
@@ -299,7 +326,7 @@ fn escape_carry_the_escape_closure_replays_like_the_raw_stream() {
                 // one.
                 let mut filter = ScrollbackWriteFilter::new();
                 let closed = filter.feed_with_cuts(&prefix, DIMS, &[prefix.len()]).bytes;
-                assert_eq!(closed, esc_and_closure(), "{ctx}");
+                assert_eq!(closed, esc_closed(), "{ctx}");
                 let later = filter.feed(continuation, DIMS).1;
                 let view = view_after_a_cut(&closed, &later);
                 assert!(
@@ -331,7 +358,7 @@ fn escape_carry_the_escape_closure_replays_like_the_raw_stream() {
                 let mut filter = ScrollbackWriteFilter::new();
                 let mut before = filter.feed(&prefix, DIMS).1;
                 before.extend_from_slice(&filter.feed_with_cuts(b"", DIMS, &[0]).bytes);
-                assert_eq!(before, esc_and_closure(), "{ctx}: fallback closing");
+                assert_eq!(before, esc_closed(), "{ctx}: fallback closing");
                 let later = filter.feed(continuation, DIMS).1;
                 assert_eq!(
                     view_after_a_cut(&before, &later),
@@ -469,17 +496,18 @@ fn escape_carry_the_escape_closure_has_no_effect_in_term_core() {
 // ── R8 (AC-4, TS-4, EC-4, EC-5): splice-made designator waits ─────────────
 
 /// AC-4 (FR2, FR3, TS-4, R8, EC-4, EC-5): for `ESC` + a removed construct + `(`
-/// (and `)`):
-/// - with a cut at the end the output is the written `ESC (` followed by exactly
-///   one designator ESC, and neither DEL nor the Escape closure;
-/// - without a cut the state is Designator and the awaiting flag is clear, a
-///   following call that starts with a removed construct has it removed (the
-///   same bytes as one call), and a fallback closing writes one ESC.
-/// EC-5: for `ESC` + a construct + `( ESC (`, without a cut the awaiting flag is
-/// set and the state is Ground (the written designator consumed the second ESC);
-/// a cut at the end writes nothing after the written bytes, a later fallback
-/// closing writes nothing, and a following call's first byte is copied verbatim
-/// (the same bytes as one call).
+/// (and `)`) the strip closes the written `ESC` at the removal
+/// (mux-strip-concat-query-closure D1), so no designator wait is spliced:
+/// - the written bytes are `ESC` + DEL + the brace as text, the state is Ground
+///   and nothing is awaited; a cut at the end writes no closure, neither the
+///   designator ESC nor DEL nor the Escape closure after them;
+/// - a following call that starts with a removed construct has it removed (the
+///   same bytes as one call), and a fallback closing writes nothing.
+/// EC-5: for `ESC` + a construct + `( ESC (`, the written `ESC (` is a designation
+/// start of its own: without a cut the awaiting flag is set and the state is
+/// Designator; a fallback closing and a cut at the end write the designator ESC
+/// once, and a following call's first byte is copied verbatim (the same bytes as
+/// one call).
 #[test]
 fn escape_carry_a_splice_made_designator_wait_closes_with_the_designator_esc() {
     for (name, target) in all_targets() {
@@ -487,34 +515,31 @@ fn escape_carry_a_splice_made_designator_wait_closes_with_the_designator_esc() {
             let ctx = format!("{name}, brace {:?}", brace as char);
             let designation = [0x1b, brace];
             let fed = [&esc_then(target)[..], &[brace]].concat();
+            let written = [&esc_closed()[..], &[brace]].concat();
 
-            // A cut at the end: the written `ESC (` and one designator ESC.
+            // A cut at the end: the written bytes and no closure.
             let mut filter = ScrollbackWriteFilter::new();
             let out = filter.feed_with_cuts(&fed, DIMS, &[fed.len()]).bytes;
-            assert_eq!(
-                out,
-                [&designation[..], ESC].concat(),
-                "{ctx}: cut at the end writes the designator ESC only"
-            );
+            assert_eq!(out, written, "{ctx}: cut at the end writes no closure");
             assert!(
-                !out.contains(&CSI_CLOSING[0]) && !out.contains(&ESCAPE_CLOSING[0]),
-                "{ctx}: neither DEL nor the Escape closure"
+                !out[written.len() - 1..].contains(&ESCAPE_CLOSING[0]),
+                "{ctx}: no Escape closure"
             );
             assert_eq!(filter.written_state(), WrittenState::Ground, "{ctx}");
             assert!(!filter.awaiting_designator(), "{ctx}");
 
-            // No cut: the state is Designator, nothing is awaited by the scan.
+            // No cut: the state is Ground, nothing is awaited.
             let mut filter = ScrollbackWriteFilter::new();
             let first = filter.feed(&fed, DIMS).1;
-            assert_eq!(first, designation, "{ctx}: the written bytes");
-            assert_eq!(filter.written_state(), WrittenState::Designator, "{ctx}");
+            assert_eq!(first, written, "{ctx}: the written bytes");
+            assert_eq!(filter.written_state(), WrittenState::Ground, "{ctx}");
             assert!(
                 !filter.awaiting_designator(),
                 "{ctx}: the boundary scan does not await a designator"
             );
             assert!(filter.pending().is_empty(), "{ctx}");
             // A following call starting with a removed construct: removed as in
-            // one call (the carried Designator decides no removal).
+            // one call.
             let second_fed = [target, b"abc"].concat();
             let second = filter.feed(&second_fed, DIMS).1;
             assert_eq!(
@@ -527,21 +552,20 @@ fn escape_carry_a_splice_made_designator_wait_closes_with_the_designator_esc() {
                 one_call.emitted,
                 "{ctx}: the same bytes as one call"
             );
-            // The fallback closing writes one ESC (a fresh filter in the same
+            // The fallback closing writes nothing (a fresh filter in the same
             // state).
             let mut filter = ScrollbackWriteFilter::new();
             filter.feed(&fed, DIMS);
             let closing = filter.feed_with_cuts(b"", DIMS, &[0]).bytes;
-            assert_eq!(closing, ESC, "{ctx}: the fallback closing writes one ESC");
             assert!(
-                filter.feed_with_cuts(b"", DIMS, &[0]).bytes.is_empty(),
-                "{ctx}: one closing"
+                closing.is_empty(),
+                "{ctx}: the fallback closing: {closing:?}"
             );
             assert_eq!(filter.written_state(), WrittenState::Ground, "{ctx}");
 
             // EC-5: `ESC` + construct + brace + `ESC` + brace.
             let splice = [&fed[..], &designation[..]].concat();
-            let written = [&designation[..], &designation[..]].concat();
+            let written = [&written[..], &designation[..]].concat();
             let mut filter = ScrollbackWriteFilter::new();
             let out = filter.feed(&splice, DIMS).1;
             assert_eq!(out, written, "{ctx}: EC-5 written bytes");
@@ -551,20 +575,25 @@ fn escape_carry_a_splice_made_designator_wait_closes_with_the_designator_esc() {
             );
             assert_eq!(
                 filter.written_state(),
-                WrittenState::Ground,
-                "{ctx}: EC-5 the written designator consumed the second ESC"
+                WrittenState::Designator,
+                "{ctx}: EC-5 the written `ESC (` awaits its designator"
             );
-            // A later fallback closing writes nothing.
+            // A later fallback closing writes the designator ESC once.
             let closing = filter.feed_with_cuts(b"", DIMS, &[0]).bytes;
+            assert_eq!(closing, ESC, "{ctx}: EC-5 fallback closing");
             assert!(
-                closing.is_empty(),
-                "{ctx}: EC-5 fallback closing: {closing:?}"
+                filter.feed_with_cuts(b"", DIMS, &[0]).bytes.is_empty(),
+                "{ctx}: EC-5 one closing"
             );
             assert!(!filter.awaiting_designator(), "{ctx}: EC-5");
-            // A cut at the end of the call writes nothing after the written bytes.
+            // A cut at the end of the call writes the designator ESC.
             let mut filter = ScrollbackWriteFilter::new();
             let out = filter.feed_with_cuts(&splice, DIMS, &[splice.len()]).bytes;
-            assert_eq!(out, written, "{ctx}: EC-5 cut at the end");
+            assert_eq!(
+                out,
+                [&written[..], ESC].concat(),
+                "{ctx}: EC-5 cut at the end"
+            );
             assert!(!filter.awaiting_designator(), "{ctx}: EC-5");
             // A following call's first byte is copied verbatim.
             let mut filter = ScrollbackWriteFilter::new();
@@ -589,10 +618,11 @@ fn escape_carry_a_splice_made_designator_wait_closes_with_the_designator_esc() {
 
 /// AC-5 (FR1, FR3, TS-5, R9): an OSC held at the 512 KiB cap is completed past
 /// the cap by a call whose run ends in `ESC` + a complete removed construct (for
-/// each removed construct). With a cut at the end of that call the output is the
-/// stripped run followed by one Escape closure and the state is Ground; without
-/// a cut the output is the stripped run, the state is Escape, and a later
-/// fallback closing writes the Escape closure once.
+/// each removed construct). The stripped run ends in `ESC` + DEL (the strip's
+/// closing, mux-strip-concat-query-closure D1), so with a cut at the end of that
+/// call the output is the stripped run alone and the state is Ground; without a
+/// cut the output is the stripped run, the state is Ground, and a later fallback
+/// closing writes nothing.
 #[test]
 fn escape_carry_an_overflow_flush_ending_in_a_written_escape_carries_or_closes_it() {
     let held = osc_held_at_the_cap();
@@ -602,7 +632,7 @@ fn escape_carry_an_overflow_flush_ending_in_a_written_escape_carries_or_closes_i
         let tail: Vec<u8> = [&b"pppppppppp"[..], BEL, b"abc", &esc_then(target)[..]].concat();
         let stripped = strip_pty_output_for_scrollback_write(&[&held[..], &tail[..]].concat());
         assert!(
-            stripped.ends_with(b"abc\x1b"),
+            stripped.ends_with(b"abc\x1b\x7f"),
             "{name}: the run is stripped"
         );
 
@@ -612,8 +642,8 @@ fn escape_carry_an_overflow_flush_ending_in_a_written_escape_carries_or_closes_i
         let outcome = filter.feed_with_cuts(&tail, DIMS, &[tail.len()]);
         assert!(outcome.carried.is_none(), "{name}");
         assert!(
-            outcome.bytes == [&stripped[..], ESCAPE_CLOSING].concat(),
-            "{name}: the stripped run and one Escape closure"
+            outcome.bytes == stripped,
+            "{name}: the stripped run and no closure"
         );
         assert!(filter.pending().is_empty(), "{name}");
         assert_eq!(filter.written_state(), WrittenState::Ground, "{name}");
@@ -625,12 +655,12 @@ fn escape_carry_an_overflow_flush_ending_in_a_written_escape_carries_or_closes_i
         let fed = [&tail[..], b"abc"].concat();
         let outcome = filter.feed_with_cuts(&fed, DIMS, &[tail.len()]);
         assert!(
-            outcome.bytes == [&stripped[..], ESCAPE_CLOSING, b"abc"].concat(),
+            outcome.bytes == [&stripped[..], b"abc"].concat(),
             "{name}: cut, then text in the same call"
         );
 
-        // No cut: the flush carries Escape; a later fallback closing writes the
-        // closure once.
+        // No cut: the flush carries Ground; a later fallback closing writes
+        // nothing.
         let mut filter = ScrollbackWriteFilter::new();
         assert!(filter.feed(&held, DIMS).1.is_empty(), "{name}");
         let outcome = filter.feed_with_cuts(&tail, DIMS, &[]);
@@ -640,12 +670,12 @@ fn escape_carry_an_overflow_flush_ending_in_a_written_escape_carries_or_closes_i
         );
         assert_eq!(
             filter.written_state(),
-            WrittenState::Escape,
+            WrittenState::Ground,
             "{name}: the flush carries the post-strip state"
         );
         assert!(!filter.awaiting_designator(), "{name}");
         let closing = filter.feed_with_cuts(b"", DIMS, &[0]).bytes;
-        assert_eq!(closing, ESCAPE_CLOSING, "{name}: the fallback closing");
+        assert!(closing.is_empty(), "{name}: the fallback closing");
         assert!(
             filter.feed_with_cuts(b"", DIMS, &[0]).bytes.is_empty(),
             "{name}: once"
@@ -720,7 +750,9 @@ fn alternating(target: &[u8], reps: usize) -> Vec<u8> {
 }
 
 /// AC-8 (NFR2, NFR4, TM-2, TS-8, R11): long inputs alternating `ESC` + a removed
-/// construct finish within 10 seconds, never panic, and write the same bytes for
+/// construct (each written as `ESC` + the strip's closing, which leaves ground,
+/// so a trailing cut writes no closure) finish within 10 seconds, never panic,
+/// and write the same bytes for
 /// every feeding of the same input, with and without a trailing cut: below the
 /// 512 KiB cap in one call, in two calls split at a unit boundary and inside a
 /// unit, and byte at a time (on a shorter input of the same shape); above the cap
@@ -739,13 +771,6 @@ fn escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_
         ("sixel dcs", SIXEL),
     ] {
         let unit_len = 1 + target.len();
-        let with_closure = |bytes: Vec<u8>, cut: bool| -> Vec<u8> {
-            if cut {
-                [&bytes[..], ESCAPE_CLOSING].concat()
-            } else {
-                bytes
-            }
-        };
 
         // Below the cap, one call and two calls.
         let reps = 8_000;
@@ -755,18 +780,14 @@ fn escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_
             let whole = feed_pieces(&[&input], cut_at_end);
             assert_eq!(
                 whole.emitted,
-                with_closure(ESC.repeat(reps), cut_at_end),
+                esc_closed().repeat(reps),
                 "{name}: one call, cut at end {cut_at_end}"
             );
             assert!(whole.pending.is_empty(), "{name}");
             assert!(!whole.awaiting, "{name}");
             assert_eq!(
                 whole.written,
-                if cut_at_end {
-                    WrittenState::Ground
-                } else {
-                    WrittenState::Escape
-                },
+                WrittenState::Ground,
                 "{name}: cut at end {cut_at_end}"
             );
             for at in [
@@ -803,7 +824,7 @@ fn escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_
             );
             assert_eq!(
                 whole.emitted,
-                with_closure(ESC.repeat(1_500), cut_at_end),
+                esc_closed().repeat(1_500),
                 "{name}: byte by byte writes the same bytes"
             );
         }
@@ -816,7 +837,7 @@ fn escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_
             let whole = feed_pieces(&[&input], cut_at_end);
             assert_eq!(
                 whole.emitted,
-                with_closure(ESC.repeat(reps), cut_at_end),
+                esc_closed().repeat(reps),
                 "{name}: overflow, one call, cut at end {cut_at_end}"
             );
             let (a, b) = input.split_at(unit_len * (reps / 2));
@@ -833,11 +854,7 @@ fn escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_
     let input = alternating(QUERY, reps);
     for cut_at_end in [false, true] {
         let whole = feed_pieces(&[&input], cut_at_end);
-        let expected = if cut_at_end {
-            [&ESC.repeat(reps)[..], ESCAPE_CLOSING].concat()
-        } else {
-            ESC.repeat(reps)
-        };
+        let expected = esc_closed().repeat(reps);
         assert_eq!(
             whole.emitted, expected,
             "query: one call, cut at end {cut_at_end}"

@@ -1,0 +1,42 @@
+feature: mux-strip-concat-query-closure
+collected_at: "2026-10-03T22:38:00+09:00"
+session_ids: [01a101fb-4586-74f2-9fb0-ee7f2fe23150]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - test-docs/mux-strip-concat-query-closure/task0001.tests.yaml
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: 共有 strip と書き込みフィルタは PTY 出力のホットパスで、NFR1（線形・O(1) 状態）と NFR2（敵対入力予算）を持つため
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "最終読み (description_plus_code) の score 1.98（バケット 2 の確率 0.98）で full に決定"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.59, confidence: 0.59, probabilities: {'0': 0.0, '1': 0.41, '2': 0.59, '3': 0.0}}
+        observed_at: "2026-10-03T20:08:00+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.98, confidence: 0.97, probabilities: {'0': 0.0, '1': 0.02, '2': 0.98, '3': 0.0}}
+        observed_at: "2026-10-03T20:14:30+09:00"
+    pre_survey_estimate:
+      changed_lines_approx: 500
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 4
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 6
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+  - "review round1 の medium 2 件（f5176c335e8e18f8 / d69ef2ca8d34e20b）は SCA triage がタスク一覧取得失敗で report 分岐に落ち、起票されなかった"
+  - "planner の files 予測に test-docs の記録ファイルが含まれていなかった。逆に round4_chain.rs / round3_write_path.rs は予測されたが未変更"
