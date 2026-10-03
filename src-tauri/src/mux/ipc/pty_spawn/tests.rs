@@ -8860,3 +8860,7 @@ mod escape_state_carry;
 // produces never completes an escape or a CSI device query the raw stream never
 // made (write filter and reader level).
 mod strip_concat_query;
+
+// mux-strip-join-escape-closure task0001 (FR1, FR2): scenarios 2 and 3 of the join
+// attack stay closed (write strip, snapshot strip and replay together).
+mod strip_join_escape_closure;
