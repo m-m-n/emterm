@@ -10,7 +10,7 @@ baseline_failures:
 # Re-executed after the implementation (new test module, DECISIONS.md and this record in the
 # tree): `cargo test --lib` finished with 4199 passed, 3 failed, 3 ignored (the baseline's 4194
 # plus the 5 tests this task adds). The 3 failures are the baseline's, again on the 10 s budgets
-# (10.19 s, 15.19 s, 20.91 s); the 5 new tests pass. `cargo check` and
+# (10.37 s, 15.59 s, 18.06 s); the 5 new tests pass. `cargo check` and
 # `cargo check --no-default-features` finished with no error.
 final_failures:
   - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
