@@ -50,9 +50,15 @@ worker_runs:
   input_digest: sha256:7dd48f9f36ecd207c2ba93475bcd121edfe9c2d27d4226b252ef93e78dcf038e
   output_digest: sha256:be2a3f8499c1db9b08feb2039088e06dd13059e6ee5fe2789783bc82e98b6053
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:17a8961baab4dbe2423a5741dd6dc1ff1a339026b73d6799ee3df64dd129ca99
-artifacts: []
+artifacts:
+- path: feature-docs/mux-strip-join-escape-closure/REQUIREMENTS.md
+  sha256: sha256:3cb39acf2d9448290fbac00a68f844b3d4447e6bff2b3b209f98b14980ab7a3e
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-strip-join-escape-closure/SPEC.md
+  sha256: sha256:8fba10448d15a866e243ab58c6796dc78ce07fc267d1388bb92ddf936fcaea55
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
