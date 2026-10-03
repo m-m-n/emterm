@@ -1,0 +1,34 @@
+schema_version: 1
+feature: mux-write-filter-overflow-lone-esc
+phase: create-spec
+status: in_progress
+generation: 1
+base_revision: 79b90906fdd34e58060c3fa3a1afc23ac2a09a5a
+last_input_digest: sha256:9b42bc3754b2b85a82425261874a97fec3a7d03cdf04ebc7c1daf06f5ac3cdae
+active_request_id: create-spec-run-0001
+packets: {}
+answers:
+  create-spec.feature-identity:
+    packet_id: null
+    answered_at: '2026-10-03T22:45:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - derive_from_task_description
+    freeform: null
+    normalized_answer: 'feature name derived from the task description: mux-write-filter-overflow-lone-esc'
+    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option
+      derive_from_task_description; codex_consulted: false'
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+last_error: null
