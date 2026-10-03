@@ -91,7 +91,11 @@ workflow:
   status: completed
   completed_at_commit: a29d3dd7e8519a88400d6241945ee269015a1632
 - id: verify
-  status: in_progress
+  status: completed
+  result: pass
+  failed_items: []
+  summary: 'cargo check (default / --no-default-features) ok; cargo test --lib 4187 passed, 0 failed, 3 ignored; TS-1..TS-9 / AC-1..AC-7 / TM-1..TM-3 covered by passing tests; FR8 records: all 9 DECISIONS test paths and all 32 record entries resolve in --lib --list, predecessor DECISIONS.md and test-docs unchanged vs base. Manual reproduction (2 items) needs a release binary and was not run.'
+  completed_at_commit: e28ef6fc21cc5108493e55f3be9b870e0e271d9e
 - id: retrospect
   status: pending
 tasks:
