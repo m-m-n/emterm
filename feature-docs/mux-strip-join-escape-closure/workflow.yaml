@@ -162,7 +162,7 @@ tasks:
     - NFR1
     - NFR2
     - NFR3
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-strip-join-escape-closure/task0001
 review:
   status: pending
