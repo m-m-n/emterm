@@ -88,7 +88,8 @@ workflow:
   base_commit: 32706c8615f83b72f9fce09e1f26a90927108d73
   completed_at_commit: d58675efc79247cb0dc365b5180dd3628d150df6
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: a29d3dd7e8519a88400d6241945ee269015a1632
 - id: verify
   status: pending
 - id: retrospect
@@ -130,9 +131,14 @@ tasks:
     status: merged
     branch: em-workflow/mux-strip-concat-query-closure/task0001
 review:
-  status: in_progress
-  rounds_completed: 0
-  perspectives: []
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  - performance
   plan:
     floor:
     - comprehensive
