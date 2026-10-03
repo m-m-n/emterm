@@ -4,14 +4,14 @@ phase: create-plan
 status: dispatching
 generation: 1
 base_revision: cef378721e4da165ff333cca51fea93f74cc7b3e
-last_input_digest: sha256:810896b012070bf9b1d2495c0dd6bf071c8d28f2653be538dd8f628c49b84262
+last_input_digest: sha256:96ea808b60f6a1b6421bac5df406b034bb33a594c15dff0f7d3e81e12c0f0904
 active_request_id: create-plan-run-0002
 packets: {}
 answers:
   create-plan.open-body-tracking-scope:
     question_id: create-plan.open-body-tracking-scope
     packet_id: null
-    answered_at: '2026-10-04T03:40:00+09:00'
+    answered_at: '2026-10-04T03:25:00+09:00'
     source: batch-codex-consultation
     answer_mode: single_select
     selected_option_ids:
@@ -31,7 +31,7 @@ answers:
   create-plan.predecessor-open-body-case:
     question_id: create-plan.predecessor-open-body-case
     packet_id: null
-    answered_at: '2026-10-04T03:40:00+09:00'
+    answered_at: '2026-10-04T03:25:00+09:00'
     source: batch-codex-consultation
     answer_mode: single_select
     selected_option_ids:
@@ -53,7 +53,7 @@ worker_runs:
   output_digest: sha256:9e632b586c555688b3c3e492a6f4188ee05f17f3586859a2ef8437718528bca6
 - request_id: create-plan-run-0002
   status: dispatched
-  input_digest: sha256:810896b012070bf9b1d2495c0dd6bf071c8d28f2653be538dd8f628c49b84262
+  input_digest: sha256:96ea808b60f6a1b6421bac5df406b034bb33a594c15dff0f7d3e81e12c0f0904
   output_digest: null
 artifacts:
 - path: feature-docs/mux-write-filter-overflow-open-string-cut/IMPLEMENTATION.md
