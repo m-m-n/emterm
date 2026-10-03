@@ -1,0 +1,40 @@
+schema_version: 1
+feature: settings-profile-drag-reorder
+records:
+- question_id: requirement.scope.ssh-list
+  packet_id: null
+  answered_at: '2026-10-03T10:33:05+09:00'
+  source: batch-codex-consultation
+  answer_mode: freeform
+  selected_option_ids: []
+  freeform: 'Include the SSH connection list (ssh-section.ts setupSshDragReorder)
+    in this fix: apply the same dragstart setData fix there, with its own regression
+    tests. Do not extract a shared helper.'
+  normalized_answer: Scope = Profiles list + SSH connection list; same fix in each
+    dragstart; no shared helper.
+  resolution_note: 'gate: create-spec.requirement-clarification (orchestrator-raised,
+    user instructed Codex consultation for unclear points); options: (a) Profiles
+    only + follow-up task, (b) also fix SSH list; chosen: b; not chosen: a; key points:
+    ssh-section.ts:372 has the identical effectAllowed-only dragstart (profiles-section.ts:197),
+    small change, avoids repeating the same fix/verification later; risk: SSH Linux
+    repro unconfirmed; codex_consulted: true; opus_escalation: false'
+- question_id: requirement.fr1.setdata-payload
+  packet_id: null
+  answered_at: '2026-10-03T10:33:05+09:00'
+  source: batch-codex-consultation
+  answer_mode: freeform
+  selected_option_ids: []
+  freeform: 'In dragstart call setData with a custom MIME type and the dragged index
+    as string: Profiles uses "application/x-emterm-profile-index", SSH uses "application/x-emterm-ssh-index".
+    Do not also set text/plain. The drop handler keeps using the in-memory dragIndex
+    (returns when null) and never reads the transferred data.'
+  normalized_answer: setData(custom MIME per list, String(index)); no text/plain;
+    drop uses dragIndex only.
+  resolution_note: 'gate: create-spec.requirement-clarification (orchestrator-raised);
+    options: (a) text/plain index, (b) custom MIME type, (c) other; chosen: b; not
+    chosen: a, c; key points: WebKit counts custom data in hasData and registers a
+    custom transfer target on GTK3 drag start (PasteboardGLib.cpp, DragSourceGtk3.cpp),
+    text/plain could insert the index into other apps on drop, existing drop handler
+    never reads transfer data (profiles-section.ts:219); risk: actual drag start on
+    the target WebKitGTK version unverified -> Linux manual check required; codex_consulted:
+    true; opus_escalation: false'
