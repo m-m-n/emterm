@@ -5,19 +5,38 @@ status: dispatching
 generation: 1
 base_revision: cedf73a0d870c36d5cd2aa6f6ed2277aaf105c5a
 last_input_digest: sha256:e1febcec0e4bb90f544293a621f9bb918e839b2436bec73c87957ddcca55fde5
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
-answers: {}
+answers:
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-10-03T13:05:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'kind: project_native, paths: [src-tauri/web-shared/styles.css]
+      (top of 4 candidates)'
+    resolution_note: 'gate: create-spec.design-system; batch-policies.yaml top_candidate_or_none;
+      design step skipped with 4 candidates, so 11a requires confirmation; chose top
+      candidate src-tauri/web-shared/styles.css'
 worker_runs:
 - request_id: create-spec-run-0001
   status: completed
   input_digest: sha256:1820e18186033309f6df31c3587d6b439acd4d617106ce29c9bb8845807ebcc6
   output_digest: sha256:ee614fe96d12335f6ce56168cd516a60227d7566a61309fb266253903e44611d
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:e1febcec0e4bb90f544293a621f9bb918e839b2436bec73c87957ddcca55fde5
   output_digest: null
-artifacts: []
+artifacts:
+- path: feature-docs/settings-profile-remove-launch/REQUIREMENTS.md
+  sha256: sha256:6ec45d5e620c03f3f681e5e205eacf189dd298c6f62c40c5bf64de4f52f12484
+  produced_by: create-spec-run-0002
+- path: feature-docs/settings-profile-remove-launch/SPEC.md
+  sha256: sha256:96d929547cadec426b3b7eb7207794012a573fb50cef96613697d811336b6b43
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
