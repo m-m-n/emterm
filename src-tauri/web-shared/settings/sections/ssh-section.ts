@@ -371,6 +371,11 @@ function setupSshDragReorder(list: HTMLElement, ctx: SectionContext): void {
     item.classList.add("dragging");
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";
+      // WebKitGTK starts a drag only when the DataTransfer carries data.
+      e.dataTransfer.setData(
+        "application/x-emterm-ssh-index",
+        String(dragIndex),
+      );
     }
   }) as EventListener);
 
