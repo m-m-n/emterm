@@ -1,0 +1,46 @@
+feature: settings-profile-remove-launch
+collected_at: "2026-10-03T13:18:00+09:00"
+session_ids:
+  - 01a0fffa-c9d1-7286-9dd7-df273118476d
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "Final read (description_plus_code) put P(2)=1.0; threshold row selected full."
+    bases:
+      - basis: description_only
+        score: {score: 1.14, confidence: 0.79, probabilities: {"0": 0.04, "1": 0.78, "2": 0.18, "3": 0.0}}
+        observed_at: "2026-10-03T12:46:38+09:00"
+      - basis: description_plus_code
+        score: {score: 2.0, confidence: 1.0, probabilities: {"0": 0.0, "1": 0.0, "2": 1.0, "3": 0.0}}
+        observed_at: "2026-10-03T12:49:29+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/web-shared/settings/sections/profiles-section.ts
+        - src-tauri/web-shared/i18n/locales/en.json
+        - src-tauri/web-shared/i18n/locales/ja.json
+      changed_lines_approx: 11
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules:
+        - src-tauri/web-shared/i18n/locales
+      work_still_required: true
+      test_change_kind: none
+      added_test_cases_approx: 0
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 2
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+  - "A pure deletion task (one button + one locale key, ~11 lines) was scored P(2)=1.0 on the description_plus_code read and ran at full tier; the full SPEC/REQUIREMENTS/IMPLEMENTATION/VERIFICATION set was produced for it."
+  - "Review evaluator noted SPEC.md AC-2 / TS-4 wording ('no profile:launch string in src-tauri') literally clashes with the TS-2 test that names the event; VERIFICATION.md and the task AC exclude test files."
+  - "MT-1 / MT-2 (manual GUI check on Linux and Windows) were not executed in batch."
