@@ -1,0 +1,62 @@
+schema_version: 2
+feature: settings-profile-drag-reorder
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.56
+    confidence: 0.54
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.45
+      '2': 0.54
+      '3': 0.01
+  observed_at: '2026-10-03T10:20:52+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.85
+    confidence: 0.85
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.15
+      '2': 0.85
+      '3': 0.0
+  observed_at: '2026-10-03T10:24:17+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/web-shared/settings/sections/profiles-section.ts
+  - src-tauri/web-shared/settings/sections/profiles-section.test.ts
+  changed_lines_approx: 140
+  new_functions_needed: 0
+  new_files_needed: 1
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules:
+  - src-tauri/web-shared/settings/sections/ssh-section.ts
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 5
+  body_change_kind: new_logic
+  change_containment: single_module
+  caller_and_dependency_count: 4
+  changes_external_contract: false
+  changes_behavior: true
+decided_at: '2026-10-03T10:24:23+09:00'
