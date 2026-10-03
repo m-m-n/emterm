@@ -143,7 +143,7 @@ workflow:
   base_commit: 5377fa12772c5ced3af6ccd3528a902b5b3c4509
   completed_at_commit: 7efa3fd3eae132ca3725d3c28c9fd73c78d5d77c
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -180,8 +180,15 @@ tasks:
     notes: null
     branch: em-workflow/mux-vt100-del-closing/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
 requirements:
   FR1:
     title: ReadPane rendering cancels the closing for vt100
