@@ -1,0 +1,71 @@
+schema_version: 1
+feature: new-tab-menu-shortcut-hints
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: c0b7bd0d6b8e446047f6236f8e64e838d68cb71f
+last_input_digest: sha256:16c5b73bc212e8b6d03d5db6884f198ec5d5dcb1b8964f2766dc26f14c9831c2
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:16c5b73bc212e8b6d03d5db6884f198ec5d5dcb1b8964f2766dc26f14c9831c2
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:71a9187fc46ff43557089764ad2ccabc12b9a2463ca795557c27098ebe20cdec
+    resolved_at_generation: 1
+    paths:
+    - src-tauri/src/ui/md3.rs
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/dialog/tokens.rs
+    digests:
+      src-tauri/src/ui/md3.rs: sha256:8165557d9c2a3ea1a64c2d952de2e932b61b3514f03b52c03b9bc810e8acdc7b
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
+      src-tauri/src/ui/dialog/tokens.rs: sha256:00dd92c313dd1c025616f9674c24176b1016befafc19aaa2d754817cee81550d
+    truncated: false
+  reference_scan_targets:
+    generation_digest: sha256:77f94b08a4009f0e5e0373981dd3fff841653435140e104e40d87dea8b635057
+    resolved_at_generation: 1
+    paths:
+    - src-tauri/src/ui/profile_selector.rs
+    - src-tauri/src/render/overlays.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/render/tests.rs
+    - src-tauri/src/ui/keybinds.rs
+    - src-tauri/src/ui/keybinds/tests.rs
+    - src-tauri/src/settings/types.rs
+    - src-tauri/src/app/chooser.rs
+    - src-tauri/src/app/tests/chooser.rs
+    - src-tauri/src/app/tab_lifecycle.rs
+    - src-tauri/src/app/font_settings.rs
+    - src-tauri/src/window_host/pointer_routing.rs
+    digests:
+      src-tauri/src/ui/profile_selector.rs: sha256:81b47ca462f2b38f4f5a08915d716db70c749d09501f5802541daa0fe106347e
+      src-tauri/src/render/overlays.rs: sha256:a62bd5933f0b02118db16c067f4f7dada752cbfde9eaeded1971a6ad27a5a5cc
+      src-tauri/src/render/mod.rs: sha256:804b9c6aa669ee8e32d64bd6bb42668ee6288c8ba1c85f35011b1a6ebef76c0d
+      src-tauri/src/render/tests.rs: sha256:f5f887bdcfd2940962fdf7d21bb9adad6603604b3ede8bab54405056924ad70a
+      src-tauri/src/ui/keybinds.rs: sha256:a5e13a9f350ae0b3008dfa6c0f1c792ec63dc4cfd72385ccc30e75f26db84b9c
+      src-tauri/src/ui/keybinds/tests.rs: sha256:835a2d2eb87c34e8f65dbfd0fd03a05ad36e93e5a9e2a1d2ee024bacf51a27c4
+      src-tauri/src/settings/types.rs: sha256:9bdb7e3074a19b4c9dc2a9eb7d155e5b035c77f962f986e4a501ed60c22d321e
+      src-tauri/src/app/chooser.rs: sha256:c3c924c4ebf89885849a77b8c00b3a07b68610595b56411318bb9b7efdded22c
+      src-tauri/src/app/tests/chooser.rs: sha256:e98ed87786299ee414cdab849144526327a3490c875a32f8ad06bf669441e487
+      src-tauri/src/app/tab_lifecycle.rs: sha256:1037d84352dbbdb62168fed0564741a663f7f755ed7facaad1d29847d83a09fb
+      src-tauri/src/app/font_settings.rs: sha256:67c06357bc7377d772f54c65e2bf346e77cd6eeec9e9c50dd48c08248ce71630
+      src-tauri/src/window_host/pointer_routing.rs: sha256:4fec9bfc5325a5e9ce844d1d6a4eca14a18425381791ac9abdbc098588313a1e
+    truncated: false
+  e2e:
+    generation_digest: sha256:549cc09a68bbf8d8c433c1c74704a68ce7dbbb4799a0847bc88f825b613d91f7
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+last_error: null
