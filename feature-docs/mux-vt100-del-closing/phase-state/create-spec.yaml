@@ -1,0 +1,20 @@
+schema_version: 1
+feature: mux-vt100-del-closing
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: c50a4c11404b5a507d8d74127e542524fb606b8a
+last_input_digest: sha256:fd5a5ec1be5dbca1a0ef083f78f7cb365832b7675ed859aaeabbf6fbc5c950f2
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:fd5a5ec1be5dbca1a0ef083f78f7cb365832b7675ed859aaeabbf6fbc5c950f2
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
