@@ -1,0 +1,17 @@
+schema_version: 1
+feature: mux-strip-concat-query-closure
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: ddc2e47fa8275a544424a1451039fc5b6c0a0688
+last_input_digest: sha256:3b6d0da7025a43c6fcafdca9dd49577fab090fa31edc5d569014ba54419be0eb
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
