@@ -1,0 +1,161 @@
+task_id: task0001
+# Full `--lib` run in the task worktree before any edit: 4102 passed, 0 failed, 3 ignored.
+baseline_failures: []
+# Full `--lib` run re-executed after the implementation (and after rustfmt on the
+# changed files): 4159 passed, 0 failed, 3 ignored.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - ui::keybinds::tests::format_chord_default_table_new_tab_global_and_new_tab
+      - ui::keybinds::tests::format_chord_lowercase_spec_is_canonicalized
+      - ui::keybinds::tests::format_chord_orders_modifiers_ctrl_shift_alt_then_key
+      - ui::keybinds::tests::format_chord_omits_disabled_modifiers
+      - ui::keybinds::tests::format_chord_unparseable_new_tab_spec_shows_fallback_default
+      - ui::keybinds::tests::format_chord_uses_word_tokens_not_symbols
+      - ui::keybinds::tests::reachable_labels_default_table_shows_both
+    red_confirmed: true
+    red_reason: >-
+      With `format_chord` and the label queries present only as stubs returning
+      an empty string / None, these tests failed on their assertions, for
+      example `left: "" right: "Ctrl+Shift+G"` and `left: None right:
+      Some("Ctrl+Shift+G")`.
+  AC-2:
+    tests:
+      - ui::keybinds::tests::format_chord_round_trips_every_default_table_chord
+      - ui::keybinds::tests::format_chord_round_trips_named_samples
+      - ui::keybinds::tests::format_chord_round_trips_every_parseable_main_key
+      - ui::keybinds::tests::format_chord_non_empty_for_every_egui_key
+    red_confirmed: true
+    red_reason: >-
+      With the empty-string stub for `format_chord`, `parse_chord("")` returned
+      None, so each test failed, for example `label "" left: None right:
+      Some(Chord { ctrl: true, shift: true, alt: false, key: C })` and, for the
+      exhaustive test, `token "a" ... label ""`.
+  AC-3:
+    tests:
+      - ui::profile_selector::tests::shortcut_labels_global_and_default_profile_only
+      - ui::profile_selector::tests::shortcut_labels_without_default_profile_label_only_global
+      - ui::profile_selector::tests::shortcut_labels_first_flagged_profile_wins
+      - ui::profile_selector::tests::shortcut_labels_follow_a_later_default_profile
+      - ui::profile_selector::tests::shortcut_labels_without_profiles_cover_global_and_tmux_rows
+      - ui::profile_selector::tests::shortcut_labels_have_one_entry_per_row
+      - app::tests::chooser::chooser_shortcut_labels_cover_global_and_default_profile_rows
+      - app::tests::chooser::overlay_paints_labels_on_global_and_default_profile_rows
+    red_confirmed: true
+    red_reason: >-
+      With the assignment and the App-level query present only as stubs
+      returning an empty Vec, the assignment and App-level tests failed with
+      `left: [] right: [Some("Ctrl+Shift+G"), Some("Ctrl+Shift+T"), None,
+      None]`. The overlay test failed with the overlay wiring removed (every
+      row handed `shortcut: None`): `no painted text "Ctrl+Shift+G"` among
+      the painted row texts.
+  AC-4:
+    tests:
+      - ui::keybinds::tests::new_tab_global_label_hidden_by_copy
+      - ui::keybinds::tests::new_tab_global_label_hidden_by_paste
+      - ui::keybinds::tests::new_tab_global_label_hidden_by_profile_selector
+      - ui::keybinds::tests::new_tab_label_hidden_by_copy
+      - ui::keybinds::tests::new_tab_label_hidden_by_paste
+      - ui::keybinds::tests::new_tab_label_hidden_by_profile_selector
+      - ui::keybinds::tests::new_tab_label_hidden_by_new_tab_global
+      - ui::keybinds::tests::new_tab_label_kept_when_only_a_lower_priority_action_shares_the_chord
+      - ui::keybinds::tests::new_tab_global_label_kept_when_only_a_lower_priority_action_shares_the_chord
+      - ui::keybinds::tests::label_queries_do_not_change_the_collision_report
+      - ui::profile_selector::tests::shortcut_labels_global_row_hidden_by_higher_priority_actions
+      - ui::profile_selector::tests::shortcut_labels_default_profile_row_hidden_by_higher_priority_actions
+      - ui::profile_selector::tests::shortcut_labels_new_tab_equal_to_global_hides_only_the_profile_row
+      - ui::profile_selector::tests::shortcut_labels_lower_priority_collision_keeps_the_profile_label
+      - app::tests::chooser::overlay_omits_a_label_whose_chord_is_taken_by_a_higher_priority_action
+    red_confirmed: true
+    red_reason: >-
+      The `kept` tests failed against the None-returning stub (`left: None
+      right: Some("Ctrl+Shift+W")`). The `hidden` tests failed against a
+      first implementation that returned the formatted label without
+      consulting the collision report (`left: Some("Ctrl+Shift+C") right:
+      None`, same for paste, profile_selector and new_tab_global). The
+      assignment-level tests failed against the empty-Vec stub with an
+      index-out-of-range panic. The overlay test failed with the overlay
+      wiring removed (`assertion failed: has_painted(&texts,
+      "Ctrl+Shift+G")`). `label_queries_do_not_change_the_collision_report`
+      passed against the stub and against the first implementation, so no red
+      was observed for that single test.
+  AC-5:
+    tests:
+      - ui::profile_selector::tests::shortcut_labels_selector_mode_has_no_labels
+      - app::tests::chooser::profile_selector_mode_has_no_shortcut_labels
+      - app::tests::chooser::overlay_selector_mode_paints_no_labels
+    red_confirmed: true
+    red_reason: >-
+      With the assignment and App-level query as stubs returning an empty Vec,
+      the first two tests failed with `left: [] right: [None, None]` (one
+      entry per profile row was expected). `overlay_selector_mode_paints_no_labels`
+      passed with the overlay wiring removed, so no red was observed for that
+      single test.
+  AC-6:
+    tests:
+      - app::tests::chooser::chooser_shortcut_labels_follow_applied_keybind_settings
+      - app::tests::chooser::chooser_shortcut_labels_are_the_same_in_ja_and_en
+      - app::tests::chooser::chooser_shortcut_labels_read_the_default_flag_at_call_time
+      - ui::keybinds::tests::reachable_labels_follow_the_resolved_table
+    red_confirmed: true
+    red_reason: >-
+      With the App-level query and the label queries as stubs, these failed:
+      `left: [] right: [Some("Ctrl+Alt+G"), Some("Ctrl+Alt+N")]` for the
+      applied-settings test, `left: [] right: [Some("Ctrl+Shift+G"),
+      Some("Ctrl+Shift+T")]` for the Ja/En test (the Ja and En results were
+      equal but empty), and `left: None right: Some("Ctrl+Alt+G")` for the
+      table query.
+  AC-7:
+    tests:
+      - ui::profile_selector::tests::geometry_label_right_edge_is_row_right_minus_pad
+      - ui::profile_selector::tests::geometry_content_boundary_is_inner_gap_before_the_label
+      - ui::profile_selector::tests::geometry_shell_path_range_ends_at_the_content_boundary
+      - ui::profile_selector::tests::geometry_shell_path_range_is_empty_when_no_width_remains
+      - ui::profile_selector::tests::geometry_name_is_bounded_at_the_content_boundary
+      - ui::profile_selector::tests::geometry_badge_width_and_gap_are_reserved_before_the_name
+      - ui::profile_selector::tests::geometry_name_width_never_goes_negative
+      - ui::profile_selector::tests::geometry_badge_must_end_within_the_content_boundary
+      - ui::profile_selector::tests::geometry_unlabeled_row_matches_todays_layout
+      - ui::profile_selector::tests::shell_color_resolution_is_per_row_state
+      - ui::profile_selector::tests::painted_label_is_right_aligned_with_shell_font_and_color
+      - ui::profile_selector::tests::painted_label_uses_the_normal_shell_color_on_a_normal_row
+      - ui::profile_selector::tests::painted_long_name_and_badge_stay_left_of_the_label
+      - ui::profile_selector::tests::painted_shell_path_ends_before_the_label
+      - ui::profile_selector::tests::painted_short_name_with_label_is_not_ellipsized
+      - ui::profile_selector::tests::painted_unlabeled_row_is_unchanged
+    red_confirmed: true
+    red_reason: >-
+      The geometry and color tests failed against stubs returning placeholder
+      values (`left: -1.0 right: 0.0` for the shell range, `left: None right:
+      Some(-84.0)` for the name width, a wrong color for the shell-color
+      resolution). The painted tests, which run the real `draw` in a headless
+      egui context, failed with the label painting switched off (`no painted
+      text "Ctrl+Shift+G"`); the long-name test also failed with name and
+      badge left unbounded on labeled rows (`assertion failed:
+      !has_text(&shapes, long)`). `painted_unlabeled_row_is_unchanged`
+      passed with the label painting switched off, so no red was observed for
+      that single test.
+  AC-8:
+    tests:
+      - ui::dialog::tests::yaml_layout_widths_match_constants
+      - ui::dialog::tests::yaml_typography_sizes_match_constants
+      - ui::dialog::tests::yaml_color_roles_defined_in_styles_css
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing
+      `ui::dialog::tests` detect drift between `doc/UI-DESIGN-GUIDELINES.yaml`,
+      `src-tauri/src/ui/dialog/tokens.rs` and `src-tauri/web-shared/styles.css`;
+      no red state occurred for this change. The CLI-only check
+      (`cargo check --no-default-features`) passed before and after the change,
+      so no failing build was observed. The diff's file list
+      (`git diff --name-only`) names six files, all under `src-tauri/src/ui`,
+      `src-tauri/src/app` or `src-tauri/src/render`, and none of the four token
+      files named in IMPLEMENTATION.md Conventions.
+notes: >-
+  Manual verification left for the verification phase (TS-9): the label's
+  visual placement, the on-secondary-container color on the highlighted row,
+  and the look of an ellipsized long profile name next to the label. The
+  painted-row tests run the real selector draw in a headless egui context
+  (two warm-up frames with advancing time so the dialog fade-in finishes) and
+  assert positions, font size and color from the emitted text shapes.

@@ -140,6 +140,212 @@ fn confirm_out_of_range_closes_without_spawn() {
     assert!(app.tabs.is_empty());
 }
 
+// ── shortcut labels on the new-tab chooser rows ─────────────────
+//
+// new-tab-menu-shortcut-hints task0001 AC-3 / AC-5 / AC-6. The
+// entry-injecting `open_new_tab_chooser_with_entries` keeps these tests
+// off real tmux discovery.
+
+fn labels(v: &[Option<&str>]) -> Vec<Option<String>> {
+    v.iter().map(|l| l.map(str::to_string)).collect()
+}
+
+// AC-3 at the App level: Global, default profile, other profile, tmux
+// row, in row order.
+#[test]
+fn chooser_shortcut_labels_cover_global_and_default_profile_rows() {
+    let mut app = app_with_profiles(vec![profile("a", true), profile("b", false)]);
+    app.open_new_tab_chooser_with_entries(vec![tmux_row(
+        "tmux: dev",
+        vec!["-S", "/tmp/tmux-1000/dev", "attach"],
+    )]);
+    assert_eq!(
+        app.profile_selector_shortcut_labels(),
+        labels(&[Some("Ctrl+Shift+G"), Some("Ctrl+Shift+T"), None, None])
+    );
+    // One entry per row the dialog shows.
+    assert_eq!(
+        app.profile_selector_shortcut_labels().len(),
+        app.profile_selector_row_count()
+    );
+}
+
+// AC-5 (FR8): the Ctrl+Shift+P selector never shows a shortcut label.
+#[test]
+fn profile_selector_mode_has_no_shortcut_labels() {
+    let mut app = app_with_profiles(vec![profile("a", true), profile("b", false)]);
+    app.open_profile_selector();
+    assert!(app.profile_selector.visible);
+    assert!(!app.profile_selector.include_global);
+    assert_eq!(
+        app.profile_selector_shortcut_labels(),
+        labels(&[None, None])
+    );
+}
+
+// AC-6 (FR4): labels are derived from the table in force when the
+// chooser is drawn, so the call after a settings apply shows the new
+// chords.
+#[test]
+fn chooser_shortcut_labels_follow_applied_keybind_settings() {
+    let mut app = app_with_profiles(vec![profile("a", true)]);
+    app.open_new_tab_chooser_with_entries(Vec::new());
+    assert_eq!(
+        app.profile_selector_shortcut_labels(),
+        labels(&[Some("Ctrl+Shift+G"), Some("Ctrl+Shift+T")])
+    );
+
+    let mut keybinds = crate::settings::KeybindSettings::default();
+    keybinds.new_tab_global = "Ctrl+Alt+G".to_string();
+    keybinds.new_tab = "Ctrl+Alt+N".to_string();
+    let reloaded = crate::settings::Settings {
+        profiles: vec![profile("a", true)],
+        keybinds,
+        ..Default::default()
+    };
+    app.apply_settings(reloaded);
+    app.open_new_tab_chooser_with_entries(Vec::new());
+    assert_eq!(
+        app.profile_selector_shortcut_labels(),
+        labels(&[Some("Ctrl+Alt+G"), Some("Ctrl+Alt+N")])
+    );
+}
+
+// AC-6 (NFR2): the label text takes no locale input.
+#[test]
+fn chooser_shortcut_labels_are_the_same_in_ja_and_en() {
+    let mut app = app_with_profiles(vec![profile("a", true)]);
+    app.open_new_tab_chooser_with_entries(Vec::new());
+    app.locale = crate::i18n::Locale::Ja;
+    let ja = app.profile_selector_shortcut_labels();
+    app.locale = crate::i18n::Locale::En;
+    let en = app.profile_selector_shortcut_labels();
+    assert_eq!(ja, en);
+    assert_eq!(ja, labels(&[Some("Ctrl+Shift+G"), Some("Ctrl+Shift+T")]));
+}
+
+// The default flag is read at call time: no cached row assignment.
+#[test]
+fn chooser_shortcut_labels_read_the_default_flag_at_call_time() {
+    let mut app = app_with_profiles(vec![profile("a", false), profile("b", false)]);
+    app.open_new_tab_chooser_with_entries(Vec::new());
+    assert_eq!(
+        app.profile_selector_shortcut_labels(),
+        labels(&[Some("Ctrl+Shift+G"), None, None])
+    );
+    std::sync::Arc::make_mut(&mut app.settings).profiles[1].is_default = true;
+    assert_eq!(
+        app.profile_selector_shortcut_labels(),
+        labels(&[Some("Ctrl+Shift+G"), None, Some("Ctrl+Shift+T")])
+    );
+}
+
+// ── overlay wiring (headless egui pass) ─────────────────────────
+//
+// Runs the real overlay pass and inspects what was painted: each label
+// lands on the row of the target it opens (new-tab-menu-shortcut-hints
+// task0001 FR1 / FR2 / FR8 wiring).
+
+/// `(painted text, vertical center)` of every text the selector overlay
+/// painted in its final frame.
+fn overlay_texts(app: &mut App) -> Vec<(String, f32)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, f32)>) {
+        match shape {
+            egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, out)),
+            egui::Shape::Text(t) => {
+                let text: String = t.galley.rows.iter().map(|r| r.text()).collect();
+                out.push((text, t.pos.y + t.galley.size().y / 2.0));
+            }
+            _ => {}
+        }
+    }
+    let ctx = egui::Context::default();
+    let mut output = egui::FullOutput::default();
+    // The first frame only sizes the areas; advancing time finishes
+    // their fade-in.
+    for frame in 0..4 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            time: Some(f64::from(frame)),
+            ..Default::default()
+        };
+        output = ctx.run(input, |ctx| {
+            crate::render::draw_profile_selector_overlay(ctx, app);
+        });
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+fn center_of(texts: &[(String, f32)], text: &str) -> f32 {
+    texts
+        .iter()
+        .find(|(t, _)| t == text)
+        .unwrap_or_else(|| panic!("no painted text {text:?} in {texts:?}"))
+        .1
+}
+
+fn has_painted(texts: &[(String, f32)], text: &str) -> bool {
+    texts.iter().any(|(t, _)| t == text)
+}
+
+// FR1 / FR2: the Global row carries the `new_tab_global` label and the
+// default profile's row (not another profile's) the `new_tab` label.
+#[test]
+fn overlay_paints_labels_on_global_and_default_profile_rows() {
+    let mut app = app_with_profiles(vec![profile("alpha", false), profile("beta", true)]);
+    app.locale = crate::i18n::Locale::En;
+    app.open_new_tab_chooser_with_entries(vec![tmux_row("tmux: dev", vec!["attach"])]);
+    let texts = overlay_texts(&mut app);
+
+    let near = |a: f32, b: f32| (a - b).abs() < 0.5;
+    assert!(near(
+        center_of(&texts, "Ctrl+Shift+G"),
+        center_of(&texts, "Global Settings")
+    ));
+    assert!(near(
+        center_of(&texts, "Ctrl+Shift+T"),
+        center_of(&texts, "beta")
+    ));
+    // No other row gets a label: exactly one of each.
+    assert_eq!(texts.iter().filter(|(t, _)| t == "Ctrl+Shift+G").count(), 1);
+    assert_eq!(texts.iter().filter(|(t, _)| t == "Ctrl+Shift+T").count(), 1);
+}
+
+// FR8: the Ctrl+Shift+P selector paints no shortcut label.
+#[test]
+fn overlay_selector_mode_paints_no_labels() {
+    let mut app = app_with_profiles(vec![profile("alpha", true)]);
+    app.open_profile_selector();
+    let texts = overlay_texts(&mut app);
+    assert!(has_painted(&texts, "alpha"));
+    assert!(!has_painted(&texts, "Ctrl+Shift+G"));
+    assert!(!has_painted(&texts, "Ctrl+Shift+T"));
+}
+
+// FR6: a chord another action outranks is not shown.
+#[test]
+fn overlay_omits_a_label_whose_chord_is_taken_by_a_higher_priority_action() {
+    let mut keybinds = crate::settings::KeybindSettings::default();
+    keybinds.new_tab = keybinds.copy.clone();
+    let settings = crate::settings::Settings {
+        profiles: vec![profile("alpha", true)],
+        keybinds,
+        ..Default::default()
+    };
+    let mut app = App::with_settings(settings);
+    app.open_new_tab_chooser_with_entries(Vec::new());
+    let texts = overlay_texts(&mut app);
+    assert!(has_painted(&texts, "Ctrl+Shift+G"));
+    assert!(!has_painted(&texts, "Ctrl+Shift+C"));
+}
+
 #[test]
 fn apply_settings_closes_open_profile_selector() {
     let mut app = app_with_profiles(vec![profile("a", false), profile("b", false)]);

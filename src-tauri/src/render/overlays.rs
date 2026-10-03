@@ -25,6 +25,12 @@ pub fn draw_profile_selector_overlay(
         crate::i18n::Locale::Ja => ("プロファイル", "新しいタブ", "グローバル設定", "デフォルト"),
         crate::i18n::Locale::En => ("Profiles", "New Tab", "Global Settings", "Default"),
     };
+    // Shortcut labels are derived from the keybind table in force this
+    // frame (never cached), one entry per Global / profile row in row
+    // order. The tmux rows the draw path appends carry no label, which
+    // matches the assignment.
+    let shortcut_labels = app.profile_selector_shortcut_labels();
+    let shortcut_at = |row: usize| shortcut_labels.get(row).and_then(|l| l.as_deref());
     let mut rows: Vec<crate::ui::profile_selector::ProfileRow<'_>> = Vec::new();
     // New-tab chooser mode (`+` button): a synthetic "Global Settings"
     // row leads the list and the dialog is titled "New Tab" (WebView
@@ -34,21 +40,21 @@ pub fn draw_profile_selector_overlay(
             name: global_label,
             shell_path: "",
             is_default: false,
+            shortcut: shortcut_at(0),
         });
         new_tab_title
     } else {
         selector_title
     };
-    rows.extend(
-        app.settings
-            .profiles
-            .iter()
-            .map(|p| crate::ui::profile_selector::ProfileRow {
-                name: &p.name,
-                shell_path: &p.shell_path,
-                is_default: p.is_default,
-            }),
-    );
+    let profile_row_base = rows.len();
+    rows.extend(app.settings.profiles.iter().enumerate().map(|(i, p)| {
+        crate::ui::profile_selector::ProfileRow {
+            name: &p.name,
+            shell_path: &p.shell_path,
+            is_default: p.is_default,
+            shortcut: shortcut_at(profile_row_base + i),
+        }
+    }));
     crate::ui::profile_selector::draw(ctx, &mut app.profile_selector, &rows, title, badge)
 }
 
