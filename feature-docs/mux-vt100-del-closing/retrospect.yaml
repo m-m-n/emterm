@@ -1,0 +1,40 @@
+feature: mux-vt100-del-closing
+collected_at: "2026-10-04T04:04:42+09:00"
+session_ids: [01a10326-9f26-7299-af8d-3a8869abca3c]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code の最終読み（score 1.37 / confidence 0.63）を閾値表で評価し full を採用"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.31, confidence: 0.69, probabilities: {'0': 0.0, '1': 0.69, '2': 0.31, '3': 0.0}}
+        observed_at: "2026-10-04T02:09:46+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.37, confidence: 0.63, probabilities: {'0': 0.0, '1': 0.63, '2': 0.37, '3': 0.0}}
+        observed_at: "2026-10-04T02:09:46+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/mux/ipc/handlers/agent_api.rs
+        - src-tauri/src/mux/ipc/handlers/tests.rs
+        - src-tauri/src/mux/session/pane/mod.rs
+        - src-tauri/src/mux/session/pane/tests.rs
+      changed_lines_approx: 60
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      work_still_required: true
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+  - "事前調査は変更ファイルを 4 本と見積もったが、実装は共有関数を scrollback_filter.rs（+ tests.rs）に置いたため 6 本になった"
+  - "--lib 全体で経過時間 assert（BUDGET 10s）の 2 テストが高負荷環境で base main でも恒常的に失敗し、verify は Codex 相談で pass と判定した"
