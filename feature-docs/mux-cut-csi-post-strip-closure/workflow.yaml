@@ -107,7 +107,7 @@ workflow:
     (NFR2). Manual reproduction on a release binary is left to the user (optional per
     VERIFICATION.md).
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Post-strip CSI state for the cut closing and the carry
