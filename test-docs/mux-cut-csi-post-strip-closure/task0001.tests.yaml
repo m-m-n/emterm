@@ -1,0 +1,131 @@
+task_id: task0001
+# From step 4a, before any change: `cargo test --lib` finished with 4091 passed, 0 failed,
+# 3 ignored.
+baseline_failures: []
+# Re-executed after the implementation (the whole lib suite, after the last source edit):
+# 4101 passed, 0 failed, 3 ignored (the 4091 of the baseline plus the 10 tests this task adds;
+# the extended R1 test is one of the baseline's). The `--no-default-features` cargo check also
+# finished with no error and no warning of this task's code.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_the_closing_is_written_only_when_the_emitted_stream_ends_inside_a_csi
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change write filter with the three new CLOSING_CASES rows in place:
+      the test failed with 'fed "ESC[6 ESC]777;emterm;markdown;begin;id=x BEL", cut at the end'
+      (left `ESC [ 6`, right `ESC [ 6 DEL`): the strip removed the launch together with its
+      ESC, the written bytes still ended inside the CSI, and no DEL followed. The Kitty and
+      CSI-query rows have the same cause and were not reached before the first row failed. The
+      CSI-query row's byte-by-byte expectation (the fed bytes, no DEL) is stated explicitly in
+      BYTE_BY_BYTE_EXPECTATIONS and holds before and after the change. Every pre-existing
+      row keeps its expectation; the pre-existing rows pass before and after.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::post_strip_a_cut_after_a_stripped_construct_replays_like_the_raw_stream
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change write filter: the test failed with 'viewer launch, switch
+      [?47h, continuation "n": cut at the end of the call, continuation in a later call' - the
+      replayed ring answered `ESC [ 1 ; 1 R` (a cursor-position report) and displayed no `n`,
+      where the raw-stream reference gives no response and displays `n` at column 1. The
+      cut-in-the-same-call and fallback-closing layouts and the Kitty and CSI-query forms were
+      not reached before the first layout failed; they share the cause (no DEL after
+      `ESC[6`).
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_the_closing_follows_the_stripped_output
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change write filter: the test failed in its EC-2 part with
+      'EC-2: cut at the end' (left `ESC [ 6`, right `ESC [ 6 DEL`). The test stops at its first
+      failing assertion, so the EC-3 part (a stripped CSI device query embedding a C0 byte)
+      and the EC-6 part were not observed red on their own; EC-3 has the same cause as
+      EC-2 (the removed query's ESC cleared the pre-strip state). The EC-4 part (a CSI
+      followed by a complete kept OSC, or by `ESC X`, then a cut writes no DEL) and the EC-6
+      designator parts guard behavior that already held before the change (the pre-existing
+      CLOSING_CASES rows with the same bytes pass before and after); they are regression
+      guards, not reds.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_the_carried_csi_state_follows_the_stripped_output
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change write filter: the test failed in its first part with '"ESC["
+      then osc 777 launch: the written bytes end inside the CSI' (left `None`, right
+      `Some(Entry)`): the filter carried the pre-strip state, cleared by the launch's ESC. The
+      EC-1 part (the held target completing in a later call keeps the carried-in CSI) and the
+      split-invariance corpus part were not observed red on their own because the test stops at
+      the first failing assertion; the split corpus also compares the carried state with
+      term_core's after every call, which the pre-change state fails by the same cause.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_an_overflow_flush_followed_by_a_cut_closes_an_open_csi
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change write filter: the test failed with 'viewer launch: cut at the
+      end of the flushing call' - the overflow flush wrote the stripped run without the DEL, so
+      the written bytes differ from the stripped run followed by one DEL. The cut-with-`n`
+      layout, the no-cut carried state and the other two forms were not reached before the
+      first assertion failed; they share the cause (the flush used the pre-strip state).
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_reader_restore_matches_the_raw_stream_reference
+    red_confirmed: true
+    red_reason: >-
+      Observed on the pre-change reader: the test failed with '(b) viewer launch, [?47h:
+      response bytes differ from the raw-stream reference' (client `ESC [ 1 ; 1 R`, reference
+      none) - layout (a), the restore covering the switch read, passed for the launch form
+      before the change. The remaining layouts and forms were not reached. For the CSI-query
+      form the reference answers the stripped query itself; the production reader re-delivers
+      that query live when the restore covers its read (layouts (a) and (c)), so the client
+      answers it there too, and the test states that per layout (the reference's own answer is
+      expected on the client in (a) and (c) and not in (b) and (d)); every other response and
+      the screen and cursor are compared exactly.
+  AC-7:
+    tests:
+      - mux::scrollback_filter::tests::post_strip_state_form_output_equals_the_write_path_strip
+      - mux::scrollback_filter::tests::post_strip_state_form_reports_the_csi_state_of_the_written_bytes
+      - mux::scrollback_filter::tests::post_strip_csi_step_classifies_every_byte_like_term_core
+      - mux::scrollback_filter::tests::post_strip_state_form_is_one_linear_pass
+      - mux::scrollback_filter::tests::the_state_taking_form_with_the_flag_clear_equals_the_existing_entry_points
+      - mux::scrollback_filter::tests::every_strip_entry_point_keeps_a_designator_esc_and_what_follows_it
+      - mux::scrollback_filter::tests::strip_pty_output_for_scrollback_write_matches_snapshot_strip_for_everything
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: the test target did not compile. The new tests
+      name `strip_pty_output_for_scrollback_write_with_csi_state`, `csi_step`, `CsiStep` and
+      `CsiPhase` in the shared strip module, none of which existed
+      ('error[E0432]: unresolved import `CsiPhase`', 'error[E0425]: cannot find type `CsiPhase`
+      in this scope'). A compile failure is the only red these tests of a new function can have;
+      they were not watched failing on an assertion. The existing strip tests listed after the
+      first four are the pre-existing guards of the existing forms' outputs and signatures; they
+      pass before and after. The whole lib suite passes after the change with no existing test's
+      expectation changed (4101 passed, 0 failed).
+  AC-8:
+    tests:
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+      - mux::scrollback_filter::tests::post_strip_state_form_is_one_linear_pass
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_long_csi_parameter_runs_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_many_csis_straddling_calls_with_cuts_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_many_open_csis_through_the_reader_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::round4_cut_csi::round4_fr4_a_long_csi_fed_byte_by_byte_is_never_held
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_an_overflow_flush_followed_by_a_cut_closes_an_open_csi
+      - mux::ipc::pty_spawn::tests::round3_write_path::an_osc_held_near_the_cap_is_dropped_at_a_cut_and_at_the_fallback
+    red_confirmed: false
+    red_reason: >-
+      The R7 test passed on the pre-change code (observed in the red run: 'ok'): it asserts
+      that every way of feeding long alternating inputs - one call, two calls, byte by byte,
+      with and without a cut, below and above the 512 KiB cap - writes the same bytes within the
+      10-second budget, which the pre-change filter also satisfied; it guards against a
+      regression, as the plan's test notes state. The remaining parts of the criterion have no
+      executable check that can be made to fail first: that the post-strip state is produced
+      inside the strip's pass with no new loop over the bytes in the write filter is a property
+      of the code (checked by inspection: the state advances in `Written::push` / `extend`
+      inside `strip_pass`, and the boundary scan lost its CSI walk), and the
+      `--no-default-features` cargo check (passes before and after) is a build outcome that
+      was not observed failing. The existing cap and overflow tests listed above pass
+      unchanged. Linear time of the strip itself is covered by
+      `post_strip_state_form_is_one_linear_pass`, which has no pre-change form to run (red is
+      its compile failure, see AC-7).
