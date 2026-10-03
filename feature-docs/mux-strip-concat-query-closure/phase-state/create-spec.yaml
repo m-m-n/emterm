@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-strip-concat-query-closure
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: b3c8a567a04017ea66066394dd72dba939ffc7b3
-last_input_digest: sha256:8d111efd353b07369254b4311f31fec6bf6a46afc41cc1ff29e87a9a5ff0e837
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:3dc80ccbceb62242619f1367b8707c6131cb811f620c44778d02220ef83f0c9c
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: answered
@@ -72,6 +72,9 @@ worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:8d111efd353b07369254b4311f31fec6bf6a46afc41cc1ff29e87a9a5ff0e837
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:3dc80ccbceb62242619f1367b8707c6131cb811f620c44778d02220ef83f0c9c
 artifacts: []
 patches: []
 progress_fingerprint: null
