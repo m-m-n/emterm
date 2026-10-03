@@ -94,7 +94,18 @@ workflow:
   status: completed
   completed_at_commit: 57d50d888bb6965b6f75e752ef01e4084e8997c2
 - id: verify
-  status: in_progress
+  status: completed
+  completed_at_commit: 09451c4a032120a30d253e6499b18ae8468e300c
+  result: pass
+  failed_items: []
+  excluded_scenarios: []
+  summary: >-
+    cargo check (default / --no-default-features) exit 0; lib suite 4102 passed, 0 failed,
+    3 ignored; R1-R9 and every DECISIONS.md cited path resolve in the --lib --list output;
+    predecessor round4-fixes files untouched; existing-test diffs only widen helper
+    visibility and add the planned rows (D2); write_filter keeps 3 scan_boundary call sites
+    (NFR2). Manual reproduction on a release binary is left to the user (optional per
+    VERIFICATION.md).
 - id: retrospect
   status: pending
 tasks:
