@@ -1,0 +1,76 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - "Profiles list Launch removal — action buttons > AC-1: each profile item holds exactly the default toggle, Edit, Duplicate and Delete buttons in that order"
+      - "Profiles list Launch removal — action buttons > AC-1: no action button reads Launch or 起動 in either UI language"
+    red_confirmed: true
+    red_reason: >-
+      Before the deletion each item rendered five buttons. The order test failed
+      with a diff showing an extra trailing "Launch" entry in the received
+      button texts. The language test failed with 'Expected to not contain:
+      "Launch"' and received ["Unset Default", "Edit", "Duplicate", "Delete",
+      "Launch", "Set as Default", "Edit", "Duplicate", "Delete", "Launch"].
+  AC-2:
+    tests:
+      - "Profiles list Launch removal — action buttons > AC-2: clicking every action button of a profile never dispatches profile:launch on the document"
+    red_confirmed: true
+    red_reason: >-
+      Before the deletion, clicking the Launch button dispatched the
+      profile:launch CustomEvent and the document listener ran once:
+      expect(launchEvents).toBe(0) failed with Expected: 0, Received: 1. The
+      test swaps in the happy-dom window's CustomEvent for its duration,
+      because Bun's native CustomEvent is rejected by happy-dom's
+      document.dispatchEvent (TypeError, swallowed by the click listener) and
+      the first version of the test passed vacuously before the deletion.
+  AC-3:
+    tests:
+      - "Profiles list Launch removal — locale files > AC-3: en.json settings.profiles has no launch property"
+      - "Profiles list Launch removal — locale files > AC-3: ja.json settings.profiles has no launch property"
+    red_confirmed: true
+    red_reason: >-
+      Before the deletion both parsed locale objects held the launch entry:
+      expect(Object.hasOwn(profiles, "launch")).toBe(false) failed with
+      Expected: false, Received: true for en and for ja.
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Verified by the static search of VERIFICATION.md TS-4, not by a unit test
+      (the AC-2 test names the event, so test files are excluded). No existing
+      test covers it (searched test files by path and basename for
+      profiles-section and the locale files; only profiles-section.test.ts,
+      which now holds the AC-2/AC-3 tests, and terminal-behavior-section.test.ts,
+      which reads the locale files for another section, reference them). The
+      check was run against the pre-change commit with git grep -n -e
+      'profile:launch' -e 'settings.profiles.launch' HEAD -- src-tauri
+      ':!*.test.ts' and found two lines in profiles-section.ts (exit 0, i.e.
+      the criterion failed). After the change the same command finds nothing
+      (exit 1).
+  AC-5:
+    tests:
+      - "Profiles list drag reorder — dragstart drag data > AC-1: dragstart on item 1 sets its index under the profile MIME type with effectAllowed move"
+      - "Profiles list drag reorder — dragstart drag data > AC-2: the profile MIME entry is the only one on the DataTransfer (no text/plain)"
+      - "Profiles list drag reorder — dragstart then drop > AC-3: dragstart on index 0 + drop on index 2 reorders [A, B, C] into [B, C, A], saves once and re-renders"
+      - "Profiles list drag reorder — dragstart then drop > AC-4: a drop with no preceding dragstart does not save and leaves profiles unchanged"
+      - "Profiles list drag reorder — dragstart then drop > AC-4: a drop whose DataTransfer carries the profile MIME type with value 0 but has no preceding dragstart does not save"
+      - "Profiles list drag reorder — dragstart then drop > AC-5: dragstart on index 1 + drop on index 1 does not save and leaves profiles unchanged"
+    red_confirmed: false
+    red_reason: >-
+      These are the existing drag reorder tests, unchanged in name and body;
+      they passed before this task (baseline run: 413 pass, 0 fail) and pass
+      after it (418 pass, 0 fail), so no red state occurred. The criterion is a
+      regression guard: bun test and bun run typecheck both exit 0 after the
+      change.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified from the task's changed-file list (git diff --name-only: the two
+      locale files, profiles-section.ts and profiles-section.test.ts, all under
+      src-tauri/web-shared/; nothing under src-tauri/src/). No existing test
+      covers it (searched test files by path and basename; none inspects the
+      set of changed files). The condition held before any change was made, so
+      no check could be observed failing.
