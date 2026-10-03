@@ -1061,3 +1061,317 @@ fn designator_chains_are_one_pass_and_keep_every_byte() {
         assert_eq!(remapped, vec![0, input.len() / 2]);
     }
 }
+
+// ── state-reporting write-path strip (mux-cut-csi-post-strip-closure, FR2 /
+//    FR3 / FR6, D1) ────────────────────────────────────────────────────────
+//
+// The form reports the CSI sub-state the stream is in after the bytes it
+// writes, so the write filter can close a cut and carry the state by what it
+// wrote, not by what it was fed.
+
+/// Run `stream` through a fresh term_core and report its CSI sub-state: `None`
+/// in ground, otherwise the entry or the parameter state. Only meaningful for a
+/// stream that ends in a CSI or in ground (not after a bare `ESC`, not inside a
+/// charset designator wait).
+fn client_csi_phase(stream: &[u8]) -> Option<CsiPhase> {
+    fn shows_m(stream: &[u8]) -> bool {
+        let mut core = term_core::terminal_core::TerminalCore::new(80, 24, 10);
+        core.process_pty_data_fully(&[stream, b"m"].concat());
+        (0..24).any(|r| core.get_line_text(r).contains('m'))
+    }
+    // A final byte is displayed in ground and consumed inside a CSI.
+    if shows_m(stream) {
+        return None;
+    }
+    // `!` cancels the entry state and is an intermediate in the parameter state.
+    Some(if shows_m(&[stream, b"!"].concat()) {
+        CsiPhase::Entry
+    } else {
+        CsiPhase::Param
+    })
+}
+
+const POST_STRIP_LAUNCH: &[u8] = b"\x1b]777;emterm;markdown;begin;id=x\x07";
+const POST_STRIP_KITTY: &[u8] = b"\x1b_Gi=1,a=d;AAAA\x1b\\";
+
+/// `(csi_in, designator flag, input, written bytes, reported state, whether
+/// the written stream, started from the state given, ends in a CSI or in
+/// ground, so that term_core can confirm the reported state)`.
+type StateCase = (
+    Option<CsiPhase>,
+    bool,
+    &'static [u8],
+    &'static [u8],
+    Option<CsiPhase>,
+    bool,
+);
+
+/// The bytes that put term_core in a given CSI sub-state.
+fn bytes_entering(phase: Option<CsiPhase>) -> &'static [u8] {
+    match phase {
+        None => b"",
+        Some(CsiPhase::Entry) => b"\x1b[",
+        Some(CsiPhase::Param) => b"\x1b[6",
+    }
+}
+
+/// The reported state is the CSI sub-state of the stream formed by the state
+/// given followed by the bytes written: bytes the pass removes never advance
+/// it; copied bytes, designator bytes and the C0 bytes re-emitted from a
+/// removed CSI query do.
+#[test]
+fn post_strip_state_form_reports_the_csi_state_of_the_written_bytes() {
+    use CsiPhase::{Entry, Param};
+    let cases: &[StateCase] = &[
+        // Nothing written, nothing changes.
+        (None, false, b"", b"", None, true),
+        (Some(Param), false, b"", b"", Some(Param), true),
+        (Some(Entry), false, b"", b"", Some(Entry), true),
+        // Copied bytes advance the state.
+        (None, false, b"abc", b"abc", None, true),
+        (None, false, b"\x1b[", b"\x1b[", Some(Entry), true),
+        (None, false, b"\x1b[6", b"\x1b[6", Some(Param), true),
+        (None, false, b"\x1b[?25", b"\x1b[?25", Some(Param), true),
+        (None, false, b"\x1b[6 ", b"\x1b[6 ", Some(Param), true),
+        (None, false, b"\x1b[\r", b"\x1b[\r", Some(Entry), true),
+        (None, false, b"\x1b[6m", b"\x1b[6m", None, true),
+        (None, false, b"\x1b[6\x7f", b"\x1b[6\x7f", None, true),
+        (None, false, b"\x1b[!", b"\x1b[!", None, true),
+        (Some(Entry), false, b"6", b"6", Some(Param), true),
+        (Some(Param), false, b"6", b"6", Some(Param), true),
+        (Some(Param), false, b"m", b"m", None, true),
+        (Some(Entry), false, b"\r", b"\r", Some(Entry), true),
+        // An ESC that is written aborts the open CSI.
+        (Some(Param), false, b"\x1bX", b"\x1bX", None, true),
+        (Some(Param), false, b"\x1b[", b"\x1b[", Some(Entry), true),
+        (Some(Param), false, b"\x1b[7", b"\x1b[7", Some(Param), true),
+        (
+            Some(Param),
+            false,
+            b"\x1b]0;t\x07",
+            b"\x1b]0;t\x07",
+            None,
+            true,
+        ),
+        (
+            None,
+            false,
+            b"\x1b[6\x1b]0;t\x07",
+            b"\x1b[6\x1b]0;t\x07",
+            None,
+            true,
+        ),
+        // An ESC that is not written (a removed construct) leaves it open.
+        (
+            None,
+            false,
+            b"\x1b[6\x1b]777;emterm;markdown;begin;id=x\x07",
+            b"\x1b[6",
+            Some(Param),
+            true,
+        ),
+        (
+            None,
+            false,
+            b"\x1b[6\x1b_Gi=1,a=d;AAAA\x1b\\",
+            b"\x1b[6",
+            Some(Param),
+            true,
+        ),
+        (None, false, b"\x1b[6\x1b[6n", b"\x1b[6", Some(Param), true),
+        (None, false, b"\x1b[\x1b[6n", b"\x1b[", Some(Entry), true),
+        (
+            Some(Param),
+            false,
+            POST_STRIP_LAUNCH,
+            b"",
+            Some(Param),
+            true,
+        ),
+        (Some(Entry), false, POST_STRIP_KITTY, b"", Some(Entry), true),
+        (Some(Param), false, b"\x1b[6n", b"", Some(Param), true),
+        (Some(Param), false, b"\x1b[c", b"", Some(Param), true),
+        // The C0 bytes re-emitted from a removed query execute inside an
+        // open CSI and leave it open (EC-3).
+        (
+            None,
+            false,
+            b"\x1b[6\x1b[6\rn",
+            b"\x1b[6\r",
+            Some(Param),
+            true,
+        ),
+        (
+            None,
+            false,
+            b"\x1b[6\x1b[\x086n",
+            b"\x1b[6\x08",
+            Some(Param),
+            true,
+        ),
+        (Some(Entry), false, b"\x1b[6\rn", b"\r", Some(Entry), true),
+        // The designator flag: byte 0 is copied whatever it is, and the
+        // stream continues from ground.
+        (None, true, b"B", b"B", None, true),
+        (None, true, b"B\x1b[6", b"B\x1b[6", Some(Param), true),
+        (None, true, b"\x1b[6n", b"\x1b[6n", None, true),
+        (None, true, b"B\x1b[6\x1b[6n", b"B\x1b[6", Some(Param), true),
+        // A trailing escape or designation start is not a CSI.
+        (None, false, b"\x1b[6\x1b(", b"\x1b[6\x1b(", None, false),
+        (None, false, b"\x1b[6\x1b", b"\x1b[6\x1b", None, false),
+        (None, false, b"\x1b(\x1b", b"\x1b(\x1b", None, true),
+    ];
+    for (csi_in, designator, input, expected_out, expected_state, confirm) in cases {
+        let label = format!(
+            "state {csi_in:?}, designator {designator}, input {:?}",
+            String::from_utf8_lossy(input)
+        );
+        let (out, state) =
+            strip_pty_output_for_scrollback_write_with_csi_state(input, *designator, *csi_in);
+        assert_eq!(out, *expected_out, "{label}: written bytes");
+        assert_eq!(state, *expected_state, "{label}: reported state");
+        if *confirm && !*designator {
+            // The reported state is the one term_core is in after the bytes
+            // that enter the given state followed by the written bytes.
+            let stream = [bytes_entering(*csi_in), &out[..]].concat();
+            assert_eq!(
+                client_csi_phase(&stream),
+                state,
+                "{label}: term_core on the written stream"
+            );
+        }
+    }
+}
+
+/// `csi_step` is the per-byte CSI transition both the write filter's scan and
+/// the state-reporting strip follow: every byte in each sub-state is classified
+/// as term_core does - the byte keeps the CSI open in the entry or the
+/// parameter state, completes or cancels it, or (ESC) aborts it.
+#[test]
+fn post_strip_csi_step_classifies_every_byte_like_term_core() {
+    for phase in [CsiPhase::Entry, CsiPhase::Param] {
+        let head = bytes_entering(Some(phase));
+        for byte in 0u8..=255 {
+            let step = csi_step(phase, byte);
+            if byte == 0x1b {
+                assert_eq!(step, CsiStep::Abort, "{phase:?}: ESC aborts");
+                continue;
+            }
+            let after = client_csi_phase(&[head, &[byte][..]].concat());
+            let expected = match after {
+                Some(next) => CsiStep::Open(next),
+                None => CsiStep::End,
+            };
+            assert_eq!(step, expected, "{phase:?} then byte {byte:#04x}");
+        }
+    }
+}
+
+/// Inputs for the output-identity check: strip targets of every kind, kept
+/// look-alikes, designations and text.
+fn post_strip_identity_corpus() -> Vec<Vec<u8>> {
+    let launch = osc(b"777;emterm;markdown;begin", b"\x07");
+    let mut corpus: Vec<Vec<u8>> = vec![
+        b"plain".to_vec(),
+        b"a\x1b[6nb".to_vec(),
+        b"\x1b(B\x1b)0text".to_vec(),
+        b"\x1b_Gi=1;P\x1b\\tail".to_vec(),
+        b"\x1bPq#0\x1b\\tail".to_vec(),
+        b"\x1bP$qm\x1b\\tail".to_vec(),
+        b"\x1b]0;title\x07".to_vec(),
+        b"\x1b".to_vec(),
+        b"\x1b[6\x1b".to_vec(),
+        Vec::new(),
+        b"\x1b[6\x1b[6n\x1b[5n\x1b[c\x1b[?c\x1b[>0c\x1b[14t\x1b[?25$p".to_vec(),
+        b"\x1b[=c\x1b[0n\x1b[8;24;80t\x1b[261n\x1b[6\rn\x1b[\x086n".to_vec(),
+        b"\x1b[6\x1b]777;emterm;markdown;x\x07\x1b_Gi=1;P\x1b\\\x1b[6n".to_vec(),
+        b"\x1b]777;emterm;fold;start;1\x07\x1b]9999;emterm-mux;state;1\x07".to_vec(),
+        b"\x1b[6\x1b]777;emterm;markdown;unterminated".to_vec(),
+    ];
+    corpus.push([b"x".as_slice(), &launch, b"y"].concat());
+    corpus.extend(DESIGNATOR_ESC_KEPT_RUNS.iter().map(|r| r.to_vec()));
+    for body in NON_CANONICAL_STRIPPED_BODIES.iter().chain(KEPT_BODIES) {
+        for terminator in [b"\x07".as_slice(), b"\x1b\\".as_slice()] {
+            let mut input = b"before\x1b[6".to_vec();
+            input.extend_from_slice(&osc(body, terminator));
+            input.extend_from_slice(b"after");
+            corpus.push(input);
+        }
+    }
+    corpus
+}
+
+/// R9 (AC-7, NFR1, FR6): the state-reporting form returns output byte-identical
+/// to the existing write-path form over the scrollback_filter corpora, with the
+/// designator flag on and off and from every CSI state given. The existing
+/// forms keep their signatures and outputs.
+#[test]
+fn post_strip_state_form_output_equals_the_write_path_strip() {
+    let configs: [(bool, Option<CsiPhase>); 4] = [
+        (false, None),
+        (false, Some(CsiPhase::Entry)),
+        (false, Some(CsiPhase::Param)),
+        (true, None),
+    ];
+    let mut check = |input: &[u8]| {
+        for (designator, csi_in) in configs {
+            let (out, _state) =
+                strip_pty_output_for_scrollback_write_with_csi_state(input, designator, csi_in);
+            assert_eq!(
+                out,
+                strip_pty_output_for_scrollback_write_with_designator(input, designator),
+                "{input:?}: designator {designator}, state {csi_in:?}"
+            );
+            if !designator && csi_in.is_none() {
+                assert_eq!(
+                    out,
+                    strip_pty_output_for_scrollback_write(input),
+                    "{input:?}"
+                );
+                assert_eq!(out, strip_replayable_rich_content(input), "{input:?}");
+            }
+        }
+    };
+    for input in post_strip_identity_corpus() {
+        check(&input);
+    }
+    // Every string of up to five bytes over an alphabet that forms the short
+    // strip targets (a CSI query, a Kitty APC, a SIXEL DCS) and designations.
+    let alphabet: [u8; 10] = [0x1b, b'[', b'(', b'_', b'P', b'G', b'q', b'6', b'n', b'\\'];
+    let mut input: Vec<u8> = Vec::new();
+    fn walk(alphabet: &[u8], input: &mut Vec<u8>, depth: usize, check: &mut impl FnMut(&[u8])) {
+        check(input);
+        if depth == 0 {
+            return;
+        }
+        for &byte in alphabet {
+            input.push(byte);
+            walk(alphabet, input, depth - 1, check);
+            input.pop();
+        }
+    }
+    walk(&alphabet, &mut input, 5, &mut check);
+}
+
+/// NFR2: the state is advanced inside the strip's single pass, so a long input
+/// stays linear: no second pass and no per-construct rescan.
+#[test]
+fn post_strip_state_form_is_one_linear_pass() {
+    let unit = [
+        b"\x1b[6".as_slice(),
+        POST_STRIP_LAUNCH,
+        b"\x1b[7",
+        POST_STRIP_KITTY,
+    ]
+    .concat();
+    let input: Vec<u8> = std::iter::repeat_n(unit, 100_000).flatten().collect();
+    let start = std::time::Instant::now();
+    let (out, state) = strip_pty_output_for_scrollback_write_with_csi_state(&input, false, None);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(5),
+        "took {:?}",
+        start.elapsed()
+    );
+    assert_eq!(out, b"\x1b[6\x1b[7".repeat(100_000));
+    assert_eq!(state, Some(CsiPhase::Param));
+}

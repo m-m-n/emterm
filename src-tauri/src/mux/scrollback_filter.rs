@@ -8,6 +8,148 @@
 
 use crate::mux::osc_identify::{OscIdentity, osc_body_identity};
 
+/// The CSI sub-states of `term_core`'s parser (`csi_entry` / `csi_param` in
+/// `crates/term_core/src/parser/csi.rs`) the mux has to tell apart: they differ
+/// in which bytes they accept and which they cancel on.
+///
+/// Defined here, in the shared strip module, so that this module never depends
+/// on the IPC layer; the write filter (`mux::ipc::pty_spawn`) names it too.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::mux) enum CsiPhase {
+    /// Right after `ESC [`: a private marker (`< = > ?`) and a space are
+    /// accepted, and the intermediates `0x21..=0x2F` cancel the CSI.
+    Entry,
+    /// After a parameter byte, separator, marker or space: the intermediates
+    /// `0x20..=0x2F` are accepted, and a private marker cancels the CSI.
+    Param,
+}
+
+/// What one byte does to a CSI the parser is inside ([`csi_step`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::mux) enum CsiStep {
+    /// The byte is consumed and the CSI stays open in this sub-state.
+    Open(CsiPhase),
+    /// The byte is consumed and ends the CSI: it completes it (a final byte,
+    /// `0x40..=0x7E`) or cancels it (a byte `term_core` treats as invalid).
+    End,
+    /// The byte is an `ESC`: it aborts the CSI and starts a new escape. It is
+    /// not consumed by the CSI.
+    Abort,
+}
+
+/// The per-byte CSI transition of `term_core` (`csi_entry` / `csi_param`),
+/// defined once: the state-reporting strip
+/// ([`strip_pty_output_for_scrollback_write_with_csi_state`]) follows it, and
+/// no second copy exists (the write filter's boundary scan does not walk CSI
+/// bytes any more).
+///
+/// C0 controls other than `ESC` execute inside the CSI and leave its sub-state
+/// alone.
+pub(in crate::mux) fn csi_step(phase: CsiPhase, byte: u8) -> CsiStep {
+    match (phase, byte) {
+        (_, 0x1b) => CsiStep::Abort,
+        (_, 0x00..=0x1a | 0x1c..=0x1f) => CsiStep::Open(phase),
+        (_, 0x40..=0x7e) => CsiStep::End,
+        (_, b'0'..=b'9' | b';' | b':') => CsiStep::Open(CsiPhase::Param),
+        (CsiPhase::Entry, b'?' | b'>' | b'<' | b'=' | b' ') => CsiStep::Open(CsiPhase::Param),
+        (CsiPhase::Param, 0x20..=0x2f) => CsiStep::Open(CsiPhase::Param),
+        // Invalid in this state (DEL, a byte above 0x7F, an intermediate in
+        // the entry state, a private marker after a parameter): cancelled
+        // without dispatch.
+        _ => CsiStep::End,
+    }
+}
+
+/// Where a parser replaying the bytes written so far stands, as far as the
+/// CSI question needs it (mux-cut-csi-post-strip-closure D1). In ground only
+/// `ESC` matters; an OSC / DCS / APC body needs no state of its own, because
+/// only an `ESC` leaves it and that `ESC` behaves as it does from ground.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WrittenState {
+    Ground,
+    /// Right after an `ESC` that was written.
+    Escape,
+    /// Right after `ESC (` / `ESC )`: the next byte is the charset designator,
+    /// consumed whatever it is.
+    Designator,
+    /// Inside a CSI.
+    Csi(CsiPhase),
+}
+
+impl WrittenState {
+    /// The state a pass starts in: `pending_designator` (the first byte is a
+    /// pending charset designator) wins; otherwise the CSI sub-state of the
+    /// stream written before, or ground. The two are never given together.
+    fn start(pending_designator: bool, csi: Option<CsiPhase>) -> Self {
+        if pending_designator {
+            Self::Designator
+        } else {
+            csi.map_or(Self::Ground, Self::Csi)
+        }
+    }
+
+    /// The transition of `term_core` for one written byte.
+    #[inline]
+    fn advance(&mut self, byte: u8) {
+        *self = match *self {
+            Self::Ground => {
+                if byte == 0x1b {
+                    Self::Escape
+                } else {
+                    return;
+                }
+            }
+            Self::Escape => match byte {
+                b'[' => Self::Csi(CsiPhase::Entry),
+                b'(' | b')' => Self::Designator,
+                // Another ESC restarts the escape.
+                0x1b => return,
+                // Any other byte completes the escape (a string introducer
+                // enters a body that, for this question, is ground).
+                _ => Self::Ground,
+            },
+            Self::Designator => Self::Ground,
+            Self::Csi(phase) => match csi_step(phase, byte) {
+                CsiStep::Open(next) => Self::Csi(next),
+                CsiStep::End => Self::Ground,
+                CsiStep::Abort => Self::Escape,
+            },
+        };
+    }
+
+    /// The CSI sub-state, `None` outside a CSI.
+    fn csi(self) -> Option<CsiPhase> {
+        match self {
+            Self::Csi(phase) => Some(phase),
+            _ => None,
+        }
+    }
+}
+
+/// The output of a strip pass together with the [`WrittenState`] of the
+/// stream it forms. Every byte the pass writes goes through here, so the state
+/// is advanced inside the pass itself, once per written byte: bytes the pass
+/// removes never advance it.
+struct Written {
+    bytes: Vec<u8>,
+    state: WrittenState,
+}
+
+impl Written {
+    #[inline]
+    fn push(&mut self, byte: u8) {
+        self.state.advance(byte);
+        self.bytes.push(byte);
+    }
+
+    fn extend(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.state.advance(byte);
+        }
+        self.bytes.extend_from_slice(bytes);
+    }
+}
+
 /// Remove rich-content viewer launch sequences from a completed byte run so a
 /// reattach / window-switch snapshot replays plain-text history WITHOUT
 /// re-spawning child WebView viewers or re-rendering inline images.
@@ -89,15 +231,53 @@ pub(in crate::mux) fn strip_pty_output_for_scrollback_write(bytes: &[u8]) -> Vec
     strip_rich_content(bytes)
 }
 
-/// State-taking form of [`strip_pty_output_for_scrollback_write`] for the
-/// write filter: `pending_designator` is true when `bytes[0]` is the pending
-/// charset designator of an `ESC (` / `ESC )` that ended the previous feed.
-/// See [`strip_rich_content_and_remap_with_designator`].
+/// State-taking form of [`strip_pty_output_for_scrollback_write`]:
+/// `pending_designator` is true when `bytes[0]` is the pending charset
+/// designator of an `ESC (` / `ESC )` that ended the previous feed. See
+/// [`strip_rich_content_and_remap_with_designator`]. The write filter uses
+/// [`strip_pty_output_for_scrollback_write_with_csi_state`], which returns the
+/// same bytes.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::mux) fn strip_pty_output_for_scrollback_write_with_designator(
     bytes: &[u8],
     pending_designator: bool,
 ) -> Vec<u8> {
     strip_rich_content_and_remap_with_designator(bytes, &[], pending_designator).0
+}
+
+/// State-reporting form of [`strip_pty_output_for_scrollback_write_with_designator`]
+/// for the write filter (mux-cut-csi-post-strip-closure D1): the same single
+/// pass, which also reports the CSI sub-state of the stream formed by the
+/// state before these bytes followed by the stripped bytes.
+///
+/// - `pending_designator`: `bytes[0]` is a pending charset designator (as in
+///   the designator form).
+/// - `csi_in`: the CSI sub-state of the written stream before `bytes`.
+///   Precondition: the designator flag and an open CSI sub-state are never
+///   given together (the client is never inside a CSI while a designator is
+///   awaited).
+///
+/// Returns the stripped bytes - byte-identical to what the designator form
+/// returns for the same bytes and flag - and the CSI sub-state the written
+/// bytes leave the stream in (`None` outside a CSI).
+///
+/// The state is advanced by every byte the pass writes (copied bytes,
+/// designator bytes, and the C0 bytes re-emitted from a removed CSI query, which
+/// execute without ending an open CSI), and never by a byte the pass removes: a
+/// removed construct's opening `ESC` does not abort a CSI the written stream is
+/// inside. The transitions are `term_core`'s ([`csi_step`] and the escape
+/// states of [`WrittenState`]). Extra state is O(1); there is no second pass.
+pub(in crate::mux) fn strip_pty_output_for_scrollback_write_with_csi_state(
+    bytes: &[u8],
+    pending_designator: bool,
+    csi_in: Option<CsiPhase>,
+) -> (Vec<u8>, Option<CsiPhase>) {
+    debug_assert!(
+        !(pending_designator && csi_in.is_some()),
+        "a designator wait and an open CSI are never given together"
+    );
+    let (out, _, state) = strip_pass(bytes, &[], WrittenState::start(pending_designator, csi_in));
+    (out, state.csi())
 }
 
 /// Shared implementation for [`strip_replayable_rich_content`] /
@@ -152,7 +332,27 @@ pub(in crate::mux) fn strip_rich_content_and_remap_with_designator(
     watch_offsets: &[usize],
     pending_designator: bool,
 ) -> (Vec<u8>, Vec<usize>) {
-    let mut out = Vec::with_capacity(bytes.len());
+    let (out, remapped, _) = strip_pass(
+        bytes,
+        watch_offsets,
+        WrittenState::start(pending_designator, None),
+    );
+    (out, remapped)
+}
+
+/// The single strip pass behind every strip form, started in `start` (a
+/// pending designator, an open CSI the written stream is inside, or ground).
+/// Returns the stripped bytes, the remapped watch offsets and the state of the
+/// stream the stripped bytes form (see [`Written`]).
+fn strip_pass(
+    bytes: &[u8],
+    watch_offsets: &[usize],
+    start: WrittenState,
+) -> (Vec<u8>, Vec<usize>, WrittenState) {
+    let mut out = Written {
+        bytes: Vec::with_capacity(bytes.len()),
+        state: start,
+    };
     let mut remapped = vec![0usize; watch_offsets.len()];
     let mut next_watch = 0usize;
     let mut i = 0;
@@ -160,7 +360,7 @@ pub(in crate::mux) fn strip_rich_content_and_remap_with_designator(
     // Number of upcoming bytes to copy without examining them: the
     // designator awaited by the caller's state, or the brace and the
     // designator of an `ESC (` / `ESC )` met at top level.
-    let mut verbatim = usize::from(pending_designator);
+    let mut verbatim = usize::from(start == WrittenState::Designator);
     // Smallest index at or after which an `ESC \` (ST) terminator may still
     // exist. Once a terminator search runs off the end we set this to `n`, so
     // subsequent APC/DCS introducers short-circuit instead of re-scanning the
@@ -174,7 +374,7 @@ pub(in crate::mux) fn strip_rich_content_and_remap_with_designator(
         // iteration with the correct (unchanged, since nothing was pushed
         // for that span) output length.
         while next_watch < watch_offsets.len() && watch_offsets[next_watch] <= i {
-            remapped[next_watch] = out.len();
+            remapped[next_watch] = out.bytes.len();
             next_watch += 1;
         }
         // Designator bytes are copied one at a time so each keeps its own
@@ -231,7 +431,7 @@ pub(in crate::mux) fn strip_rich_content_and_remap_with_designator(
                 // term_core answers (see the module doc comment's "Removed"
                 // list / `scan_csi_device_query`).
                 if let Some(strip) = scan_csi_device_query(bytes, i + 2) {
-                    out.extend_from_slice(&strip.embedded_c0);
+                    out.extend(&strip.embedded_c0);
                     i = strip.end;
                     continue;
                 }
@@ -256,10 +456,10 @@ pub(in crate::mux) fn strip_rich_content_and_remap_with_designator(
     // which the loop above never revisits since it exits at `i == n`) map
     // to the final output length.
     while next_watch < watch_offsets.len() {
-        remapped[next_watch] = out.len();
+        remapped[next_watch] = out.bytes.len();
         next_watch += 1;
     }
-    (out, remapped)
+    (out.bytes, remapped, out.state)
 }
 
 /// Find the index just past an ST terminator (`ESC \`) for a sequence whose

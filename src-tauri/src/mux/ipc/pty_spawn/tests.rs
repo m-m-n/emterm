@@ -8842,3 +8842,7 @@ mod round3_send_recheck;
 
 // mux-suppressed-output-round4-fixes task0004 (FR4): in-progress CSI at a cut.
 mod round4_cut_csi;
+
+// mux-cut-csi-post-strip-closure task0001 (FR1-FR4, FR6): the closing at a cut
+// and the carried CSI state follow the bytes the strip actually writes.
+mod post_strip_cut_csi;

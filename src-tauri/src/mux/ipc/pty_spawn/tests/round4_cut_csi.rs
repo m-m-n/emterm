@@ -36,13 +36,13 @@ fn small_core() -> TerminalCore {
 
 /// What a client shows and answers after a byte stream.
 #[derive(Debug, PartialEq)]
-struct View {
-    rows: Vec<String>,
-    cursor: (u16, u16),
-    responses: Vec<u8>,
+pub(super) struct View {
+    pub(super) rows: Vec<String>,
+    pub(super) cursor: (u16, u16),
+    pub(super) responses: Vec<u8>,
 }
 
-fn view_of(stream: &[u8]) -> View {
+pub(super) fn view_of(stream: &[u8]) -> View {
     let mut core = small_core();
     core.process_pty_data_fully(stream);
     let responses = core.take_response();
@@ -57,7 +57,7 @@ fn view_of(stream: &[u8]) -> View {
 
 /// Feed `fed` to a fresh filter with `cuts`, then each of `later` as a
 /// cut-free call; returns every emitted byte, in order.
-fn emitted_through(fed: &[u8], cuts: &[usize], later: &[&[u8]]) -> Vec<u8> {
+pub(super) fn emitted_through(fed: &[u8], cuts: &[usize], later: &[&[u8]]) -> Vec<u8> {
     let mut filter = ScrollbackWriteFilter::new();
     let mut out = filter.feed_with_cuts(fed, DIMS, cuts).bytes;
     for piece in later {
@@ -66,14 +66,14 @@ fn emitted_through(fed: &[u8], cuts: &[usize], later: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-fn text(bytes: &[u8]) -> String {
+pub(super) fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
 /// Whether a client that has been fed `stream` is still inside a CSI: an `m`
 /// (a final byte) is then consumed by that CSI, in ground it is displayed.
 /// Only meaningful for a stream that ends in a CSI or in ground.
-fn client_is_inside_a_csi(stream: &[u8]) -> bool {
+pub(super) fn client_is_inside_a_csi(stream: &[u8]) -> bool {
     let probe = [stream, b"m"].concat();
     let view = view_of(&probe);
     !view.rows.iter().any(|row| row.contains('m'))
@@ -244,7 +244,7 @@ const CUT_PREFIXES: &[&[u8]] = &[
 /// Continuations that tell a parser still inside the aborted CSI from one in
 /// ground: finals that complete queries, other finals, a C0 control, text,
 /// and bytes that cancel.
-const CONTINUATIONS: &[&[u8]] = &[
+pub(super) const CONTINUATIONS: &[&[u8]] = &[
     b"n", b"m", b"c", b"A", b"H", b"t", b"\r", b"[6n", b"6n", b";5H", b"x", b"Z", b"\x7f", b"?25h",
     b" q", b"$p",
 ];
@@ -328,7 +328,7 @@ fn round4_fr4_a_cut_inside_a_call_and_a_carried_csi_replay_like_the_raw_stream()
 
 /// The held run of an OSC that fills the pending buffer exactly to the cap
 /// (still held: only a run past the cap is flushed).
-fn osc_held_at_the_cap() -> Vec<u8> {
+pub(super) fn osc_held_at_the_cap() -> Vec<u8> {
     let mut held = b"\x1b]0;".to_vec();
     held.resize(SCROLLBACK_FILTER_PENDING_CAP, b'p');
     held
@@ -380,6 +380,115 @@ fn round4_fr4_an_overflow_flush_followed_by_a_cut_closes_an_open_csi() {
             text(completing)
         );
     }
+}
+
+// ── mux-cut-csi-post-strip-closure AC-2 (FR1, FR2, FR4, NFR3, TM-1, R2) ──
+
+/// The constructs the write strip removes together with their opening `ESC`,
+/// in the forms the review finding reports: a complete OSC 777 emterm markdown
+/// launch, a complete Kitty APC, and an answered CSI device query. The Kitty
+/// payload neither answers nor places an image (EC-5).
+pub(super) const POST_STRIP_FORMS: &[(&str, &[u8])] = &[
+    ("viewer launch", b"\x1b]777;emterm;markdown;begin;id=x\x07"),
+    ("kitty apc", b"\x1b_Gi=1,a=d;AAAA\x1b\\"),
+    ("csi query", b"\x1b[6n"),
+];
+
+/// The client after `before` and then `after`, with the answers to `before`
+/// discarded: the responses compared are the ones `after` provokes (EC-5: the
+/// removed construct's own effect, such as the answer to `ESC[6n`, is kept out
+/// of the comparison - the convention of the round4 chain tests' after-cut
+/// view).
+pub(super) fn view_after_a_cut(before: &[u8], after: &[u8]) -> View {
+    let mut core = small_core();
+    core.process_pty_data_fully(before);
+    let _answered_before = core.take_response();
+    core.process_pty_data_fully(after);
+    let responses = core.take_response();
+    View {
+        rows: (0..24)
+            .map(|r| core.get_line_text(r).trim_end().to_string())
+            .collect(),
+        cursor: (core.get_cursor_row(), core.get_cursor_col()),
+        responses,
+    }
+}
+
+/// AC-2 (FR1, FR2, FR4, NFR3, TM-1, R2): `ESC[6`, a construct the strip
+/// removes, a removed 47 / 1047 / 1049 `h` / `l` pair and a continuation that
+/// includes `n`. term_core fed the written ring and the continuation shows the
+/// same rows and cursor, and gives the same responses after the cut, as
+/// term_core fed the raw stream with the switch inline. The ring is written
+/// with the cut ending the call (the continuation in a later call), with the
+/// cut in the same call as the continuation, and with the reader's fallback
+/// closing. The removed construct's ESC aborted the CSI the ring is left
+/// inside, so the cut closes it: no cursor-position report is produced and
+/// `n` is displayed as text.
+#[test]
+fn post_strip_a_cut_after_a_stripped_construct_replays_like_the_raw_stream() {
+    let start = std::time::Instant::now();
+    for (form, construct) in POST_STRIP_FORMS.iter().copied() {
+        let prefix = [&b"\x1b[6"[..], construct].concat();
+        for (enter, leave) in switch_pairs() {
+            let pair = [enter, leave].concat();
+            let before_raw = [&prefix[..], &pair[..]].concat();
+            for continuation in CONTINUATIONS {
+                let ctx = format!(
+                    "{form}, switch {}, continuation {:?}",
+                    text(enter),
+                    text(continuation)
+                );
+                let reference = view_after_a_cut(&before_raw, continuation);
+
+                // The cut ends the call; the continuation arrives in a later one.
+                let mut filter = ScrollbackWriteFilter::new();
+                let closed = filter.feed_with_cuts(&prefix, DIMS, &[prefix.len()]).bytes;
+                let later = filter.feed(continuation, DIMS).1;
+                assert_eq!(
+                    view_after_a_cut(&closed, &later),
+                    reference,
+                    "{ctx}: cut at the end of the call, continuation in a later call"
+                );
+
+                // The cut and the continuation in the same call.
+                let mut filter = ScrollbackWriteFilter::new();
+                let fed = [&prefix[..], continuation].concat();
+                let whole = filter.feed_with_cuts(&fed, DIMS, &[prefix.len()]).bytes;
+                assert!(
+                    whole.starts_with(&closed),
+                    "{ctx}: the bytes before the cut are the same in both layouts"
+                );
+                assert_eq!(
+                    view_after_a_cut(&closed, &whole[closed.len()..]),
+                    reference,
+                    "{ctx}: cut and continuation in the same call"
+                );
+
+                // The construct in an earlier call, the reader's fallback
+                // closing (an empty fed range with a cut at 0), then the
+                // continuation.
+                let mut filter = ScrollbackWriteFilter::new();
+                let mut before = filter.feed(&prefix, DIMS).1;
+                before.extend_from_slice(&filter.feed_with_cuts(b"", DIMS, &[0]).bytes);
+                let later = filter.feed(continuation, DIMS).1;
+                assert_eq!(
+                    view_after_a_cut(&before, &later),
+                    reference,
+                    "{ctx}: fallback closing"
+                );
+
+                if *continuation == b"n" {
+                    // The raw stream's `n` is plain text: no report, displayed.
+                    assert!(reference.responses.is_empty(), "{ctx}");
+                    assert!(
+                        reference.rows.iter().any(|row| row.ends_with('n')),
+                        "{ctx}: `n` is displayed as text"
+                    );
+                }
+            }
+        }
+    }
+    assert!(start.elapsed() < BUDGET, "took {:?}", start.elapsed());
 }
 
 // ── AC-4 (TM-2, NFR3, NFR5): adversarial input ───────────────────────────
@@ -489,11 +598,36 @@ const CLOSING_CASES: &[(&[u8], &[u8], bool)] = &[
     // No CSI at all.
     (b"abc", b"abc", false),
     (b"\x1b]0;t", b"", false),
+    // mux-cut-csi-post-strip-closure FR1/FR4: an open CSI followed by a
+    // construct the strip removes together with its opening ESC. The removed
+    // ESC would have aborted the CSI, so the written bytes still end inside it
+    // and the cut closes it: a complete OSC 777 emterm markdown launch (BEL
+    // terminated), a complete Kitty APC, and an answered CSI device query.
+    (
+        b"\x1b[6\x1b]777;emterm;markdown;begin;id=x\x07",
+        b"\x1b[6",
+        true,
+    ),
+    (b"\x1b[6\x1b_Gi=1,a=d;AAAA\x1b\\", b"\x1b[6", true),
+    (b"\x1b[6\x1b[6n", b"\x1b[6", true),
 ];
+
+/// Rows of [`CLOSING_CASES`] whose byte-by-byte feeding is not the strip of the
+/// whole run. A CSI device query is never held: fed one byte at a time it is
+/// written across calls and is not stripped by the write path (the snapshot
+/// strip removes it later; mux-cut-csi-post-strip-closure D2, SPEC FR6 item 3).
+/// The ring then holds the fed bytes whole, ends in ground after the query's
+/// final byte, and the cut has nothing to close.
+const BYTE_BY_BYTE_EXPECTATIONS: &[(&[u8], &[u8])] = &[(b"\x1b[6\x1b[6n", b"\x1b[6\x1b[6n")];
 
 /// AC-3 (FR4): the closing is written after the emitted bytes exactly when
 /// the emitted stream ends inside a CSI at the cut, and once; the state is
 /// clear afterwards. The CSI claim of each case is checked against term_core.
+///
+/// mux-cut-csi-post-strip-closure AC-1 (FR1, FR4, TM-1, R1): the three rows
+/// that follow an open `ESC[6` with a construct the strip removes (launch,
+/// Kitty APC, CSI device query) hold on every path of the table: the closing
+/// follows the written bytes, not the bytes fed.
 #[test]
 fn round4_fr4_the_closing_is_written_only_when_the_emitted_stream_ends_inside_a_csi() {
     for (fed, kept, inside) in CLOSING_CASES {
@@ -535,6 +669,10 @@ fn round4_fr4_the_closing_is_written_only_when_the_emitted_stream_ends_inside_a_
         assert_eq!(outcome.bytes, expected, "fed {:?}, three cuts", text(fed));
 
         // Fed one byte at a time, the cut in the last call.
+        let by_byte_expected: &[u8] = BYTE_BY_BYTE_EXPECTATIONS
+            .iter()
+            .find(|(row, _)| row == fed)
+            .map_or(expected.as_slice(), |(_, bytes)| *bytes);
         let mut filter = ScrollbackWriteFilter::new();
         let mut got = Vec::new();
         let (init, last) = fed.split_at(fed.len() - 1);
@@ -542,7 +680,7 @@ fn round4_fr4_the_closing_is_written_only_when_the_emitted_stream_ends_inside_a_
             got.extend_from_slice(&filter.feed(&[*byte], DIMS).1);
         }
         got.extend_from_slice(&filter.feed_with_cuts(last, DIMS, &[1]).bytes);
-        assert_eq!(got, expected, "fed {:?} byte by byte", text(fed));
+        assert_eq!(got, by_byte_expected, "fed {:?} byte by byte", text(fed));
 
         // The CSI carried in from an earlier call, the cut at fed 0 of the next
         // (an empty fed range as the reader's fallback closing).
