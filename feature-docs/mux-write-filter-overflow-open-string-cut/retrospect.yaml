@@ -1,0 +1,38 @@
+feature: mux-write-filter-overflow-open-string-cut
+collected_at: "2026-10-04T05:07:00+09:00"
+session_ids: [01a1035e-77e0-74c5-878c-cc9e60c4d64a]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "write_filter.rs runs on every PTY output chunk in the mux daemon; the new open-body state tracking adds per-byte work on that hot path (NFR1)"
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code final read put 0.88 on bucket 2 (new logic across several modules), which maps to full"
+    bases:
+      - basis: description_only
+        score: {score: 1.36, confidence: 0.64, probabilities: {'0': 0.0, '1': 0.64, '2': 0.36, '3': 0.0}}
+        observed_at: "2026-10-04T02:41:47+09:00"
+      - basis: description_plus_code
+        score: {score: 1.88, confidence: 0.87, probabilities: {'0': 0.0, '1': 0.12, '2': 0.88, '3': 0.0}}
+        observed_at: "2026-10-04T02:45:41+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+        - src-tauri/src/mux/scrollback_filter.rs
+        - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_lone_esc.rs
+        - src-tauri/src/mux/scrollback_filter/tests.rs
+      changed_lines_approx: 180
+      added_test_cases_approx: 12
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      changes_external_contract: false
+follow_up_drafts: []
+lessons_candidates:
+  - "The fix target existed only on an unmerged predecessor integration branch (PR #120); the integration branch was cut from the predecessor tip and the PR to main carries the predecessor commits until #120 lands."
+  - "verify TS-7 (suite exit 0) hit wall-clock budget asserts under load; one token-corpus test fails on base and main too (tracked by an existing Notion task)."
+  - "Review medium f54c0279b8e89443 (snapshot strip does not recognize ESC + CAN truncation for Kitty APC / SIXEL DCS) deferred as out of scope (NFR2 / NFR5)."
