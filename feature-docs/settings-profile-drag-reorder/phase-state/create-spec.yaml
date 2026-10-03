@@ -4,8 +4,8 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: 7087f4a47719363518d5323377aa6a4b81e72974
-last_input_digest: sha256:e0a1a8fb6bd83e4a3c801c46d2299d5a60c8e6d3bcd247284358603a3d3f9b03
-active_request_id: create-spec-run-0002
+last_input_digest: sha256:207c72e464e5a25868acf58d52a8c617d98773fce0f790632cf904e9b30471ba
+active_request_id: create-spec-run-0003
 packets: {}
 answers:
   requirement.scope.ssh-list:
@@ -51,8 +51,12 @@ worker_runs:
   input_digest: sha256:cb28a936c66b8d092742190b4faa0b8d070869adef79f9e7452fb9991ebf6530
   output_digest: sha256:08362849fb17b966b0021cd265f267cb44c4b6bb7716f0acbec15a615484ce71
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:e0a1a8fb6bd83e4a3c801c46d2299d5a60c8e6d3bcd247284358603a3d3f9b03
+  output_digest: sha256:46315b94712d35d5a1acf1671b68ae30f2fd09defc411c5bf0b642d3c95ad5a4
+- request_id: create-spec-run-0003
+  status: dispatched
+  input_digest: sha256:207c72e464e5a25868acf58d52a8c617d98773fce0f790632cf904e9b30471ba
   output_digest: null
 artifacts: []
 patches: []
