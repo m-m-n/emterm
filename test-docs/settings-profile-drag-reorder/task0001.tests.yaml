@@ -1,0 +1,69 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - "Profiles list drag reorder — dragstart drag data > AC-1: dragstart on item 1 sets its index under the profile MIME type with effectAllowed move"
+    red_confirmed: true
+    red_reason: >-
+      Before the fix the dragstart handler only set effectAllowed, so
+      dt.getData("application/x-emterm-profile-index") returned "" and
+      expect(...).toBe("1") failed with 'Expected: "1", Received: ""'.
+  AC-2:
+    tests:
+      - "Profiles list drag reorder — dragstart drag data > AC-2: the profile MIME entry is the only one on the DataTransfer (no text/plain)"
+    red_confirmed: true
+    red_reason: >-
+      Before the fix the DataTransfer held no entries, so
+      expect([...dt.types]).toEqual(["application/x-emterm-profile-index"])
+      failed with Received: [].
+  AC-3:
+    tests:
+      - "Profiles list drag reorder — dragstart then drop > AC-3: dragstart on index 0 + drop on index 2 reorders [A, B, C] into [B, C, A], saves once and re-renders"
+    red_confirmed: false
+    red_reason: >-
+      The reorder path (in-memory dragIndex set at dragstart, read at drop)
+      already worked before this task and the task does not change it, so the
+      test passed before the fix; no red state occurred. It is a regression
+      guard for the unchanged drop path. No other existing test covers this
+      (searched src-tauri and test by path and basename profiles-section).
+  AC-4:
+    tests:
+      - "Profiles list drag reorder — dragstart then drop > AC-4: a drop with no preceding dragstart does not save and leaves profiles unchanged"
+      - "Profiles list drag reorder — dragstart then drop > AC-4: a drop whose DataTransfer carries the profile MIME type with value 0 but has no preceding dragstart does not save"
+    red_confirmed: false
+    red_reason: >-
+      The drop handler already returned when dragIndex was null and never read
+      the DataTransfer before this task, so both tests passed before the fix;
+      no red state occurred. They are regression guards for the unchanged drop
+      path. No other existing test covers this (searched src-tauri and test by
+      path and basename profiles-section).
+  AC-5:
+    tests:
+      - "Profiles list drag reorder — dragstart then drop > AC-5: dragstart on index 1 + drop on index 1 does not save and leaves profiles unchanged"
+    red_confirmed: false
+    red_reason: >-
+      The drop handler already returned when dragIndex equalled the drop index
+      before this task, so the test passed before the fix; no red state
+      occurred. It is a regression guard for the unchanged drop path. No other
+      existing test covers this (searched src-tauri and test by path and
+      basename profiles-section).
+  AC-6:
+    tests:
+      - "Profiles list drag reorder — dragstart drag data > AC-1: dragstart on item 1 sets its index under the profile MIME type with effectAllowed move"
+    red_confirmed: true
+    red_reason: >-
+      The AC-1 test was run against the unmodified dragstart handler
+      (effectAllowed only, no drag data) before the fix was applied and failed
+      with 'Expected: "1", Received: ""'; it passed after the fix.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The outcome is the exit status of `bun test`, `bun run typecheck` and
+      `bun run build:settings`, all exit 0 after the change. Before the fix
+      `bun test` was red only through the AC-1 and AC-2 tests (2 failures);
+      typecheck and build:settings were never observed failing, so no red was
+      observed for the criterion as a whole. No existing test covers it
+      (searched src-tauri and test by path and basename profiles-section).
