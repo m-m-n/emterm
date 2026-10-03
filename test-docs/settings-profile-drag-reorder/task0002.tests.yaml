@@ -1,0 +1,67 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - "renderSshSection() - connection list drag reorder > AC-1: dragstart on item 1 sets the item index under the SSH index MIME type with effectAllowed move"
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, the dragstart handler set effectAllowed only and added
+      no drag data: `expect(dt.getData("application/x-emterm-ssh-index")).toBe("1")`
+      failed with `Expected: "1"  Received: ""`.
+  AC-2:
+    tests:
+      - "renderSshSection() - connection list drag reorder > AC-2: dragstart leaves exactly one DataTransfer entry and no text/plain entry"
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, the DataTransfer type list stayed empty after dragstart:
+      `expect(Array.from(dt.types)).toEqual(["application/x-emterm-ssh-index"])`
+      failed with a received list of `[]`.
+  AC-3:
+    tests:
+      - "renderSshSection() - connection list drag reorder > AC-3: dragstart on item 0 then drop on item 2 reorders to [B, C, A], saves once and re-renders"
+    red_confirmed: false
+    red_reason: >-
+      The dragstart -> drop reorder path (in-memory dragIndex, splice,
+      saveSetting, reRender) already worked before this task and the fix
+      leaves it untouched, so the test passed before the fix. It is a
+      regression guard for that existing behavior; no red state occurred
+      for this criterion.
+  AC-4:
+    tests:
+      - "renderSshSection() - connection list drag reorder > AC-4: a drop with no preceding dragstart saves nothing and leaves the connections unchanged"
+      - "renderSshSection() - connection list drag reorder > AC-4: a drop carrying the SSH index MIME type but no preceding dragstart saves nothing"
+    red_confirmed: false
+    red_reason: >-
+      The drop handler already returned when no dragstart had set dragIndex
+      and never read the drop event's DataTransfer, so both tests passed
+      before the fix. They are regression guards that keep the drop path
+      independent of the drag data; no red state occurred for this criterion.
+  AC-5:
+    tests:
+      - "renderSshSection() - connection list drag reorder > AC-5: dragstart on item 1 then drop on the same item saves nothing and leaves the connections unchanged"
+    red_confirmed: false
+    red_reason: >-
+      The drop handler already returned when the drop index equals the drag
+      index, so the test passed before the fix. It is a regression guard for
+      that existing early return; no red state occurred for this criterion.
+  AC-6:
+    tests:
+      - "renderSshSection() - connection list drag reorder > AC-1: dragstart on item 1 sets the item index under the SSH index MIME type with effectAllowed move"
+    red_confirmed: true
+    red_reason: >-
+      The AC-1 test was run against the unmodified dragstart handler
+      (effectAllowed only, no drag data) before the fix was applied and
+      failed with `Expected: "1"  Received: ""`; it passes after the fix.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Command-run criterion: `bun test` (407 pass, 0 fail, including the six
+      new tests under the unchanged test-setup.ts preload), `bun run
+      typecheck` (tsc --noEmit, exit 0) and `bun run build:settings` (exit 0)
+      were re-run after the change. No such check was made to fail first:
+      neither command could fail on the absence of the new code. The search
+      for existing tests referencing ssh-section.ts (by relative path and by
+      basename) found none apart from the new ssh-section.test.ts.
