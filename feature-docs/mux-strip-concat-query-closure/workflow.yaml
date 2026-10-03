@@ -1,0 +1,270 @@
+schema_version: 1
+feature: mux-strip-concat-query-closure
+created: '2026-10-03'
+base_branch: main
+goal: |
+  # mux: カット無しの strip 連結で未完 CSI と後続バイトが連結され CPR 照会が成立しうる（mux-cut-csi-post-strip-closure FR6 残件 3 件）
+
+  Notion task: https://www.notion.so/3ee3509ec8ee819dbd44c62cbb6ae184
+
+  ## 現象 (必須)
+  mux-cut-csi-post-strip-closure（PR https://github.com/m-m-n/emterm/pull/114 ）の DECISIONS.md に FR6 残件として記録した 3 件。カットの無い経路で、共有 strip（`scrollback_filter.rs`）が除去対象の構文を `ESC` ごと除去すると、その前後のバイトが連結され、未完 CSI と後続バイトがクライアントの開始していない CSI 照会（`ESC[6n` → CPR 応答）を成立させうる。
+  1. 1 回のカット無し呼び出しで `ESC[6` + 完全なビューア起動列 + `n` を受けると、strip は起動列を中断用の `ESC` ごと除去し、リングには `ESC[6n` と書かれる
+  2. リングが除去済み構文の直後の `ESC[6` で終わった状態で snapshot が取られる（閉じるカットが無い）と、次のライブの `n` が CPR 照会を完成させうる
+  3. `ESC[6n` のような CSI 照会が呼び出しをまたいで分割されると、書き込みフィルタは CSI バイトを保持しないためそのままリングに書かれ、snapshot 時の strip でだけ除去される
+  ## 再現手順 (必須)
+  1. mux の pane に `ESC[6` + `ESC]777;emterm;markdown;…BEL` + `n` を 1 チャンクで出力する（残件 1）、または `ESC[6` + 除去対象構文で出力を終え、その状態で snapshot（タブ切り替え / reattach）を取ってから `n` を出力する（残件 2）
+  2. 復元・後続出力の再生で、クライアントが開始していない CPR 応答（`ESC[row;colR`）を返す
+  ## 期待する挙動 (必須)
+  共有 strip 由来の連結でも、クライアントが開始していない照会を成立させない。
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  ## 該当箇所 (任意)
+  - `src-tauri/src/mux/scrollback_filter.rs`（共有 strip `strip_rich_content_and_remap_with_designator`）
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs`
+  - 詳細: ブランチ `em-workflow/mux-cut-csi-post-strip-closure/integration` の `feature-docs/mux-cut-csi-post-strip-closure/DECISIONS.md`（Residuals (FR6)）
+  ## 実害・発生条件 (任意)
+  共有 strip の出力を変えるとスナップショット経路と位置補正（`snapshot_bytes.rs`）に波及するため、前 feature ではカット閉鎖と引き継ぎ状態に範囲を限定し、この 3 件を範囲外とした。
+parent_branch: em-workflow/mux-strip-concat-query-closure/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.41
+      '2': 0.59
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.02
+      '2': 0.98
+      '3': 0.0
+  at: '2026-10-03T20:14:40+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 774d3985c9a8366052492502b86beff94a10d876
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'UI に触れない Rust 内部の変更（mux デーモンのバイト列フィルタ）。batch: decide_autonomously'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: 7caefbc2a3e330c7c47847008be97bfe26136d61
+- id: implement
+  status: completed
+  base_commit: 32706c8615f83b72f9fce09e1f26a90927108d73
+  completed_at_commit: d58675efc79247cb0dc365b5180dd3628d150df6
+- id: review
+  status: completed
+  completed_at_commit: a29d3dd7e8519a88400d6241945ee269015a1632
+- id: verify
+  status: completed
+  result: pass
+  failed_items: []
+  summary: 'cargo check (default / --no-default-features) ok; cargo test --lib 4187 passed, 0 failed, 3 ignored; TS-1..TS-9 / AC-1..AC-7 / TM-1..TM-3 covered by passing tests; FR8 records: all 9 DECISIONS test paths and all 32 record entries resolve in --lib --list, predecessor DECISIONS.md and test-docs unchanged vs base. Manual reproduction (2 items) needs a release binary and was not run.'
+  completed_at_commit: e28ef6fc21cc5108493e55f3be9b870e0e271d9e
+- id: retrospect
+  status: completed
+  completed_at_commit: 85b2594d710e54afb81fe468d58d99ba856379f9
+tasks:
+  task0001:
+    title: Strip-join closing, lone-ESC neutralization and split-query classification
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+    - feature-docs/mux-strip-concat-query-closure/DECISIONS.md
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_cut_csi.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_chain.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round3_write_path.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - FR8
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    status: merged
+    branch: em-workflow/mux-strip-concat-query-closure/task0001
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  - performance
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary:
+    - perspective: performance
+      reason: 共有 strip と書き込みフィルタは PTY 出力のホットパスで、NFR1（線形・O(1) 状態）と NFR2（敵対入力予算）を持つため
+    cross_validation: true
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Strip closes an open CSI at a removed construct
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+  FR2:
+    title: No snapshot leaves a strip-induced open CSI
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+  FR3:
+    title: Split CSI device query never reaches the ring answerable
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-4
+    - TS-5
+  FR4:
+    title: Neutralize a superseded lone ESC before a removed construct
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-6
+  FR5:
+    title: Path identity and predicate stability
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-7
+  FR6:
+    title: Offset remapping stays consistent
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-7
+  FR7:
+    title: Cut and carried-state behavior preserved
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+  FR8:
+    title: Records
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+  NFR1:
+    title: Linear pass with O(1) state
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-9
+  NFR2:
+    title: Adversarial input budget
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-9
+  NFR3:
+    title: No term_core effect from inserted bytes
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-6
+  NFR4:
+    title: Test and CLI-only check pass
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-9
