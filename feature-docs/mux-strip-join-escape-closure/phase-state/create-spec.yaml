@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-strip-join-escape-closure
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: 0c3a2c06deb717868a10473cd0a4e72d6b14d58d
-last_input_digest: sha256:84e926fd80af604fd6480deb65f9cfdaab6d703cdf34ae8bc013550f76b9cd18
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:7dd48f9f36ecd207c2ba93475bcd121edfe9c2d27d4226b252ef93e78dcf038e
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: answered
@@ -45,6 +45,9 @@ worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:84e926fd80af604fd6480deb65f9cfdaab6d703cdf34ae8bc013550f76b9cd18
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:7dd48f9f36ecd207c2ba93475bcd121edfe9c2d27d4226b252ef93e78dcf038e
 artifacts: []
 patches: []
 progress_fingerprint: null
