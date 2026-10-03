@@ -291,7 +291,6 @@
       "delete": "Delete",
       "setDefault": "Set as Default",
       "unsetDefault": "Unset Default",
-      "launch": "Launch",
       "defaultBadge": "Default",
       "nameRequired": "Profile name is required",
       "dragHandle": "Drag to reorder",
