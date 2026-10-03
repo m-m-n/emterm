@@ -2,56 +2,30 @@ schema_version: 1
 feature: mux-strip-concat-query-closure
 created: '2026-10-03'
 base_branch: main
-goal: '# mux: カット無しの strip 連結で未完 CSI と後続バイトが連結され CPR 照会が成立しうる（mux-cut-csi-post-strip-closure FR6 残件 3
-  件）
-
+goal: |
+  # mux: カット無しの strip 連結で未完 CSI と後続バイトが連結され CPR 照会が成立しうる（mux-cut-csi-post-strip-closure FR6 残件 3 件）
 
   Notion task: https://www.notion.so/3ee3509ec8ee819dbd44c62cbb6ae184
 
-
   ## 現象 (必須)
-
-  mux-cut-csi-post-strip-closure（PR https://github.com/m-m-n/emterm/pull/114 ）の DECISIONS.md に FR6 残件として記録した
-  3 件。カットの無い経路で、共有 strip（`scrollback_filter.rs`）が除去対象の構文を `ESC` ごと除去すると、その前後のバイトが連結され、未完 CSI と後続バイトがクライアントの開始していない
-  CSI 照会（`ESC[6n` → CPR 応答）を成立させうる。
-
+  mux-cut-csi-post-strip-closure（PR https://github.com/m-m-n/emterm/pull/114 ）の DECISIONS.md に FR6 残件として記録した 3 件。カットの無い経路で、共有 strip（`scrollback_filter.rs`）が除去対象の構文を `ESC` ごと除去すると、その前後のバイトが連結され、未完 CSI と後続バイトがクライアントの開始していない CSI 照会（`ESC[6n` → CPR 応答）を成立させうる。
   1. 1 回のカット無し呼び出しで `ESC[6` + 完全なビューア起動列 + `n` を受けると、strip は起動列を中断用の `ESC` ごと除去し、リングには `ESC[6n` と書かれる
-
   2. リングが除去済み構文の直後の `ESC[6` で終わった状態で snapshot が取られる（閉じるカットが無い）と、次のライブの `n` が CPR 照会を完成させうる
-
   3. `ESC[6n` のような CSI 照会が呼び出しをまたいで分割されると、書き込みフィルタは CSI バイトを保持しないためそのままリングに書かれ、snapshot 時の strip でだけ除去される
-
   ## 再現手順 (必須)
-
-  1. mux の pane に `ESC[6` + `ESC]777;emterm;markdown;…BEL` + `n` を 1 チャンクで出力する（残件 1）、または `ESC[6` + 除去対象構文で出力を終え、その状態で
-  snapshot（タブ切り替え / reattach）を取ってから `n` を出力する（残件 2）
-
+  1. mux の pane に `ESC[6` + `ESC]777;emterm;markdown;…BEL` + `n` を 1 チャンクで出力する（残件 1）、または `ESC[6` + 除去対象構文で出力を終え、その状態で snapshot（タブ切り替え / reattach）を取ってから `n` を出力する（残件 2）
   2. 復元・後続出力の再生で、クライアントが開始していない CPR 応答（`ESC[row;colR`）を返す
-
   ## 期待する挙動 (必須)
-
   共有 strip 由来の連結でも、クライアントが開始していない照会を成立させない。
-
   ## 完了の定義 (必須)
-
   - [ ] 再現手順で現象が起きない
-
   - [ ] 再発を検出するテストがある
-
   ## 該当箇所 (任意)
-
   - `src-tauri/src/mux/scrollback_filter.rs`（共有 strip `strip_rich_content_and_remap_with_designator`）
-
   - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs`
-
-  - 詳細: ブランチ `em-workflow/mux-cut-csi-post-strip-closure/integration` の `feature-docs/mux-cut-csi-post-strip-closure/DECISIONS.md`（Residuals
-  (FR6)）
-
+  - 詳細: ブランチ `em-workflow/mux-cut-csi-post-strip-closure/integration` の `feature-docs/mux-cut-csi-post-strip-closure/DECISIONS.md`（Residuals (FR6)）
   ## 実害・発生条件 (任意)
-
   共有 strip の出力を変えるとスナップショット経路と位置補正（`snapshot_bytes.rs`）に波及するため、前 feature ではカット閉鎖と引き継ぎ状態に範囲を限定し、この 3 件を範囲外とした。
-
-  '
 parent_branch: em-workflow/mux-strip-concat-query-closure/integration
 tier: full
 tier_decision:
@@ -78,8 +52,7 @@ project:
     src-tauri:
       language: rust
       build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
-      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
-        --lib
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
       format_command: ''
       e2e_test_command: ''
 batch:
@@ -108,7 +81,8 @@ workflow:
   - IMPLEMENTATION.md
   - VERIFICATION.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: 7caefbc2a3e330c7c47847008be97bfe26136d61
 - id: implement
   status: pending
 - id: review
