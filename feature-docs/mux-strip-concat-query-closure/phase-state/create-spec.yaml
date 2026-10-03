@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-strip-concat-query-closure
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: b3c8a567a04017ea66066394dd72dba939ffc7b3
 last_input_digest: sha256:7caaa90d3c4c832b96fc742a7574433d0553a860c53b53cc32db4ba94695e2ce
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
