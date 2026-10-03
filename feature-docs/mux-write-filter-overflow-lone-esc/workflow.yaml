@@ -110,7 +110,8 @@ workflow:
   base_commit: 3e6eec1f7bcf0ce8ac80a9e3e29422a32ee567a1
   completed_at_commit: 50980f84c6ff5eddecc6ccbabd4566190c4ab56c
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: da9b029f3f6c9f84ada743db181f5e77bd77797d
 - id: verify
   status: pending
 - id: retrospect
@@ -144,7 +145,16 @@ tasks:
     status: merged
     branch: em-workflow/mux-write-filter-overflow-lone-esc/task0001
 review:
-  status: in_progress
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  - performance
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive
