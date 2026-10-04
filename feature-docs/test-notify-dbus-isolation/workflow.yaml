@@ -112,7 +112,8 @@ workflow:
   excluded: []
   completed_at_commit: 5c76221715825595d4aede452e0a9611a5bc1fba
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: ebf10e7674d1daae586a6d7759e5bee722200a31
 tasks:
   task0001:
     title: Test-build App uses a no-op notification sink
