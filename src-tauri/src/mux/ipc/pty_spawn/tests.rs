@@ -8867,3 +8867,7 @@ mod overflow_lone_esc;
 
 // mux-write-filter-overflow-open-string-cut task0001 (FR1-FR7): open string body state, ESC + CAN.
 mod overflow_open_string_cut;
+
+// mux-strip-join-escape-closure task0001 (FR1, FR2): scenarios 2 and 3 of the join
+// attack stay closed (write strip, snapshot strip and replay together).
+mod strip_join_escape_closure;
