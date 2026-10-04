@@ -1,7 +1,7 @@
 schema_version: 1
 feature: lib-budget-tests-load-tolerance
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: acfdc188bcbecb9ec7c0933dd3a9ac6dd28a0b05
 last_input_digest: sha256:ad259c5c5545c91b05bd08cdbafe3a945ee13dcf1b3cd0729afbc7209464d832
