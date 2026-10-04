@@ -119,7 +119,7 @@ workflow:
       measured_call_review: "pass (meter wraps exactly the write strip, snapshot strip and every write-filter feed)"
     excluded: []
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Thread CPU-time helper and CPU budget for the strip_concat alternations test
