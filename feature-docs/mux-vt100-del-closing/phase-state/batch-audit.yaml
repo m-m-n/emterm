@@ -1,0 +1,35 @@
+schema_version: 1
+feature: mux-vt100-del-closing
+records:
+- gate_id: create-spec.requirement-clarification
+  question_id: requirement.fix-approach
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-04T02:18:16+09:00'
+  source: batch-codex-consultation
+  selected_option_ids:
+  - consumer_copy_state_aware
+  resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (codex harness, 1 turn) consulted; Opus escalation: not run; options: consumer_copy_state_aware
+    [chosen] / consumer_copy_all_del [not chosen] / ring_two_byte_closing [not chosen]; key points: vte は CSI 内の DEL を無視し CAN で通常状態へ戻る(vte-0.15.0 lib.rs:251,:440)ため消費側変換が適する。変換は ReadPane の scratch.process(agent_api.rs:117)と復元時の
+    parser.process(pane/mod.rs:884)の直前、共有関数は scrollback_filter.rs に置き WrittenState の遷移(scrollback_filter.rs:222)を利用、O(n)。単一バイト CSI_CLOSING と D2 の 1 対 1 置換(scrollback_filter.rs:53,:287)を維持できる。全 DEL 置換は保持された
+    OSC/DCS 本文を CAN で終了させる(vte lib.rs:320,:414)ため不採用。注意: 状態判定は置換前のバイトで進める(term_core は CAN で CSI を閉じない: csi.rs:77)。ReadPane の末尾切り出し(agent_api.rs:188)とリングの先頭破棄で失われた状態は復元できない。a3(ESC 直後の DEL)も同じ変換に含める(scrollback_filter.rs:316,
+    vte lib.rs:347,:383,:388)。D3 の ESC 用終端は既に CAN なので変更不要(write_filter.rs:160)'
+- gate_id: create-spec.design-step
+  question_id: design-step.recommendation
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-04T02:18:16+09:00'
+  source: batch-decision-table
+  selected_option_ids:
+  - skip
+  resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously (= analyst の推奨を受け入れる)。packet の options が skip/run で decide_autonomously を含まないため、その意味どおり recommended の
+    skip に写像した'
+- gate_id: verify.baseline-failure-judgment
+  question_id: verify.result
+  packet_id: null
+  answered_at: '2026-10-04T04:02:58+09:00'
+  source: batch-codex-consultation
+  selected_option_ids:
+  - pass
+  resolution_note: 'gate: verify 結果判定（既存の時間制限テスト失敗の扱い、unlisted-gate fallback）; Codex (codex harness, 1 turn) consulted; Opus escalation: not run; options: pass [chosen] / fail [not chosen]; key points:
+    --lib 全体で 2 件が恒常的に失敗（round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus 24s、strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget 35s、いずれも
+    BUDGET=10s の経過時間 assert、負荷平均 10-20）。base main 0c3a2c06 でも同じ 2 件が同様に失敗（24s / 43s）し、implementer の test-docs にも変更前の失敗として記録済み。feature の差分は関数追加と呼び出し 2 か所のみで pty_spawn の書き込みフィルタは未変更。fail にすると範囲外かつ TS-6 が禁じる既存テスト編集を要する
+    rework が自動発生するため、未達を明記したうえで pass を採用'

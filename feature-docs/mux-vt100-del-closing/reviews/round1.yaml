@@ -1,0 +1,45 @@
+round: 1
+executed_at: "2026-10-04T03:33:36+09:00"
+scope:
+  review_mode: diff
+  base_commit: 5377fa12772c5ced3af6ccd3528a902b5b3c4509
+  head_commit: b66dcea2e73a3ba97a91123161907fd47eb78d52
+  changed_files:
+  - src-tauri/src/mux/ipc/handlers/agent_api.rs
+  - src-tauri/src/mux/ipc/handlers/tests.rs
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/scrollback_filter/tests.rs
+  - src-tauri/src/mux/session/pane/mod.rs
+  - src-tauri/src/mux/session/pane/tests.rs
+  - test-docs/mux-vt100-del-closing/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "3 観点（comprehensive#0 / security#0 / spec#0）はすべて完了し findings は空。evaluator も差分と関連ファイルを独自に確認し、FR1-FR5・NFR1-NFR3 の実装を裏づけた。vt100_replay_copy は元バイトで WrittenState を進め、Escape / Csi(_) 直前の DEL だけを CAN に置換する。render_scrollback_rows と MuxPane::from_restored の 2 か所だけがリングのバイトを vt100 に渡す消費者。記録事項: designator 待ち（ESC ( DEL）と CSI 内 0x80 以上のバイトで vte と term_core の遷移に既存の差がある（前者は SPEC で範囲外、後者は strip が DEL を書かない経路）。インジェクションの試みは無し。"
+  recommended_action: "complete"
+  action_rationale: "3 観点すべて完了し critical/high の指摘は無い。追加ラウンドも修正も不要。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: "tmp/sca-triage-mux-vt100-del-closing-20261003T183319Z.md"
+  note: "vulnerability 観点は未選択で対象 findings は 0 件。ntd の listing が非 0 終了したため report 分岐に縮退（degraded_reason: listing_exit_nonzero）"
