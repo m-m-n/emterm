@@ -97,7 +97,7 @@ workflow:
   base_commit: 2e54ac0bfd32df5d7f93fb5460385fcc686fe41f
   completed_at_commit: da8e316e5f4fc25b383217aecd652443e78cdc69
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -157,8 +157,17 @@ tasks:
     status: merged
     branch: em-workflow/test-notify-dbus-isolation/task0002
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
 requirements:
   FR1:
     title: テストビルドの App は何もしない通知送信部を使う
