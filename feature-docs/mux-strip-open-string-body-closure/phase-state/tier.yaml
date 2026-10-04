@@ -1,0 +1,54 @@
+schema_version: 2
+feature: mux-strip-open-string-body-closure
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.26
+    confidence: 0.74
+    probabilities:
+      '0': 0.0
+      '1': 0.74
+      '2': 0.26
+      '3': 0.0
+  observed_at: '2026-10-04T14:13:06+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.9
+    confidence: 0.89
+    probabilities:
+      '0': 0.0
+      '1': 0.1
+      '2': 0.89
+      '3': 0.01
+  observed_at: '2026-10-04T14:13:06+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/scrollback_filter/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_open_string_cut.rs
+  - feature-docs/mux-strip-join-escape-closure/DECISIONS.md
+  changed_lines_approx: 180
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules:
+  - mux::ipc::pty_spawn
+  - mux::snapshot_bytes
+  work_still_required: true
+  work_still_required_evidence: HEAD 26bf9ba の静的確認では、本文状態は追跡済みだが除去前の閉鎖は CSI/Escape
+    のみ（src-tauri/src/mux/scrollback_filter.rs:348）。本文を閉じずに結合する期待値も残る（src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs:348）。OSC
+    は BEL で送出され（crates/term_core/src/parser/osc.rs:13）、OSC 11 の「?」には色応答が生成される（src-tauri/src/render/theme.rs:553）。
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 4
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 2
+  changes_external_contract: false
+  changes_behavior: true
+decided_at: '2026-10-04T14:13:06+09:00'
