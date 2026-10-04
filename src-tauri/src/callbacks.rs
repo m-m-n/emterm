@@ -210,6 +210,22 @@ pub enum LatchFeedEvent {
 /// connection.
 pub trait NotificationSink: Send + Sync {
     fn send(&self, title: &str, body: &str);
+
+    /// Test build only: the [`TypeId`](std::any::TypeId) of the concrete
+    /// sink type behind a shared `dyn NotificationSink` handle. Lets a
+    /// test decide whether a held sink is a [`NotifyRustSink`] (compare
+    /// against `TypeId::of::<NotifyRustSink>()`) without constructing one
+    /// — construction alone starts its worker thread. The default derives
+    /// the answer from the implementing type, so no implementation
+    /// overrides it and the production trait surface (`send` only) is
+    /// unchanged.
+    #[cfg(test)]
+    fn sink_type_id(&self) -> std::any::TypeId
+    where
+        Self: 'static,
+    {
+        std::any::TypeId::of::<Self>()
+    }
 }
 
 // ── task0001 (notification-worker-thread): submission queue + worker ────
@@ -864,9 +880,11 @@ pub struct NativeCallbacks {
 impl NativeCallbacks {
     /// Construct callbacks with a caller-supplied notification `sink`.
     ///
-    /// `App` builds one production [`NotifyRustSink`] and clones the same
-    /// `Arc` into every tab, so the OSC 9 path and the link-handling path
-    /// (`WindowHost::open_file_in_editor`) share a single sink instance.
+    /// `App` builds one sink — the production [`NotifyRustSink`] in the
+    /// non-test build, a no-op sink in the lib's unit-test build — and
+    /// clones the same `Arc` into every tab, so the OSC 9 path and the
+    /// link-handling path (`WindowHost::open_file_in_editor`) share a
+    /// single sink instance.
     pub fn new(
         state: Arc<Mutex<NativeCallbackState>>,
         theme: Arc<Mutex<Theme>>,

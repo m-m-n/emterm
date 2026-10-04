@@ -13,7 +13,9 @@ use std::time::Instant;
 use parking_lot::Mutex;
 use term_core::terminal_core::TerminalCore;
 
-use crate::callbacks::{NotificationSink, NotifyRustSink};
+use crate::callbacks::NotificationSink;
+#[cfg(not(test))]
+use crate::callbacks::NotifyRustSink;
 use crate::ime::backend::ImeBackend;
 use crate::ime::null::NullBackend;
 use crate::render::font::cache::GlyphCache;
@@ -35,6 +37,21 @@ mod scroll_search_fold;
 mod sftp;
 mod tab_lifecycle;
 mod timing;
+
+/// Test build only: the notification sink every `App` holds in the lib's
+/// unit-test build. [`NotificationSink::send`] accepts any title and body
+/// and returns at once with no side effect — no thread, no I/O, no log
+/// record, no panic — so no App-constructing test can reach notify-rust
+/// (D-Bus on Linux, the toast API on Windows). Private to this module and
+/// its tests; the non-test build never compiles it and builds
+/// [`NotifyRustSink`] instead (see [`App::with_settings`]).
+#[cfg(test)]
+struct NoopNotificationSink;
+
+#[cfg(test)]
+impl NotificationSink for NoopNotificationSink {
+    fn send(&self, _title: &str, _body: &str) {}
+}
 
 /// Where the viewport currently sits relative to the live tail.
 ///
@@ -399,8 +416,10 @@ pub struct App {
     /// `NativeCallbacks` (OSC 9 notifications) and used directly by
     /// link handling (`WindowHost::open_file_in_editor`) to surface
     /// file-not-found / editor-launch failures to the user. Constructed
-    /// once in [`App::with_settings`] as the production [`NotifyRustSink`]
-    /// and cloned into each tab so a single sink instance is shared.
+    /// once in [`App::with_settings`] — as the production
+    /// [`NotifyRustSink`] in the non-test build, as the no-op
+    /// `NoopNotificationSink` in the lib's unit-test build — and cloned
+    /// into each tab so a single sink instance is shared.
     ///
     /// アプリケーションドメイン外からの直接アクセスは禁止。通知送信は
     /// [`App::notify`] を経由すること。
@@ -568,9 +587,14 @@ impl App {
         let runtime_font_size_pt = settings.font_size;
         let show_tab_bar = settings.show_tab_bar;
 
-        // Single production notification sink, shared with every tab's
-        // callbacks (OSC 9) and used directly by link handling for
-        // file-not-found / editor-launch failures.
+        // Single notification sink, shared with every tab's callbacks
+        // (OSC 9) and used directly by link handling for file-not-found /
+        // editor-launch failures. The lib's unit-test build gets the no-op
+        // sink so no App-constructing test reaches notify-rust; every
+        // other build gets the production `NotifyRustSink`.
+        #[cfg(test)]
+        let notification_sink: Arc<dyn NotificationSink> = Arc::new(NoopNotificationSink);
+        #[cfg(not(test))]
         let notification_sink: Arc<dyn NotificationSink> = Arc::new(NotifyRustSink::new());
 
         // task0002: seed the fade-bookkeeping instant already
