@@ -23,6 +23,7 @@ use super::round3_write_path::{
     DIMS, new_core, reference_view, run_reader_without_owner, run_visibility_restore_at,
 };
 use super::round4_cut_csi::{osc_held_at_the_cap, text, view_after_a_cut, view_of};
+use super::thread_cpu_time::CpuMeter;
 use super::*;
 use crate::mux::scrollback_filter::{
     strip_pty_output_for_scrollback_write, strip_replayable_rich_content,
@@ -1011,9 +1012,15 @@ fn repeated(unit: &[u8], reps: usize) -> Vec<u8> {
 /// chain before each removed construct finish within the budget through the
 /// strips and the write filter (in one call, which takes the overflow flush,
 /// and in unit-aligned and unaligned reads), and write what the plan says.
+///
+/// lib-budget-tests-load-tolerance task0001 (FR2, FR9): the budget is the
+/// thread CPU time of the measured calls (the strips and every write-filter
+/// feed), summed through a `CpuMeter` and judged against `BUDGET`. Building the
+/// inputs, the comparisons and the test-side collection of the fed output are
+/// not measured.
 #[test]
 fn strip_concat_alternations_and_chains_finish_within_the_budget() {
-    let start = Instant::now();
+    let mut meter = CpuMeter::new();
     let reps = 100_000usize;
     for target in TARGETS {
         for (shape, lead) in [("open CSI", &b"\x1b[6"[..]), ("lone ESC", &[ESC][..])] {
@@ -1023,17 +1030,13 @@ fn strip_concat_alternations_and_chains_finish_within_the_budget() {
             let expected = repeated(&expected_unit, reps);
             let ctx = format!("{shape} + {}", target.name);
 
-            assert!(
-                strip_pty_output_for_scrollback_write(&input) == expected,
-                "{ctx}: strip"
-            );
-            assert!(
-                strip_replayable_rich_content(&input) == expected,
-                "{ctx}: snapshot strip"
-            );
+            let stripped = meter.measure(|| strip_pty_output_for_scrollback_write(&input));
+            assert!(stripped == expected, "{ctx}: strip");
+            let snapshot_stripped = meter.measure(|| strip_replayable_rich_content(&input));
+            assert!(snapshot_stripped == expected, "{ctx}: snapshot strip");
 
             let mut filter = ScrollbackWriteFilter::new();
-            let out = filter.feed(&input, DIMS).1;
+            let out = meter.measure(|| filter.feed(&input, DIMS)).1;
             assert!(out == expected, "{ctx}: one call (the overflow flush)");
             assert_eq!(filter.csi_phase(), None, "{ctx}");
 
@@ -1042,7 +1045,8 @@ fn strip_concat_alternations_and_chains_finish_within_the_budget() {
             let mut filter = ScrollbackWriteFilter::new();
             let mut out = Vec::new();
             for read in input.chunks(aligned) {
-                out.extend_from_slice(&filter.feed(read, DIMS).1);
+                let fed = meter.measure(|| filter.feed(read, DIMS));
+                out.extend_from_slice(&fed.1);
             }
             assert!(out == expected, "{ctx}: unit-aligned reads");
 
@@ -1050,7 +1054,8 @@ fn strip_concat_alternations_and_chains_finish_within_the_budget() {
             let mut filter = ScrollbackWriteFilter::new();
             let mut out = Vec::new();
             for read in input.chunks(65_536) {
-                out.extend_from_slice(&filter.feed(read, DIMS).1);
+                let fed = meter.measure(|| filter.feed(read, DIMS));
+                out.extend_from_slice(&fed.1);
             }
             assert!(!out.is_empty(), "{ctx}: unaligned reads");
         }
@@ -1060,24 +1065,27 @@ fn strip_concat_alternations_and_chains_finish_within_the_budget() {
         let input = [&chain[..], target.bytes, b"x"].concat();
         let expected = [&chain[..], CSI_CLOSING, target.c0, b"x"].concat();
         let ctx = format!("ESC chain + {}", target.name);
-        assert!(
-            strip_pty_output_for_scrollback_write(&input) == expected,
-            "{ctx}: strip"
-        );
+        let stripped = meter.measure(|| strip_pty_output_for_scrollback_write(&input));
+        assert!(stripped == expected, "{ctx}: strip");
         let mut filter = ScrollbackWriteFilter::new();
-        let out = filter.feed(&input, DIMS).1;
+        let out = meter.measure(|| filter.feed(&input, DIMS)).1;
         assert!(out == expected, "{ctx}: one call");
         let mut filter = ScrollbackWriteFilter::new();
         let mut out = Vec::new();
         for read in input.chunks(16_384) {
-            out.extend_from_slice(&filter.feed(read, DIMS).1);
+            let fed = meter.measure(|| filter.feed(read, DIMS));
+            out.extend_from_slice(&fed.1);
         }
         assert!(
             out.starts_with(&chain[..chain.len() - 1]) && out.ends_with(b"x"),
             "{ctx}: reads"
         );
     }
-    assert!(start.elapsed() < BUDGET, "took {:?}", start.elapsed());
+    let verdict = meter.judge(BUDGET);
+    assert!(
+        verdict.is_within(),
+        "the measured calls exceeded the budget: {verdict}"
+    );
 }
 
 /// AC-7 (NFR1, NFR2, TS-9): a 300k-byte CSI parameter run, fed whole and byte
