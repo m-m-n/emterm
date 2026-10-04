@@ -1,11 +1,11 @@
 schema_version: 1
 feature: lib-budget-tests-load-tolerance
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 68067a4871e8406bba133d26bbf6f10fdb3f836f
 last_input_digest: sha256:694e9bc5b0b530e1f89968f0bf21c7e17607b909f3b4f89b187cb9488ae08fa1
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
