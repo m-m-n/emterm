@@ -4,7 +4,7 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: 98f41830211b0ab849c1286755dd6866d5b34c92
-last_input_digest: sha256:6dfa089afe02f093ef7a7aa9372f7bdb27fef17ddfa75b8867473bb361ab4e14
+last_input_digest: sha256:5b75319e1e5a97269fdbd8fd7f76382c8eec9c67d0642bb7ff87aed01c4ce8bc
 active_request_id: null
 packets:
   create-spec-q0001:
@@ -49,11 +49,40 @@ answers:
       EC1 regression under keep; mapped by orchestrator to remove_aborted_body; opus_escalation:
       not run'
     question_id: requirement.aborted-body-handling
+  create-spec.design-step:
+    packet_id: orchestrator-gate
+    answered_at: '2026-10-04T14:18:05+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step skipped per analyst recommendation (no UI or visual
+      change)
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option decide_autonomously;
+      codex_consulted: false'
+    question_id: create-spec.design-step
+  create-spec.design-system:
+    packet_id: orchestrator-gate
+    answered_at: '2026-10-04T14:18:05+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: kind none (zero candidates, design skipped)
+    resolution_note: 'gate: create-spec.design-system; batch-policies.yaml option
+      top_candidate_or_none; codex_consulted: false'
+    question_id: create-spec.design-system
 worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:6dfa089afe02f093ef7a7aa9372f7bdb27fef17ddfa75b8867473bb361ab4e14
   output_digest: sha256:99ba57dee67502f07454e2adf0d0c661668b1db08b13ee3d5384e3b37a0785ba
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:5b75319e1e5a97269fdbd8fd7f76382c8eec9c67d0642bb7ff87aed01c4ce8bc
+  output_digest: sha256:bc504cc65fbec59495dba9029ca2591a99383e132a6507c7438538e416d931ce
 artifacts: []
 patches: []
 progress_fingerprint: null
