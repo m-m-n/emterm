@@ -1,0 +1,16 @@
+schema_version: 1
+feature: mux-strip-non-sixel-dcs-linear
+phase: create-spec
+status: in_progress
+generation: 1
+base_revision: f6e8166aa48c04de1554f5fc90093cf71b94db11
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
