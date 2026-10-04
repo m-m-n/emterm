@@ -1,0 +1,325 @@
+schema_version: 1
+feature: mux-strip-open-string-body-closure
+created: '2026-10-04'
+base_branch: main
+goal: '# mux: 保持した未終了の OSC/DCS/APC 本文の中で除去が起きると後続バイトが本文に結合し OSC 11 色照会が成立する
+
+
+  Notion task: https://www.notion.so/3ee3509ec8ee81fcbac5cf94e354df11
+
+  種別: セキュリティ
+
+
+  ## 脆弱性の概要 (必須)
+
+  共有 strip（`strip_pass`）は、保持した未終了の OSC/DCS/APC 本文の中で除去対象を除去しても閉じるバイトを書かない。書き込み済み状態（`WrittenState`）が文字列本文を Ground として扱うため、除去後ろのバイトが本文に結合し、元の出力が作らなかった文字列照会（例: OSC 11 `?`）がリングに成立する。
+
+  ## 参照 (必須)
+
+  - CVE / GHSA ID: 該当なし
+
+  - アドバイザリ URL: 該当なし
+
+  - severity: low
+
+  - 該当パッケージ: 該当なし
+
+  - 現在のバージョン: main（0c3a2c06 時点）
+
+  - 修正済みバージョン: 無し
+
+  ## 攻撃シナリオ (必須)
+
+  細工した出力を表示させる（例: 細工したファイルを `cat`）だけで成立する。
+
+  1. `ESC]11;` + 除去対象（例: `ESC]777;emterm;markdown;x BEL` や `ESC[6n`）+ `?BEL` を cut 無しで与えると、リングが `ESC]11;?BEL` になる。スナップショット strip も保持し、term_core は OSC 11 `?` を BEL 終端で処理して色応答（ThemeColorResponder）が返る。生の入力では除去対象の `ESC` で OSC 11 が未終了として打ち切られ、応答は無い。
+
+  2. スナップショット再生中の応答はクライアントが破棄する（`src-tauri/src/tabs/replay.rs:96-105`）。一方、リングが `ESC]11;` + 除去対象で終わり、主画面の復帰スナップショットが末尾に何も足さない場合、再生後のパーサーが OSC 本文の中に残り、後から届くライブの `?BEL` に応答する。
+
+  ## 影響範囲 (必須)
+
+  再生側の端末が定型の OSC 色応答（OSC 4/10/11/12）をその時点の前景プログラムの PTY 入力へ書き込む。応答の形式は固定。履歴の折り返し時は `append_wrapped_dump_block_if_applicable`（`src-tauri/src/mux/snapshot_bytes.rs:490`）が画面復元データを末尾に足すため、ライブ継続の経路はその場合に成立しない。
+
+  ## 完了の定義 (必須)
+
+  - [ ] 攻撃シナリオが成立しない
+
+  - [ ] 修正版に追随している（修正版が無い場合は暫定緩和策の欄に対応を記載）
+
+  - [ ] `ESC]11;` + 除去対象 + `?BEL` を cut 無しの 1 回の feed で与えたとき、再生で色応答が出ないことを検出するテストがある
+
+  ## 該当箇所 (任意)
+
+  - `src-tauri/src/mux/scrollback_filter.rs:315`（`Written::close_before_removal` は Csi / Escape 状態でだけ閉鎖を書く）
+
+  - `src-tauri/src/mux/scrollback_filter.rs:207-247`（`WrittenState` が文字列本文を Ground として扱う）
+
+  - `crates/term_core/src/parser/osc.rs:51`（生の入力では ESC + `\` 以外で OSC を Unterminated として送出）
+
+  - 固定済み期待値: `scrollback_filter::tests::strip_concat_a_construct_removed_in_ground_adds_no_closing` の `ESC]0;t` 行、`strip_concat_query::strip_concat_a_construct_removed_in_ground_or_a_kept_string_adds_no_closing` の body_head ループ（変更時は決定記録が必要）
+
+  - 経緯: feature mux-strip-join-escape-closure の create-spec で範囲外として残件化（`feature-docs/mux-strip-join-escape-closure/DECISIONS.md` に記録予定）
+
+  ## 暫定緩和策 (任意)
+
+  修正候補: 書き込み済み状態で保持中の未終了 OSC/DCS/APC 本文を追跡し、本文内で除去が起きたら、term_core が除去対象の `ESC` で行う打ち切りと同じ結果になる閉鎖（例: `ESC` + DEL）を書く。位置補正（remap）は閉鎖バイトを含める。
+
+  '
+parent_branch: em-workflow/mux-strip-open-string-body-closure/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.74
+      '2': 0.26
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.1
+      '2': 0.89
+      '3': 0.01
+  at: '2026-10-04T14:13:06+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 3b0b1944ccc281c6391baece1dea108142fb6d71
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'UI に触れない mux デーモンのバイト列フィルタの修正。batch: decide_autonomously'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: 7b5970937f396c0e3d8921d102abf881677b074a
+- id: implement
+  status: completed
+  base_commit: 6b8c0f9fc5cf30e94b7b8d74b23abf2588e93fcb
+  completed_at_commit: 46dfbd8187a902a3a91718768a00b62d6736cd94
+- id: review
+  status: completed
+  completed_at_commit: 9684ec9d50fadde8281ee80e0376e8b5f27476c8
+- id: verify
+  status: completed
+  completed_at_commit: 8bf3edbe6e69b6ac3833b3657cb75f6039d04151
+  result: pass
+  failed_items: []
+  summary: 'cargo check (default / --no-default-features) ok. cargo test --lib: parallel run 4273 passed / 1 failed (render::font::user_dir::tests::user_font_dir_prefers_xdg_data_home, XDG_DATA_HOME env race, file not touched by this feature); single-threaded re-run 4274 passed / 0 failed. TS-1..TS-14 pass (23 strip_open_string_body_closure tests ok; TS-12 DECISIONS.md has decisions / changed expectations / Residual 1 resolution; TS-13 no crates/term_core change, predecessor feature-docs untouched, predecessor test-docs AC-11 renamed with supersede note, red_reason unchanged).'
+- id: retrospect
+  status: completed
+  completed_at_commit: d6ff51135b9a06207a6b4c8102e6f1767e369bd3
+tasks:
+  task0001:
+    title: Close an open written string body at a removal
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_open_string_body_closure.rs
+    - feature-docs/mux-strip-open-string-body-closure/DECISIONS.md
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_open_string_cut.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_join_escape_closure.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - test-docs/mux-write-filter-overflow-open-string-cut/task0001.tests.yaml
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - FR8
+    - FR9
+    - FR10
+    - NFR1
+    - NFR2
+    - NFR3
+    status: merged
+    branch: em-workflow/mux-strip-open-string-body-closure/task0001
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary:
+    - perspective: performance
+      reason: 'strip_pass / WrittenState はデーモン出力のバイト単位ホットパスで、NFR2（単一の線形走査）の維持を確認する'
+    cross_validation: true
+  perspectives:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  - performance
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: String-body closure at a removal
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-3
+    - TS-4
+  FR2:
+    title: Single definition of STRING_BODY_CLOSING
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-9
+  FR3:
+    title: Every entry point and every start state
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+    - TS-5
+    - TS-6
+  FR4:
+    title: Remap includes the closure
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-7
+  FR5:
+    title: Cut closure unchanged, no double closure
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+  FR6:
+    title: Closure is inert to both strips and to the vt100 copy
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+  FR7:
+    title: DoD regression tests
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+  FR8:
+    title: Pinned expectations and renames
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-9
+    - TS-13
+  FR9:
+    title: Decision record
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-12
+  FR10:
+    title: Doc comments
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-10
+  NFR1:
+    title: Test and CLI-only check pass
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-9
+    - TS-11
+  NFR2:
+    title: Single linear pass
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-11
+    - TS-14
+  NFR3:
+    title: term_core unchanged; oracle convention; budgets
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-11
+    - TS-13

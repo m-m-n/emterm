@@ -315,8 +315,9 @@ fn strip_concat_several_constructs_in_one_open_csi_write_one_closing() {
 }
 
 /// FR1 (TS-2): a construct removed in ground, and one removed after a
-/// completed CSI, adds no byte; neither does one removed after a kept string
-/// body.
+/// completed CSI, adds no byte; neither does one removed after a completed
+/// string. (A construct removed inside an open string body writes the
+/// string-body closure: see `strip_open_string_body_closure`.)
 #[test]
 fn strip_concat_a_construct_removed_in_ground_or_a_kept_string_adds_no_closing() {
     for ground in [
@@ -336,19 +337,6 @@ fn strip_concat_a_construct_removed_in_ground_or_a_kept_string_adds_no_closing()
             assert!(out == expected, "{ctx}: {:?}", text(&out));
             assert!(!out.contains(&DEL), "{ctx}: no closing");
             assert_replays_like_raw(&out, &[ground, target.bytes].concat(), b"n", &ctx);
-        }
-    }
-
-    // After a kept string whose body the removed construct's ESC aborts: the
-    // written state is ground, so nothing is written (D1).
-    for body_head in [&b"\x1b]0;t"[..], b"\x1b_Xnot-kitty"] {
-        for target in TARGETS {
-            let ctx = format!("{:?} + {}", text(body_head), target.name);
-            let fed = [body_head, target.bytes, b"n"].concat();
-            let expected = [body_head, target.c0, b"n"].concat();
-            let mut filter = ScrollbackWriteFilter::new();
-            let out = filter.feed(&fed, DIMS).1;
-            assert!(out == expected, "{ctx}: {:?}", text(&out));
         }
     }
 }

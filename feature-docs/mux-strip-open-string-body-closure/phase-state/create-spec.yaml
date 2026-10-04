@@ -1,0 +1,81 @@
+schema_version: 1
+feature: mux-strip-open-string-body-closure
+phase: create-spec
+status: completed
+generation: 1
+base_revision: f1608cad4c036d32d92b15100972af0956c73b0c
+last_input_digest: sha256:0caf838105531991688f6a678a18a92cebe25e2b4681430d33207b1787f6b31d
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-04T14:24:09+09:00'
+    questions:
+    - question_id: closure-bytes
+      status: answered
+    - question_id: pinned-expectations
+      status: answered
+    - question_id: design-step
+      status: answered
+answers:
+  closure-bytes:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T14:24:09+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - esc_can
+    freeform: null
+    normalized_answer: 保持した未終了の OSC/DCS/APC 本文の中で除去が起きたとき、strip は ESC + CAN（既存の cut 閉鎖 STRING_BODY_CLOSING と同じバイト）を書く。定数は共有 strip 側（scrollback_filter.rs）に定義し、write_filter.rs はそれを参照する。値は変えない。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 1 turn) consulted; Opus escalation:
+      not run; options: esc_can [chosen] / esc_del [not chosen]; key points: 既存 STRING_BODY_CLOSING=ESC+CAN が OscBody/StBody 閉鎖に使われている(write_filter.rs:186,200,205)。term_core では両案とも ESC で文字列 escape 状態に入り
+      CAN/DEL で Ground に戻り OSC は Unterminated 通知(osc.rs:17,52; dcs.rs:8,29; apc.rs:8,29; escape.rs:54)。vte 0.15.0 では Escape 内の CAN が Ground に戻し DEL は状態を変えないため、ESC+CAN は vt100_replay_copy の DEL→CAN 書き換え(scrollback_filter.rs:389)に依存しない。注意:
+      両案とも除去対象の開始にも ST にも一致しない(scrollback_filter.rs:674,733,764,788; write_filter.rs:1012,1070)。共有側 DCS/APC 探索が後続 ST まで走る既存の範囲問題は本修正で解消しない。EscDispatch の final_byte は CAN と DEL で異なる'
+  pinned-expectations:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T14:24:09+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - rename_and_supersede
+    freeform: null
+    normalized_answer: '名前が不正確になる試験（例: overflow_open_string_cut_a_non_overflow_strip_then_cut_closes_the_open_osc_body）だけを後継名に改名し、先行 feature の test-docs/*/taskNNNN.tests.yaml の登録名を更新して supersede 注記（新 SPEC
+      と FR 番号）を付ける（red_reason は変えない）。Ground や完了済み文字列の行は閉鎖なしを維持し、本文行は新しい閉鎖試験へ分離するか期待値を反転する。変更した期待値はすべて本 feature の DECISIONS.md に旧値と新値で記録する。'
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 1 turn) consulted; Opus escalation:
+      not run; options: rename_and_supersede [chosen] / keep_names_split_rows [not chosen]; key points: 非オーバーフロー試験は除去後 OscBody が残り次の cut/fallback が閉鎖を書くことを検証しており、修正後は除去時に Ground に戻るため『cut が開いた OSC を閉じる』名が不正確になる(overflow_open_string_cut.rs:692,704,714,726;
+      write_filter.rs:206)。同試験は先行記録 AC-11 に登録(test-docs/mux-write-filter-overflow-open-string-cut/task0001.tests.yaml:153)で改名時は登録名更新と supersede 注記が必要(.claude/rules/test-docs-records.md:19,25)。注意: 全試験の改名は不要で
+      Ground/完了済み文字列の行は名前を保てる(scrollback_filter/tests.rs:2174,2179; strip_concat_query.rs:326)。期待値の変更だけでは先行記録の更新義務は生じない。先行 feature-docs の旧名は更新対象外'
+  design-step:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T14:24:09+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: design step は推奨どおり skip（UI に触れないバイト列フィルタの修正）
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously (= analyst の推奨を受け入れる)。packet の options は skip/run で decide_autonomously を含まないため、その意味どおり recommended
+      の skip に写像した'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:0e688da99fecf136f9309a0364f4517211329b3c9454e9544e468a59b90fb893
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:65a3adaaef5430572e43477d6e79cc2799cb37a4d0261ab7dc25a6155e5e0063
+  output_digest: sha256:cecc3d16b295ea16efcfcf10407eaebeea727f85fb2879c4a9e539b1413746bb
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:0caf838105531991688f6a678a18a92cebe25e2b4681430d33207b1787f6b31d
+artifacts:
+- path: feature-docs/mux-strip-open-string-body-closure/REQUIREMENTS.md
+  sha256: sha256:797608139c1acd6c2903f33f0b14e5875091827f9d53033760cb3a4dc1aec69c
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-strip-open-string-body-closure/SPEC.md
+  sha256: sha256:68317607999d436010e5c0d5b94b09f134513658240b6bfc7c31845f3d67c651
+  produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

@@ -1,0 +1,63 @@
+round: 1
+executed_at: "2026-10-04T15:37:34+09:00"
+scope:
+  review_mode: diff
+  base_commit: 6b8c0f9fc5cf30e94b7b8d74b23abf2588e93fcb
+  head_commit: 9684ec9d50fadde8281ee80e0376e8b5f27476c8
+  changed_files:
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_open_string_cut.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/strip_open_string_body_closure.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/scrollback_filter/tests.rs
+  - src-tauri/src/mux/snapshot_bytes.rs
+  - test-docs/mux-strip-open-string-body-closure/task0001.tests.yaml
+  - test-docs/mux-write-filter-overflow-open-string-cut/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+  - perspective: performance
+    reason: "strip_pass / WrittenState はデーモン出力のバイト単位ホットパスで、NFR2（単一の線形走査）の維持を確認する"
+  cross_validation: true
+perspective_runs:
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+- {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+- stable_id: 4e185423a8bf510d
+  severity: medium
+  category: security
+  file: src-tauri/src/mux/scrollback_filter.rs
+  line: 807
+  title: "ST 終端探索が見つけた ST の位置を記録せず、非 SIXEL DCS の反復で strip の処理量が入力長の二乗になる（既存挙動）"
+  description: "find_st_terminator は ST が見つからなかったときだけ st_search_from を末尾へ進め、見つけたときは記録しない。strip_pass の DCS 分岐は非 SIXEL の DCS でも開始のたびに find_st_terminator を呼ぶため、『ESC P x』を N 回並べて末尾に ESC \\ を 1 つ置いた出力では処理量が O(N²) になる。スナップショット生成を長時間止められる可能性がある。この経路は 475a97e4（2026-06-19）からの既存挙動で、今回の差分は find_st_terminator にも DCS 分岐にも触れていない。除去を含まない入力でも再現する。SPEC A4 は DCS/APC の ST 探索を範囲外としている。TM-3 の検証テストは OSC 本文しか使っておらず、strip のドキュメントコメントの『single O(n) pass』はこの入力では成り立たない。"
+  suggestion: "範囲外の既存問題として別フィーチャーで扱う。直すなら、見つけた ST の開始位置を strip_pass の中で記録し、次の開始位置がその ST 以前なら走査せずに同じ終端を返す。『ESC P x』×N + ESC \\（除去あり・なし）で処理時間が入力長に比例する回帰テストを追加し、ドキュメントコメントの O(n) の記述も合わせる。"
+  sources: [codex:security]
+  confidence: 70
+  resolution: unresolved
+  resolution_reason: "既存挙動・SPEC A4 で範囲外。medium のため完了ゲートに影響しない。既存の Notion タスク https://www.notion.so/3ee3509ec8ee81c8a3aad0cc5f143842 と重複するため新規起票はしない"
+evaluation:
+  round_summary: "Round 1（diff、cross_validation=true）。critical/high は 0 件。本番コードの変更（Written::close_before_removal の OscBody/StBody 分岐で STRING_BODY_CLOSING を書く／定数を scrollback_filter.rs に一本化し write_filter.rs から再エクスポート）は SPEC FR1/FR2/FR4/FR5/FR10 と一致。security#0 の指摘は実在を確認したが今回の差分では変わっていない既存経路で、除去なしでも再現するため medium の範囲外として引き継いだ。指示の乗っ取りの試みは無し。読書上限のため strip_concat_query.rs と test-docs/mux-strip-open-string-body-closure/task0001.tests.yaml は評価者自身では未確認（spec#0 は確認済み）。"
+  recommended_action: complete
+  action_rationale: "critical/high は 0 件。唯一の medium は 475a97e4 からの既存挙動で今回の後退ではなく、SPEC A4 で範囲外。残課題として別タスクで扱うのが妥当。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null

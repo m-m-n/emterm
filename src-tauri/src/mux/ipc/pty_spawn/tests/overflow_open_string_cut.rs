@@ -45,7 +45,7 @@ const BEL: &[u8] = &[0x07];
 pub(super) const AFTER: &[u8] = b"after the cut";
 
 /// The ten body bytes an overflowing call adds to the held OSC.
-const TEN_BODY_BYTES: &[u8] = b"pppppppppp";
+pub(super) const TEN_BODY_BYTES: &[u8] = b"pppppppppp";
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -688,18 +688,22 @@ fn overflow_open_string_cut_neither_strip_reads_the_closure_as_a_target_or_as_st
 /// boundary scan holds nothing, and the strip removes the query.
 const OSC_THEN_QUERY: &[u8] = b"\x1b]0;x\x1b[6n";
 
-/// AC-11 (IMPLEMENTATION.md D3; FR1, FR2, NFR3, TM-1): a call far below the cap
-/// fed `ESC ]0;x` followed by `ESC [6n` holds nothing and writes the write-path
-/// strip of its input, `ESC ]0;x`; the written state is the open OSC body, as the
-/// end-state oracle classifies those written bytes. A next call carrying a cut at
-/// fed 0 followed by plain text writes `ESC` + CAN and then the text, with
-/// `pending` empty, the state Ground and no designator awaited. In a separate run,
-/// the reader's fallback closing in place of that call writes exactly `ESC` + CAN.
-/// For each pair, the replay of each run's written bytes plus a later plain-text
-/// call equals the raw stream with the switch for the cut (the query's answer
-/// kept out), and the text is displayed.
+/// AC-11 (IMPLEMENTATION.md D3; FR1, FR2, NFR3, TM-1), as changed by
+/// mux-strip-open-string-body-closure (FR1, FR5; AC-8 item 1): a call far below
+/// the cap fed `ESC ]0;x` followed by `ESC [6n` holds nothing and writes the
+/// write-path strip of its input, `ESC ]0;x` followed by the string-body
+/// closure: the strip removes the query inside the open OSC body and writes
+/// `ESC` + CAN in its place, so the written state is Ground, as the end-state
+/// oracle classifies those written bytes. A next call carrying a cut at fed 0
+/// followed by plain text writes the text only, with `pending` empty, the state
+/// Ground and no designator awaited. In a separate run, the reader's fallback
+/// closing in place of that call writes nothing. For each pair, the replay of
+/// each run's written bytes plus a later plain-text call equals the raw stream
+/// with the switch for the cut (the query's answer kept out), and the text is
+/// displayed.
 #[test]
-fn overflow_open_string_cut_a_non_overflow_strip_then_cut_closes_the_open_osc_body() {
+fn overflow_open_string_cut_a_non_overflow_strip_closes_the_osc_body_at_the_removal_and_the_cut_adds_nothing()
+ {
     let references = references_after(OSC_THEN_QUERY);
 
     // The cut at fed 0 of the next call.
@@ -711,18 +715,22 @@ fn overflow_open_string_cut_a_non_overflow_strip_then_cut_closes_the_open_osc_bo
         strip_of(&[OSC_THEN_QUERY]),
         "the write-path strip of the input"
     );
-    assert_eq!(first.bytes, b"\x1b]0;x".to_vec(), "the query is removed");
-    assert_eq!(filter.written_state(), WrittenState::OscBody);
+    assert_eq!(
+        first.bytes,
+        [b"\x1b]0;x".as_slice(), STRING_BODY_CLOSING].concat(),
+        "the query is removed and the strip writes ESC and CAN in its place"
+    );
+    assert_eq!(filter.written_state(), WrittenState::Ground);
     assert_eq!(
         filter.written_state(),
         client_written_state(&first.bytes),
-        "term_core classifies the written bytes as the open OSC body"
+        "term_core classifies the written bytes as Ground"
     );
     let second = filter.feed_with_cuts(AFTER, DIMS, &[0]);
     assert_eq!(
         second.bytes,
-        [STRING_BODY_CLOSING, AFTER].concat(),
-        "ESC and CAN, then the text"
+        AFTER.to_vec(),
+        "the cut writes nothing, only the text follows"
     );
     assert!(filter.pending().is_empty());
     assert_eq!(filter.written_state(), WrittenState::Ground);
@@ -733,7 +741,10 @@ fn overflow_open_string_cut_a_non_overflow_strip_then_cut_closes_the_open_osc_bo
     let mut filter = ScrollbackWriteFilter::new();
     let first = filter.feed_with_cuts(OSC_THEN_QUERY, DIMS, &[]);
     let closing = filter.feed_with_cuts(b"", DIMS, &[0]).bytes;
-    assert_eq!(closing, STRING_BODY_CLOSING.to_vec(), "fallback closing");
+    assert!(
+        closing.is_empty(),
+        "the fallback closing writes nothing after the strip's closure"
+    );
     assert!(filter.pending().is_empty());
     assert_eq!(filter.written_state(), WrittenState::Ground);
     assert!(!filter.awaiting_designator());

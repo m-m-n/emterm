@@ -1,0 +1,54 @@
+feature: mux-strip-open-string-body-closure
+collected_at: "2026-10-04T15:44:34+09:00"
+session_ids: [01a105a7-46b6-745c-8b4b-506ea4fca837]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_open_string_cut.rs
+        - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+        - src-tauri/src/mux/snapshot_bytes.rs
+        - test-docs/mux-strip-open-string-body-closure/task0001.tests.yaml
+        - test-docs/mux-write-filter-overflow-open-string-cut/task0001.tests.yaml
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "strip_pass / WrittenState はデーモン出力のバイト単位ホットパスで、NFR2（単一の線形走査）の維持を確認する"
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code の最終読みがバケット 2（確率 0.89）で、閾値表により full を採用した"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.26, confidence: 0.74, probabilities: {'0': 0.0, '1': 0.74, '2': 0.26, '3': 0.0}}
+        observed_at: "2026-10-04T14:13:06+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.9, confidence: 0.89, probabilities: {'0': 0.0, '1': 0.1, '2': 0.89, '3': 0.01}}
+        observed_at: "2026-10-04T14:13:06+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/mux/scrollback_filter.rs
+        - src-tauri/src/mux/scrollback_filter/tests.rs
+        - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+        - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+        - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_open_string_cut.rs
+        - feature-docs/mux-strip-join-escape-closure/DECISIONS.md
+      changed_lines_approx: 180
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 4
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 2
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1 の medium（stable_id 4e185423a8bf510d、非 SIXEL DCS の ST 探索が O(N²)）は既存挙動で、既存 Notion タスク https://www.notion.so/3ee3509ec8ee81c8a3aad0cc5f143842 と重複のため新規起票なし"
+  - "verify の並列テストで render::font::user_dir::tests::user_font_dir_prefers_xdg_data_home が XDG_DATA_HOME の環境変数競合で 1 件失敗、単一スレッド再実行で全件成功"

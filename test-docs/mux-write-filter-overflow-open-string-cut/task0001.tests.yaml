@@ -151,8 +151,11 @@ acceptance_tests:
       still says "for this question, is ground"` (the module-owned stale phrase list is checked
       first against the strip's comments, then against write_filter.rs).
   AC-11:
+    # Superseded: the non-overflow call `ESC ]0;x` + `ESC [6n` leaving the open OSC body, with the cut
+    # at fed 0 and the fallback closing each writing `ESC` + CAN, is replaced by
+    # feature-docs/mux-strip-open-string-body-closure/SPEC.md FR1/FR5.
     tests:
-      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_non_overflow_strip_then_cut_closes_the_open_osc_body
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_non_overflow_strip_closes_the_osc_body_at_the_removal_and_the_cut_adds_nothing
     red_confirmed: true
     red_reason: >-
       Observed before the production change: failed at the written-state assertion after the call
