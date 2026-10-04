@@ -1,0 +1,73 @@
+schema_version: 1
+feature: mux-write-filter-overflow-open-string-cut
+phase: create-spec
+status: completed
+generation: 1
+base_revision: e42a0a651708f4f45ce242cf64a36c2a0f118129
+last_input_digest: sha256:e25849f4a4abfa9b3bfdc692563d8ba351f0b9c44df3413a21a9f9b7a23cfb40
+active_request_id: null
+packets: {}
+answers:
+  create-spec.feature-identity:
+    packet_id: orchestrator-gate
+    answered_at: '2026-10-04T02:47:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - derive_from_task_description
+    freeform: null
+    normalized_answer: 'feature name derived from the task description: mux-write-filter-overflow-open-string-cut'
+    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option
+      derive_from_task_description; codex_consulted: false'
+    question_id: create-spec.feature-identity
+  create-spec.design-step:
+    packet_id: orchestrator-gate
+    answered_at: '2026-10-04T02:58:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step skipped per analyst recommendation (no UI surface)
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option decide_autonomously;
+      codex_consulted: false'
+    question_id: create-spec.design-step
+  create-spec.design-system:
+    packet_id: orchestrator-gate
+    answered_at: '2026-10-04T02:58:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: kind none (zero candidates, design skipped)
+    resolution_note: 'gate: create-spec.design-system; batch-policies.yaml option
+      top_candidate_or_none; codex_consulted: false'
+    question_id: create-spec.design-system
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:e25849f4a4abfa9b3bfdc692563d8ba351f0b9c44df3413a21a9f9b7a23cfb40
+  output_digest: sha256:f3a093445b3e3addba49d28fec4b7ff429165c9e9f0c0e951fb37d1c656c4cf6
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:48d54d1b7d9a4afffd34697872060fb1b401eaf3fef0c09744697fadef6b85a5
+  output_digest: sha256:5f4471a12ece65eb7fe922152a412b619d4b90581958dacf2b8455776157d59d
+artifacts:
+- path: feature-docs/mux-write-filter-overflow-open-string-cut/REQUIREMENTS.md
+  sha256: sha256:39d765422e9d5f4f28ea077f84bd772395a89d760ad30da73e62fab0cf9c9c96
+  produced_by: create-spec-run-0002
+- path: feature-docs/mux-write-filter-overflow-open-string-cut/SPEC.md
+  sha256: sha256:46b2ac8f4f7483e43e28f2c05f5c5b500e9a89fd5d128b1f2d3701ae639a0b42
+  produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+last_error: null

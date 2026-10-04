@@ -1,0 +1,79 @@
+round: 1
+executed_at: "2026-10-04T04:30:19+09:00"
+scope:
+  review_mode: diff
+  base_commit: 220881f4152f888add9c6e5b61c47df7ddc835ff
+  head_commit: da7525912b6f2cb06f21d6d5244476c64a1211a7
+  changed_files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_lone_esc.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_open_string_cut.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_designator_cut.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+    - test-docs/mux-write-filter-overflow-open-string-cut/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+    - perspective: performance
+      reason: "write_filter.rs runs on every PTY output chunk in the mux daemon; the new open-body state tracking adds per-byte work on that hot path (NFR1)"
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: f54c0279b8e89443
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    line: 197
+    title: "スナップショット時の除去処理が ESC + CAN による打ち切りを認識せず、Kitty APC / SIXEL DCS の切断後の本文を消す"
+    description: |-
+      上限を超えて開いたまま書き込まれた Kitty APC (`ESC _ G`) や SIXEL DCS (`ESC P … q`) の本体は、カットで STRING_BODY_CLOSING (`ESC` + CAN) によって閉じられる。ただしスナップショット組み立て時の除去処理 (strip_replayable_rich_content → strip_pass、scrollback_filter.rs:436-457) は、閉じられた後の本体を正しく扱えない。find_st_terminator (scrollback_filter.rs:516-530) が次の `ESC \` まで走査を続け、途中の `ESC` + CAN を打ち切りとして扱わないため。リングの後ろに ST 終端の列があると、APC / DCS の開始からその ST までがまとめて除去される。ST 終端の列とは、ST 終端の OSC 0 / OSC 8 や別の Kitty 画像など。その結果、カット後に書かれた本文と後続の OSC がスナップショット再生から消える。
+
+      新規テストはこの経路を通っていない。overflow_open_string_cut.rs の Kitty / SIXEL ケースはリングをそのまま term_core で再生しており、除去処理を経由しないため。テスト内のコメント (overflow_open_string_cut.rs:656-660) は、これを既存挙動として認識している。
+
+      デグレではない。変更前もこのケースのスナップショット出力は同じバイト列になる。また SPEC の NFR2（除去判定を変えない）と NFR5（スナップショット時の除去処理を変えない）により、この機能の範囲では直せない。発生する条件は、cap（512 KiB）を超える単一の未終端 Kitty APC / SIXEL DCS、画面切替、その後の ST 終端列がそろったときに限られる。
+    suggestion: |-
+      この機能では直さない。NFR2 / NFR5 に反するため、自動修正の対象から外す。後続の機能で、strip_pass の APC / DCS 除去走査が本体内の `ESC` に `\` 以外が続く場合（とくに `ESC` + CAN）を打ち切りと認識し、打ち切り後のバイトを残すように変える。st_search_from キャッシュによる O(n) は保つ。あわせて回帰テストを追加する。対象は、上限超過した Kitty APC / SIXEL DCS、カット、本文、ST 終端 OSC を含むリング。これを strip_replayable_rich_content に通してから term_core で再生し、本文が表示されることを確かめる。
+    sources: [codex:comprehensive]
+    confidence: 85
+    resolution: deferred
+    resolution_reason: "medium; pre-existing behavior outside this feature's scope (SPEC NFR2 / NFR5 forbid changing the snapshot strip); filed as a follow-up task"
+evaluation:
+  round_summary: |-
+    ラウンド1：5 観点（security / comprehensive / architecture / spec / performance）がすべて完了した。critical / high は 0 件、medium は comprehensive#0 の 1 件。この 1 件は、スナップショット時の除去処理が ESC + CAN を認識せず Kitty APC / SIXEL DCS の後の本文を消す問題で、仕組みを確認したうえでそのまま引き継いだ。デグレではなく、NFR2 / NFR5 の範囲外にある既存挙動なので、後続機能の候補にあたる。
+
+    レビュアー出力に注入の試みは見つからなかった。
+
+    観点ごとの独自確認（変更ファイル 8 件をすべて確認、読んだファイルは 9 件で上限 10 件以内）:
+    - security: corroborated。ESC + CAN は ground では効果のない閉じ方で、閉じすぎても無害。どちらの除去処理でも除去対象の開始にも ST にもならない（テストで確認済み）。追加される状態は O(1)。
+    - comprehensive: corroborated。指摘の仕組みを scrollback_filter.rs:436-457 と 516-530 で再現した。追加の指摘はない。
+    - architecture: corroborated。WrittenState は共有の除去モジュールに置かれ、write_filter からの依存は一方向のまま。closure_for と advance は新しい状態をすべて網羅している。
+    - spec: corroborated。FR1〜FR7 と AC-1〜AC-10 は実装・テストと対応している。ただし前提 A3 と NFR3 の括弧書き「(every non-overflow path)」とは食い違う点がある。上限超過を経ない経路でも、除去処理が文字列本体を開いたまま残すことがあり、IMPLEMENTATION の D3 / AC-11 がこれに ESC + CAN を書く。クライアントとの一致を高める改善で、矛盾ではない。
+    - performance: corroborated。advance に O(1) の分岐が増えるだけで、走査の追加・メモリ確保・ループはない。
+
+    補足（verify フェーズ向け）: test-docs の記録では、wall-clock の時間予算テスト 5 件が変更前後とも失敗している（マシン負荷が原因と記載）。そのうち overflow_lone_esc_every_continuation_is_removed_and_the_total_equals_the_reference は、時間予算の assert が末尾にあり、正しさの assert はその手前で通っている。AC-9（--lib 全件成功）の判定は verify フェーズに委ねる。
+  recommended_action: complete
+  action_rationale: "critical / high は 0 件。残る medium 1 件は既存挙動の限界で、デグレではない。直すにはスナップショット時の除去処理の判定を変える必要があり、SPEC の NFR2 / NFR5 に反する。そのため自動修正や手戻りの対象ではなく、後続機能として記録するのが妥当。それ以外の観点はすべて独自確認で裏付けが取れた。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null

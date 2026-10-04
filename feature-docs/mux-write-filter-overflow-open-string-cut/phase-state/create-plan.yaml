@@ -1,0 +1,83 @@
+schema_version: 1
+feature: mux-write-filter-overflow-open-string-cut
+phase: create-plan
+status: completed
+generation: 1
+base_revision: cef378721e4da165ff333cca51fea93f74cc7b3e
+last_input_digest: sha256:96ea808b60f6a1b6421bac5df406b034bb33a594c15dff0f7d3e81e12c0f0904
+active_request_id: null
+packets: {}
+answers:
+  create-plan.open-body-tracking-scope:
+    question_id: create-plan.open-body-tracking-scope
+    packet_id: null
+    answered_at: '2026-10-04T03:25:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - track_all_written_bytes
+    freeform: null
+    normalized_answer: 'cp-a1: 開いた文字列本体の書き込み状態は、オーバーフロー出力に限らず書き込んだ全バイトで追跡する (D3 を維持)。SPEC A3 の『オーバーフローだけが開いた本体を書き残す』は成立しない
+      (反例: 上限未満の ESC]0;x ESC[6n — 境界走査が CSI で保留を解除し strip が ESC[6n を除去するので開いた ESC]0;x が書かれる。write_filter.rs:949,
+      scrollback_filter.rs:433)。計画への反映: (1) IMPLEMENTATION.md で SPEC A3 / NFR3 の括弧書き『every non-overflow
+      path』が成立しないことを既知の逸脱として明記し、NFR3 の受け入れは『開いた本体を書き残さない経路の出力は不変』に限定して扱う。(2) 非オーバーフローの strip 除去で開いた本体が書かれた後のカット
+      (例: ESC]0;x ESC[6n の次の呼び出しでカット) が ESC + CAN を書く回帰テストを task0001 と VERIFICATION.md に追加する。(3) D3 のリプレイ一致の保証を『カット時に
+      Ground へ戻り、カット後の文字が本体に吸い込まれない』ことに限定する。カット前に吸い込まれた文字や strip の連結で生じた表示差は復元対象外 (A4 と同じ扱い)'
+    resolution_note: 'gate: create-plan.open-body-tracking-scope (unlisted, planner の非ブロッキング未解決事項 cp-a1);
+      options: A) D3 を維持し全書き込みバイトで追跡 / B) オーバーフロー出力のバイトに限定し非オーバーフロー出力をバイト単位で不変に保つ / C) その他; codex_consulted:
+      true (1 turn); opus_escalation: false; chose A. Codex: A3 は反例があり成立しない (write_filter.rs:949, scrollback_filter.rs:433)。A
+      は書いた状態だけで全カット経路の closure を選ぶ FR1/FR2/FR5 と整合 (SPEC.md:83, :119)。B は同じ書き込み状態でもオーバーフロー履歴で closure
+      が変わる。D3 のリプレイ一致の説明は広すぎるので限定する (IMPLEMENTATION.md:85, SPEC.md:355)'
+  create-plan.predecessor-open-body-case:
+    question_id: create-plan.predecessor-open-body-case
+    packet_id: null
+    answered_at: '2026-10-04T03:25:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - move_case_to_new_module
+    freeform: null
+    normalized_answer: 'cp-a2: round4_designator_cut.rs の round4_overflow_flush_then_a_cut_without_a_wait_writes_nothing_extra
+      の第 3 ケース (開いた OSC 本体で終わる) を新しい回帰モジュールへ移し ESC + CAN を期待する。前身テストは名前と Ground で終わる 2 ケースを維持する。計画への反映:
+      (1) この移動は期待値の変更であり、AC-9『他の既存期待値は変更しない』の例外として FR6 の対象 (overflow_lone_esc.rs endings() と並ぶ 2 件目) に明示する。(2)
+      前身テストの説明文は Ground で終わる 2 ケースに限定する。(3) 移動先では同じ入力について strip(run) + ESC + CAN を完全一致で比較する'
+    resolution_note: 'gate: create-plan.predecessor-open-body-case (unlisted, planner の非ブロッキング未解決事項 cp-a2);
+      options: A) 第 3 ケースを新モジュールへ移す (planner 案) / B) その場で期待値を更新し、名前が偽になるならテスト名を変える / C) その他; codex_consulted:
+      true (1 turn); opus_escalation: false; chose A. Codex: 第 3 ケースは AC-5 と同じ入力で旧期待値の変更は必須 (round4_designator_cut.rs:632,
+      SPEC.md:52)。新モジュールにまとめれば既存 2 ケースと名前を維持でき、改名に伴う test-docs 記録の更新も避けられる (IMPLEMENTATION.md:50, :92)。ただし移動も期待値変更なので
+      AC-9 の例外として明示する (SPEC.md:74)'
+worker_runs:
+- request_id: create-plan-run-0001
+  status: completed
+  input_digest: sha256:674dd9c3061da8eb8e683b8c723fff47f7bf5a0c01c7e32795b925a9f9651574
+  output_digest: sha256:9e632b586c555688b3c3e492a6f4188ee05f17f3586859a2ef8437718528bca6
+- request_id: create-plan-run-0002
+  status: completed
+  input_digest: sha256:96ea808b60f6a1b6421bac5df406b034bb33a594c15dff0f7d3e81e12c0f0904
+  output_digest: sha256:25a1df01340ccc87f505e6f98bc9effcea29198d418b2350d29f6fff19b2eac3
+artifacts:
+- path: feature-docs/mux-write-filter-overflow-open-string-cut/IMPLEMENTATION.md
+  sha256: sha256:0e6470788360c36800bd6f8cff8c0a69fda226322f1b5cc8d9d87182f8a4bd82
+  produced_by: create-plan-run-0002
+- path: feature-docs/mux-write-filter-overflow-open-string-cut/VERIFICATION.md
+  sha256: sha256:8ad00fb710345cc724e0deda1759e2c717fcd0916e02ac655fd69017632dee3c
+  produced_by: create-plan-run-0002
+- path: feature-docs/mux-write-filter-overflow-open-string-cut/THREAT-MODEL.md
+  sha256: sha256:88d9c0a3778628d5005da2f18507ed54ca7eaa77a2ad43df823e7df128e71a15
+  produced_by: create-plan-run-0002
+- path: feature-docs/mux-write-filter-overflow-open-string-cut/tasks/task0001.md
+  sha256: sha256:6b185ea7d8fb6bb974a1e44ab1f90c7d62fe6e7289906a5486d5a79039b3dd03
+  produced_by: create-plan-run-0002
+patches:
+- patch_id: create-plan-p0001
+  status: rejected
+  base_input_digest: sha256:674dd9c3061da8eb8e683b8c723fff47f7bf5a0c01c7e32795b925a9f9651574
+  base_workflow_blob: edd5f0d6104cf2b3acc9d0830b14b0e67dc1ed67
+- patch_id: create-plan-p0002
+  status: applied
+  base_input_digest: sha256:96ea808b60f6a1b6421bac5df406b034bb33a594c15dff0f7d3e81e12c0f0904
+  base_workflow_blob: edd5f0d6104cf2b3acc9d0830b14b0e67dc1ed67
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
