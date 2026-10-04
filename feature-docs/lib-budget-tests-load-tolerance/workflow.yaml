@@ -137,7 +137,7 @@ tasks:
     status: merged
     branch: em-workflow/lib-budget-tests-load-tolerance/task0002
 review:
-  status: in_progress
+  status: completed
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary:
@@ -146,8 +146,15 @@ review:
     - perspective: vulnerability
       reason: diff touches dependency manifest src-tauri/Cargo.toml (axis 2 scan)
     cross_validation: true
-  rounds_completed: 0
-  perspectives: {}
+  rounds_completed: 1
+  perspectives:
+    comprehensive: completed
+    security: completed
+    license: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+    vulnerability: skipped
   residual_critical_high: 0
   needs_rework: false
 requirements:
