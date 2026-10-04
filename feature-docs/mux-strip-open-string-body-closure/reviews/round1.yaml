@@ -40,7 +40,7 @@ findings:
   sources: [codex:security]
   confidence: 70
   resolution: unresolved
-  resolution_reason: "既存挙動・SPEC A4 で範囲外。medium のため完了ゲートに影響しない。Notion に別タスクとして起票する"
+  resolution_reason: "既存挙動・SPEC A4 で範囲外。medium のため完了ゲートに影響しない。既存の Notion タスク https://www.notion.so/3ee3509ec8ee81c8a3aad0cc5f143842 と重複するため新規起票はしない"
 evaluation:
   round_summary: "Round 1（diff、cross_validation=true）。critical/high は 0 件。本番コードの変更（Written::close_before_removal の OscBody/StBody 分岐で STRING_BODY_CLOSING を書く／定数を scrollback_filter.rs に一本化し write_filter.rs から再エクスポート）は SPEC FR1/FR2/FR4/FR5/FR10 と一致。security#0 の指摘は実在を確認したが今回の差分では変わっていない既存経路で、除去なしでも再現するため medium の範囲外として引き継いだ。指示の乗っ取りの試みは無し。読書上限のため strip_concat_query.rs と test-docs/mux-strip-open-string-body-closure/task0001.tests.yaml は評価者自身では未確認（spec#0 は確認済み）。"
   recommended_action: complete
