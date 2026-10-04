@@ -90,9 +90,34 @@ workflow:
   status: completed
   completed_at_commit: bd25057e2830928e8c93198c1c77550bafcdf744
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  completed_at_commit: 88de2e9e1a5e18fc83bce6ac3308574a462440c7
+  result: pass
   failed_items: []
+  summary:
+    build:
+      default_check: pass
+      no_default_features_check: pass
+      windows_xwin_check_lib_tests: pass
+    tests:
+      lib_unloaded: "pass (4307 passed, 0 failed, 3 ignored; load avg 6.0)"
+      lib_under_synthetic_load_TS7: "pass (4307 passed, 0 failed; 1-min load avg 12.2 -> 17.5 during the run, 12 busy workers on 24 cores)"
+    scenarios:
+      TS-1: pass
+      TS-2: pass
+      TS-3: pass
+      TS-4: pass
+      TS-5: "pass (no wall-clock reading or BUDGET use in the test body)"
+      TS-6: pass
+      TS-7: pass
+      TS-8: "pass (diff vs 389142b5 limited to the declared files; no other BUDGET/elapsed check changed)"
+      TS-9: "pass (panics naming clock_gettime / GetThreadTimes; no zero or wall-clock fallback found)"
+      TS-10: "pass (Win32_System_Threading listed; Cargo.lock unchanged; three builds succeed)"
+    manual:
+      windows_run: "not run: no Windows machine available in the batch environment"
+      ac6_review: pass
+      measured_call_review: "pass (meter wraps exactly the write strip, snapshot strip and every write-filter feed)"
+    excluded: []
 - id: retrospect
   status: pending
 tasks:
