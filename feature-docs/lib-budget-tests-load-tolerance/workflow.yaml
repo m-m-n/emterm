@@ -91,7 +91,46 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Thread CPU-time helper and CPU budget for the strip_concat alternations test
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/Cargo.toml
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/thread_cpu_time.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+    skills: []
+    domains:
+    - concurrency
+    - config-infra
+    complexity: high
+    requirements:
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - FR8
+    - FR9
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    status: pending
+  task0002:
+    title: Remove the wall-clock assert from the token-corpus replay test
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_chain.rs
+    skills: []
+    domains: []
+    complexity: low
+    requirements:
+    - FR1
+    - FR9
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -104,89 +143,121 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-5
+    - TS-7
   FR2:
     title: Thread-CPU-time budget limited to the code under test
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-6
+    - TS-7
   FR3:
     title: Thread CPU time helper
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
   FR4:
     title: Clock failures are not masked
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-9
   FR5:
     title: Windows dependency feature
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-10
   FR6:
     title: 'Recurrence detection: the helper ignores off-CPU time'
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
   FR7:
     title: 'Recurrence detection: the helper counts its own thread'
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-3
   FR8:
     title: 'Recurrence detection: quadratic control'
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   FR9:
     title: Scope
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-8
   NFR1:
     title: No test-framework crate added (std + existing libc / windows-sys)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-10
   NFR2:
     title: Compiles and runs on Linux and Windows; --no-default-features check still compiles
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-10
   NFR3:
     title: Per-thread measurement excludes parallel libtest tests
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
   NFR4:
     title: Quadratic regression at 100k repetitions still exceeds the 10s CPU budget
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
