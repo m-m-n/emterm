@@ -10,6 +10,7 @@ mod font_settings;
 mod ime;
 mod misc;
 mod mux_ui;
+mod notification_sink;
 mod scroll_search_fold;
 mod sftp;
 mod tab_lifecycle;

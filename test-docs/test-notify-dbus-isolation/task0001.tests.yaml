@@ -1,0 +1,32 @@
+task_id: task0001
+# baseline: `cargo test --lib` (default features) run in the worktree before any edit:
+# 4306 passed, 1 failed. The one failure is a reader-timeout in the mux pty_spawn
+# tests and is unrelated to the notification sink. final: the same command after the
+# implementation: 4308 passed (the 2 new tests), the same single failure.
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
+final_failures:
+  - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
+acceptance_tests:
+  AC-1:
+    tests:
+      - app::tests::notification_sink::ac1_ts1_app_new_notification_sink_is_not_notify_rust_sink
+    red_confirmed: true
+    red_reason: "assertion `left != right` failed: the test-build App must hold the no-op sink, not the production NotifyRustSink (both TypeIds equal, because App::with_settings still built NotifyRustSink::new())"
+  AC-2:
+    tests:
+      - app::tests::notification_sink::ac2_ts2_app_notify_on_app_new_returns_without_panicking
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: App::notify must reach the no-op sink in the test build (the held sink was a NotifyRustSink, not NoopNotificationSink). The no-delivery half is structural: NoopNotificationSink::send has an empty body, confirmed by code review."
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: "Outcome is code review of the non-test branch of App::with_settings (NotifyRustSink::new() stored in notification_sink) plus the default-features cargo check. Searched src-tauri/tests and test/ by path (src-tauri/src/app/mod.rs) and basename (mod.rs, callbacks.rs): no existing test reads or exercises the non-test branch (integration tests under src-tauri/tests never construct an App). The branch pre-existed unchanged, so no red state occurred."
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: "Outcome is the build: sink_type_id is #[cfg(test)] with a default body, so the default-features and --no-default-features cargo checks compile without it and every existing impl (NotifyRustSink, the sinks in callbacks/tests.rs, app/tests/agent_status.rs, tabs/tests.rs) compiles unedited in the --lib test build. Searched src-tauri/tests and test/ by path (src-tauri/src/callbacks.rs) and basename (callbacks.rs): no test reads the file. The failure of this check was not observed before implementation."
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: "Outcome is the full --lib run (compared against the baseline: no new failure), the default-features, --no-default-features and Windows-target (cargo xwin check --lib --tests) cargo checks, and the absence of any new warning from src-tauri/src/app/mod.rs in the test build (cargo check --lib --tests) and the non-test build (cargo check); the NotifyRustSink import is #[cfg(not(test))]. Searched src-tauri/tests and test/ by path and basename (mod.rs): no existing test covers it. No red state occurred for this check."
