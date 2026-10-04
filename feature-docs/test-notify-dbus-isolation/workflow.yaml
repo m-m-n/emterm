@@ -2,7 +2,38 @@ schema_version: 1
 feature: test-notify-dbus-isolation
 created: '2026-10-04'
 base_branch: main
-goal: "# テスト実行で本物のデスクトップ通知が発行され、通知デーモンのメモリを消費し通常の通知が埋もれる\n\n種別: バグ\nNotion: https://www.notion.so/3ef3509ec8ee813b8de6e5a7387c2710\n\n## 現象\n`cargo test` の実行で、本物のデスクトップ通知（notify-rust 経由の D-Bus 通知）が発行される。テストを回すたびに通知デーモンの履歴に溜まり、メモリを消費する。通常の通知もテスト由来の通知に埋もれる。\n\n## 再現手順\n1. Linux のデスクトップセッションで `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` を実行する\n2. 通知デーモンの履歴に `t0`〜 などのタイトルの通知が溜まる\n\n## 期待する挙動\nテストのビルドでは本物の D-Bus 通知に到達しない。\n\n## 完了の定義\n- 再現手順で現象が起きない\n- 再発を検出するテストがある\n\n## 該当箇所\n- `src-tauri/src/callbacks/tests.rs:1492` 付近の `worker_thread` モジュール: `NotifyRustSink::new()` を直接使う\n  - `sink_send_never_blocks_the_caller_even_past_queue_capacity`: 1 回で 32 件送信（キュー容量 8 件ぶんが実際に D-Bus まで届く）\n  - `dropping_the_sink_after_sending_returns_within_the_shutdown_deadline`: 3 件送信\n- `src-tauri/src/app/mod.rs:574`: `App::with_settings` が常に本物の `NotifyRustSink` を組み立てる。`app_with_test_sink()` を使わない App のテストが通知経路を通ると本物の通知が出る\n\n修正方針:\n1. `#[cfg(test)]` のとき、`App::with_settings` で何もしない送信部を使う（差し替え忘れのテストからの漏れもまとめて防ぐ）\n2. `worker_thread` のテストは送信関数を偽物にする。unix 版の `notify_worker` は送信関数を注入できる作りなので、同じ方式で `NotifyRustSink` 側にも偽物を渡せるようにする\n\n## 実害・発生条件\nテストを実行する開発者全員。通知デーモンのメモリ消費と、通常の通知の埋没。\n"
+goal: |
+  # テスト実行で本物のデスクトップ通知が発行され、通知デーモンのメモリを消費し通常の通知が埋もれる
+
+  種別: バグ
+  Notion: https://www.notion.so/3ef3509ec8ee813b8de6e5a7387c2710
+
+  ## 現象
+  `cargo test` の実行で、本物のデスクトップ通知（notify-rust 経由の D-Bus 通知）が発行される。テストを回すたびに通知デーモンの履歴に溜まり、メモリを消費する。通常の通知もテスト由来の通知に埋もれる。
+
+  ## 再現手順
+  1. Linux のデスクトップセッションで `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` を実行する
+  2. 通知デーモンの履歴に `t0`〜 などのタイトルの通知が溜まる
+
+  ## 期待する挙動
+  テストのビルドでは本物の D-Bus 通知に到達しない。
+
+  ## 完了の定義
+  - 再現手順で現象が起きない
+  - 再発を検出するテストがある
+
+  ## 該当箇所
+  - `src-tauri/src/callbacks/tests.rs:1492` 付近の `worker_thread` モジュール: `NotifyRustSink::new()` を直接使う
+    - `sink_send_never_blocks_the_caller_even_past_queue_capacity`: 1 回で 32 件送信（キュー容量 8 件ぶんが実際に D-Bus まで届く）
+    - `dropping_the_sink_after_sending_returns_within_the_shutdown_deadline`: 3 件送信
+  - `src-tauri/src/app/mod.rs:574`: `App::with_settings` が常に本物の `NotifyRustSink` を組み立てる。`app_with_test_sink()` を使わない App のテストが通知経路を通ると本物の通知が出る
+
+  修正方針:
+  1. `#[cfg(test)]` のとき、`App::with_settings` で何もしない送信部を使う（差し替え忘れのテストからの漏れもまとめて防ぐ）
+  2. `worker_thread` のテストは送信関数を偽物にする。unix 版の `notify_worker` は送信関数を注入できる作りなので、同じ方式で `NotifyRustSink` 側にも偽物を渡せるようにする
+
+  ## 実害・発生条件
+  テストを実行する開発者全員。通知デーモンのメモリ消費と、通常の通知の埋没。
 parent_branch: em-workflow/test-notify-dbus-isolation/integration
 tier: full
 tier_decision:
@@ -59,7 +90,8 @@ workflow:
   - IMPLEMENTATION.md
   - VERIFICATION.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: 834a46a8acfb2dcec55aaf2da715e5859c4868aa
 - id: implement
   status: pending
 - id: review
