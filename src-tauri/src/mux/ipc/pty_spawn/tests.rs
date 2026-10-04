@@ -8871,3 +8871,7 @@ mod overflow_open_string_cut;
 // mux-strip-join-escape-closure task0001 (FR1, FR2): scenarios 2 and 3 of the join
 // attack stay closed (write strip, snapshot strip and replay together).
 mod strip_join_escape_closure;
+
+// mux-snapshot-strip-can-abort task0001 (AC-2, AC-9): the write filter to snapshot
+// round trip of an open Kitty APC / SIXEL DCS body closed at a cut, and the comment text.
+mod snapshot_strip_can_abort;

@@ -1,0 +1,37 @@
+schema_version: 1
+feature: mux-snapshot-strip-can-abort
+records:
+- question_id: create-spec.command-approval
+  packet_id: null
+  answered_at: '2026-10-04T14:23:16+09:00'
+  source: batch-decision-table
+  answer_mode: select
+  selected_option_ids: []
+  freeform: null
+  normalized_answer: 'All project.components commands were already in the approval
+    store; no new --record was needed. Commands: "CARGO_TARGET_DIR=src-tauri/target
+    cargo check --manifest-path src-tauri/Cargo.toml" (build_command) and "CARGO_TARGET_DIR=src-tauri/target
+    cargo test --manifest-path src-tauri/Cargo.toml --lib" (test_command).'
+  resolution_note: 'gate: create-spec.command-approval; batch auto-approval path;
+    both strings matched bash_guard.py --list exactly; codex_consulted: false.'
+- question_id: review.residual-ticket-filing
+  packet_id: null
+  answered_at: '2026-10-04T15:25:00+09:00'
+  source: codex-consultation
+  answer_mode: select
+  selected_option_ids: ['2']
+  freeform: null
+  normalized_answer: 'Deferred medium finding 483c527d84decb6b is not filed as a new
+    Notion task; it is mapped to the existing task "mux: 保持した未終了の OSC/DCS/APC
+    本文の中で除去が起きると後続バイトが本文に結合し OSC 11 色照会が成立する" (page_id 3ee3509e-c8ee-81fc-bac5-cf94e354df11)
+    and its reproduction is appended there as a comment.'
+  resolution_note: 'not a gate_id-bearing gate; residual-ticket filing choice. Options:
+    (1) file a new task, (2) map to existing task A without filing, (3) file a new
+    task marked related to A. duplicate-task-judge returned no candidates, but the
+    orchestrator saw the same root cause (Written::close_before_removal writes no
+    closing inside OscBody/StBody). Codex consulted (readonly): chose (2) because the
+    root cause is shared and the fix proposed in A (write ESC+DEL before a removal
+    inside a kept string body) leaves a boundary that the second strip also keeps,
+    which by code reading also blocks the OSC 777 splice; Codex added that A''s completion
+    criteria should gain a two-pass strip regression test for OSC 777. Opus escalation:
+    not run.'

@@ -392,9 +392,11 @@ const CLOSURE_PROBES: &[&[u8]] = &[
 ///     no response to a following `[6n`, `n`, `c` or `[c`;
 /// (c)/(d) the closure is neither ESC nor `\`; both strips keep `ESC` + the
 ///     closure as written and still remove a strip target right after it, and
-///     inserting `ESC` + the closure between a Kitty APC or SIXEL DCS introducer
-///     and the ST that ends it leaves the snapshot strip's output unchanged (no
-///     new ST).
+///     `ESC` + the closure inserted between a Kitty APC or SIXEL DCS introducer
+///     and the ST that ends it forms no new ST but aborts the body at the
+///     inserted `ESC` (mux-snapshot-strip-can-abort FR1-FR4): the snapshot strip
+///     returns `head`, `ESC` + the closure, the construct's bytes from the
+///     insertion point on, and `tail`.
 #[test]
 fn escape_carry_the_escape_closure_has_no_effect_in_term_core() {
     assert_eq!(ESCAPE_CLOSING, &[0x18][..], "the Escape closure is CAN");
@@ -474,20 +476,27 @@ fn escape_carry_the_escape_closure_has_no_effect_in_term_core() {
     }
 
     // (d): `ESC` + the closure inserted anywhere between the introducer of a
-    // Kitty APC or a SIXEL DCS and the ST that ends it adds no ST: the
-    // snapshot strip removes the same span.
+    // Kitty APC or a SIXEL DCS and the ST that ends it adds no ST, but its `ESC`
+    // aborts the body there: the snapshot strip removes the body up to the
+    // inserted `ESC`, keeps `ESC` + the closure, and judges what follows (the
+    // construct's remaining bytes, its own `ESC \` included) by the ordinary
+    // rules.
     for (name, introducer_len, construct) in [("kitty apc", 3, KITTY), ("sixel dcs", 3, SIXEL)] {
         let st_start = construct.len() - 2;
         let plain = [&b"head"[..], construct, b"tail"].concat();
-        let want = strip_replayable_rich_content(&plain);
-        assert_eq!(want, b"headtail", "{name}: the plain construct is removed");
+        let want_plain = strip_replayable_rich_content(&plain);
+        assert_eq!(
+            want_plain, b"headtail",
+            "{name}: the plain construct is removed"
+        );
         for at in introducer_len..=st_start {
             let inserted = [&construct[..at], &kept[..], &construct[at..]].concat();
             let input = [&b"head"[..], &inserted[..], b"tail"].concat();
+            let want = [&b"head"[..], &kept[..], &construct[at..], b"tail"].concat();
             assert_eq!(
                 strip_replayable_rich_content(&input),
                 want,
-                "{name}: ESC + closure inserted at {at}"
+                "{name}: ESC + closure inserted at {at} aborts the body there"
             );
         }
     }
