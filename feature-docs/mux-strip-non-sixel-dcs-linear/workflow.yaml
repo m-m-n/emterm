@@ -2,52 +2,30 @@ schema_version: 1
 feature: mux-strip-non-sixel-dcs-linear
 created: '2026-10-04'
 base_branch: main
-goal: '# mux: 共有 strip の ST 探索が見つけた終端位置をキャッシュせず、SIXEL でない DCS の反復で二乗時間になる
-
+goal: |
+  # mux: 共有 strip の ST 探索が見つけた終端位置をキャッシュせず、SIXEL でない DCS の反復で二乗時間になる
 
   Notion task: https://www.notion.so/3ee3509ec8ee81c8a3aad0cc5f143842
-
   種別: バグ
 
-
   ## 現象 (必須)
-
   mux-strip-concat-query-closure（ブランチ `em-workflow/mux-strip-concat-query-closure/integration`）の review round 1 で残った medium 指摘 `d69ef2ca8d34e20b`。今回の差分で変更された関数ではない既存の問題。
-
   `find_st_terminator`（`src-tauri/src/mux/scrollback_filter.rs:669-683`）がキャッシュするのは ST が見つからなかった場合だけで、見つかった ST の位置は再利用されない。SIXEL でない DCS は fallback に落ちて ESC を 1 バイト書くだけで先に進む（`scrollback_filter.rs:597-608`）。
-
-  `(ESC P x)` を N 回繰り返して最後に `ESC \` を置くと、走査量は約 N\^2 × 3/2 バイトになる。書き込み経路では pending 上限 512 KiB の範囲で約 3.8e10 回、スナップショット経路では 2 MiB のリング全体で約 7e11 回。モジュール doc の single O(n) pass、THREAT-MODEL.md の TB-1 / TM-3、SPEC
-  NFR1 と矛盾する。
-
+  `(ESC P x)` を N 回繰り返して最後に `ESC \` を置くと、走査量は約 N\^2 × 3/2 バイトになる。書き込み経路では pending 上限 512 KiB の範囲で約 3.8e10 回、スナップショット経路では 2 MiB のリング全体で約 7e11 回。モジュール doc の single O(n) pass、THREAT-MODEL.md の TB-1 / TM-3、SPEC NFR1 と矛盾する。
   ## 再現手順 (必須)
-
   1. mux の pane に `ESC P x` を多数回繰り返し、最後に `ESC \` を置いた出力を流す
-
   2. 書き込みフィルタ、または snapshot 時の共有 strip の処理時間が入力長の二乗で増える
-
   ## 期待する挙動 (必須)
-
   共有 strip が入力長に対して線形時間で終わる。
-
   ## 完了の定義 (必須)
-
   - [ ] 再現手順で現象が起きない
-
   - [ ] 再発を検出するテストがある
-
   ## 該当箇所 (任意)
-
   - `src-tauri/src/mux/scrollback_filter.rs:669-683`（`find_st_terminator`）
-
   - `src-tauri/src/mux/scrollback_filter.rs:597-608`（非 SIXEL DCS の fallback）
-
   review での修正案: 見つけた ST の位置をキャッシュする（`from` は単調増加なので、`from` が直前に見つけた ST の ESC 位置以下ならその終端を返す。strip 対象の判定は変わらず FR5 を保てる）。`ESC P x` の反復と末尾 ST を、書き込み経路とスナップショット経路の両方の時間予算テスト（TS-9 / TM-3）に追加する。
-
   ## 実害・発生条件 (任意)
-
   敵対的な出力を流すプログラムで mux デーモンの CPU を長時間占有できる。
-
-  '
 parent_branch: em-workflow/mux-strip-non-sixel-dcs-linear/integration
 tier: full
 tier_decision:
