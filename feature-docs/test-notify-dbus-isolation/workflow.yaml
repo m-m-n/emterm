@@ -127,7 +127,8 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: pending
+    status: in_progress
+    branch: em-workflow/test-notify-dbus-isolation/task0001
   task0002:
     title: NotifyRustSink with injected worker functions; worker_thread tests on fakes for both OSes
     plan: tasks/task0002.md
@@ -152,7 +153,8 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: pending
+    status: in_progress
+    branch: em-workflow/test-notify-dbus-isolation/task0002
 review:
   status: pending
   rounds_completed: 0
