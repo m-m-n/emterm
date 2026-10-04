@@ -8867,3 +8867,7 @@ mod overflow_lone_esc;
 
 // mux-write-filter-overflow-open-string-cut task0001 (FR1-FR7): open string body state, ESC + CAN.
 mod overflow_open_string_cut;
+
+// mux-snapshot-strip-can-abort task0001 (AC-2, AC-9): the write filter to snapshot
+// round trip of an open Kitty APC / SIXEL DCS body closed at a cut, and the comment text.
+mod snapshot_strip_can_abort;
