@@ -1,16 +1,112 @@
 schema_version: 1
 feature: lib-budget-tests-load-tolerance
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: acfdc188bcbecb9ec7c0933dd3a9ac6dd28a0b05
 last_input_digest: sha256:3750c78e96a498a8b3e72669c2c5db28a7e81599f7d1b8f323776d6d37191b25
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-04T18:38:00+09:00'
+    questions:
+    - question_id: requirement.ring-corpus-budget
+      status: answered
+    - question_id: requirement.strip-concat-budget-mechanism
+      status: answered
+    - question_id: requirement.scope-other-budgets
+      status: answered
+    - question_id: requirement.recurrence-test
+      status: answered
+    - question_id: requirement.windows-measurement
+      status: answered
+    - question_id: requirement.load-reproduction-in-verify
+      status: answered
+    - question_id: design-step.decision
+      status: answered
+answers:
+  requirement.ring-corpus-budget:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T18:46:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - remove_wall_clock_assert
+    freeform: null
+    normalized_answer: round4_chain のトークンコーパス試験から経過時間の判定（Instant/BUDGET）だけを除き、再生一致の検証はすべて残す。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 1 turn, converged) consulted; Opus
+      escalation: not run; options: remove_wall_clock_assert [chosen] / cpu_time_budget / ignore_bench [not chosen]; key points: 試験の目的は再生一致で時間制限は AC に含まれない(round4_chain.rs:1183,1194,1220)。最大 16 バイトの入力では計算量の悪化を検出できない(round4_chain.rs:1092,1095,1196)'
+  requirement.strip-concat-budget-mechanism:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T18:46:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - cpu_time_code_under_test
+    freeform: null
+    normalized_answer: strip_concat_alternations_and_chains_finish_within_the_budget は、strip・snapshot strip・write filter 呼び出しのスレッド CPU 時間の合計を 10 秒の予算と比較する。入力生成・期待値生成・比較・テスト側の出力連結は計測に含めない。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 1 turn, converged) consulted; Opus
+      escalation: not run; options: cpu_time_code_under_test [chosen] / scaling_ratio / operation_count / ignore_bench [not chosen]; key points: 100k 反復の線形性検証(AC-7)を残す。filter 呼び出しは同期処理で現在のスレッドを測れる(write_filter.rs:303,480)。Linux
+      は CLOCK_THREAD_CPUTIME_ID。orchestrator 実測: 無負荷 debug ビルドで試験全体 3.71s wall / 3.68s user（round4_chain 試験は 2.60s）で 10 秒予算に余裕がある'
+  requirement.scope-other-budgets:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T18:46:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - named_two_only
+    freeform: null
+    normalized_answer: 対象は名指しされた 2 試験のみ。他の時間予算判定は変更しない。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 1 turn, converged) consulted; Opus
+      escalation: not run; options: named_two_only [chosen] / all_10s_budgets / all_wall_clock_budgets [not chosen]; key points: 他の時間判定は目的が別で一律変更の根拠がない(round4_chain.rs:814,1180)。デッドロック検出(tests.rs:2272,2279)には実時間が必要'
+  requirement.recurrence-test:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T18:46:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - both
+    freeform: null
+    normalized_answer: '再発検出の試験は、計測ヘルパーが sleep や別スレッドの CPU 消費を計上しないこと、自スレッドの CPU 消費を計上すること、同じ予算判定が二乗処理の対照例を拒否することを確かめる。短い試験用予算で通常の #[test] として置く。'
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 1 turn, converged) consulted; Opus
+      escalation: not run; options: both [chosen] / helper_excludes_off_cpu / sensitivity_control [not chosen]; key points: 対照例で検出力を示す既存例がある(strip_join_escape_closure.rs:217,223)。新しい試験クレートは不要(test/README.md:15,143)'
+  requirement.windows-measurement:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T18:46:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - windows_get_thread_times
+    freeform: null
+    normalized_answer: Windows では windows-sys に Win32_System_Threading を追加し、GetThreadTimes による現在スレッドの kernel+user 時間で計測する。Linux は clock_gettime(CLOCK_THREAD_CPUTIME_ID)。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 1 turn, converged) consulted; Opus
+      escalation: not run; options: windows_get_thread_times [chosen] / unix_cpu_windows_wall / budget_unix_only [not chosen]; key points: analyst 推奨は unix_cpu_windows_wall だったが、Codex は Windows にも負荷による待ち時間の除外を適用できる点で
+      GetThreadTimes を推奨。既存の windows-sys の feature 追加のみで新規クレートは不要(Cargo.toml:246)。orchestrator は両プラットフォームで同じ判定になる点を比較優位と判断して採用'
+  requirement.load-reproduction-in-verify:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T18:46:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - synthetic_load
+    freeform: null
+    normalized_answer: verify では CPU を消費するプロセスを並列に走らせた状態で cargo test --lib を実行し、2 試験の成功を確認する。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 1 turn, converged) consulted; Opus
+      escalation: not run; options: synthetic_load [chosen] / test_only [not chosen]; key points: 通常実行だけでは報告条件を検証できない。全 --lib 実行も完了条件(test/README.md:146)'
+  design-step.decision:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T18:46:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step は推奨どおり skip（UI に触れないテストコードのみの変更）
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously (analyst の推奨 skip を受け入れる)'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:3750c78e96a498a8b3e72669c2c5db28a7e81599f7d1b8f323776d6d37191b25
 artifacts: []
 patches: []
