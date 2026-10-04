@@ -1,0 +1,98 @@
+task_id: task0002
+baseline_failures: []          # full --lib run before any edit: 4307 passed, 0 failed, 3 ignored
+final_failures: []             # full --lib run re-executed after implementation: 4307 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - callbacks::tests::worker_thread::sink_send_never_blocks_the_caller_even_past_queue_capacity
+    red_confirmed: true
+    red_reason: >-
+      Switched the test to NotifyRustSink::with_worker_functions (recording
+      fake send plus, on unix, a fake capability query) before the
+      constructor existed: the --lib test build failed with E0599 "no
+      associated function or constant named `with_worker_functions` found
+      for struct `callbacks::NotifyRustSink`". After implementing, a
+      throwaway mutation that dropped the injected send inside the
+      constructor made the new reach assertion fail (the recorder stayed
+      empty for the whole 5 s bounded wait), so the assertion proves the
+      fake is wired into the worker; the mutation was reverted.
+  AC-2:
+    tests:
+      - callbacks::tests::worker_thread::dropping_the_sink_after_sending_returns_within_the_shutdown_deadline
+    red_confirmed: true
+    red_reason: >-
+      Same E0599 compile failure for the missing with_worker_functions
+      constructor before the implementation. With the injected send dropped
+      by the throwaway mutation, the exact-three-pairs-in-send-order
+      assertion failed (recorder empty); the mutation was reverted.
+  AC-3:
+    tests:
+      - callbacks::tests::worker_thread::dropping_a_freshly_constructed_sink_with_no_notifications_returns_within_the_shutdown_deadline
+    red_confirmed: true
+    red_reason: >-
+      Same E0599 compile failure for the missing with_worker_functions
+      constructor before the implementation.
+  AC-4:
+    tests:
+      - callbacks::tests::worker_injection_points::confirmed_body_markup_capability_escapes_both_fields
+      - callbacks::tests::worker_injection_points::absent_body_markup_capability_leaves_both_fields_unchanged
+      - callbacks::tests::worker_injection_points::fetch_failure_escapes_both_fields
+      - callbacks::tests::worker_injection_points::worker_calls_fetch_and_send_once_per_notification_in_enqueue_order
+      - callbacks::tests::worker_injection_points::worker_queries_only_notifications_with_a_metacharacter_and_sends_all_in_order
+      - callbacks::tests::notification_redaction::redaction_carries_byte_lengths_and_id_in_fixed_order_and_shape
+      - callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_false_on_fetch_failure
+      - callbacks::tests::summary_markup_escape::failed_capability_fetch_escapes_both_title_and_body_in_the_same_call
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing
+      worker_injection_points, notification_redaction, body_markup_escape
+      and summary_markup_escape tests detect any change to the unix worker's
+      order (redact, on-demand capability gate, escape, send) and to the
+      escape and redaction behavior; no red state occurred for this change
+      because the unix notify_worker signature and body are untouched and
+      those tests passed unmodified before and after. The remaining clauses
+      (NotifyRustSink::new keeps signature and visibility and delegates to
+      the injection constructor with notify-rust's capability query and
+      send; queue capacity, join timeout and thread name unchanged) are
+      verified by code review; no executable check for them can be made to
+      fail.
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Verified by the Windows-target check including tests (`cargo xwin
+      check --target x86_64-pc-windows-msvc --lib --tests`) plus code
+      review of the log wording; no Windows test drives the Windows
+      notify_worker (out of scope). With the Windows sink_with_fakes helper
+      in tests.rs and callbacks.rs still at HEAD (no send injection point,
+      no constructor), that check was observed to fail with E0599 "no
+      associated function or constant named `with_worker_functions` found
+      for struct `callbacks::NotifyRustSink`". After implementing, the same
+      check passes. The success and failure record wording and the absence
+      of a direct notify-rust call in the Windows worker body are code
+      review only.
+  AC-6:
+    tests:
+      - callbacks::tests::worker_thread::sink_send_never_blocks_the_caller_even_past_queue_capacity
+      - callbacks::tests::worker_thread::dropping_the_sink_after_sending_returns_within_the_shutdown_deadline
+      - callbacks::tests::worker_thread::dropping_a_freshly_constructed_sink_with_no_notifications_returns_within_the_shutdown_deadline
+    red_confirmed: false
+    red_reason: >-
+      The clause that no test in callbacks/tests.rs constructs a
+      NotifyRustSink through new() or Default is a source search
+      (`grep NotifyRustSink::new`, none left); no executable check exists
+      that can be made to fail for it, and the pre-change tests constructing
+      through new() were green. The build and test clauses (full --lib
+      command, default-features and --no-default-features cargo checks,
+      Windows-target check including tests) all passed after the change.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No worker_thread test was renamed, so
+      test-docs/notification-worker-thread/task0001.tests.yaml is
+      unchanged and there is nothing to make fail. A search of src-tauri/src
+      and src-tauri/tests for that record's path and for the basename
+      task0001.tests.yaml found no test that reads it. The record's names
+      still match the --lib tests (the three worker_thread tests keep their
+      names).

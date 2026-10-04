@@ -351,9 +351,11 @@ impl NotifyQueue {
 /// notify-escape-test-production-path task0001: `fetch_capabilities` and
 /// `send` are injection points, so worker-level tests can drive this loop
 /// with fakes and reach no D-Bus connection. [`NotifyRustSink::new`]
-/// passes notify-rust's capability query (`notify_rust::get_capabilities`)
-/// and notify-rust's send (`notify_rust::Notification::show`) as the
-/// production values. The escape decision itself is delegated entirely to
+/// hands notify-rust's capability query (`notify_rust::get_capabilities`)
+/// and notify-rust's send ([`notify_rust_send`]) to
+/// [`NotifyRustSink::with_worker_functions`] as the production values, and
+/// that constructor starts this loop on the worker thread with them. The
+/// escape decision itself is delegated entirely to
 /// [`escape_for_send_on_demand`] — this loop forwards only its return
 /// values to `send` and never inspects or branches on the capability list
 /// itself.
@@ -448,56 +450,78 @@ fn notify_worker<FetchErr, SendErr>(
 
 /// Worker body (Windows): notify-rust has no `get_capabilities()` export
 /// on Windows (XDG-only surface), so there is no capability fetch and no
-/// escape here — the received title/body are sent directly, unchanged
-/// from before this task. No injection points on this platform (task
-/// plan "Out of Scope").
+/// escape here — the received title/body are handed to `send` directly,
+/// unchanged. Runs until `rx` disconnects, like the unix worker.
+///
+/// test-notify-dbus-isolation task0002 (FR4): `send` is the Windows
+/// injection point, so a test can drive this worker with a fake and reach
+/// no toast API. [`NotifyRustSink::new`] hands notify-rust's send
+/// ([`notify_rust_send`]) to [`NotifyRustSink::with_worker_functions`] as
+/// the production value. The redacted rendering is computed from the
+/// received title and body before `send` runs, exactly as in the unix
+/// worker, and the success and failure records keep their wording.
 #[cfg(not(unix))]
-fn notify_worker(rx: Receiver<(String, String)>) {
+fn notify_worker<SendErr>(
+    rx: Receiver<(String, String)>,
+    send: impl Fn(&str, &str) -> Result<(), SendErr>,
+) where
+    SendErr: std::fmt::Display,
+{
     for (title, body) in rx.iter() {
         let redacted = redact_notification(&title, &body);
-        match notify_rust::Notification::new()
-            .summary(&title)
-            .body(&body)
-            .show()
-        {
-            Ok(_) => log::debug!("notify-rust dispatched: {redacted}"),
+        match send(&title, &body) {
+            Ok(()) => log::debug!("notify-rust dispatched: {redacted}"),
             Err(e) => log::warn!("notify-rust failed: {e}"),
         }
     }
 }
 
-/// Start the worker thread with the production injection points on unix
-/// (notify-rust's capability query and notify-rust's send), or with none
-/// on Windows. Kept as a separate function, split by platform, so
-/// [`NotifyRustSink::new`] itself stays a single, unbranched body — only
-/// the injection points differ by platform.
+/// notify-rust's send, the production send injected into the worker on
+/// every platform: show one notification with `summary` and `body`,
+/// dropping the returned handle. Referenced only from
+/// [`NotifyRustSink::new`], so the production notify-rust send exists in
+/// exactly one place.
+fn notify_rust_send(summary: &str, body: &str) -> notify_rust::error::Result<()> {
+    notify_rust::Notification::new()
+        .summary(summary)
+        .body(body)
+        .show()
+        .map(|_| ())
+}
+
+/// Start the worker thread (unix) with the injected capability query and
+/// send. Both functions move onto the worker thread and live for the
+/// worker's whole life. The thread name and the panic on thread-spawn
+/// failure are fixed here.
 #[cfg(unix)]
-fn spawn_notify_worker(rx: Receiver<(String, String)>) -> JoinHandle<()> {
+fn spawn_notify_worker<FetchErr, SendErr>(
+    rx: Receiver<(String, String)>,
+    fetch_capabilities: impl Fn() -> Result<Vec<String>, FetchErr> + Send + 'static,
+    send: impl Fn(&str, &str) -> Result<(), SendErr> + Send + 'static,
+) -> JoinHandle<()>
+where
+    FetchErr: std::fmt::Display,
+    SendErr: std::fmt::Display,
+{
     thread::Builder::new()
         .name("emterm-notify".to_string())
-        .spawn(move || {
-            notify_worker(
-                rx,
-                || notify_rust::get_capabilities(),
-                |summary, body| {
-                    notify_rust::Notification::new()
-                        .summary(summary)
-                        .body(body)
-                        .show()
-                        .map(|_| ())
-                },
-            )
-        })
+        .spawn(move || notify_worker(rx, fetch_capabilities, send))
         .expect("failed to spawn the notification worker thread")
 }
 
-/// Windows counterpart of [`spawn_notify_worker`]: the thread-start call
-/// site, unchanged from before this task — no injection points.
+/// Windows counterpart of [`spawn_notify_worker`]: only the send is
+/// injected, because the Windows worker has no capability query.
 #[cfg(not(unix))]
-fn spawn_notify_worker(rx: Receiver<(String, String)>) -> JoinHandle<()> {
+fn spawn_notify_worker<SendErr>(
+    rx: Receiver<(String, String)>,
+    send: impl Fn(&str, &str) -> Result<(), SendErr> + Send + 'static,
+) -> JoinHandle<()>
+where
+    SendErr: std::fmt::Display,
+{
     thread::Builder::new()
         .name("emterm-notify".to_string())
-        .spawn(move || notify_worker(rx))
+        .spawn(move || notify_worker(rx, send))
         .expect("failed to spawn the notification worker thread")
 }
 
@@ -523,13 +547,63 @@ pub struct NotifyRustSink {
 }
 
 impl NotifyRustSink {
-    /// Construct the sink and start its worker thread immediately — the
-    /// worker is never started lazily (D5: every `App`-constructing test
-    /// relies on this so its own teardown of the production sink is
-    /// well-behaved under `cargo test`, SPEC A9).
+    /// Construct the production sink and start its worker thread
+    /// immediately — the worker is never started lazily (D5: every
+    /// `App`-constructing test relies on this so its own teardown of the
+    /// production sink is well-behaved under `cargo test`, SPEC A9).
+    ///
+    /// test-notify-dbus-isolation task0002: delegates to
+    /// [`Self::with_worker_functions`] with notify-rust's capability query
+    /// (unix only) and notify-rust's send ([`notify_rust_send`]). These are
+    /// the only production notify-rust function values handed to a worker.
     pub fn new() -> Self {
+        #[cfg(unix)]
+        let sink =
+            Self::with_worker_functions(|| notify_rust::get_capabilities(), notify_rust_send);
+        #[cfg(not(unix))]
+        let sink = Self::with_worker_functions(notify_rust_send);
+        sink
+    }
+
+    /// Construct a sink whose worker uses the given capability query and
+    /// send instead of notify-rust's (unix). Everything else is identical
+    /// to [`Self::new`]: queue capacity [`NOTIFY_QUEUE_CAPACITY`], the
+    /// worker started right here (never lazily), the same worker thread
+    /// name, a `send` that only enqueues, and the same bounded drop
+    /// ([`NOTIFY_WORKER_JOIN_TIMEOUT`]). Both functions move onto the
+    /// worker thread and run there for the worker's whole life, so they
+    /// own everything they capture. Private to this module: its child test
+    /// module builds sinks on fakes through it, so no test reaches
+    /// notify-rust.
+    #[cfg(unix)]
+    fn with_worker_functions<FetchErr, SendErr>(
+        fetch_capabilities: impl Fn() -> Result<Vec<String>, FetchErr> + Send + 'static,
+        send: impl Fn(&str, &str) -> Result<(), SendErr> + Send + 'static,
+    ) -> Self
+    where
+        FetchErr: std::fmt::Display,
+        SendErr: std::fmt::Display,
+    {
         let (queue, rx) = NotifyQueue::new(NOTIFY_QUEUE_CAPACITY);
-        let worker = spawn_notify_worker(rx);
+        let worker = spawn_notify_worker(rx, fetch_capabilities, send);
+        Self {
+            queue: Some(queue),
+            worker: Mutex::new(Some(worker)),
+        }
+    }
+
+    /// Windows counterpart of the unix `with_worker_functions`: the
+    /// Windows worker has no capability query, so only the send is
+    /// injected. Same postconditions otherwise.
+    #[cfg(not(unix))]
+    fn with_worker_functions<SendErr>(
+        send: impl Fn(&str, &str) -> Result<(), SendErr> + Send + 'static,
+    ) -> Self
+    where
+        SendErr: std::fmt::Display,
+    {
+        let (queue, rx) = NotifyQueue::new(NOTIFY_QUEUE_CAPACITY);
+        let worker = spawn_notify_worker(rx, send);
         Self {
             queue: Some(queue),
             worker: Mutex::new(Some(worker)),
