@@ -1,0 +1,47 @@
+schema_version: 2
+feature: mux-strip-non-sixel-dcs-linear
+tier: full
+bases:
+- basis: description_only
+  score:
+    score: 1.01
+    confidence: 0.99
+    probabilities:
+      '0': 0.0
+      '1': 0.99
+      '2': 0.01
+      '3': 0.0
+  observed_at: '2026-10-04T16:46:00+09:00'
+- basis: description_plus_code
+  score:
+    score: 1.08
+    confidence: 0.58
+    probabilities:
+      '0': 0.17
+      '1': 0.58
+      '2': 0.24
+      '3': 0.01
+  observed_at: '2026-10-04T16:49:30+09:00'
+pre_survey_estimate:
+  files_expected: []
+  changed_lines_approx: 0
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: []
+  covering_tests_exist: false
+  spillover_modules: []
+  work_still_required: false
+  test_change_kind: none
+  added_test_cases_approx: 0
+  body_change_kind: new_logic
+  change_containment: single_module
+  caller_and_dependency_count: 2
+  changes_external_contract: false
+  changes_behavior: false
+  evidence: HEAD d08d634f では、旧 find_st_terminator は scan_body_end に置き換わっている（src-tauri/src/mux/scrollback_filter.rs:875）。探索は最初の
+    ESC で終了する（同:876-883）。非 SIXEL DCS の1バイト出力は残っている（同:774-792）が、反復する ESC P x では各探索が次の
+    ESC で止まるため、指定の二乗時間の経路は残っていない。書き込み側（src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:718）と履歴復元側（src-tauri/src/mux/snapshot_bytes.rs:330）は、この共通処理を使っている。既存の
+    TS-9 は CSI と除去対象の反復を検証し（src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs:1015）、別の時間制限テストは
+    Kitty APC と SIXEL DCS の反復を検証している（src-tauri/src/mux/scrollback_filter/tests.rs:3151）。指定の非
+    SIXEL DCS 反復と末尾 ST を使う専用テストは確認できなかったため、両経路の時間制限テストへの追加を推奨する。今回はソース確認のみで、テストや時間測定は実行していない。ファイルは変更していない
+decided_at: '2026-10-04T16:50:00+09:00'
