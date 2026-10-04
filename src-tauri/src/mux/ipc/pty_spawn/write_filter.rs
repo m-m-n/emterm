@@ -163,7 +163,10 @@ pub(in crate::mux) use crate::mux::scrollback_filter::CSI_CLOSING;
 /// escape and returns to ground, without a character, a cursor move, a response,
 /// or a change of mode or charset. It is not `ESC`, and with the preceding `ESC`
 /// it does not form ST (`ESC \`), so neither strip reads it as the start of a
-/// strip target nor ends an APC / DCS body at it. It differs from the other
+/// strip target, and it never completes an APC / DCS body as ST. Where the
+/// preceding `ESC` lies inside an APC / DCS body, the strip ends that body there
+/// as an abort (mux-snapshot-strip-can-abort FR1): that `ESC` is the aborting
+/// `ESC`, and the closure is the byte after it. It differs from the other
 /// closures ([`CSI_CLOSING`], [`STRING_BODY_CLOSING`] and the designator `ESC`):
 /// a cut writes exactly one closure, the one [`closure_for`] chooses.
 /// `CSI_CLOSING` is unchanged.
@@ -181,8 +184,12 @@ pub(in crate::mux) const ESCAPE_CLOSING: &[u8] = &[0x18];
 /// ground and the bytes written after the cut are never absorbed into the string
 /// (a later BEL cannot complete it with them). The `ESC` is followed by CAN,
 /// which opens no strip target, and `ESC` + CAN is not ST (`ESC \`), so neither
-/// strip reads the closure as the start of a strip target or ends an APC / DCS
-/// body at it.
+/// strip reads the closure as the start of a strip target or as ST. The strip
+/// ends an APC / DCS body that comes before the closure at the closure's `ESC`,
+/// as an abort (mux-snapshot-strip-can-abort FR1-FR3): it removes a Kitty APC /
+/// SIXEL DCS body up to that `ESC`, keeps the closure and judges the bytes after
+/// it by the ordinary rules, so the text written after a cut is neither absorbed
+/// into the body nor removed with it.
 pub(in crate::mux) const STRING_BODY_CLOSING: &[u8] = &[0x1b, 0x18];
 
 /// The write a cut makes when the written stream ends right after `ESC (` /
@@ -1058,10 +1065,14 @@ enum StringScanResult {
 }
 
 /// Find how an ST-only string (APC / DCS) starting at `from` (the first body
-/// byte, right after the introducer) ends. Mirrors the terminator scan in
-/// [`crate::mux::scrollback_filter`] so the boundary detector and the
-/// stripper agree on what "complete" means, and `term_core`'s
-/// `apc_escape` / `dcs_escape` state handlers for the abort case.
+/// byte, right after the introducer) ends. The body ends at its first `ESC`:
+/// `ESC \` completes it, `ESC` followed by any other byte aborts it at that
+/// aborting `ESC`, and an `ESC` that is the last byte (or no `ESC` at all) leaves
+/// it incomplete. This mirrors `term_core`'s `apc_escape` / `dcs_escape` state
+/// handlers, and the strip's own body end scan in
+/// [`crate::mux::scrollback_filter`] (`scan_body_end`) agrees with it on
+/// complete and aborted bodies, so the boundary detector and the stripper agree
+/// on where such a body ends.
 fn find_st(bytes: &[u8], from: usize) -> StringScanResult {
     let mut j = from;
     while j < bytes.len() {

@@ -1,0 +1,96 @@
+feature: mux-snapshot-strip-can-abort
+collected_at: '2026-10-04T15:22:35+09:00'
+session_ids:
+- 01a10593-22f9-746e-87db-58ba2593d16e.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+  - perspective: performance
+    reason: NFR1 requires the strip to stay a linear single pass; the diff changes
+      the APC / DCS body scan and its st_search_from cache.
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: description_plus_code の最終読みで bucket 1 が 0.56（bucket 2 が 0.44）。評価器は
+      full を返した
+    bases:
+    - basis: description_only
+      score:
+        type: score
+        score: 1.03
+        confidence: 0.97
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread
+            across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to
+            an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+            or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.97
+          '2': 0.03
+          '3': 0.0
+      observed_at: '2026-10-04T13:59:05+09:00'
+    - basis: description_plus_code
+      score:
+        type: score
+        score: 1.44
+        confidence: 0.56
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread
+            across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to
+            an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+            or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.56
+          '2': 0.44
+          '3': 0.0
+      observed_at: '2026-10-04T13:59:05+09:00'
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/mux/scrollback_filter.rs
+      - src-tauri/src/mux/scrollback_filter/tests.rs
+      - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+      - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_open_string_cut.rs
+      changed_lines_approx: 100
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules:
+      - mux::ipc::pty_spawn::write_filter
+      - mux::snapshot_bytes
+      work_still_required: true
+      work_still_required_evidence: src-tauri/src/mux/scrollback_filter.rs:759 の find_st_terminator
+        は ESC と逆斜線だけを終端と認識し、ESC + CAN を越えて走査する。呼出し元は strip_pass の1関数で、同ファイル:678 と
+        :689 の2箇所から呼ばれ、リポジトリ内関数への直接依存は0。ESC に逆斜線以外が続いた時点で None を返し、st_search_from
+        を末尾に更新する処理は走査終了時だけに保つ修正が可能。src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:186
+        は ESC + CAN を定義するが、:183 のコメントは除去処理が本体を打ち切らないと記述している。src-tauri/src/mux/ipc/pty_spawn/tests/overflow_open_string_cut.rs:383
+        の既存検証は除去前のバイトを再生し、:658 は Kitty/SIXEL を後続列の検証から除外している。既存補助関数を使い、両形式の上限超過、カット、本文、ST終端OSCを除去後に再生する検証を追加する必要がある。src-tauri/src/mux/scrollback_filter/tests.rs:227
+        に未終端開始列を多数含む既存テストがある。src-tauri/src/mux/snapshot_bytes.rs:330 と src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:666
+        は同じ除去処理を利用する。行数と追加ケース数は概算で、新関数数は実装用関数を数えている
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 4
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 1
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+- task0001 は予測ファイル内で完了（round4_designator_cut.rs の旧挙動テスト更新は計画が予期していた）。conflict_retries
+  0
+- performance#0 の litellm レビュアーがモデル未実行の自己レビューを返し、fallback に回った
+- review の medium 1 件（483c527d84decb6b、2 回 strip の非冪等性で OSC 777 漏れ）は deferred。既存 Notion
+  タスク 3ee3509e-c8ee-81fc-bac5-cf94e354df11 にコメント追記済み
+- verify の並列 --lib 実行で負荷依存の時間予算テスト strip_concat_alternations_and_chains_finish_within_the_budget
+  が 10.13s で落ち、直列実行で pass
