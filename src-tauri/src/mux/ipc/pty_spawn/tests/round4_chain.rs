@@ -1191,7 +1191,6 @@ fn chains_and_csis_are_split_invariant_and_the_csi_state_matches_term_core() {
 /// start after the cut.)
 #[test]
 fn the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus() {
-    let start = Instant::now();
     let pair = [&b"\x1b[?1049h"[..], &b"\x1b[?1049l"[..]].concat();
     for stream in token_streams(4) {
         // The CSI state against term_core, on what the filter emitted before
@@ -1217,5 +1216,4 @@ fn the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus() {
             );
         }
     }
-    assert!(start.elapsed() < BUDGET, "took {:?}", start.elapsed());
 }

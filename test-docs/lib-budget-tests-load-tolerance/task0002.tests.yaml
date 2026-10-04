@@ -1,0 +1,18 @@
+task_id: task0002
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+final_failures:
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_chain::the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus
+    red_confirmed: false
+    red_reason: "a dedicated new module is out of scope, but the existing the_ring_at_a_cut_replays_like_the_raw_stream_over_the_token_corpus detects the replay-equality and CSI-state assertions this task keeps unchanged; no red state occurred for this change. Removing the wall-clock assertion has no behavioral red: the failure being removed appears only under environment load. Verified by the passing test (filtered run and full --lib run) plus the diff, which removes only the Instant::now() start and the elapsed-versus-BUDGET assertion of that test."
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::round4_chain::a_held_chain_past_the_cap_takes_the_overflow_flush
+      - mux::ipc::pty_spawn::tests::round4_chain::a_hostile_aborted_introducer_stream_is_one_linear_chain
+      - mux::ipc::pty_spawn::tests::round4_chain::chains_and_csis_are_split_invariant_and_the_csi_state_matches_term_core
+    red_confirmed: false
+    red_reason: "a dedicated new module is out of scope, but the three existing tests keep their wall-clock BUDGET checks and still pass; no red state occurred for this change (the criterion states that nothing else changes). Verified by the diff (only the named test's body changed; the BUDGET constant and the Duration/Instant imports remain) and by the --lib test build reporting no compiler warning for round4_chain.rs."
