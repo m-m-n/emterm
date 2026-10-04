@@ -893,8 +893,8 @@ fn pump_all_applies_daemon_agent_status_update_to_model() {
 
     // Subject under test is the model update, not the notification, so
     // the capturing sink's handle is intentionally unused (bound as
-    // `_sink`) rather than asserted on — its role here is purely to keep
-    // this test off the production `NotifyRustSink`.
+    // `_sink`) rather than asserted on — its role here is purely to stand
+    // in for the App's default sink (the no-op sink in the test build).
     let (mut app, _sink) = app_with_test_sink();
     app.spawn_initial_tab();
     let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
