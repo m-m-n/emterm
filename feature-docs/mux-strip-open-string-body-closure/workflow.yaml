@@ -130,7 +130,11 @@ workflow:
   status: completed
   completed_at_commit: 9684ec9d50fadde8281ee80e0376e8b5f27476c8
 - id: verify
-  status: in_progress
+  status: completed
+  completed_at_commit: 8bf3edbe6e69b6ac3833b3657cb75f6039d04151
+  result: pass
+  failed_items: []
+  summary: 'cargo check (default / --no-default-features) ok. cargo test --lib: parallel run 4273 passed / 1 failed (render::font::user_dir::tests::user_font_dir_prefers_xdg_data_home, XDG_DATA_HOME env race, file not touched by this feature); single-threaded re-run 4274 passed / 0 failed. TS-1..TS-14 pass (23 strip_open_string_body_closure tests ok; TS-12 DECISIONS.md has decisions / changed expectations / Residual 1 resolution; TS-13 no crates/term_core change, predecessor feature-docs untouched, predecessor test-docs AC-11 renamed with supersede note, red_reason unchanged).'
 - id: retrospect
   status: pending
 tasks:
