@@ -8860,3 +8860,7 @@ mod escape_state_carry;
 // produces never completes an escape or a CSI device query the raw stream never
 // made (write filter and reader level).
 mod strip_concat_query;
+
+// mux-write-filter-overflow-lone-esc task0001 (FR1-FR6): the overflow flush holds the
+// final live lone ESC of its run.
+mod overflow_lone_esc;

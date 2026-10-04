@@ -1,0 +1,280 @@
+schema_version: 1
+feature: mux-write-filter-overflow-lone-esc
+created: '2026-10-03'
+base_branch: main
+goal: 'Notion: https://www.notion.so/3ee3509ec8ee818f8984d20bd6b4064b
+
+
+  # mux: 書き込みフィルタの上限超過書き出しが lone ESC で終わると次回読み取りの [6n が実行可能な CPR 照会としてリングに入る
+
+
+  ## 現象
+
+  書き込みフィルタの保留上限（512 KiB、`src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:38`）を超えた一括書き出し（`write_filter.rs:445`）の末尾が
+  lone ESC だと、書き出し済みストリームは escape 状態なのに、引き継ぐ CSI 分類は none になる（`src-tauri/src/mux/scrollback_filter.rs:121`
+  で Escape は CSI 状態として報告されない）。次の読み取りの `[6n` がそのまま実行可能な CPR 照会としてリングに入る。snapshot 時の strip では除去される。
+
+  ## 再現手順
+
+  1. mux の pane に、保留上限を超える保留列を末尾 `ESC` で終わる形で出力する
+
+  2. 次のチャンクで `[6n` を出力する
+
+  3. リングに `ESC[6n` が実行可能な形で残る
+
+  ## 期待する挙動
+
+  上限超過の書き出し経路でも、クライアントが開始していない照会をリングで成立させない。
+
+  ## 完了の定義
+
+  - [ ] 再現手順で現象が起きない
+
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所
+
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:38`（保留上限）
+
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:445`（上限超過時の一括書き出し）
+
+  - `src-tauri/src/mux/scrollback_filter.rs:121`（strip の状態報告で Escape が CSI 状態にならない）
+
+  ## 実害・発生条件
+
+  feature mux-strip-concat-query-closure の create-plan で範囲外と判断した残件（Codex 相談済み）。元タスク: https://www.notion.so/3ee3509ec8ee819dbd44c62cbb6ae184
+  。上限超過が必要なため通常利用での到達は限られるが、大きな未完了列で到達しうる。
+
+  '
+parent_branch: em-workflow/mux-write-filter-overflow-lone-esc/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.91
+      '2': 0.09
+      '3': 0.0
+    description_plus_code:
+      '0': 0.01
+      '1': 0.83
+      '2': 0.16
+      '3': 0.0
+  at: '2026-10-03T22:38:30+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 886a3a57e439f63381c4407ee3394fc279146bd9
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: Internal byte-stream filter fix in the mux daemon with no UI, visual or interaction
+    surface.
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: 6d2e356f0db7087aa0f0df59a2a1b1fa52cb24ee
+- id: implement
+  status: completed
+  base_commit: 3e6eec1f7bcf0ce8ac80a9e3e29422a32ee567a1
+  completed_at_commit: 50980f84c6ff5eddecc6ccbabd4566190c4ab56c
+- id: review
+  status: completed
+  completed_at_commit: da9b029f3f6c9f84ada743db181f5e77bd77797d
+- id: verify
+  status: completed
+  result: pass
+  failed_items: []
+  summary: 'cargo check (default) exit 0; cargo check --no-default-features exit 0; cargo test --lib 4188 passed / 0 failed / 3 ignored (19 overflow_lone_esc tests incl. TS-1..TS-6); TS-8 doc-comment review pass; NFR3 diff limited to task0001 files'
+  completed_at_commit: 025eea0cc165942d077b6b3a0eda8c500900e89c
+- id: retrospect
+  status: completed
+  completed_at_commit: d8f399d3b457d2171ff79e18013dd41984181e05
+tasks:
+  task0001:
+    title: Hold the overflow flush's final live lone ESC
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_lone_esc.rs
+    - test-docs/mux-write-filter-overflow-lone-esc/task0001.tests.yaml
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    status: merged
+    branch: em-workflow/mux-write-filter-overflow-lone-esc/task0001
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  - performance
+  residual_critical_high: 0
+  needs_rework: false
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary:
+    - perspective: performance
+      reason: write_filter.rs is on the per-read PTY output hot path and NFR1 bounds overflow-path work
+        to O(1) with no extra pass over fed bytes
+    cross_validation: true
+requirements:
+  FR1:
+    title: 'Overflow flush ending in a lone ESC: the ESC is classified together with the next read'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-6
+  FR2:
+    title: Memory bound after the overflow flush
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+  FR3:
+    title: Rest of the overflow flush unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+    - TS-5
+  FR4:
+    title: Behavior of the held ESC in later calls
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+    - TS-4
+  FR5:
+    title: Dims attribution of the held ESC
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+  FR6:
+    title: Regression tests
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-6
+  NFR1:
+    title: 'Performance: no additional pass over fed bytes, O(1) overflow-path work, budget tests pass'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-7
+  NFR2:
+    title: Output independence from read splitting
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+  NFR3:
+    title: Unchanged elsewhere (live forward, snapshot strip, non-overflow path, strip functions, existing
+      tests)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-5
+    - TS-7
+  NFR4:
+    title: Doc comments updated to the new overflow postcondition
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+  NFR5:
+    title: Linux / Windows builds and --no-default-features check compile
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-7
