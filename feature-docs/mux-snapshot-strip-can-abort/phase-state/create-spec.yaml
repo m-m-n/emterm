@@ -83,7 +83,17 @@ worker_runs:
   status: completed
   input_digest: sha256:5b75319e1e5a97269fdbd8fd7f76382c8eec9c67d0642bb7ff87aed01c4ce8bc
   output_digest: sha256:bc504cc65fbec59495dba9029ca2591a99383e132a6507c7438538e416d931ce
-artifacts: []
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:3cbaf93cb5847a156d0803ffad448428bdc275cc782f1c9b4422258f38489bdf
+  output_digest: sha256:7f4e1a7a7247240da30aced97e0951e9a295108ee075b7208223f2aacb38d346
+artifacts:
+- path: feature-docs/mux-snapshot-strip-can-abort/REQUIREMENTS.md
+  sha256: sha256:e700a35c277ec7c3b993641b3d3eaa0e87a711f8479a9124abd21a00c56670fc
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-snapshot-strip-can-abort/SPEC.md
+  sha256: sha256:eb437e3f9bc3e87c5249f2fdd161af4a589216a51493c77decbb2057e8217ba6
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
