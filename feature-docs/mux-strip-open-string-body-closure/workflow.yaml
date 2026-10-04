@@ -127,7 +127,7 @@ workflow:
   base_commit: 6b8c0f9fc5cf30e94b7b8d74b23abf2588e93fcb
   completed_at_commit: 46dfbd8187a902a3a91718768a00b62d6736cd94
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -170,8 +170,18 @@ tasks:
     status: merged
     branch: em-workflow/mux-strip-open-string-body-closure/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary:
+    - perspective: performance
+      reason: 'strip_pass / WrittenState はデーモン出力のバイト単位ホットパスで、NFR2（単一の線形走査）の維持を確認する'
+    cross_validation: true
   perspectives: []
   residual_critical_high: 0
   needs_rework: false
