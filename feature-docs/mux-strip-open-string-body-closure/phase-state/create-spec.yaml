@@ -1,0 +1,20 @@
+schema_version: 1
+feature: mux-strip-open-string-body-closure
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: f1608cad4c036d32d92b15100972af0956c73b0c
+last_input_digest: sha256:0e688da99fecf136f9309a0364f4517211329b3c9454e9544e468a59b90fb893
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:0e688da99fecf136f9309a0364f4517211329b3c9454e9544e468a59b90fb893
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
