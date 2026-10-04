@@ -908,6 +908,10 @@ mod tests {
 
     const CONCAT_LAUNCH: &[u8] = b"\x1b]777;emterm;markdown;begin;id=x\x07";
     const REATTACH_CLEAR: &[u8] = b"\x1b[3J\x1b[H\x1b[2J";
+    /// ESC then CAN: the string-body closure the strip writes at a construct
+    /// removed inside an open string body (written out so the test does not
+    /// borrow the strip's own constant).
+    const STRING_BODY_CLOSING_BYTES: &[u8] = &[0x1b, 0x18];
 
     /// A construct the strip removes inside an open CSI is replaced by one
     /// CSI_CLOSING, and the segment offsets follow it (D5): an offset at the
@@ -1014,6 +1018,87 @@ mod tests {
             ]
         );
         assert!(payload[mapped[4].0..].starts_with(b"[ctail"));
+    }
+
+    /// mux-strip-open-string-body-closure AC-5 (FR4): a construct the strip removes
+    /// inside an open OSC or DCS / APC body is replaced by the string-body
+    /// closure, the construct's re-emitted C0 bytes follow it, and the segment
+    /// offsets follow the same mapping as the strip's remap, shifted by the clear
+    /// prefix: offsets at 0 and inside the head are unchanged, the offset at the
+    /// construct's first byte maps before the closure, and an offset strictly
+    /// inside the construct, at its last byte or right after it maps after the
+    /// closure and the C0 bytes. The mapping is non-decreasing and within the
+    /// payload.
+    #[test]
+    fn build_snapshot_bytes_segments_follow_a_construct_removed_inside_an_open_body() {
+        use crate::mux::scrollback_filter::tests::CONCAT_TARGETS;
+
+        let start = std::time::Instant::now();
+        let heads: [&[u8]; 4] = [b"\x1b]0;t", b"\x1b]11;", b"\x1bPx", b"\x1b_Xnot-kitty"];
+        for head in heads {
+            for (name, construct, c0) in CONCAT_TARGETS {
+                let ctx = format!("{:?} + {name}", String::from_utf8_lossy(head));
+                let scrollback = [head, construct, b"tail"].concat();
+                let first = head.len();
+                let after = first + construct.len();
+                let segments = [
+                    (0usize, 80u16, 24u16),
+                    (first - 1, 81, 25),
+                    (first, 90, 25),
+                    (first + 1, 100, 26),
+                    (after - 1, 105, 27),
+                    (after, 110, 27),
+                    (after + 1, 120, 28),
+                    (scrollback.len(), 130, 29),
+                ];
+                let body = [head, STRING_BODY_CLOSING_BYTES, c0, b"tail"].concat();
+
+                let layouts: [(&str, Vec<u8>, (Vec<u8>, Vec<(usize, u16, u16)>)); 2] = [
+                    (
+                        "reattach",
+                        REATTACH_CLEAR.to_vec(),
+                        build_snapshot_bytes(&scrollback, &segments, b"", false, (80, 24)),
+                    ),
+                    (
+                        "resume",
+                        b"\x1b[H\x1b[2J".to_vec(),
+                        build_resume_snapshot_bytes(&scrollback, &segments, b"", false, (80, 24)),
+                    ),
+                ];
+                for (layout, clear, (payload, mapped)) in layouts {
+                    let ctx = format!("{ctx}, {layout}");
+                    assert!(
+                        payload[clear.len()..].starts_with(&body),
+                        "{ctx}: the construct is replaced by the closure and its C0 bytes: {:?}",
+                        String::from_utf8_lossy(&payload)
+                    );
+                    let before_closure = clear.len() + head.len();
+                    let past = before_closure + STRING_BODY_CLOSING_BYTES.len() + c0.len();
+                    let expected = vec![
+                        (0usize, 80u16, 24u16),
+                        (before_closure - 1, 81, 25),
+                        (before_closure, 90, 25),
+                        (past, 100, 26),
+                        (past, 105, 27),
+                        (past, 110, 27),
+                        (past + 1, 120, 28),
+                        (past + b"tail".len(), 130, 29),
+                    ];
+                    assert_eq!(mapped, expected, "{ctx}: the mapped segments");
+                    assert!(mapped.windows(2).all(|w| w[0].0 <= w[1].0), "{ctx}");
+                    assert!(
+                        mapped.iter().all(|&(off, _, _)| off <= payload.len()),
+                        "{ctx}"
+                    );
+                    assert!(payload[mapped[5].0..].starts_with(b"tail"), "{ctx}");
+                }
+            }
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "took {:?}",
+            start.elapsed()
+        );
     }
 
     /// D6: no closing is written at the snapshot end. A ring that genuinely ends
