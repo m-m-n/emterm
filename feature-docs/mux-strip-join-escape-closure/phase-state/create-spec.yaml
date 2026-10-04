@@ -1,0 +1,66 @@
+schema_version: 1
+feature: mux-strip-join-escape-closure
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 0c3a2c06deb717868a10473cd0a4e72d6b14d58d
+last_input_digest: sha256:17a8961baab4dbe2423a5741dd6dc1ff1a339026b73d6799ee3df64dd129ca99
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-04T02:20:22+09:00'
+    questions:
+    - question_id: requirement.string-body-join-scope
+      status: answered
+    - question_id: design-step
+      status: answered
+answers:
+  requirement.string-body-join-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T02:20:22+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - record_residual
+    freeform: null
+    normalized_answer: '保持した未終了の OSC/DCS/APC 本文の中で除去が起きたときの結合（例: ESC]11; + 除去対象 + ?BEL が OSC 11 色照会になる）は本 feature の範囲外とし、DECISIONS.md に残件として再現手順・影響（OSC 11 応答誘発が残る、主画面復帰 snapshot が末尾を追加しない場合のライブ継続）とともに記録する。本
+      feature は DoD-2 と シナリオ 3 のテスト、記録のみを追加し、既存の固定済み期待値は変えない。'
+    resolution_note: 'gate: create-spec.requirement-clarification (category security → batch relaxed route; policy codex_consultation, record_as_assumption); Codex (codex harness, 1 turn) consulted; Opus
+      escalation: not run; options: record_residual [chosen] / include_closure [not chosen]; key points: CSI/ESC 継ぎ目の DEL 閉鎖は既存(scrollback_filter.rs:315)。DoD-1 テストは既存(strip_concat_query.rs:258)。二段 strip
+      の応答 0 件検証は無く追加が要る(strip_concat_query.rs:408 は応答を検証しない)。保持した未終了文字列本文に閉鎖を書かない挙動は前任テストが固定(scrollback_filter/tests.rs:1917, strip_concat_query.rs:344)で、include_closure は状態管理と固定済み期待値の変更になる。OSC 11 残件はコードで裏付け(parser/osc.rs:51,
+      theme.rs:1485)、再生中の応答破棄は後続の通常出力による応答を防がない(csi_device.rs:72, output_pipeline.rs:186)。注意: DECISIONS.md に OSC/DCS/APC 本文結合を対象外として残件記録し、OSC 11 応答誘発が残ることを明記。主画面復帰 snapshot は履歴折り返し時に画面復元データを追加する(snapshot_bytes.rs:490)ため、再現条件は末尾追加の無い場合に限る'
+  design-step:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T02:20:22+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: design step は推奨どおり skip（UI に触れないバイト列フィルタのテストのみ）
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously (= analyst の推奨を受け入れる)。packet の options が skip/run で decide_autonomously を含まない(validate-worker-output.py
+      が gate_id エラーとして報告)ため、その意味どおり recommended の skip に写像した'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:84e926fd80af604fd6480deb65f9cfdaab6d703cdf34ae8bc013550f76b9cd18
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:7dd48f9f36ecd207c2ba93475bcd121edfe9c2d27d4226b252ef93e78dcf038e
+  output_digest: sha256:be2a3f8499c1db9b08feb2039088e06dd13059e6ee5fe2789783bc82e98b6053
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:17a8961baab4dbe2423a5741dd6dc1ff1a339026b73d6799ee3df64dd129ca99
+artifacts:
+- path: feature-docs/mux-strip-join-escape-closure/REQUIREMENTS.md
+  sha256: sha256:3cb39acf2d9448290fbac00a68f844b3d4447e6bff2b3b209f98b14980ab7a3e
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-strip-join-escape-closure/SPEC.md
+  sha256: sha256:8fba10448d15a866e243ab58c6796dc78ce07fc267d1388bb92ddf936fcaea55
+  produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
