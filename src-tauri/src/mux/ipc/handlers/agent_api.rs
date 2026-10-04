@@ -11,6 +11,7 @@ use tokio::sync::{Mutex, oneshot};
 
 use crate::agent_status::AgentState as CoreAgentState;
 use crate::mux::daemon::{from_wire_state, to_wire_state};
+use crate::mux::scrollback_filter::vt100_replay_copy;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatus, AgentWaitOutcome, AgentWaiter, MuxPane, PaneId, lock_shadow_parser,
@@ -114,7 +115,10 @@ fn render_scrollback_rows(scrollback_tail: &[u8], lines: u32, cols: u16) -> Vec<
         .min(u32::from(u16::MAX)) as u16;
     let cols = cols.max(1);
     let mut scratch = vt100::Parser::new(rows, cols, 0);
-    scratch.process(scrollback_tail);
+    // The ring keeps CSI_CLOSING (DEL) for `term_core`; vt100 ignores DEL and
+    // would take the next byte as the sequence's final byte, so it gets the
+    // DEL-to-CAN replay copy (mux-vt100-del-closing FR1, FR4).
+    scratch.process(&vt100_replay_copy(scrollback_tail));
     let screen = scratch.screen();
     let (cursor_row, _cursor_col) = screen.cursor_position();
     let mut rendered: Vec<String> = screen

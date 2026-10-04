@@ -2459,3 +2459,102 @@ fn strip_concat_the_state_form_replaces_the_completing_final_byte_of_a_carried_c
         );
     }
 }
+
+// ── vt100 replay copy (mux-vt100-del-closing task0001) ───────────────
+
+/// AC-4 (FR3, FR4, FR5): the replay copy replaces a DEL with CAN exactly when
+/// the written-stream scan is inside a CSI (entry or parameter) or right after
+/// an `ESC`, keeps every other byte, and keeps the length.
+#[test]
+fn vt100_replay_copy_replaces_del_by_the_scan_state_just_before_it() {
+    let cases: &[(&[u8], &[u8])] = &[
+        // Replaced: inside a CSI.
+        (b"\x1b[\x7f", b"\x1b[\x18"),
+        (b"\x1b[6\x7f", b"\x1b[6\x18"),
+        // Replaced: right after a lone ESC.
+        (b"\x1b\x7f", b"\x1b\x18"),
+        // Replaced: the DEL that closes an open CSI cut (D3 shape), text follows.
+        (b"\x1b[1;2\x7fHello", b"\x1b[1;2\x18Hello"),
+        // Replaced: an ESC inside a CSI moves the scan to the escape state.
+        (b"\x1b[1\x1b\x7fx", b"\x1b[1\x1b\x18x"),
+        // Replaced: another ESC restarts the escape, the DEL is right after it.
+        (b"\x1b\x1b\x7f", b"\x1b\x1b\x18"),
+        // Only the first DEL is replaced: after the replaced DEL the scan is
+        // in ground, so the second DEL is kept.
+        (b"\x1b[6\x7f\x7f", b"\x1b[6\x18\x7f"),
+        // Kept: ground.
+        (b"a\x7fb", b"a\x7fb"),
+        (b"\x7f", b"\x7f"),
+        // Kept: ground right after a completed CSI.
+        (b"\x1b[6n\x7f", b"\x1b[6n\x7f"),
+        // Kept: OSC body (ground for the scan).
+        (b"\x1b]0;a\x7fb\x07", b"\x1b]0;a\x7fb\x07"),
+        // Kept: DCS body, closed by ST.
+        (b"\x1bP1;2qa\x7fb\x1b\\", b"\x1bP1;2qa\x7fb\x1b\\"),
+        // Kept: APC body, closed by ST.
+        (b"\x1b_Ga\x7fb\x1b\\", b"\x1b_Ga\x7fb\x1b\\"),
+        // Kept: the charset designator is consumed whatever it is.
+        (b"\x1b(\x7f", b"\x1b(\x7f"),
+        (b"\x1b)\x7f", b"\x1b)\x7f"),
+        // Unchanged: no DEL, including a complete device query (the strip's
+        // D2 rewrite does not apply to the copy) and a raw CAN inside a CSI.
+        (b"\x1b[6n", b"\x1b[6n"),
+        (b"\x1b[1;2\x18m", b"\x1b[1;2\x18m"),
+        (b"plain text\r\n", b"plain text\r\n"),
+        // Empty.
+        (b"", b""),
+    ];
+    for (input, expected) in cases {
+        let out = vt100_replay_copy(input);
+        assert_eq!(
+            out.len(),
+            input.len(),
+            "length must be kept for {:?}",
+            String::from_utf8_lossy(input)
+        );
+        assert_eq!(
+            out,
+            *expected,
+            "replay copy of {:?}",
+            String::from_utf8_lossy(input)
+        );
+    }
+}
+
+/// AC-4: the copy is a new vector and does not modify the input.
+#[test]
+fn vt100_replay_copy_leaves_the_input_unmodified() {
+    let input = b"\x1b[6\x7fHello".to_vec();
+    let before = input.clone();
+    let out = vt100_replay_copy(&input);
+    assert_eq!(input, before, "the input slice must not be modified");
+    assert_ne!(out, input, "the copy differs from the input at the DEL");
+}
+
+/// AC-6 (TM-1, FR3, NFR2): every prefix, then every byte value, then DEL: the
+/// replay copy returns without panicking, keeps the length, and differs from
+/// the input only by CAN at a DEL position.
+#[test]
+fn vt100_replay_copy_is_total_and_changes_only_del_into_can() {
+    let prefixes: [&[u8]; 6] = [b"", b"\x1b", b"\x1b[", b"\x1b[6", b"\x1b(", b"\x1b]0;"];
+    for prefix in prefixes {
+        for byte in 0u8..=0xff {
+            let mut input = prefix.to_vec();
+            input.push(byte);
+            input.push(CSI_CLOSING_BYTE);
+            let out = vt100_replay_copy(&input);
+            assert_eq!(
+                out.len(),
+                input.len(),
+                "length must be kept for prefix {prefix:?} byte {byte:#04x}"
+            );
+            for (i, (&o, &b)) in out.iter().zip(input.iter()).enumerate() {
+                assert!(
+                    o == b || (b == CSI_CLOSING_BYTE && o == 0x18),
+                    "prefix {prefix:?} byte {byte:#04x}: output byte {i} is {o:#04x}, \
+                     input byte is {b:#04x}"
+                );
+            }
+        }
+    }
+}
