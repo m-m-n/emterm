@@ -1642,32 +1642,55 @@ fn post_strip_state_form_reports_the_csi_state_of_the_written_bytes() {
         (StBody, false, b"\x1b", b"\x1b", Escape, true),
         (StBody, false, b"\x1b\\", b"\x1b\\", Ground, true),
         (StBody, false, b"\x1b[", b"\x1b[", csi(Entry), true),
-        // The C0 bytes re-emitted from a removed query execute in a body: a
-        // re-emitted BEL ends an OSC body and is data in a DCS / APC body
-        // (the strip's removal and output do not read the state).
-        (OscBody, false, b"\x1b[6\x07n", b"\x07", Ground, true),
-        (OscBody, false, b"\x1b[6\rn", b"\r", OscBody, true),
-        (StBody, false, b"\x1b[6\x07n", b"\x07", StBody, true),
+        // A construct removed inside an open body writes the string-body
+        // closure, ESC then CAN, first (mux-strip-open-string-body-closure FR1,
+        // D1), so the C0 bytes re-emitted from a removed query execute in
+        // ground: a re-emitted BEL no longer ends an OSC body or joins a DCS /
+        // APC body, and the reported state is Ground.
+        (
+            OscBody,
+            false,
+            b"\x1b[6\x07n",
+            b"\x1b\x18\x07",
+            Ground,
+            true,
+        ),
+        (OscBody, false, b"\x1b[6\rn", b"\x1b\x18\r", Ground, true),
+        (StBody, false, b"\x1b[6\x07n", b"\x1b\x18\x07", Ground, true),
         (
             Ground,
             false,
             b"\x1b]0;t\x1b[6\x07n",
-            b"\x1b]0;t\x07",
+            b"\x1b]0;t\x1b\x18\x07",
             Ground,
             true,
         ),
-        // A removed construct leaves an open body as it was: its `ESC` is not
-        // written.
+        // A removed construct closes an open body: its `ESC` is not written,
+        // the closure is, and the state is Ground.
         (
             Ground,
             false,
             b"\x1b]0;t\x1b[6n",
-            b"\x1b]0;t",
-            OscBody,
+            b"\x1b]0;t\x1b\x18",
+            Ground,
             true,
         ),
-        (Ground, false, b"\x1bPx\x1b[6n", b"\x1bPx", StBody, true),
-        (Ground, false, b"\x1bPx\x1b[6nab", b"\x1bPxab", StBody, true),
+        (
+            Ground,
+            false,
+            b"\x1bPx\x1b[6n",
+            b"\x1bPx\x1b\x18",
+            Ground,
+            true,
+        ),
+        (
+            Ground,
+            false,
+            b"\x1bPx\x1b[6nab",
+            b"\x1bPx\x1b\x18ab",
+            Ground,
+            true,
+        ),
         // The designator flag with a carried body is not allowed (a designator
         // is awaited only from Designator or Ground), so it is not tabled.
     ];
@@ -1714,15 +1737,18 @@ fn post_strip_state_form_reports_the_csi_state_of_the_written_bytes() {
         // start is still removed (the carried state never decides a removal)
         // and the state stays Designator.
         assert_state_row(Designator, false, construct, b"", Designator, true);
-        // From a carried open body the construct is removed whole and the body
-        // stays open: the removed `ESC` neither ends the string nor aborts it.
-        assert_state_row(OscBody, false, construct, b"", OscBody, true);
-        assert_state_row(StBody, false, construct, b"", StBody, true);
+        // From a carried open body the construct is removed whole and the pass
+        // writes the string-body closure in its place: the body is closed and
+        // the state is Ground (mux-strip-open-string-body-closure FR1).
+        assert_state_row(OscBody, false, construct, STRING_BODY_CLOSING, Ground, true);
+        assert_state_row(StBody, false, construct, STRING_BODY_CLOSING, Ground, true);
         // The same for a body the pass itself writes open before the construct.
         let open_osc = [b"\x1b]0;t".as_slice(), construct].concat();
-        assert_state_row(Ground, false, &open_osc, b"\x1b]0;t", OscBody, true);
+        let closed_osc = [b"\x1b]0;t".as_slice(), STRING_BODY_CLOSING].concat();
+        assert_state_row(Ground, false, &open_osc, &closed_osc, Ground, true);
         let open_dcs = [b"\x1bPx".as_slice(), construct].concat();
-        assert_state_row(Ground, false, &open_dcs, b"\x1bPx", StBody, true);
+        let closed_dcs = [b"\x1bPx".as_slice(), STRING_BODY_CLOSING].concat();
+        assert_state_row(Ground, false, &open_dcs, &closed_dcs, Ground, true);
         // With the flag set, byte 0 is the designator and is copied whatever it
         // is; the rest of the construct is then plain text.
         let (out, _) =
@@ -1854,8 +1880,11 @@ fn post_strip_identity_corpus() -> Vec<Vec<u8>> {
 /// `strip_concat_the_state_form_from_a_carried_head_equals_the_ground_started_strip`);
 /// for an `ESC`, input that starts with `ESC`; for a designator wait with the
 /// flag clear, input that does not start with `ESC`. From a carried string body
-/// neither closing is written, so the output equals the designator form's
-/// (mux-write-filter-overflow-open-string-cut). With the flag set and Ground
+/// a removal writes STRING_BODY_CLOSING, so the identity is the same one: the
+/// ground-started strip of the bytes entering the body (`ESC ]0;` for the OSC
+/// body, `ESC _x` for the ST-terminated body) and the input, minus those bytes
+/// (mux-strip-open-string-body-closure FR8 item 6; the entering bytes never
+/// form or complete a strip target with any input). With the flag set and Ground
 /// carried, the identity with the designator form holds for input that does not
 /// start with `ESC`. The existing forms keep their signatures.
 #[test]
@@ -1891,7 +1920,7 @@ fn post_strip_state_form_output_equals_the_write_path_strip() {
             if head_combines {
                 continue;
             }
-            if !designator && !matches!(state_in, Ground | OscBody | StBody) {
+            if !designator && state_in != Ground {
                 let head = bytes_entering_state(state_in);
                 let ground = strip_pty_output_for_scrollback_write(&[head, input].concat());
                 let rest = ground
@@ -2017,7 +2046,7 @@ fn assert_concat_replay(ring: &[u8], raw_before: &[u8], after: &[u8], ctx: &str)
 
 /// Every removed construct kind: name, bytes, and the C0 bytes the strip
 /// re-emits from it.
-const CONCAT_TARGETS: &[(&str, &[u8], &[u8])] = &[
+pub(in crate::mux) const CONCAT_TARGETS: &[(&str, &[u8], &[u8])] = &[
     (
         "osc 777 launch (BEL)",
         b"\x1b]777;emterm;markdown;begin;id=x\x07",
@@ -2171,9 +2200,10 @@ fn strip_concat_several_constructs_in_one_open_csi_write_one_closing() {
     assert_every_entry_point(input, &expected, "two queries with C0 bytes");
 }
 
-/// FR1: a construct removed in ground, after a completed CSI or after a kept
-/// string adds no byte (a construct removed inside a kept string body adds none
-/// either: its opening ESC leaves the written state in ground).
+/// FR1: a construct removed in ground, after a completed CSI or after a
+/// completed string adds no byte. (A construct removed inside an open string body
+/// writes the string-body closure: see
+/// `open_body_closure_every_entry_point_closes_an_open_body_at_every_removed_construct`.)
 #[test]
 fn strip_concat_a_construct_removed_in_ground_adds_no_closing() {
     for ground in [
@@ -2183,7 +2213,6 @@ fn strip_concat_a_construct_removed_in_ground_adds_no_closing() {
         b"\x1b]0;t\x07",
         b"\x1b]0;t\x1b\\",
         b"\x1b(B",
-        b"\x1b]0;t",
     ] {
         for (name, target, c0) in CONCAT_TARGETS {
             let ctx = format!("{:?} + {name}", String::from_utf8_lossy(ground));
@@ -2462,6 +2491,275 @@ fn strip_concat_the_state_form_replaces_the_completing_final_byte_of_a_carried_c
             "{ctx}: no CSI is open after the final byte"
         );
     }
+}
+
+// ── mux-strip-open-string-body-closure task0001 (FR1, FR3, FR4, NFR2, NFR3) ──
+//
+// A construct the shared strip removes together with its opening `ESC` while the
+// written stream is inside an open OSC body or an open DCS / APC body writes the
+// string-body closure, ESC then CAN, first (D1): the bytes written after the
+// removal can never join the body. The oracle is term_core fed the raw stream
+// with the removed construct's own effect excluded (SPEC A3).
+
+/// The per-test time budget.
+const OPEN_BODY_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The open string bodies of the plan: an OSC title, an OSC color head, a DCS
+/// and a non-Kitty APC. Their abort answers nothing, and none of them is a strip
+/// target.
+const OPEN_BODY_HEADS: &[&[u8]] = &[b"\x1b]0;t", b"\x1b]11;", b"\x1bPx", b"\x1b_Xnot-kitty"];
+
+/// What follows the removed construct: a byte that would complete a query, a
+/// `?` and BEL that would complete a color query with an OSC color head, text,
+/// and ST.
+const OPEN_BODY_CONTINUATIONS: &[&[u8]] = &[b"n", b"?\x07", b"text", b"\x1b\\"];
+
+/// AC-1 (FR1, FR3, NFR3, TM-1, TS-3): an open body head, a removed construct of
+/// every kind and a continuation, as one cut-free input to every strip entry
+/// point. In every output exactly one string-body closure sits at the
+/// construct's position, before any re-emitted C0 byte; the written-state form
+/// reports Ground, and the term_core end-state oracle observes Ground for the
+/// output; replaying the output gives no response and the rows and cursor of the
+/// raw stream with the construct's own effect excluded; no output is longer than
+/// its input (TM-3). All entry points are byte-identical (FR3).
+#[test]
+fn open_body_closure_every_entry_point_closes_an_open_body_at_every_removed_construct() {
+    let start = std::time::Instant::now();
+    for head in OPEN_BODY_HEADS {
+        for (name, target, c0) in CONCAT_TARGETS {
+            for cont in OPEN_BODY_CONTINUATIONS {
+                let ctx = format!(
+                    "{:?} + {name} + {:?}",
+                    String::from_utf8_lossy(head),
+                    String::from_utf8_lossy(cont)
+                );
+                let input = [*head, *target, *cont].concat();
+                let expected = [*head, STRING_BODY_CLOSING, *c0, *cont].concat();
+                assert_every_entry_point(&input, &expected, &ctx);
+                assert_eq!(
+                    expected
+                        .windows(STRING_BODY_CLOSING.len())
+                        .filter(|w| *w == STRING_BODY_CLOSING)
+                        .count(),
+                    1,
+                    "{ctx}: exactly one closure"
+                );
+                for (entry, out) in every_entry_point(&input) {
+                    assert!(
+                        out.len() <= input.len(),
+                        "{ctx}: {entry} grew the input from {} to {}",
+                        input.len(),
+                        out.len()
+                    );
+                }
+                let (_, state) = strip_pty_output_for_scrollback_write_with_written_state(
+                    &input,
+                    false,
+                    WrittenState::Ground,
+                );
+                assert_eq!(state, WrittenState::Ground, "{ctx}: the reported state");
+                assert_eq!(
+                    client_written_state(&expected),
+                    WrittenState::Ground,
+                    "{ctx}: the end-state oracle"
+                );
+                assert_concat_replay(&expected, &[*head, *target].concat(), cont, &ctx);
+            }
+        }
+    }
+    assert!(
+        start.elapsed() < OPEN_BODY_BUDGET,
+        "took {:?}",
+        start.elapsed()
+    );
+}
+
+/// AC-1 (FR1, TM-1, TS-4): all eight constructs concatenated inside one body
+/// write one closure, and the C0 bytes the removed queries re-emit follow it in
+/// order. The same from a carried-in body (AC-2 a).
+#[test]
+fn open_body_closure_several_constructs_in_one_body_write_one_closure() {
+    let start = std::time::Instant::now();
+    let all: Vec<u8> = CONCAT_TARGETS
+        .iter()
+        .flat_map(|(_, bytes, _)| bytes.to_vec())
+        .collect();
+    let c0: Vec<u8> = CONCAT_TARGETS
+        .iter()
+        .flat_map(|(_, _, c0)| c0.to_vec())
+        .collect();
+    for head in OPEN_BODY_HEADS {
+        for cont in OPEN_BODY_CONTINUATIONS {
+            let ctx = format!(
+                "{:?} + all + {:?}",
+                String::from_utf8_lossy(head),
+                String::from_utf8_lossy(cont)
+            );
+            let input = [*head, &all[..], *cont].concat();
+            let expected = [*head, STRING_BODY_CLOSING, &c0[..], *cont].concat();
+            assert_every_entry_point(&input, &expected, &ctx);
+            assert_concat_replay(&expected, &[*head, &all[..]].concat(), cont, &ctx);
+        }
+    }
+    for state_in in [WrittenState::OscBody, WrittenState::StBody] {
+        for cont in OPEN_BODY_CONTINUATIONS {
+            let input = [&all[..], *cont].concat();
+            let expected = [STRING_BODY_CLOSING, &c0[..], *cont].concat();
+            assert_state_row(
+                state_in,
+                false,
+                &input,
+                &expected,
+                WrittenState::Ground,
+                true,
+            );
+        }
+    }
+    assert!(
+        start.elapsed() < OPEN_BODY_BUDGET,
+        "took {:?}",
+        start.elapsed()
+    );
+}
+
+/// AC-2 (a) (FR1, FR3, NFR3, TM-1, TS-5): the written-state form started in the
+/// open OSC body and in the open ST-terminated body, given each construct and
+/// each continuation, writes the closure, the construct's C0 bytes and the
+/// continuation, and reports Ground; the end-state oracle agrees on the bytes
+/// that enter the state followed by the output (`assert_state_row` checks it).
+#[test]
+fn open_body_closure_a_carried_open_body_is_closed_at_every_removed_construct() {
+    let start = std::time::Instant::now();
+    for state_in in [WrittenState::OscBody, WrittenState::StBody] {
+        for (_, target, c0) in CONCAT_TARGETS {
+            for cont in OPEN_BODY_CONTINUATIONS {
+                let input = [*target, *cont].concat();
+                let expected = [STRING_BODY_CLOSING, *c0, *cont].concat();
+                assert_state_row(
+                    state_in,
+                    false,
+                    &input,
+                    &expected,
+                    WrittenState::Ground,
+                    true,
+                );
+            }
+        }
+    }
+    assert!(
+        start.elapsed() < OPEN_BODY_BUDGET,
+        "took {:?}",
+        start.elapsed()
+    );
+}
+
+/// AC-5 (FR4, TS-7): watch offsets around a construct removed inside an open
+/// body. Offsets at 0 and inside the head are unchanged; the offset at the
+/// construct's first byte maps before the closure, to the head's length; an
+/// offset strictly inside the construct, at its last byte and right after it
+/// maps past the closure and the re-emitted C0 bytes; the offsets after that
+/// shift by the same difference. The remapped offsets are non-decreasing and
+/// within the output, and the designator form agrees.
+#[test]
+fn open_body_closure_remap_offsets_around_a_construct_removed_inside_an_open_body() {
+    let start = std::time::Instant::now();
+    for head in OPEN_BODY_HEADS {
+        for (name, target, c0) in CONCAT_TARGETS {
+            let ctx = format!("{:?} + {name}", String::from_utf8_lossy(head));
+            let input = [*head, *target, b"xyz"].concat();
+            let first = head.len();
+            let after = first + target.len();
+            let mut watch = vec![0, 1, first - 1, first, first + 1];
+            watch.push(first + target.len() / 2);
+            watch.push(after - 1);
+            watch.push(after);
+            watch.push(after + 1);
+            watch.push(input.len());
+            watch.push(input.len() + 10);
+            watch.sort_unstable();
+            watch.dedup();
+
+            let expected = [*head, STRING_BODY_CLOSING, *c0, b"xyz"].concat();
+            let (out, remapped) = strip_rich_content_and_remap(&input, &watch);
+            assert!(
+                out == expected,
+                "{ctx}: {:?}",
+                String::from_utf8_lossy(&out)
+            );
+            let (out_designator, remapped_designator) =
+                strip_rich_content_and_remap_with_designator(&input, &watch, false);
+            assert!(out_designator == expected, "{ctx}: the designator form");
+            assert_eq!(remapped_designator, remapped, "{ctx}: the designator form");
+
+            assert_eq!(remapped.len(), watch.len(), "{ctx}");
+            assert!(
+                remapped.windows(2).all(|w| w[0] <= w[1]),
+                "{ctx}: non-decreasing: {remapped:?}"
+            );
+            assert!(
+                remapped.iter().all(|&o| o <= out.len()),
+                "{ctx}: within the output: {remapped:?} of {}",
+                out.len()
+            );
+            let at = |offset: usize| remapped[watch.iter().position(|&w| w == offset).unwrap()];
+            // At 0 and inside the head: one to one.
+            assert_eq!(at(0), 0, "{ctx}: start");
+            assert_eq!(at(1), 1, "{ctx}: inside the head");
+            assert_eq!(at(first - 1), first - 1, "{ctx}: the head's last byte");
+            // The construct's first byte maps before the closure.
+            assert_eq!(at(first), first, "{ctx}: first byte");
+            // Strictly inside, the last byte and right after: after the closure
+            // and the C0 bytes the strip re-emits.
+            let past = first + STRING_BODY_CLOSING.len() + c0.len();
+            assert_eq!(at(first + 1), past, "{ctx}: inside");
+            assert_eq!(at(first + target.len() / 2), past, "{ctx}: inside, middle");
+            assert_eq!(at(after - 1), past, "{ctx}: inside, last byte");
+            assert_eq!(at(after), past, "{ctx}: right after");
+            // The bytes after the construct are one to one, shifted by the
+            // difference.
+            assert_eq!(at(after + 1), past + 1, "{ctx}: after + 1");
+            assert_eq!(at(input.len()), out.len(), "{ctx}: end");
+            assert_eq!(at(input.len() + 10), out.len(), "{ctx}: past the end");
+        }
+    }
+    assert!(
+        start.elapsed() < OPEN_BODY_BUDGET,
+        "took {:?}",
+        start.elapsed()
+    );
+}
+
+/// AC-10 (NFR2, NFR3, TM-3): 100,000 repetitions of an open OSC title and a
+/// removed BEL-terminated launch through the written-state form: one pass, the
+/// output is 100,000 repetitions of the title and one closure, the state is
+/// Ground, and it finishes within the bound of the existing state-form
+/// linear-pass test.
+#[test]
+fn open_body_closure_the_state_form_is_one_linear_pass() {
+    let test_start = std::time::Instant::now();
+    let unit = [b"\x1b]0;t".as_slice(), POST_STRIP_LAUNCH].concat();
+    let input: Vec<u8> = std::iter::repeat_n(unit, 100_000).flatten().collect();
+    let start = std::time::Instant::now();
+    let (out, state) = strip_pty_output_for_scrollback_write_with_written_state(
+        &input,
+        false,
+        WrittenState::Ground,
+    );
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(5),
+        "took {:?}",
+        start.elapsed()
+    );
+    assert!(
+        out == b"\x1b]0;t\x1b\x18".repeat(100_000),
+        "100,000 repetitions of the title and one closure"
+    );
+    assert_eq!(state, WrittenState::Ground);
+    assert!(
+        test_start.elapsed() < OPEN_BODY_BUDGET,
+        "took {:?}",
+        test_start.elapsed()
+    );
 }
 
 // ── vt100 replay copy (mux-vt100-del-closing task0001) ───────────────

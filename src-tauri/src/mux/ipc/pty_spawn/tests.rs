@@ -8875,3 +8875,8 @@ mod strip_join_escape_closure;
 // mux-snapshot-strip-can-abort task0001 (AC-2, AC-9): the write filter to snapshot
 // round trip of an open Kitty APC / SIXEL DCS body closed at a cut, and the comment text.
 mod snapshot_strip_can_abort;
+
+// mux-strip-open-string-body-closure task0001 (FR1-FR10): a construct removed inside an
+// open OSC / DCS / APC body writes the string-body closure (write filter, snapshot
+// replay, live continuation, cuts and doc contracts).
+mod strip_open_string_body_closure;

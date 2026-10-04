@@ -1,0 +1,166 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib` finished with 4245 passed, 2 failed, 3 ignored.
+# Both failures are inherited and not touched by this task: a per-test 10 s budget exceeded in
+# the unoptimized parallel run (strip_concat_query, 10.54 s) and a PTY test of the session layer
+# (from_restored_pane_can_write_and_read_through_its_adopted_master).
+baseline_failures:
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# Re-executed after the implementation (the final tree of this task, DECISIONS.md and the updated
+# predecessor record in place): `cargo test --lib` finished with 4273 passed, 1 failed, 3 ignored
+# (the baseline's 4247 tests plus the 27 tests this task adds, which all pass). The 1 failure is the
+# baseline's budget test again (10.65 s in the parallel run; it passes alone in 3.7 s). The
+# baseline's PTY test passed in this run. `cargo check` and `cargo check --no-default-features`
+# finished with no error and no warning. The renamed test and all 39 names of the predecessor
+# record resolve in `cargo test --lib -- --list`. `git diff` shows nothing under
+# `crates/term_core`.
+final_failures:
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# Reds: observed on the code before the production change (the closure at a removal and the move
+# of STRING_BODY_CLOSING into scrollback_filter.rs). Tests that held before the change by design
+# are named in the red_reason of their criterion and are not part of the red evidence.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::scrollback_filter::tests::open_body_closure_every_entry_point_closes_an_open_body_at_every_removed_construct
+      - mux::scrollback_filter::tests::open_body_closure_several_constructs_in_one_body_write_one_closure
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: the first test failed with `"ESC]0;t" + osc 777
+      launch (BEL) + "n": strip_replayable_rich_content wrote "ESC]0;tn", expected
+      "ESC]0;t ESC CAN n"`; the second failed with `"ESC]0;t" + all + "n":
+      strip_replayable_rich_content wrote "ESC]0;t CR n", expected "ESC]0;t ESC CAN CR n"`.
+  AC-2:
+    tests:
+      - mux::scrollback_filter::tests::open_body_closure_a_carried_open_body_is_closed_at_every_removed_construct
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_an_osc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_held_lone_esc_joins_the_next_construct_and_the_body_is_closed
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_split_read_writes_the_same_bytes_as_one_call
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_split_csi_query_after_a_body_head_replays_like_the_raw_stream
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_no_split_position_lets_a_color_query_join_a_color_head
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change, all seven failed. (a) the written-state form from
+      OscBody wrote [110] (`n`), expected [27, 24, 110]. (b) the next call after the overflow
+      flush wrote `?BEL plain text`, expected `ESC CAN ?BEL plain text` (the OSC body and the
+      DCS / APC bodies). (c) the call after the held lone ESC wrote `?BEL plain text`, expected
+      `ESC CAN ?BEL plain text`. (d) the one-call write of `ESC]0;t` + a held construct + `?BEL`
+      was `ESC]0;t?BEL`, without the closure the test expects; the split CSI queries replayed
+      with empty rows where the raw stream shows `?` (the tail was absorbed into the open body);
+      the themed client answered the split `ESC]11;` + launch + `?BEL` with an OSC 11 color
+      report (ring `ESC]11;?BEL`).
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_the_ring_of_a_color_head_and_a_removed_construct_is_closed_and_kept
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_snapshot_replay_of_a_removal_in_a_color_body_answers_nothing
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_snapshot_replay_of_a_removal_in_a_dcs_or_apc_body_matches_the_raw_stream
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: the ring test failed with `"ESC]11;" + osc 777
+      launch (BEL): the ring holds "ESC]11;?BEL", expected "ESC]11;ESC CAN ?BEL"`; the color
+      replay test failed with `"ESC]11;" + osc 777 launch (BEL): replaying the snapshot answers
+      [27, 93, 49, 49, 59, 114, 103, 98, 58, ...]` (the OSC 11 color report); the DCS / APC
+      replay test failed on the written state (`ESC Px` + launch: StBody, Ground expected). The
+      control `open_body_closure_control_the_themed_client_answers_the_closure_less_join_and_every_color_head`
+      passed before and after the change, as designed: it shows that the themed client answers
+      the closure-less join `ESC]11;?BEL` and each color head + `?BEL`, so the empty response
+      assertions above can fail.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_live_question_mark_after_a_ring_ending_in_a_removal_answers_nothing
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: failed at its precondition on the written state,
+      `"ESC]11;" + osc 777 launch (BEL)`, left OscBody, right Ground (the ring ended inside the
+      open OSC body, so the live `?BEL` that follows would complete it). The control
+      `open_body_closure_control_the_live_question_mark_is_answered_after_a_bare_color_head`
+      passed before and after the change, as designed: with a ring of the head alone the same
+      path answers the live `?BEL`.
+  AC-5:
+    tests:
+      - mux::scrollback_filter::tests::open_body_closure_remap_offsets_around_a_construct_removed_inside_an_open_body
+      - mux::snapshot_bytes::tests::build_snapshot_bytes_segments_follow_a_construct_removed_inside_an_open_body
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: the remap test failed with `"ESC]0;t" + osc 777
+      launch (BEL): "ESC]0;txyz"` (no closure in the output); the segment test failed with
+      `"ESC]0;t" + osc 777 launch (BEL), reattach: the construct is replaced by the closure and
+      its C0 bytes: "ESC[3J ESC[H ESC[2J ESC]0;ttail ESC[?1049l"`.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_cut_after_the_strips_closure_writes_nothing_more
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_neither_strip_reads_the_written_closure_as_a_target_or_as_st
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_the_vt100_replay_copy_keeps_the_closure
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change, two of the three failed: the cut test failed with
+      `"ESC]0;t" + osc 777 launch (BEL): cut-free wrote "ESC]0;t"` (no closure to follow with a
+      cut), and the vt100 replay copy test failed at its ring precondition (`"ESC]0;t" + osc 777
+      launch (BEL)`, left OscBody, right Ground). The test
+      `open_body_closure_neither_strip_reads_the_written_closure_as_a_target_or_as_st` passed
+      before the change: its input already holds the closure bytes, which the strip never read
+      as a target start or ST (the predecessor's cut closure is the same two bytes), so no red
+      state exists for that check.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_string_body_closing_is_defined_once_in_the_shared_strip
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_the_write_filter_constant_is_the_shared_one
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_the_shared_strip_does_not_depend_on_the_ipc_layer
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_the_doc_comments_state_the_closure_at_a_removal
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_the_doc_comments_state_the_open_body_model
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: the definition test failed with `exactly one
+      definition of the closure constant` (left 2, right 1: the write filter's definition and a
+      temporary stand-in in the test module, none in scrollback_filter.rs); the shared-constant
+      test did not compile (`error[E0425]: cannot find value STRING_BODY_CLOSING in module
+      crate::mux::scrollback_filter`); the doc-comment test failed with `scrollback_filter.rs: a
+      comment still says "In ground, or after a complete string, nothing is written"`. The test
+      `open_body_closure_the_shared_strip_does_not_depend_on_the_ipc_layer` held before the
+      change, as it guards a property the shared module already had (the new definition must
+      not break it), and `overflow_open_string_cut_the_doc_comments_state_the_open_body_model`
+      is the predecessor's contract test, unchanged and passing before and after.
+  AC-8:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_a_non_overflow_strip_closes_the_osc_body_at_the_removal_and_the_cut_adds_nothing
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_the_predecessor_record_lists_the_renamed_test_with_a_supersede_note
+      - mux::scrollback_filter::tests::strip_concat_a_construct_removed_in_ground_adds_no_closing
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_a_construct_removed_in_ground_or_a_kept_string_adds_no_closing
+      - mux::scrollback_filter::tests::post_strip_state_form_reports_the_csi_state_of_the_written_bytes
+      - mux::scrollback_filter::tests::post_strip_state_form_output_equals_the_write_path_strip
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change, three of the six failed: the renamed test failed
+      with `the query is removed and the strip writes ESC and CAN in its place` (left
+      [27, 93, 48, 59, 120], right [27, 93, 48, 59, 120, 27, 24]); the state-form rows test
+      failed with `state OscBody, designator false, input "ESC[6 BEL n": written bytes left [7],
+      right [27, 24, 7]`; the predecessor record test failed with `the old name is still
+      listed` (observed by temporarily restoring the record from HEAD, then putting the updated
+      record back). The other three keep their names and hold before and after the change:
+      `strip_concat_a_construct_removed_in_ground_adds_no_closing` and
+      `strip_concat_a_construct_removed_in_ground_or_a_kept_string_adds_no_closing` lost only
+      their open-body rows (now in the AC-1 tests above), and
+      `post_strip_state_form_output_equals_the_write_path_strip` asserts an identity between two
+      strips of the same input that holds both before and after the change, so no red state
+      exists for those three.
+  AC-9:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_the_decision_record_states_the_four_things
+    red_confirmed: true
+    red_reason: >-
+      Observed before DECISIONS.md existed: failed with `reading ".../feature-docs/mux-strip-open-string-body-closure/DECISIONS.md":
+      No such file or directory (os error 2)`.
+  AC-10:
+    tests:
+      - mux::scrollback_filter::tests::open_body_closure_the_state_form_is_one_linear_pass
+      - mux::scrollback_filter::tests::open_body_closure_every_entry_point_closes_an_open_body_at_every_removed_construct
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: the linear-pass test failed with `100,000
+      repetitions of the title and one closure` (the output held no closure), and the AC-1 test
+      failed as quoted above (it also asserts that no output is longer than its input). The
+      remaining parts of this criterion have no check that can be made to fail first: the
+      `--lib` suite and the `--no-default-features` check pass on the code before the change,
+      and `crates/term_core` is unchanged by construction (`git diff` is empty there). Every new
+      test also asserts the 10 s budget.
