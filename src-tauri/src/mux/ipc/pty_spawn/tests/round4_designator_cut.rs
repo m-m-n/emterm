@@ -239,14 +239,23 @@ fn round4_cut_in_the_same_call_after_a_waiting_esc_brace_writes_one_esc() {
 
         // An `ESC` that aborts an open string opens the designation: the run
         // still ends waiting, so the closing ESC is written. The string
-        // closed by `ESC \` before it is complete and kept.
-        for before in [&b"\x1b]0;x"[..], &b"\x1bPq1"[..], &b"\x1b]0;x\x1b\\"[..]] {
+        // closed by `ESC \` before it is complete and kept. The aborted DCS
+        // `ESC P q 1` is a SIXEL: the strip ends its body at the aborting `ESC`
+        // and removes it up to that `ESC` (mux-snapshot-strip-can-abort FR3),
+        // while the aborted non-SIXEL DCS `ESC P x 1` is kept.
+        let cases: [(&[u8], &[u8]); 4] = [
+            (b"\x1b]0;x", b"\x1b]0;x"),
+            (b"\x1bPq1", b""),
+            (b"\x1bPx1", b"\x1bPx1"),
+            (b"\x1b]0;x\x1b\\", b"\x1b]0;x\x1b\\"),
+        ];
+        for (before, written_before) in cases {
             let run = [before, &[ESC, brace]].concat();
             let mut i = ScrollbackWriteFilter::new();
             let outcome = cut_feed(&mut i, &run, &[run.len()]);
             assert_eq!(
                 outcome.bytes,
-                [run.clone(), vec![ESC]].concat(),
+                [written_before, &[ESC, brace, ESC]].concat(),
                 "{:?}",
                 String::from_utf8_lossy(&run)
             );

@@ -5,6 +5,13 @@
 //! session layer (`mux::session::pane`) does not have to reach into the IPC
 //! layer (`mux::ipc::reattach`) for it; both depend on this shared module
 //! instead.
+//!
+//! The strip ends the body of a Kitty APC / SIXEL DCS at the first `ESC` in it:
+//! `ESC \` completes the body, and `ESC` followed by any other byte (CAN
+//! included) aborts it. An aborted body is removed up to, not including, the
+//! aborting `ESC`, and the pass resumes at that `ESC`, so the bytes written after
+//! an aborted body are judged by the ordinary rules and reach the replay (see
+//! [`strip_replayable_rich_content`]).
 
 use crate::mux::osc_identify::{OscIdentity, osc_body_identity};
 
@@ -421,9 +428,19 @@ pub(in crate::mux) fn vt100_replay_copy(bytes: &[u8]) -> Vec<u8> {
 ///   (`mux::scrollback_buffer::ScrollbackRingBuffer::read_segments` /
 ///   `mux_ipc::protocol::DimSegment`), never as an OSC 777 body in the byte
 ///   stream — see [`strip_pty_output_for_scrollback_write`]'s doc comment.
-/// - Kitty graphics APC: `ESC _ G … ESC \`
+/// - Kitty graphics APC: `ESC _ G … ESC \`. The body ends at the first `ESC` in
+///   it ([`scan_body_end`]): `ESC \` completes it and the whole APC is removed;
+///   `ESC` followed by any other byte (CAN included) aborts it, and the body is
+///   removed from its introducer up to, not including, the aborting `ESC`. The
+///   pass resumes AT the aborting `ESC`, which is judged by the rules below like
+///   any other `ESC` (it may be a kept escape, a kept OSC or a removal target of
+///   its own). Any other APC (`ESC _` not followed by `G`) is KEPT.
 /// - SIXEL DCS: `ESC P <params> q …  ESC \` (only DCS whose final byte is
-///   `q`; a DCS whose *data* merely contains `q`, e.g. DECRQSS, is KEPT).
+///   `q`; a DCS whose *data* merely contains `q`, e.g. DECRQSS, is KEPT). The body
+///   ends at its first `ESC` as for a Kitty APC: a complete SIXEL body is removed
+///   whole, and an aborted one is removed up to the aborting `ESC` when the bytes
+///   between `ESC P` and that `ESC` are SIXEL by the same final-byte rule
+///   (otherwise the DCS is KEPT).
 /// - emterm Markdown OSC 9999: `ESC ] 9999 ; emterm-md ; …` (BEL or ST
 ///   terminated; recovered the same way). `ESC ] 9999 ; emterm-mux ; …`
 ///   (mux control) is KEPT.
@@ -439,7 +456,13 @@ pub(in crate::mux) fn vt100_replay_copy(bytes: &[u8]) -> Vec<u8> {
 ///
 /// `bytes` is assumed to be a completed byte run (the scrollback ring stores
 /// whole sequences). A sequence whose terminator never arrives is treated as
-/// non-matching and left intact, so plain text is never accidentally dropped.
+/// non-matching and left intact, so plain text is never accidentally dropped. An
+/// APC / DCS body that has no `ESC` at all, or whose first `ESC` is the last byte
+/// of the input, is such a sequence: it is KEPT, and BEL is body data in it, never
+/// a terminator. An APC / DCS body that an `ESC` followed by another byte aborts
+/// is not one: it is complete as far as the strip is concerned, because a replay
+/// of the bytes ends the body at that aborting `ESC` too, so the text written
+/// after it is never absorbed into the body and never removed with it.
 ///
 /// Where a construct is removed together with its opening `ESC` while the
 /// written stream is inside a CSI, or right after a written lone `ESC`, one
@@ -447,12 +470,13 @@ pub(in crate::mux) fn vt100_replay_copy(bytes: &[u8]) -> Vec<u8> {
 /// after it are never joined into an escape or a device query the raw stream
 /// never made (mux-strip-concat-query-closure D1). In ground nothing is added.
 ///
-/// Runs in a single O(n) pass: once an `ESC \` (ST) terminator search runs off
-/// the end of the buffer, that "no more ST terminators" fact is cached in
-/// `st_search_from` so later APC / DCS introducers do not re-scan the tail
-/// (which would make a buffer full of unterminated introducers quadratic). The
-/// OSC terminator search is likewise bounded — it stops at the first bare ESC,
-/// so it never scans past the introducer's own (short) run.
+/// Runs in a single O(n) pass. The body scan of an APC / DCS stops at the first
+/// `ESC` of the body ([`scan_body_end`]), so the ranges scanned for distinct
+/// introducers never overlap: the next introducer starts at or after the
+/// aborting `ESC`, and a buffer full of aborted or unterminated introducers is
+/// one sweep, never quadratic. The OSC terminator search is likewise bounded — it
+/// stops at the first bare ESC, so it never scans past the introducer's own
+/// (short) run.
 pub(in crate::mux) fn strip_replayable_rich_content(bytes: &[u8]) -> Vec<u8> {
     strip_rich_content(bytes)
 }
@@ -576,7 +600,10 @@ fn strip_rich_content(bytes: &[u8]) -> Vec<u8> {
 /// inserts, see [`Written::close_before_removal`]). An offset strictly inside the
 /// removed span, or right after it, maps to the output position after the
 /// closing byte and the C0 bytes re-emitted from a removed query (mux-strip-
-/// concat-query-closure D5): the removed span contributes only those bytes.
+/// concat-query-closure D5): the removed span contributes only those bytes. An
+/// aborted Kitty APC / SIXEL DCS body is removed up to, not including, its
+/// aborting `ESC`, so an offset strictly inside it, or at the aborting `ESC`,
+/// maps to the output position of the aborting `ESC` (after the closing byte).
 /// Remapped offsets are non-decreasing and within the output. An offset at or
 /// past `bytes.len()` maps to `out.len()` (the end of the stripped output).
 /// These forms start in ground, so the D2 replacement never occurs in them.
@@ -641,11 +668,6 @@ fn strip_pass(
     // designator awaited by the caller's flag, or the brace and the
     // designator of an `ESC (` / `ESC )` met at top level.
     let mut verbatim = usize::from(pending_designator);
-    // Smallest index at or after which an `ESC \` (ST) terminator may still
-    // exist. Once a terminator search runs off the end we set this to `n`, so
-    // subsequent APC/DCS introducers short-circuit instead of re-scanning the
-    // tail — that is what keeps the whole pass O(n).
-    let mut st_search_from = 0usize;
     while i < n {
         // Any watch offset at or before the CURRENT input position maps to
         // the CURRENT output length. Checked at every iteration (including
@@ -674,24 +696,45 @@ fn strip_pass(
         match bytes[i + 1] {
             b'_' => {
                 // APC: ESC _ ... ESC \  — remove only Kitty graphics (ESC _ G).
+                // The body ends at the first ESC in it: `ESC \` completes it,
+                // any other byte after that ESC aborts it ([`scan_body_end`]).
                 if i + 2 < n && bytes[i + 2] == b'G' {
-                    if let Some(end) = find_st_terminator(bytes, i + 2, &mut st_search_from) {
-                        out.close_before_removal();
-                        i = end; // consume through the ST terminator
-                        continue;
+                    match scan_body_end(bytes, i + 2) {
+                        BodyEnd::Complete(end) => {
+                            out.close_before_removal();
+                            i = end; // consume through the ST terminator
+                            continue;
+                        }
+                        BodyEnd::Aborted(at) => {
+                            // Remove the body up to the aborting ESC and resume
+                            // AT it, so the next iteration judges it by the
+                            // ordinary rules.
+                            out.close_before_removal();
+                            i = at;
+                            continue;
+                        }
+                        BodyEnd::Unterminated => {}
                     }
                 }
                 out.push(bytes[i]);
                 i += 1;
             }
             b'P' => {
-                // DCS: ESC P ... ESC \ — remove only SIXEL.
-                if let Some(end) = find_st_terminator(bytes, i + 2, &mut st_search_from) {
-                    if dcs_is_sixel(&bytes[i + 2..end - 2]) {
+                // DCS: ESC P ... ESC \ — remove only SIXEL. A complete body is
+                // judged as a whole; an aborted one by the bytes before the
+                // aborting ESC.
+                match scan_body_end(bytes, i + 2) {
+                    BodyEnd::Complete(end) if dcs_is_sixel(&bytes[i + 2..end - 2]) => {
                         out.close_before_removal();
                         i = end;
                         continue;
                     }
+                    BodyEnd::Aborted(at) if dcs_is_sixel(&bytes[i + 2..at]) => {
+                        out.close_before_removal();
+                        i = at;
+                        continue;
+                    }
+                    _ => {}
                 }
                 out.push(bytes[i]);
                 i += 1;
@@ -746,30 +789,47 @@ fn strip_pass(
     (out.bytes, remapped, out.state)
 }
 
-/// Find the index just past an ST terminator (`ESC \`) for a sequence whose
-/// body starts at `from`. Returns the index of the byte AFTER the trailing
-/// `\\`, or `None` if no ST terminator is present.
+/// How the body of a Kitty APC / DCS ends, as [`scan_body_end`] reports it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BodyEnd {
+    /// The first `ESC` of the body is followed by `\`: the index just past that
+    /// `\` (past the ST).
+    Complete(usize),
+    /// The first `ESC` of the body is followed by any other byte, `ESC` and CAN
+    /// (0x18) included: the index of that `ESC`, the aborting `ESC`.
+    Aborted(usize),
+    /// The body has no `ESC`, or its first `ESC` is the last byte of the input.
+    Unterminated,
+}
+
+/// Find how the body of an APC / DCS ends, for a body that starts at `from` (the
+/// index right after the introducer; at most `bytes.len()`).
 ///
-/// `st_search_from` caches the smallest index at or after which an ST
-/// terminator may still exist (monotonically non-decreasing). When a search
-/// runs off the end, `st_search_from` is bumped to `bytes.len()` so a later
-/// introducer never re-scans the same terminator-free tail — collapsing what
-/// would otherwise be repeated O(n) scans (one per unterminated introducer)
-/// into a single O(n) sweep.
-fn find_st_terminator(bytes: &[u8], from: usize, st_search_from: &mut usize) -> Option<usize> {
-    // Start the scan no earlier than the introducer body and no earlier than
-    // the last position we know still might hold a terminator.
-    let mut j = from.max(*st_search_from);
-    while j + 1 < bytes.len() {
-        if bytes[j] == 0x1b && bytes[j + 1] == b'\\' {
-            return Some(j + 2);
-        }
-        j += 1;
+/// The body ends at its first `ESC`, and past it the scan reads only the one byte
+/// right after it: `ESC \` completes the body ([`BodyEnd::Complete`]), `ESC`
+/// followed by any other byte aborts it at that aborting `ESC`
+/// ([`BodyEnd::Aborted`]), and an `ESC` that is the last byte of the input leaves
+/// it [`BodyEnd::Unterminated`], as does a body with no `ESC`. BEL is body data:
+/// it neither ends nor aborts the body.
+///
+/// This agrees with the write filter's string scan (`mux::ipc::pty_spawn`,
+/// `find_st`) on complete, aborted and unterminated bodies. The scan is kept here
+/// because this module never depends on the IPC layer.
+///
+/// Every scan stops at the first `ESC` it meets, so the ranges scanned for
+/// distinct introducers never overlap (the next introducer starts at or after the
+/// aborting `ESC`): the pass stays one linear sweep even on input made only of
+/// aborted or unterminated introducers.
+fn scan_body_end(bytes: &[u8], from: usize) -> BodyEnd {
+    let Some(offset) = bytes[from..].iter().position(|&byte| byte == 0x1b) else {
+        return BodyEnd::Unterminated;
+    };
+    let esc = from + offset;
+    match bytes.get(esc + 1) {
+        Some(b'\\') => BodyEnd::Complete(esc + 2),
+        Some(_) => BodyEnd::Aborted(esc),
+        None => BodyEnd::Unterminated,
     }
-    // No ST terminator from `j` to the end — record that there is none at or
-    // after `from` so future introducers short-circuit.
-    *st_search_from = bytes.len();
-    None
 }
 
 /// Find the index just past an OSC terminator (BEL `0x07` or ST `ESC \`) for an

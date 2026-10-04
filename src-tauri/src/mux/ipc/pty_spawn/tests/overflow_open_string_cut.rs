@@ -42,7 +42,7 @@ const BEL: &[u8] = &[0x07];
 
 /// The plain text written after a cut: it must be displayed on replay and never
 /// absorbed into a string body.
-const AFTER: &[u8] = b"after the cut";
+pub(super) const AFTER: &[u8] = b"after the cut";
 
 /// The ten body bytes an overflowing call adds to the held OSC.
 const TEN_BODY_BYTES: &[u8] = b"pppppppppp";
@@ -50,14 +50,14 @@ const TEN_BODY_BYTES: &[u8] = b"pppppppppp";
 // ── helpers ──────────────────────────────────────────────────────────────
 
 /// Whether the view shows [`AFTER`] on a row.
-fn shows_after_text(view: &View) -> bool {
+pub(super) fn shows_after_text(view: &View) -> bool {
     let shown = String::from_utf8_lossy(AFTER).into_owned();
     view.rows.iter().any(|row| row.contains(&shown))
 }
 
 /// A fresh filter fed `held` (the string held at the cap: nothing is written) and
 /// then `call1` in one cut-free call, which takes the overflow flush.
-fn overflow(held: &[u8], call1: &[u8]) -> (ScrollbackWriteFilter, FeedOutcome) {
+pub(super) fn overflow(held: &[u8], call1: &[u8]) -> (ScrollbackWriteFilter, FeedOutcome) {
     let mut filter = ScrollbackWriteFilter::new();
     assert!(
         filter.feed(held, DIMS).1.is_empty(),
@@ -70,7 +70,7 @@ fn overflow(held: &[u8], call1: &[u8]) -> (ScrollbackWriteFilter, FeedOutcome) {
 }
 
 /// The write-path strip of `parts` joined.
-fn strip_of(parts: &[&[u8]]) -> Vec<u8> {
+pub(super) fn strip_of(parts: &[&[u8]]) -> Vec<u8> {
     strip_pty_output_for_scrollback_write(&parts.concat())
 }
 
@@ -113,25 +113,25 @@ fn assert_replay_matches(references: &[(String, View)], written: &[u8], later: &
 }
 
 /// One string body that can be held at the cap.
-struct Body {
-    name: &'static str,
+pub(super) struct Body {
+    pub(super) name: &'static str,
     /// The introducer and the first bytes of the body.
-    head: &'static [u8],
+    pub(super) head: &'static [u8],
     /// The filler byte of the rest of the body.
-    pad: u8,
+    pub(super) pad: u8,
 }
 
 impl Body {
     /// The run of this string that fills the pending buffer exactly to the cap
     /// (still held: only a run past the cap is flushed).
-    fn held_at_the_cap(&self) -> Vec<u8> {
+    pub(super) fn held_at_the_cap(&self) -> Vec<u8> {
         let mut held = self.head.to_vec();
         held.resize(SCROLLBACK_FILTER_PENDING_CAP, self.pad);
         held
     }
 
     /// Ten more body bytes: they take the held run past the cap.
-    fn ten_more(&self) -> Vec<u8> {
+    pub(super) fn ten_more(&self) -> Vec<u8> {
         vec![self.pad; 10]
     }
 }
@@ -139,7 +139,7 @@ impl Body {
 /// The DCS / APC bodies of AC-4: a non-strip-target DCS, a non-strip-target APC,
 /// a Kitty APC and a SIXEL DCS. The Kitty and SIXEL payloads neither answer nor
 /// place an image, so the view comparison is not dominated by image side effects.
-fn st_bodies() -> [Body; 4] {
+pub(super) fn st_bodies() -> [Body; 4] {
     [
         Body {
             name: "non-strip-target dcs",
@@ -622,9 +622,25 @@ fn overflow_open_string_cut_the_closure_returns_every_open_body_to_ground() {
     }
 }
 
-/// AC-8 (SPEC FR5; TM-2): neither the write-path strip nor the snapshot-time strip
-/// reads the closure as the start of a strip target or as ST, and a strip target
-/// written right after the closure is still removed.
+/// What both strips return for an open body stream followed by the closure
+/// (mux-snapshot-strip-can-abort FR1-FR4): an open Kitty APC / SIXEL DCS body is
+/// aborted by the closure's `ESC` and removed up to it, so the strips return
+/// `before` and the closure; every other open body (OSC, non-target DCS / APC) is
+/// kept whole.
+fn closed_stream_after_the_strip(name: &str, stream: &[u8]) -> Vec<u8> {
+    if name.contains("kitty") || name.contains("sixel") {
+        [b"before".as_slice(), STRING_BODY_CLOSING].concat()
+    } else {
+        [stream, STRING_BODY_CLOSING].concat()
+    }
+}
+
+/// AC-8 (SPEC FR5; TM-2; mux-snapshot-strip-can-abort AC-8a, FR3): neither the
+/// write-path strip nor the snapshot-time strip reads the closure as the start of
+/// a strip target or as ST, and a strip target written right after the closure is
+/// still removed. The closure's `ESC` aborts an open Kitty APC / SIXEL DCS body:
+/// both strips return `before` and the closure for those streams, and keep an
+/// open OSC, non-target DCS or non-target APC stream and the closure whole.
 #[test]
 fn overflow_open_string_cut_neither_strip_reads_the_closure_as_a_target_or_as_st() {
     type Strip = fn(&[u8]) -> Vec<u8>;
@@ -639,30 +655,24 @@ fn overflow_open_string_cut_neither_strip_reads_the_closure_as_a_target_or_as_st
             "{strip_name}: the closure alone is kept"
         );
         // An open Kitty APC / SIXEL DCS followed by the closure is no complete
-        // target: the closure is not ST.
+        // target: the closure is not ST. Its `ESC` aborts the body, which is
+        // removed up to that `ESC`.
         for (name, stream) in OPEN_BODY_STREAMS {
             let closed = [*stream, STRING_BODY_CLOSING].concat();
             assert_eq!(
                 strip(&closed),
-                closed,
+                closed_stream_after_the_strip(name, stream),
                 "{strip_name}, {name}: the closure forms no ST"
             );
         }
-        // A strip target right after the closure is still removed. The open
-        // Kitty APC / SIXEL DCS streams are left out: such a body that stays open
-        // still spans to the next ST in the ring in the snapshot-time and
-        // write-path strips alike (the pre-existing behavior this feature leaves
-        // unchanged, NFR5), which is not about the closure.
+        // A strip target right after the closure is still removed, whichever
+        // open body the closure follows.
         for (name, target) in all_targets() {
             for (open_name, stream) in OPEN_BODY_STREAMS {
-                if open_name.contains("kitty") || open_name.contains("sixel") {
-                    continue;
-                }
                 let input = [*stream, STRING_BODY_CLOSING, target].concat();
-                let expected = [*stream, STRING_BODY_CLOSING].concat();
                 assert_eq!(
                     strip(&input),
-                    expected,
+                    closed_stream_after_the_strip(open_name, stream),
                     "{strip_name}: {name} after the closure of {open_name}"
                 );
             }
@@ -742,7 +752,7 @@ fn overflow_open_string_cut_a_non_overflow_strip_then_cut_closes_the_open_osc_bo
 /// The comment lines (`//`, `///`, `//!`) of a source file with their markers
 /// removed, joined by single spaces: the text the doc-comment contract below
 /// reads, so a phrase wrapped over two lines is still one phrase.
-fn comment_text(source: &str) -> String {
+pub(super) fn comment_text(source: &str) -> String {
     source
         .lines()
         .map(str::trim_start)
