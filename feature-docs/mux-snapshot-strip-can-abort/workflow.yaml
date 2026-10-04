@@ -125,7 +125,7 @@ workflow:
   completed_at_commit: 2b889c283786333cc6d1e70ec3e487d79053aae9
   base_commit: 0b8bc248d1baeb758cb43a8bee5715f8828e34b4
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -161,7 +161,17 @@ tasks:
     - NFR3
     status: merged
     branch: em-workflow/mux-snapshot-strip-can-abort/task0001
-review: {}
+review:
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary:
+    - perspective: performance
+      reason: NFR1 requires the strip to stay a linear single pass; the diff changes the APC / DCS body scan and its st_search_from cache.
+    cross_validation: true
 requirements:
   FR1:
     title: Abort recognition in the APC / DCS body scan
