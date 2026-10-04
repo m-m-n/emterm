@@ -1,11 +1,11 @@
 schema_version: 1
 feature: test-notify-dbus-isolation
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: f41d0d4c4d72ffa6c67da44b87b67be865446023
 last_input_digest: sha256:569c80aea662c9a82b56af4c4c16f49c84104422d02ea54c3f5afbb8c209cbd5
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -71,9 +71,15 @@ worker_runs:
   input_digest: sha256:569c80aea662c9a82b56af4c4c16f49c84104422d02ea54c3f5afbb8c209cbd5
   output_digest: sha256:f403edbaa84c598f80f3b29040335dde8746f70477cd312ca9c1250374fb3677
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:f1c523883faf80fbc294f079d54ffe114e1bcd1b15a52748a8cef9a2fc27c2fa
-artifacts: []
+artifacts:
+- path: feature-docs/test-notify-dbus-isolation/REQUIREMENTS.md
+  sha256: sha256:4a54068aeb5e1542ecc325d6fdb6dbce32905fa9fdff73aad67abcaf0e2a4e5a
+  produced_by: create-spec-run-0003
+- path: feature-docs/test-notify-dbus-isolation/SPEC.md
+  sha256: sha256:be6024131a57c222b0c1b8dc451b733cc0bfc8228521cc5546e4069ccc77adda
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0

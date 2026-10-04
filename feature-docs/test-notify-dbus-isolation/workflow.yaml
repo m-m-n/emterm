@@ -1,0 +1,185 @@
+schema_version: 1
+feature: test-notify-dbus-isolation
+created: '2026-10-04'
+base_branch: main
+goal: |
+  # テスト実行で本物のデスクトップ通知が発行され、通知デーモンのメモリを消費し通常の通知が埋もれる
+
+  種別: バグ
+  Notion: https://www.notion.so/3ef3509ec8ee813b8de6e5a7387c2710
+
+  ## 現象
+  `cargo test` の実行で、本物のデスクトップ通知（notify-rust 経由の D-Bus 通知）が発行される。テストを回すたびに通知デーモンの履歴に溜まり、メモリを消費する。通常の通知もテスト由来の通知に埋もれる。
+
+  ## 再現手順
+  1. Linux のデスクトップセッションで `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` を実行する
+  2. 通知デーモンの履歴に `t0`〜 などのタイトルの通知が溜まる
+
+  ## 期待する挙動
+  テストのビルドでは本物の D-Bus 通知に到達しない。
+
+  ## 完了の定義
+  - 再現手順で現象が起きない
+  - 再発を検出するテストがある
+
+  ## 該当箇所
+  - `src-tauri/src/callbacks/tests.rs:1492` 付近の `worker_thread` モジュール: `NotifyRustSink::new()` を直接使う
+    - `sink_send_never_blocks_the_caller_even_past_queue_capacity`: 1 回で 32 件送信（キュー容量 8 件ぶんが実際に D-Bus まで届く）
+    - `dropping_the_sink_after_sending_returns_within_the_shutdown_deadline`: 3 件送信
+  - `src-tauri/src/app/mod.rs:574`: `App::with_settings` が常に本物の `NotifyRustSink` を組み立てる。`app_with_test_sink()` を使わない App のテストが通知経路を通ると本物の通知が出る
+
+  修正方針:
+  1. `#[cfg(test)]` のとき、`App::with_settings` で何もしない送信部を使う（差し替え忘れのテストからの漏れもまとめて防ぐ）
+  2. `worker_thread` のテストは送信関数を偽物にする。unix 版の `notify_worker` は送信関数を注入できる作りなので、同じ方式で `NotifyRustSink` 側にも偽物を渡せるようにする
+
+  ## 実害・発生条件
+  テストを実行する開発者全員。通知デーモンのメモリ消費と、通常の通知の埋没。
+parent_branch: em-workflow/test-notify-dbus-isolation/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.21
+      '2': 0.79
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.14
+      '2': 0.86
+      '3': 0.0
+  at: '2026-10-04T19:54:58+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - src-tauri/web-shared/settings/ui-theme-presets.ts
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 82f5c6b8dd94bc73d7834dd3e1934678e2884c7b
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'UI に触れない、テストビルドの通知経路の修正のみ。batch: decide_autonomously'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: テストビルドの App は何もしない通知送信部を使う
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: 本番ビルドの App は従来どおり NotifyRustSink を使う
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: NotifyRustSink に偽物の送信関数を渡して生成する手段
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Windows 版 notify_worker に送信関数の注入点を足す
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: worker_thread のテストは両 OS で偽物を使う
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: 修正した 2 か所を固定する回帰テスト
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: テスト名を変える場合の test-docs 記録の更新
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: テストビルドから本物の通知経路に到達しない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: 本番の通知挙動は変えない
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: CLI 専用ビルドが通る
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Windows ターゲットでテストコードを含めてコンパイルが通る
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
