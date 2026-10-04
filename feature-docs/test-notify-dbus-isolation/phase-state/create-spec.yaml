@@ -1,0 +1,30 @@
+schema_version: 1
+feature: test-notify-dbus-isolation
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: f41d0d4c4d72ffa6c67da44b87b67be865446023
+last_input_digest: sha256:2b8eeef68f5dd6298ec4cb73d7c306e40035951b535f8f28de31b7f4f7c62f2c
+active_request_id: create-spec-run-0001
+packets: {}
+answers:
+  create-spec.feature-identity:
+    packet_id: null
+    answered_at: '2026-10-04T19:55:57+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids:
+    - derive_from_task_description
+    freeform: null
+    normalized_answer: test-notify-dbus-isolation
+    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option_id derive_from_task_description (Notion タスクタイトル『テスト実行で本物のデスクトップ通知が発行され…』から導出)'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:2b8eeef68f5dd6298ec4cb73d7c306e40035951b535f8f28de31b7f4f7c62f2c
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
