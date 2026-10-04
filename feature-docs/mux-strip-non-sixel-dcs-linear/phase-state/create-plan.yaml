@@ -1,0 +1,19 @@
+schema_version: 1
+feature: mux-strip-non-sixel-dcs-linear
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 63e9277e71fa0104358291f53e122a200d77230e
+last_input_digest: sha256:5b9d72245b23fe5ea6252526bb64d35783e05961e97a5fecc6dd0a9cb1128ae6
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:5b9d72245b23fe5ea6252526bb64d35783e05961e97a5fecc6dd0a9cb1128ae6
+artifacts: []
+patches: []
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
