@@ -1,0 +1,27 @@
+feature: mux-strip-join-escape-closure
+collected_at: "2026-10-04T13:59:00+09:00"
+session_ids: [01a10546-2cc7-76e8-b8fc-be5a7057ada7]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "fallback_matrix:jev_only_usable: Codex pre-survey unusable; the final Jev call is skipped (Codex pre-survey exceeded the 540 s timeout, exit 124)"
+    bases:
+      - basis: description_only
+        score:
+          type: score
+          score: 1.61
+          confidence: 0.61
+          probabilities: {'0': 0.0, '1': 0.39, '2': 0.61, '3': 0.0}
+        observed_at: "2026-10-03T22:22:09+09:00"
+follow_up_drafts: []
+lessons_candidates:
+  - "Codex pre-survey for tier decision hit the 540 s timeout (exit 124); tier fell back to full."
+  - "Review round 1 diff was test-only (no non-test code under src-tauri/src changed); the closure behavior was already in place on base, so the feature reduced to regression tests and a decision record."
+  - "verify --lib parallel run: predecessor test strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget exceeded its 10 s budget (10.12 s) under load average ~4.5; passed with --test-threads=1. Wall-clock budget tests are load-sensitive."
+  - "Review evaluator sub-medium notes: task0001.tests.yaml AC-6 red_reason wording conflicts with recorded failures; DECISIONS.md Residual 1 condition may be overstated given SNAPSHOT_TAIL (ESC[?1049l) after scrollback."
