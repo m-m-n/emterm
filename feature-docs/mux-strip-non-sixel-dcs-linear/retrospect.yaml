@@ -1,0 +1,31 @@
+feature: mux-strip-non-sixel-dcs-linear
+collected_at: "2026-10-04T18:05:00+09:00"
+session_ids: [01a1061b-1caa-722d-b907-131691071013]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: 差分は二乗走査を検出する時間予算テストで、計測方法と入力長の妥当性が性能観点の判断になるため
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code の最終読みがバケット 1 を confidence 0.58 で返し、閾値行により full を採用した"
+    bases:
+      - basis: description_only
+        score: {score: 1.01, confidence: 0.99, probabilities: {'0': 0.0, '1': 0.99, '2': 0.01, '3': 0.0}}
+        observed_at: "2026-10-04T16:46:00+09:00"
+      - basis: description_plus_code
+        score: {score: 1.08, confidence: 0.58, probabilities: {'0': 0.17, '1': 0.58, '2': 0.24, '3': 0.01}}
+        observed_at: "2026-10-04T16:49:30+09:00"
+    pre_survey_estimate:
+      work_still_required: false
+      body_change_kind: new_logic
+      change_containment: single_module
+      evidence_summary: "HEAD d08d634f で find_st_terminator は scan_body_end に置き換わり、最初の ESC で探索が止まるため二乗経路は残っていない。非 SIXEL DCS 反復の専用時間予算テストのみ欠落"
+follow_up_drafts: []
+lessons_candidates:
+  - "事前調査は作業不要（work_still_required: false）と報告したが、回帰テスト不在のため no-work 停止せず full tier でテスト追加のみを実施した。本体修正は先行 feature で既に解消済みだった"
+  - "verify で strip_concat_query の 10 秒実時間予算テストが並列デバッグ実行の負荷で間欠失敗（main でも同様）。時間予算テストの負荷耐性は別途検討の余地あり"
