@@ -138,7 +138,7 @@ workflow:
   - 'TS-1 to TS-11: every test listed in test-docs/mux-snapshot-strip-can-abort/task0001.tests.yaml (AC-1 to AC-10) passed. The write_filter.rs diff since base_commit touches comment lines only (TS-9).'
   - 'MT-1 (manual reproduction with a release build and a restarted mux daemon) was not run: it needs the user.'
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Abort-aware APC / DCS body end scan in the mux strip
