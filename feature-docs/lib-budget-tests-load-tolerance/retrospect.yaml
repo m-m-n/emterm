@@ -1,0 +1,43 @@
+feature: lib-budget-tests-load-tolerance
+collected_at: "2026-10-04T19:36:00+09:00"
+session_ids: [01a1067a-e16c-70cf-a2a7-475ef7f28600]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: license
+      reason: "diff touches dependency manifest src-tauri/Cargo.toml (windows-sys feature added)"
+    - perspective: vulnerability
+      reason: "diff touches dependency manifest src-tauri/Cargo.toml (axis 2 scan)"
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code の最終読みがバケット 1 と 2 の拮抗（0.49 / 0.51, confidence 0.5）で、閾値行により full を採用"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.02, confidence: 0.94, probabilities: {'0': 0.02, '1': 0.94, '2': 0.04, '3': 0.0}}
+        observed_at: "2026-10-04T18:30:10+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.5, confidence: 0.5, probabilities: {'0': 0.0, '1': 0.49, '2': 0.51, '3': 0.0}}
+        observed_at: "2026-10-04T18:32:47+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/mux/ipc/pty_spawn/tests/round4_chain.rs
+        - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+      changed_lines_approx: 30
+      new_functions_needed: 1
+      new_files_needed: 0
+      new_dependencies_needed: []
+      covering_tests_exist: true
+      work_still_required: true
+      change_containment: multiple_modules
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+  - "事前調査は 2 ファイル・新規ファイル 0 と見積もったが、実際は 5 ファイル（新規 thread_cpu_time.rs、Cargo.toml の windows-sys feature 追加を含む）。CPU 時間計測という方式選択で範囲が広がった"
+  - "review evaluator の medium 未満の気づき: thread_cpu_time.rs 14-15 行目のモジュールドキュメントが TS-2 も Instant を読む点を漏らしている"
+  - "vulnerability 観点は cargo の監査ツール不在でスキップ"
+  - "Windows 実機での実行は batch 環境に Windows 機が無く未実施"
