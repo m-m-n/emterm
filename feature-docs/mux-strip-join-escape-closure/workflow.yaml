@@ -143,7 +143,7 @@ workflow:
   notes: 'Build checks (default, --no-default-features) exit 0. --lib parallel run: 4201 passed, 1 failed (strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget took 10.12s against the 10s budget under load average ~4.5; predecessor test, unchanged by this feature). Re-run with --test-threads=1 (approved command): 4202 passed, 0 failed. TS-1/TS-2/TS-3 tests pass; TS-5/TS-6 DECISIONS.md inspection pass; TS-7 diff from base_commit shows test code, visibility-only change in strip_concat_query.rs, module registration and docs only. No excluded requirements.'
   completed_at_commit: 5ed7e322f049c0626c53e89914f41b28bcaae206
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Regression tests and decision record for the strip join-escape closure
