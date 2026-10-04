@@ -141,6 +141,7 @@ tasks:
     - src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry.rs
     - src-tauri/src/mux/ipc/pty_spawn/tests/snapshot_strip_can_abort.rs
     - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/round4_designator_cut.rs
     skills:
     - backend-impl
     domains:
@@ -157,7 +158,7 @@ tasks:
     - NFR1
     - NFR2
     - NFR3
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-snapshot-strip-can-abort/task0001
 review: {}
 requirements:
