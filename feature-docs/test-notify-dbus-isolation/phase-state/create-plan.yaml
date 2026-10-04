@@ -1,0 +1,20 @@
+schema_version: 1
+feature: test-notify-dbus-isolation
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: eff3a1669e21d84a7aea1d03ee2f61079317a5ac
+last_input_digest: sha256:f75c455e595c55702215570d3119d6e6c2a0380abf317c56fa00686873100780
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:f75c455e595c55702215570d3119d6e6c2a0380abf317c56fa00686873100780
+  output_digest: null
+artifacts: []
+patches: []
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
