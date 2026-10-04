@@ -28,3 +28,14 @@ records:
   resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (same consultation turn) consulted; Opus escalation: not run; options: regression_guard_green
     [chosen] / demonstrate_red_temporarily [not chosen]; key points: 共有 strip(scrollback_filter.rs:778,875)と書き込みフィルタ(write_filter.rs:955,1069)は既に最初の ESC で探索を打ち切るため初回から緑が見込まれる。既存処理の確認を red_confirmed: false
     で記録した前例がある(test-docs/mux-snapshot-strip-can-abort/task0001.tests.yaml:79)'
+- gate_id: null
+  question_id: verify.ts7-preexisting-flake
+  packet_id: null
+  answered_at: '2026-10-04T17:55:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - pass_record_flake
+  freeform: null
+  normalized_answer: 'verify は pass とする。TS-7 の失敗は新規テストを除外しても再現する既存の負荷依存テスト（strip_concat_query の 10 秒予算、user_dir の環境変数競合）で、本 feature の範囲外。安定化は別タスクで扱う。'
+  resolution_note: 'unlisted judgment in verify (no gate_id); Codex (run_codex_exec.sh readonly, 1 turn) consulted; Opus escalation: not run; options: pass_record_flake [chosen] / fail_and_rework [not chosen]; key points: 全件実行は 3/7 回 exit 0 で TS-7 は達成済み。新規 12 テストは毎回成功、本番コード変更なし。--skip strip_non_sixel_dcs_linear でも 2/4 回同じ予算テストが失敗し既存の不安定さを裏付ける。rework は範囲外の変更を要求する。'
