@@ -8871,3 +8871,8 @@ mod overflow_open_string_cut;
 // mux-strip-join-escape-closure task0001 (FR1, FR2): scenarios 2 and 3 of the join
 // attack stay closed (write strip, snapshot strip and replay together).
 mod strip_join_escape_closure;
+
+// mux-strip-open-string-body-closure task0001 (FR1-FR10): a construct removed inside an
+// open OSC / DCS / APC body writes the string-body closure (write filter, snapshot
+// replay, live continuation, cuts and doc contracts).
+mod strip_open_string_body_closure;

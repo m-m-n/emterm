@@ -124,14 +124,15 @@ pub(in crate::mux) struct ScrollbackWriteFilter {
     /// reports it while it removes what it removes. A construct it removes
     /// together with its opening `ESC` while the written stream is inside a CSI
     /// or right after a written `ESC` is replaced by one [`CSI_CLOSING`], which
-    /// leaves the state in ground (mux-strip-concat-query-closure D1); such a
-    /// construct does not end a written string body. A call that drains bytes
-    /// before the held chain sets it from the stripped output of those bytes,
-    /// started from the state carried in; a call that drains nothing leaves it
-    /// unchanged. A body is left open by an overflow flush (it writes a run whose
-    /// string the strip never closed), and also, with no overflow, by a strip that
-    /// removes the construct whose `ESC` aborted a written string or splices a
-    /// string introducer.
+    /// leaves the state in ground (mux-strip-concat-query-closure D1); one it
+    /// removes while the written stream is inside an open OSC body or an open
+    /// DCS / APC body is replaced by one [`STRING_BODY_CLOSING`], which leaves
+    /// the state in ground too (mux-strip-open-string-body-closure D1). A call
+    /// that drains bytes before the held chain sets it from the stripped output
+    /// of those bytes, started from the state carried in; a call that drains
+    /// nothing leaves it unchanged. A body is left open by an overflow flush (it
+    /// writes a run whose string the strip never closed); the strip itself leaves
+    /// none open at a construct it removes.
     ///
     /// mux-strip-concat-query-closure D4: inside a CSI the state carries the
     /// strip's classification of the open CSI (its sub-state, private marker,
@@ -169,21 +170,13 @@ pub(in crate::mux) use crate::mux::scrollback_filter::CSI_CLOSING;
 /// `CSI_CLOSING` is unchanged.
 pub(in crate::mux) const ESCAPE_CLOSING: &[u8] = &[0x18];
 
-/// The write a cut makes when the written stream ends inside an open OSC body or
-/// an open DCS / APC body (mux-write-filter-overflow-open-string-cut FR2, FR5,
-/// D2): `ESC` followed by CAN (0x18), the [`ESCAPE_CLOSING`] byte after an `ESC`.
-/// `term_core` takes the `ESC` into the string's escape state, and the CAN as
-/// the byte that aborts the string (the string is dispatched, an OSC as
-/// `Unterminated`) and is processed as from the Escape state, where it is an
-/// unknown escape final: the escape completes and the parser returns to ground,
-/// without a character, a cursor move or a response of its own. That is what the
-/// client's parser did at the removed switch's `ESC`, so a replay stands in
-/// ground and the bytes written after the cut are never absorbed into the string
-/// (a later BEL cannot complete it with them). The `ESC` is followed by CAN,
-/// which opens no strip target, and `ESC` + CAN is not ST (`ESC \`), so neither
-/// strip reads the closure as the start of a strip target or ends an APC / DCS
-/// body at it.
-pub(in crate::mux) const STRING_BODY_CLOSING: &[u8] = &[0x1b, 0x18];
+// STRING_BODY_CLOSING is defined once, in the shared strip module
+// (mux-strip-open-string-body-closure D1): the cut writes it when the written
+// stream ends inside an open OSC body or an open DCS / APC body
+// (mux-write-filter-overflow-open-string-cut FR2, FR5, D2), and the strip writes
+// it at a removed construct while the written stream is inside one. It stays
+// nameable here under its current name.
+pub(in crate::mux) use crate::mux::scrollback_filter::STRING_BODY_CLOSING;
 
 /// The write a cut makes when the written stream ends right after `ESC (` /
 /// `ESC )` (mux-suppressed-output-round4-fixes FR3): one `ESC`, which replay
@@ -405,8 +398,9 @@ impl ScrollbackWriteFilter {
     /// designator consumed by the segment's first byte, a completed string, or a
     /// run whose incomplete string is still held (which the cut drops, unwritten).
     /// A string body that was WRITTEN and is still open is closed, not dropped: an
-    /// overflow flush writes one, and so can the strip when it removes the
-    /// construct whose `ESC` aborted a written string.
+    /// overflow flush writes one. The strip closes a body it finds open at a
+    /// construct it removes ([`STRING_BODY_CLOSING`]), so the cut closes only a
+    /// body the written stream still ends in.
     ///
     /// **The boundary scan decides no closure.** Its awaiting-designator result
     /// still decides whether the next run's first byte is copied verbatim (FR2,
@@ -437,12 +431,15 @@ impl ScrollbackWriteFilter {
     /// the strip removes together with its construct (an OSC 777 viewer launch,
     /// OSC 9999 emterm-md, an agent-status report, a Kitty APC, a SIXEL DCS, an
     /// answered CSI device query) advances nothing: it does not abort the CSI
-    /// the written stream is inside, and it does not complete an `ESC` the strip
-    /// wrote just before it. Since mux-strip-concat-query-closure FR1 the strip
-    /// writes one [`CSI_CLOSING`] at the removed construct in either case, so the
-    /// written stream is back in ground and the cut closes nothing more; the
-    /// cut's own closure remains for a state the written stream genuinely ends
-    /// in. The state is reported by the strip's own pass, started from the state
+    /// the written stream is inside, it does not complete an `ESC` the strip
+    /// wrote just before it, and it does not end an OSC body or a DCS / APC body
+    /// the written stream is inside. Since mux-strip-concat-query-closure FR1 the
+    /// strip writes one [`CSI_CLOSING`] at the removed construct in the first two
+    /// cases, and since mux-strip-open-string-body-closure FR1 one
+    /// [`STRING_BODY_CLOSING`] (`ESC` + CAN) in the third, so the written stream
+    /// is back in ground and the cut closes nothing more; the cut's own closure
+    /// remains for a state the written stream genuinely ends in. The state is
+    /// reported by the strip's own pass, started from the state
     /// carried in ([`strip_pty_output_for_scrollback_write_with_written_state`]);
     /// the boundary scan keeps the boundary, the held chain and the
     /// awaiting-designator state, and decides neither the closure nor the carried
@@ -684,8 +681,8 @@ impl ScrollbackWriteFilter {
                 // decides for a replay of the ring: DEL inside a CSI (round4
                 // FR4), the Escape closure right after an `ESC`, the designator
                 // ESC after `ESC (` / `ESC )` (round4 FR3), `ESC` + CAN inside an
-                // open string body (a body an overflow flush wrote, or one a
-                // removal left open), nothing in ground.
+                // open string body (a body an overflow flush wrote and the strip
+                // has not closed), nothing in ground.
                 // The state is that of the bytes written after the strip, so
                 // this also holds when the dropped construct starts right after
                 // them and when the strip removed a construct whose ESC would
