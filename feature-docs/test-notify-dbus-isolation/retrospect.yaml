@@ -1,0 +1,32 @@
+feature: test-notify-dbus-isolation
+collected_at: "2026-10-04T20:53:00+09:00"
+session_ids: [01a106c1-4b4c-7141-a9ac-2b2931289046.jsonl]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code の最終読みがバケット 2（新規ロジック・複数モジュールにまたがる変更）を確信度 0.86 で示し、full を採用"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.79, confidence: 0.79, probabilities: {'0': 0.0, '1': 0.21, '2': 0.79, '3': 0.0}}
+        observed_at: "2026-10-04T19:54:58+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.86, confidence: 0.86, probabilities: {'0': 0.0, '1': 0.14, '2': 0.86, '3': 0.0}}
+        observed_at: "2026-10-04T19:54:58+09:00"
+    pre_survey_estimate:
+      files_expected: [src-tauri/src/callbacks.rs, src-tauri/src/callbacks/tests.rs, src-tauri/src/app/mod.rs]
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+  - "TS-7（通知履歴の目視比較）は無人 batch では実施不可のため、dbus-monitor による Notify 呼び出し 0 件の観測で代替した。デスクトップ UI 上の通知履歴確認は未実施"
+  - "pre_survey_estimate の files_expected は 3 件だったが、実際の変更は app/tests.rs・app/tests/agent_status.rs・app/tests/notification_sink.rs・test-docs を含む 6 件超に広がった"
