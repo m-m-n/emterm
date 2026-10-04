@@ -120,7 +120,7 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: in_progress
+    status: merged
     branch: em-workflow/lib-budget-tests-load-tolerance/task0001
   task0002:
     title: Remove the wall-clock assert from the token-corpus replay test
