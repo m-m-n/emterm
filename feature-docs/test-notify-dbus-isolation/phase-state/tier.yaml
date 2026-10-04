@@ -1,0 +1,89 @@
+schema_version: 2
+feature: test-notify-dbus-isolation
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.79
+    confidence: 0.79
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.21
+      '2': 0.79
+      '3': 0.0
+  observed_at: '2026-10-04T19:54:58+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.86
+    confidence: 0.86
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.14
+      '2': 0.86
+      '3': 0.0
+  observed_at: '2026-10-04T19:54:58+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - src-tauri/src/app/mod.rs
+  changed_lines_approx: 0
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules: []
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 0
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 0
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: '修正はまだ必要だよ
+
+
+    src-tauri/src/callbacks/tests.rs:1492 は NotifyRustSink::new() を直接呼び、:1494–1495
+    で32件の送信を要求する。:1512–1514 も同じ構築方法で3件の送信を要求する。:1532 のテストも本物の送信部を構築するが、通知は送信しない
+
+
+    src-tauri/src/callbacks.rs:530–532 の構築処理は spawn_notify_worker を呼ぶ。Unix版は :481
+    に本物の get_capabilities、:483–486 に本物の Notification::show を渡し、:436 で送信関数を実行する。テストビルドでこの経路を除外する条件はない
+
+
+    src-tauri/src/app/mod.rs:463 の App::new は with_settings を呼び、:574 はテスト時も NotifyRustSink
+    を構築する。src-tauri/src/app/tests/agent_status.rs:43–49 の app_with_test_sink は、App::new
+    の後で送信部を差し替える。差し替えを使わない同ファイル :1775 のテストは、:1787 の Blocked 更新を :1808 の pump_all で処理する。通知経路は
+    src-tauri/src/app/agent_status.rs:366、:220、src-tauri/src/app/mod.rs:836 につながる
+
+
+    Unix版 notify_worker は src-tauri/src/callbacks.rs:370–373 で機能問い合わせと送信関数を受け取れる。src-tauri/src/callbacks/tests.rs:1731–1734
+    の既存テストは両方を偽物に差し替えているが、NotifyRustSink::new や App の既定構築経路を検証していない。既存の :1498 と :1519
+    の検証対象は所要時間で、本物の通知に到達しないことを確認する回帰テストは調査範囲に見つからなかった
+
+
+    既定機能には gui と notify-rust が含まれる（src-tauri/Cargo.toml:20、:44）。対象モジュールもライブラリに含まれる（src-tauri/src/lib.rs:203–208）ため、提示された
+    --lib の実行対象になる
+
+
+    ファイル変更とテスト実行はしていない。実際の通知発行件数とメモリ消費は未測定。数値欄の0は未算定を表し、変更不要という意味ではない'
+decided_at: '2026-10-04T19:54:58+09:00'
