@@ -1,0 +1,87 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib` finished with 4295 passed, 1 failed, 3 ignored.
+# The failure is the test this task rewrites: its 10 s wall-clock budget was exceeded in the
+# unoptimized parallel run ("took 10.120477442s", strip_concat_query.rs:1080).
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# Re-executed after the implementation (the final tree of this task): `cargo test --lib` finished
+# with 4307 passed, 0 failed, 3 ignored (the baseline's 4295 passed plus the 11 helper tests this
+# task adds plus the rewritten budget test). `cargo check` and `cargo check --no-default-features`
+# finished with no warning. The 12 tests of this task (the 11 helper tests and the rewritten
+# budget test) also passed in a run of the test binary alongside 10 concurrent full-suite runs
+# (load average about 30).
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::thread_cpu_time_counts_the_calling_threads_own_cpu_work
+    red_confirmed: true
+    red_reason: >-
+      With the clock reading stubbed to return zero (the helper module's tests in place, no real
+      implementation) the test failed: "the smaller work's delta is zero".
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::thread_cpu_time_ignores_a_sleep_which_a_wall_clock_reading_includes
+    red_confirmed: true
+    red_reason: >-
+      With the clock reading stubbed to a wall-clock reading (time since first use) the test
+      failed: "the CPU delta 300.06341ms across a 300ms sleep is not below 150ms". A stub that
+      returns zero passes this test, so the red was taken with the wall-clock stub.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::thread_cpu_time_excludes_the_cpu_time_of_other_threads
+    red_confirmed: true
+    red_reason: >-
+      With the zero stub the test failed: "the spawned thread reached 0ns of its own CPU time,
+      not 200ms". With the wall-clock stub it failed: "the measuring thread's delta 200.372222ms
+      while waiting in join is not below half of the spawned thread's 200.243661ms".
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::a_failure_status_panics_naming_the_clock_api
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::a_failure_status_panic_message_names_the_clock_api_and_the_os_error
+    red_confirmed: true
+    red_reason: >-
+      With the status interpretation stubbed to do nothing both tests failed: "test did not panic
+      as expected" and "a failure status did not panic". The second part of the criterion (no
+      code path of the helper returns zero or a wall-clock reading on failure) has no executable
+      check and is covered by review. The Windows branch of the status interpretation compiles
+      in the Windows cross check and is not executed here.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::the_budget_judgment_rejects_a_quadratic_surrogate_and_accepts_a_linear_one
+    red_confirmed: true
+    red_reason: >-
+      With the zero stub the test failed: "the quadratic surrogate was judged within: thread CPU
+      time 0ns against the budget 100ms". The judgment's boundary (strictly below the budget is
+      within) and the verdict message are also covered by the tests
+      the_judgment_is_within_exactly_when_the_total_is_strictly_below_the_budget and
+      the_verdict_message_shows_the_total_and_the_budget in the same module; those are pure and
+      were green from the start.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::the_meter_counts_only_the_measured_calls_and_returns_their_result_unchanged
+    red_confirmed: true
+    red_reason: >-
+      The budget part of the criterion was observed to fail before the implementation: the named
+      test failed in the Step 4a baseline run with its wall-clock budget ("took
+      10.120477442s"). That failure depends on machine load and is not deterministic. The
+      structural parts (no wall clock read in the test, only the listed calls summed through the
+      meter, every correctness assertion and the test name unchanged) have no executable red and
+      are checked by reviewing the diff. The meter's own test failed under the zero stub with
+      "the measured call adds nothing".
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      The verifiable outcome is a build check. No existing test reads src-tauri/Cargo.toml (a
+      search of src-tauri/tests, test/, ci-workflows.test.ts and src-tauri/src by the path and by
+      the basename Cargo.toml found only doc comments and a fixture string). With the
+      Win32_System_Threading line removed from the windows-sys feature list, the Windows target
+      test build without default features (cargo xwin check --profile test --lib
+      --no-default-features --target x86_64-pc-windows-msvc) failed: "error[E0432]: unresolved
+      import `windows_sys::Win32::System::Threading` ... the item is gated behind the
+      `Win32_System_Threading` feature". With the line present it passes, as does the same check
+      with default features. The default-feature Windows check passes even without the line,
+      because another crate in the GUI dependency graph enables the feature, so the red is the
+      CLI-only build.

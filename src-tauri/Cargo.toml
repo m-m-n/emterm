@@ -252,6 +252,10 @@ windows-sys = { version = "0.59", features = [
     # sink in `src/ime/winit_bridge.rs`, bypassing winit's
     # `request_ime_update` for that one call.
     "Win32_UI_Input_Ime",
+    # Threading (task0001, lib-budget-tests-load-tolerance): `GetCurrentThread`
+    # / `GetThreadTimes` for the test-side thread CPU-time helper in
+    # `src/mux/ipc/pty_spawn/tests/thread_cpu_time.rs`.
+    "Win32_System_Threading",
 ] }
 
 # Phase 4-G-1 redesign (2026-05-14): removed x11-dl / wayland-client /

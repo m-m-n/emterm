@@ -8885,3 +8885,7 @@ mod strip_open_string_body_closure;
 // `(ESC P x)*N` + `ESC \` on the shared strip, the write filter, the snapshot builders, the
 // production reader and the client-parity scan.
 mod strip_non_sixel_dcs_linear;
+
+// lib-budget-tests-load-tolerance task0001 (FR3, FR4, FR6, FR7, FR8): the thread CPU-time
+// reading, the CPU budget meter and its judgment, with their own tests.
+mod thread_cpu_time;
