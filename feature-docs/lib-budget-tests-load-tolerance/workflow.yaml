@@ -133,7 +133,7 @@ tasks:
     requirements:
     - FR1
     - FR9
-    status: in_progress
+    status: merged
     branch: em-workflow/lib-budget-tests-load-tolerance/task0002
 review:
   status: pending
