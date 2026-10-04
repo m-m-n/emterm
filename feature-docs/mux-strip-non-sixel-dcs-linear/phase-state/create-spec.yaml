@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-strip-non-sixel-dcs-linear
 phase: create-spec
-status: in_progress
+status: completed
 generation: 1
 base_revision: f6e8166aa48c04de1554f5fc90093cf71b94db11
 last_input_digest: sha256:2efef33cb2f5aeeb597b34da96c47575429824ed3f4c84d95c04d937fafa3e14
@@ -61,7 +61,16 @@ worker_runs:
   status: completed
   input_digest: sha256:2efef33cb2f5aeeb597b34da96c47575429824ed3f4c84d95c04d937fafa3e14
   output_digest: sha256:591b8d3c9104864d6605dc53eb67d4da387c125acc6ac32c31c4854c00ac59e2
-artifacts: []
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:85384c7647266a4db1cf729087197966e745e931b1545274bfad7b135bb177b0
+artifacts:
+- path: feature-docs/mux-strip-non-sixel-dcs-linear/REQUIREMENTS.md
+  sha256: sha256:b3e3a7d5fb2d01844d8093d218de94a192c2c5734f41968d6cd8b3e67be6f98b
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-strip-non-sixel-dcs-linear/SPEC.md
+  sha256: sha256:da95736f051e3658db5b8eeb36fa781660e0231d0fdd77aeb56ebae4b61d4565
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
