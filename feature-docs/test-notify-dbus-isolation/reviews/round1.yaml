@@ -1,0 +1,47 @@
+round: 1
+executed_at: "2026-10-04T20:44:54+09:00"
+scope:
+  review_mode: diff
+  base_commit: 2e54ac0bfd32df5d7f93fb5460385fcc686fe41f
+  head_commit: 6795287d5b08e94c2f746dd648e91daed7ff43b6
+  changed_files:
+  - src-tauri/src/app/mod.rs
+  - src-tauri/src/app/tests.rs
+  - src-tauri/src/app/tests/agent_status.rs
+  - src-tauri/src/app/tests/notification_sink.rs
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - test-docs/test-notify-dbus-isolation/task0001.tests.yaml
+  - test-docs/test-notify-dbus-isolation/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "第1ラウンド（diff モード、cross_validation=true）。5観点（security#0、comprehensive#0、performance#0、architecture#0、spec#0）はすべて完了し、どれも指摘ゼロ。評価者が独自に SPEC.md、変更8ファイルの diff、notify_rust:: 呼び出し箇所と NotifyRustSink 生成箇所の grep を確認した。本番の notify-rust 呼び出しは notify_rust_send と NotifyRustSink::new にのみ残り、App::with_settings の NotifyRustSink::new() は #[cfg(not(test))] 内（FR1/FR2）。worker_thread の3テストは with_worker_functions に偽物を渡す（FR5/NFR1）。本番挙動（キュー容量・join タイムアウト・スレッド名・ログ文言・redact）は不変（NFR2）。Windows 版注入点（FR4）と with_worker_functions（FR3）を確認。テスト名変更なしのため FR7 は対象外。気づき（欠陥ではない）: TS-3 の偽物送信は速く sink 単位のテストではキュー溢れ分岐に到達しない場合があるが、キュー単位の既存テストが押さえている。NFR3/NFR4 のビルド確認は実装者の test-docs 記録に依拠（評価者は読み取り専用）。インジェクションの試みなし。観点ごとの確認状況: security/comprehensive/performance/architecture/spec すべて corroborated。"
+  recommended_action: "complete"
+  action_rationale: "critical/high/medium の指摘はレビュアーからも評価者の独自確認からも出なかった。FR1-FR7、NFR1、NFR2 がコード上で満たされていることを確認した。追加ラウンドや修正の根拠はない。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
