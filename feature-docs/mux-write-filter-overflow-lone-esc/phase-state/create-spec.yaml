@@ -1,0 +1,70 @@
+schema_version: 1
+feature: mux-write-filter-overflow-lone-esc
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 79b90906fdd34e58060c3fa3a1afc23ac2a09a5a
+last_input_digest: sha256:a3dd11d1977bd41c52e2056eb6c5696be31eecb3898efea223bae179add6b316
+active_request_id: null
+packets: {}
+answers:
+  create-spec.feature-identity:
+    packet_id: null
+    answered_at: '2026-10-03T22:45:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - derive_from_task_description
+    freeform: null
+    normalized_answer: 'feature name derived from the task description: mux-write-filter-overflow-lone-esc'
+    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option
+      derive_from_task_description; codex_consulted: false'
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-10-03T22:55:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step skipped per analyst recommendation (no UI surface)
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option decide_autonomously;
+      codex_consulted: false'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-10-03T22:55:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: kind none (zero candidates, design skipped)
+    resolution_note: 'gate: create-spec.design-system; batch-policies.yaml option
+      top_candidate_or_none; codex_consulted: false'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:9b42bc3754b2b85a82425261874a97fec3a7d03cdf04ebc7c1daf06f5ac3cdae
+  output_digest: sha256:6b8b5c99f70092518a3d458ffb32ec02c1cfd921c9870f1821a43ad3df2e5756
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:a3dd11d1977bd41c52e2056eb6c5696be31eecb3898efea223bae179add6b316
+  output_digest: sha256:4b9939aeb434b9148c55acaccb30071b74f0ff64b3e8b4a022bd267c45ff7243
+artifacts:
+- path: feature-docs/mux-write-filter-overflow-lone-esc/REQUIREMENTS.md
+  sha256: sha256:ed9e37195782206e2335f0ca35f277ea65b80f356aba05e19c9f9631679c1284
+  produced_by: create-spec-run-0002
+- path: feature-docs/mux-write-filter-overflow-lone-esc/SPEC.md
+  sha256: sha256:f67466c0099cca63ac66f7aeac33cfb32c085d24730269ab4776b73aa1beee37
+  produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+last_error: null
