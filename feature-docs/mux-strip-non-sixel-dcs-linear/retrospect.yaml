@@ -1,5 +1,5 @@
 feature: mux-strip-non-sixel-dcs-linear
-collected_at: "2026-10-04T18:05:00+09:00"
+collected_at: "2026-10-04T17:51:49+09:00"
 session_ids: [01a1061b-1caa-722d-b907-131691071013]
 signals:
   review_critical_high: []
