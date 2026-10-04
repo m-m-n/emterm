@@ -601,6 +601,12 @@ The new-tab chooser (opened by the tab bar's + button) lists one row per live tm
 - Sessions already attached by another client are listed like any other session
 - With zero live tmux sockets, the chooser is unchanged (no tmux rows shown)
 
+**Shortcut Hints:**
+- The chooser shows the resolved keyboard shortcut at the right edge of the "Global Settings" row (`keybinds.new_tab_global`, default `Ctrl+Shift+G`) and of the default profile's row (`keybinds.new_tab`, default `Ctrl+Shift+T`)
+- Other profile rows and tmux rows show no label; the `Ctrl+Shift+P` profile selector shows no labels
+- Labels follow the current keybind settings, are written in canonical form (Ctrl, Shift, Alt order, uppercase letters), and are omitted when another higher-priority action holds the same chord
+- Long shell paths are truncated before the label so they never overlap
+
 ---
 
 ### Category 4: Input and IME
@@ -1015,10 +1021,10 @@ Named shell configurations that can be selected when creating new tabs.
 **Key Functionality:**
 - Each profile defines: name, shell path, shell arguments, environment variables (KEY=VALUE per line), working directory, and default flag
 - CRUD operations: create, edit, delete, duplicate profiles
-- Drag-and-drop reordering in the settings UI
+- Drag-and-drop reordering in the settings UI, for both the Profiles list and the SSH connection list (works on Linux WebKitGTK; the new order is saved)
+- The settings UI has no per-profile Launch button; each profile row offers default toggle, Edit, Duplicate and Delete
 - Exactly one profile can be marked as default at a time
 - Profile selector modal with keyboard navigation (arrow keys, Enter, Escape)
-- Launch button per profile in the settings UI opens a new tab with that profile
 - Configurable keybind to open the profile selector modal
 
 **Profile Editor - SHELL/SSH Tab Switcher:**
@@ -1370,6 +1376,14 @@ Response-producing CSI device queries (DA1/DA2, DSR, XTWINOPS size reports, DECR
 - Non-query CSI sequences (title-stack, DECSTR, DECSCL, tertiary DA, unknown-mode DSR, etc.) are preserved byte-for-byte
 - An incomplete CSI sequence at the end of the buffer is preserved unchanged
 - Eliminates stray device-query text (e.g. `65;1;4;22c`) appearing in the shell prompt after detach → attach
+
+**Join and Cut Closure:**
+- When the strip removes a construct, the bytes before and after it are never joined into an escape, CSI query (CPR and similar), RIS or OSC color query (OSC 4/10/11/12 `?`) that the raw stream did not form; a closing byte (DEL inside a CSI or after a lone ESC, `ESC` + `CAN` inside an open OSC/DCS/APC body) is written at the removal point
+- The scrollback write filter carries its end state (Ground / Escape / Designator / Csi / open string body) across PTY reads, so output is independent of where reads are split; the closure at a cut is decided from the state after stripping
+- When the filter's pending run overflows (512 KiB), a trailing lone ESC is held for the next read, and an open OSC/DCS/APC body left in the ring is closed at a later cut, so snapshot replay matches what the client displayed
+- A Kitty APC / SIXEL DCS body aborted by `ESC` + any byte (including `CAN`) is removed up to the aborting ESC, and text written after it is shown on replay
+- Scanning is linear in input length (including repeated non-SIXEL DCS introducers)
+- The vt100 shadow consumers (`ReadPane` row rendering and restored-pane replay) receive a copy in which DEL inside a CSI or after a lone ESC is replaced by CAN; the ring and the client replay bytes are unchanged
 
 ---
 

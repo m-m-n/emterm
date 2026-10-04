@@ -10,6 +10,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Device-query responses (DA1/DA2/DSR/XTWINOPS) are delivered to the application that issued them (e.g. `tmux`) rather than rendered as visible text
   - New tab with global shell settings (`Ctrl+Shift+G`), bypassing the profile selector
   - New-tab chooser lists live tmux sessions as rows (Linux/Unix); confirming a row opens a new tab attached to that session
+  - New-tab chooser shows the keyboard shortcut next to the Global Settings row and the default profile row
   - `term_core` Rust crate for the parser, grid, and Unicode width
   - Unified ring buffer with full-buffer reflow on resize
   - SlimCell scrollback compression: 76% per-cell memory reduction (34B → 8B) via StyleTable/CharTable deduplication
