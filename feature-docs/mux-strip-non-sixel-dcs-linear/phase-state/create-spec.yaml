@@ -4,11 +4,59 @@ phase: create-spec
 status: in_progress
 generation: 1
 base_revision: f6e8166aa48c04de1554f5fc90093cf71b94db11
-last_input_digest: null
+last_input_digest: sha256:4ab18209a2db926dd9b10017e3070bdd4f61c713cc5e3ad913db0ebd41c90693
 active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-04T17:12:00+09:00'
+    questions:
+    - question_id: requirement.write-path-test-scope
+      status: answered
+    - question_id: requirement.red-phase-handling
+      status: answered
+    - question_id: design-step.decision
+      status: answered
+answers:
+  requirement.write-path-test-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T17:12:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - filter_and_reader
+    freeform: null
+    normalized_answer: 書き込み経路の回帰試験は ScrollbackWriteFilter に加えて本番の読み取り処理（reader）も対象にする。client_parity_scan.rs を参照走査の対象に含める。run_reader_without_owner は Detached で client_parity_scan を通らないため、client_parity_scan::scan（配送抑止時の経路。suppressed_output.rs:246/250、run_reader_with_suppressed_reads
+      等）も同じ入力形で時間予算内に終わることを確かめる。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 1 turn) consulted; Opus escalation:
+      not run; options: filter_and_reader [chosen] / filter_only [not chosen]; key points: 本番 reader は書き込みフィルタを呼ぶ(mod.rs:575)。配送抑止時は client_parity_scan::scan も走る(mod.rs:738→961→suppressed_output.rs:246/250)。run_reader_without_owner
+      は Detached で client_parity_scan を通らない(round3_write_path.rs:897, mod.rs:720)ので reader 試験だけではその動的検証にならない。client_parity_scan の find_st_terminator は次の ESC で中断しその ESC へ進むためこの入力形で線形(client_parity_scan.rs:408,411,545)'
+  requirement.red-phase-handling:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T17:12:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - regression_guard_green
+    freeform: null
+    normalized_answer: '新しい試験は HEAD で通る回帰ガードとして追加する。test-docs には red_confirmed: false と、二乗走査が本 feature より前に解消済みである旨の red_reason を記録する。線形性は二乗走査なら予算を桁違いに超える入力長で固定する。'
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (same consultation turn) consulted; Opus escalation: not run; options: regression_guard_green
+      [chosen] / demonstrate_red_temporarily [not chosen]; key points: 共有 strip(scrollback_filter.rs:778,875)と書き込みフィルタ(write_filter.rs:955,1069)は既に最初の ESC で探索を打ち切るため初回から緑が見込まれる。既存処理の確認を red_confirmed: false
+      で記録した前例がある(test-docs/mux-snapshot-strip-can-abort/task0001.tests.yaml:79)'
+  design-step.decision:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T17:12:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step は推奨どおり skip（UI に触れない mux デーモンのバイト列処理の回帰試験）
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously (analyst の推奨 skip を受け入れる)'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:4ab18209a2db926dd9b10017e3070bdd4f61c713cc5e3ad913db0ebd41c90693
 artifacts: []
 patches: []
 progress_fingerprint: null
