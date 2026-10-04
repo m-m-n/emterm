@@ -87,7 +87,7 @@ workflow:
   completed_at_commit: 145576a862d706e99425aa44acddf4d4bfa8a199
   base_commit: 389142b5cd4cd1805a48447db67571a89ef6a3fa
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -137,7 +137,15 @@ tasks:
     status: merged
     branch: em-workflow/lib-budget-tests-load-tolerance/task0002
 review:
-  status: pending
+  status: in_progress
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary:
+    - perspective: license
+      reason: diff touches dependency manifest src-tauri/Cargo.toml (windows-sys feature added)
+    - perspective: vulnerability
+      reason: diff touches dependency manifest src-tauri/Cargo.toml (axis 2 scan)
+    cross_validation: true
   rounds_completed: 0
   perspectives: {}
   residual_critical_high: 0
