@@ -88,7 +88,8 @@ workflow:
   base_commit: ed2da8027eaf8616aa800ddde137f9cad6521a1d
   completed_at_commit: 6fc5f1ba6f23a8d3b1b0c93e9997f7390ebafd7f
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: b1e3399ba859810a980206dcf5554a525f446347
 - id: verify
   status: pending
 - id: retrospect
@@ -126,8 +127,15 @@ tasks:
     status: merged
     branch: em-workflow/mux-strip-non-sixel-dcs-linear/task0001
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - spec
+  - performance
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive

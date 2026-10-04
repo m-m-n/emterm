@@ -1,0 +1,44 @@
+round: 1
+executed_at: "2026-10-04T17:37:51+09:00"
+scope:
+  review_mode: diff
+  base_commit: ed2da8027eaf8616aa800ddde137f9cad6521a1d
+  head_commit: b1e3399ba859810a980206dcf5554a525f446347
+  changed_files:
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/strip_non_sixel_dcs_linear.rs
+  - test-docs/mux-strip-non-sixel-dcs-linear/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+  - perspective: performance
+    reason: "差分は二乗走査を検出する時間予算テストで、計測方法と入力長の妥当性が性能観点の判断になるため"
+  cross_validation: false
+perspective_runs:
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "ラウンド 1（diff モード、cross_validation=false）。4 観点 comprehensive / security / spec / performance はすべて指摘 0 件で完了した。差分は新規テストモジュール strip_non_sixel_dcs_linear.rs（12 テスト）、pty_spawn/tests.rs へのモジュール登録、test-docs の task0001.tests.yaml の 3 つ。本番コードの変更は無く、FR7 / AC-6 と整合する。評価者は write_filter の pending 上限判定、suppressed_output.rs の空 / 非空 pending 分岐、FR1〜FR6 の入力形状とサイズ、test-docs のテスト名を自分で確認した。テストは実行していない（読み取り専用）。補足: 10 秒の実時間予算は並列デバッグ実行の負荷に左右される（SPEC A5 で受容済み）。"
+  recommended_action: complete
+  action_rationale: "4 観点とも指摘は 0 件で、評価者自身の確認でも中以上の問題は見つからなかった。critical / high の指摘箇所が無いため、dismissed_sites も空になる。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-mux-strip-non-sixel-dcs-linear-20261004T083737Z.md
+  degraded_reason: listing_exit_nonzero
