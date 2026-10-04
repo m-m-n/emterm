@@ -31,7 +31,7 @@ records:
 - gate_id: null
   question_id: verify.ts7-preexisting-flake
   packet_id: null
-  answered_at: '2026-10-04T17:55:00+09:00'
+  answered_at: '2026-10-04T17:47:00+09:00'
   source: batch-codex-consultation
   answer_mode: single_select
   selected_option_ids:
