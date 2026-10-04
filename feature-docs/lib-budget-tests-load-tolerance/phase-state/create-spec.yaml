@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: acfdc188bcbecb9ec7c0933dd3a9ac6dd28a0b05
 last_input_digest: sha256:ad259c5c5545c91b05bd08cdbafe3a945ee13dcf1b3cd0729afbc7209464d832
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -113,9 +113,15 @@ worker_runs:
   input_digest: sha256:24a68a30af5ed0c966389a672af5a223d4e5cfe7dd16e573abd7ad57f7a3b190
   output_digest: sha256:2d1f1455d1e64f5470dc2ee06424d0c61f4858f0204cd3e6847d11ef1c6775db
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:ad259c5c5545c91b05bd08cdbafe3a945ee13dcf1b3cd0729afbc7209464d832
-artifacts: []
+artifacts:
+- path: feature-docs/lib-budget-tests-load-tolerance/REQUIREMENTS.md
+  sha256: sha256:dccc03f590df67c2510e330e6b5113b7005537949a34584e8ef31272ac5edfa6
+  produced_by: create-spec-run-0003
+- path: feature-docs/lib-budget-tests-load-tolerance/SPEC.md
+  sha256: sha256:c3409b1647c6554b57b3b7833151800a27654ecf902a76afa139a6f3fe195a6f
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
