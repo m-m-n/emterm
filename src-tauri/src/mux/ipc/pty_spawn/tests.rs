@@ -8880,3 +8880,8 @@ mod snapshot_strip_can_abort;
 // open OSC / DCS / APC body writes the string-body closure (write filter, snapshot
 // replay, live continuation, cuts and doc contracts).
 mod strip_open_string_body_closure;
+
+// mux-strip-non-sixel-dcs-linear task0001 (FR1-FR6, NFR1): budget regression guards for
+// `(ESC P x)*N` + `ESC \` on the shared strip, the write filter, the snapshot builders, the
+// production reader and the client-parity scan.
+mod strip_non_sixel_dcs_linear;

@@ -1,0 +1,97 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib` finished with 4283 passed, 1 failed, 3 ignored.
+# The failure is inherited and not touched by this task: a per-test 10 s wall-clock budget
+# exceeded in the unoptimized parallel run (10.08 s).
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# Re-executed after the implementation (the final tree of this task): `cargo test --lib` finished
+# with 4296 passed, 0 failed, 3 ignored (the baseline's 4284 tests plus the 12 tests this task
+# adds, which all pass). The baseline's budget test passed in this run, which shows that it is
+# load dependent. `cargo check` and `cargo check --no-default-features` finished with no error and
+# no warning.
+final_failures: []
+# No red state was observed for any criterion: the first run of the new module (12 tests) passed
+# before any other change. The scans on these paths already stop at the first ESC of a body, so
+# the new tests are regression guards that were green from the start (SPEC.md A1, A3).
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_strip_replayable_rich_content_returns_the_input_within_the_budget
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_strip_pty_output_for_scrollback_write_returns_the_input_within_the_budget
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_strip_rich_content_and_remap_returns_the_input_within_the_budget
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_the_written_state_form_returns_the_input_within_the_budget
+    red_confirmed: false
+    red_reason: >-
+      The quadratic scan was already resolved before this feature (`scan_body_end` and `find_st`
+      stop at the first ESC), so the tests are regression guards that were green from the start;
+      no red state occurred.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_the_write_filter_takes_a_chain_under_the_cap_in_one_call
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_the_write_filter_takes_a_chain_under_the_cap_in_reader_sized_pieces
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_the_write_filter_flushes_a_chain_past_the_cap_in_linear_time
+    red_confirmed: false
+    red_reason: >-
+      The quadratic scan was already resolved before this feature (`scan_body_end` and `find_st`
+      stop at the first ESC), so the tests are regression guards that were green from the start;
+      no red state occurred.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_build_snapshot_bytes_keeps_the_scrollback_within_the_budget
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_build_resume_snapshot_bytes_keeps_the_scrollback_within_the_budget
+    red_confirmed: false
+    red_reason: >-
+      The quadratic scan was already resolved before this feature (`scan_body_end` and `find_st`
+      stop at the first ESC), so the tests are regression guards that were green from the start;
+      no red state occurred.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_the_detached_reader_writes_the_input_to_the_ring_within_the_budget
+    red_confirmed: false
+    red_reason: >-
+      The quadratic scan was already resolved before this feature (`scan_body_end` and `find_st`
+      stop at the first ESC), so the tests are regression guards that were green from the start;
+      no red state occurred.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_the_client_parity_scan_reports_nothing_within_the_budget
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_the_reader_with_suppressed_reads_runs_both_replacement_branches
+    red_confirmed: false
+    red_reason: >-
+      The quadratic scan was already resolved before this feature (`scan_body_end` and `find_st`
+      stop at the first ESC), so the tests are regression guards that were green from the start;
+      no red state occurred.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      AC-1 to AC-5 passed at HEAD, so the outcome is that the task changes no production source
+      file; it is checked by the diff (`git diff --stat` lists only the new test module, the
+      one-line module registration in pty_spawn/tests.rs and this record). No executable check can
+      fail for it: the search of the test directory (by repository-relative path and by file name)
+      for tests that read scrollback_filter.rs, write_filter.rs, client_parity_scan.rs and
+      suppressed_output.rs found only the doc-comment tests
+      (`snapshot_strip_can_abort_the_comments_describe_the_abort_aware_body_end`,
+      `overflow_open_string_cut_the_doc_comments_state_the_open_body_model`) and
+      `round4_as05_the_scan_takes_no_lock_and_adds_no_blocking_wait`, which reads
+      client_parity_scan.rs for forbidden lock and wait tokens; they read comments or a token list
+      and do not detect an absent production change. No red state occurred.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The outcome is the content of this record. No test reads
+      test-docs/mux-strip-non-sixel-dcs-linear/ (the search by path and by file name found none),
+      so no executable check can fail for it; no red state occurred.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The outcomes are the full `cargo test --lib` run (4296 passed, 0 failed), the
+      `--no-default-features` `cargo check` (no error) and the new module's source (every new test
+      is a plain `#[test]` without `#[ignore]`, Cargo.toml and Cargo.lock are unchanged). None of
+      them has an executable check that fails before the change. The only existing test that reads
+      the registration file pty_spawn/tests.rs
+      (`round4_fr4_the_decision_record_states_the_outcome_and_lists_the_changed_test` in
+      round4_cut_csi.rs, via `include_str!("../tests.rs")`) checks the presence of one named
+      function and does not detect a module registration; no red state occurred.
