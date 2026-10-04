@@ -100,9 +100,17 @@ workflow:
   status: completed
   completed_at_commit: 6795287d5b08e94c2f746dd648e91daed7ff43b6
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  result: pass
   failed_items: []
+  summary: |
+    TS-6: default-features cargo check / --no-default-features cargo check / Windows-target xwin check (--lib --tests) all exit 0; no new compiler warning in touched files (only pre-existing viewer/settings dist build-script warnings).
+    TS-1..TS-5: full --lib suite 4309 passed / 0 failed / 3 ignored, including app::tests::notification_sink::{ac1_ts1,ac2_ts2} and callbacks::tests::worker_thread sink tests on fakes.
+    TS-7: substituted by a dbus-monitor capture of org.freedesktop.Notifications.Notify on the session bus (GNOME Shell 50.1) during a full --lib run: 0 Notify calls observed. Notification-history comparison in the desktop UI was not performed (headless batch).
+    TS-8: not applicable (no worker_thread test renamed; test-docs/notification-worker-thread unchanged).
+    NFR1 source check: no NotifyRustSink::new()/Default construction in lib test sources; remaining production callers are the #[cfg(not(test))] branch of App::with_settings and impl Default.
+  excluded: []
+  completed_at_commit: 5c76221715825595d4aede452e0a9611a5bc1fba
 - id: retrospect
   status: pending
 tasks:
