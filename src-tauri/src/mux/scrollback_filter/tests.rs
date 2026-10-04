@@ -220,14 +220,17 @@ fn strip_removes_mixed_rich_content_keeps_text() {
     assert_eq!(out, b"$ emterm markdown README.md\r\n$ next prompt");
 }
 
-/// Performance / correctness: a scrollback full of unterminated APC / DCS
-/// introducers must complete in a single O(n) pass (no quadratic re-scan)
-/// and preserve every byte (the introducers are partial sequences).
+/// Performance / correctness: a scrollback full of APC / DCS introducers with
+/// no ST terminator must complete in a single O(n) pass (no quadratic re-scan).
+/// Each body ends at the next `ESC`, so every Kitty APC and every SIXEL DCS
+/// here is aborted by the introducer that follows it and is removed up to that
+/// aborting `ESC`; only the last SIXEL DCS has no `ESC` after it, stays
+/// unterminated and is kept (mux-snapshot-strip-can-abort FR7, NFR1).
 #[test]
 fn strip_unterminated_introducers_complete_in_single_pass() {
     // Thousands of `ESC _ G` / `ESC P` introducers with NO ST terminator
-    // anywhere. The old implementation re-scanned the tail for every one,
-    // making this O(n²); the cached `st_search_from` makes it O(n).
+    // anywhere. Each body scan stops at the next `ESC`, so the ranges scanned
+    // never overlap and the pass is O(n).
     let mut input = Vec::new();
     for _ in 0..20_000 {
         input.extend_from_slice(b"\x1b_G"); // APC introducer, no terminator
@@ -235,8 +238,9 @@ fn strip_unterminated_introducers_complete_in_single_pass() {
         input.extend_from_slice(b"plain");
     }
     let out = strip_replayable_rich_content(&input);
-    // Nothing is terminated, so nothing is stripped — output equals input.
-    assert_eq!(out, input);
+    // The last SIXEL DCS has no `ESC` after its body: unterminated, kept. Every
+    // earlier body is aborted by the next introducer and removed.
+    assert_eq!(out, b"\x1bP1;0;0qplain");
 }
 
 /// Perf bench: measure `strip_replayable_rich_content` on a 2 MiB
@@ -2557,4 +2561,330 @@ fn vt100_replay_copy_is_total_and_changes_only_del_into_can() {
             }
         }
     }
+}
+
+// ── mux-snapshot-strip-can-abort task0001 (FR1-FR7, NFR1) ───────────────────
+//
+// The strip ends a Kitty APC / DCS body at the first `ESC` in the body: `ESC \`
+// completes it, `ESC` followed by any other byte (CAN included) aborts it, and
+// an `ESC` that is the last byte leaves it unterminated. An aborted Kitty APC /
+// SIXEL DCS body is removed up to, not including, the aborting `ESC`, and the
+// pass resumes AT that `ESC`. The payloads below neither answer nor place an
+// image, so term_core replays and the end-state oracle stay free of side effects.
+
+const ABORT_ESC_CAN: &[u8] = b"\x1b\x18";
+const ABORT_OSC0: &[u8] = b"\x1b]0;title\x1b\\";
+
+/// The Kitty APC / SIXEL DCS introducers with a short body (no ESC).
+const ABORT_BODIES: [(&str, &[u8]); 2] = [
+    ("kitty apc", b"\x1b_Gi=1,a=d;AAAA"),
+    ("sixel dcs", b"\x1bPq#0;2;0;0;0"),
+];
+
+/// A body longer than 512 KiB with no ESC: the introducer then `pad` bytes.
+fn long_abort_body(head: &[u8], pad: u8) -> Vec<u8> {
+    let mut body = head.to_vec();
+    body.resize(600 * 1024, pad);
+    assert!(body.len() > 512 * 1024);
+    body
+}
+
+/// The bodies of [`long_abort_body`]: name, introducer and filler.
+fn long_abort_bodies() -> Vec<(&'static str, Vec<u8>)> {
+    vec![
+        ("kitty apc", long_abort_body(b"\x1b_Gi=1,a=d;", b'A')),
+        ("sixel dcs", long_abort_body(b"\x1bPq#0;2;0;0;0", b';')),
+    ]
+}
+
+/// The rows term_core shows and the responses it gives after `stream`.
+fn abort_replay(stream: &[u8]) -> (Vec<String>, Vec<u8>) {
+    let mut core = term_core::terminal_core::TerminalCore::new(80, 24, 10);
+    core.process_pty_data_fully(stream);
+    let responses = core.take_response();
+    let rows = (0..24)
+        .map(|r| core.get_line_text(r).trim_end().to_string())
+        .collect();
+    (rows, responses)
+}
+
+/// Continuations kept whole after an aborted body.
+const ABORT_KEPT_CONTINUATIONS: &[&[u8]] =
+    &[b"\x1b[31m", b"\x1b]0;t\x1b\\", b"\x1b\x1b\\", b"\x1b\x18"];
+
+/// Continuations that are strip targets starting at the aborting `ESC`.
+const ABORT_TARGET_CONTINUATIONS: &[&[u8]] = &[
+    b"\x1b_Gi=1,a=d;BBBB\x1b\\",
+    b"\x1bPq#0;2;0;0;0\x1b\\",
+    b"\x1b]777;emterm;markdown;x\x07",
+    b"\x1b[6n",
+];
+
+/// AC-1 (FR1, FR2, FR3; TM-1): a ring of leading text, a Kitty APC / SIXEL DCS
+/// body longer than 512 KiB with no ESC, `ESC` + CAN, main-buffer plain text and
+/// an OSC 0 strips to the leading text, `ESC` + CAN, the plain text and the OSC.
+/// term_core replaying that output shows the plain text on a row.
+#[test]
+fn can_abort_a_long_body_closed_by_esc_can_keeps_the_text_written_after_it() {
+    let lead: &[u8] = b"lead text\r\n";
+    let main_text: &[u8] = b"main text";
+    for (name, body) in long_abort_bodies() {
+        let ring = [lead, &body[..], ABORT_ESC_CAN, main_text, ABORT_OSC0].concat();
+        let expected = [lead, ABORT_ESC_CAN, main_text, ABORT_OSC0].concat();
+        let out = strip_replayable_rich_content(&ring);
+        assert!(
+            out == expected,
+            "{name}: the body is removed up to the aborting ESC and nothing after it \
+             (got {} bytes, expected {})",
+            out.len(),
+            expected.len()
+        );
+        let (rows, responses) = abort_replay(&out);
+        assert!(
+            rows.iter().any(|row| row.contains("main text")),
+            "{name}: the plain text written after the aborted body is shown: {rows:?}"
+        );
+        assert!(responses.is_empty(), "{name}: no response");
+    }
+}
+
+/// AC-3 (FR1, FR2, FR3; TM-2): a short Kitty APC / SIXEL DCS body between plain
+/// text and one aborting continuation. A kept continuation survives whole; a
+/// continuation that is a strip target starting at the aborting `ESC` is removed
+/// as its own construct, so no aborted body and no target reaches the replay.
+#[test]
+fn can_abort_a_short_body_is_removed_up_to_the_aborting_esc_and_the_esc_is_judged() {
+    let lead: &[u8] = b"lead ";
+    let trail: &[u8] = b" trail";
+    for (name, head) in ABORT_BODIES {
+        for continuation in ABORT_KEPT_CONTINUATIONS {
+            let input = [lead, head, continuation, trail].concat();
+            let expected = [lead, continuation, trail].concat();
+            assert_eq!(
+                strip_replayable_rich_content(&input),
+                expected,
+                "{name}: kept continuation {:?}",
+                String::from_utf8_lossy(continuation)
+            );
+        }
+        for continuation in ABORT_TARGET_CONTINUATIONS {
+            let input = [lead, head, continuation, trail].concat();
+            let expected = [lead, trail].concat();
+            assert_eq!(
+                strip_replayable_rich_content(&input),
+                expected,
+                "{name}: target continuation {:?}",
+                String::from_utf8_lossy(continuation)
+            );
+        }
+    }
+}
+
+/// The inputs AC-4 keeps byte for byte.
+fn abort_kept_inputs() -> Vec<(String, Vec<u8>)> {
+    let mut inputs: Vec<(String, Vec<u8>)> = Vec::new();
+    for (name, head) in ABORT_BODIES {
+        inputs.push((
+            format!("{name}: no ESC"),
+            [b"lead ".as_slice(), head].concat(),
+        ));
+        inputs.push((
+            format!("{name}: a lone ESC at the end"),
+            [b"lead ".as_slice(), head, b"\x1b"].concat(),
+        ));
+        inputs.push((
+            format!("{name}: BEL and no ESC"),
+            [b"lead ".as_slice(), head, b"\x07more"].concat(),
+        ));
+    }
+    inputs.push((
+        "dcs 1;0 then CSI".into(),
+        b"lead \x1bP1;0\x1b[m trail".to_vec(),
+    ));
+    inputs.push(("dcs x then CSI".into(), b"lead \x1bPx\x1b[m trail".to_vec()));
+    inputs.push(("apc x then CSI".into(), b"lead \x1b_x\x1b[m trail".to_vec()));
+    inputs
+}
+
+/// AC-4 (FR3, FR4): a body with no ESC, a body ending in a lone ESC, a DCS whose
+/// pre-abort range is not SIXEL and a non-Kitty APC are kept byte for byte; a
+/// body that contains BEL and no ESC is kept, and BEL followed by ST is removed
+/// whole (BEL is body data, never a terminator or an abort).
+#[test]
+fn can_abort_bodies_without_an_abort_and_non_targets_are_kept_byte_for_byte() {
+    for (name, input) in abort_kept_inputs() {
+        assert_eq!(strip_replayable_rich_content(&input), input, "{name}");
+    }
+    for (name, head) in ABORT_BODIES {
+        let input = [
+            b"lead ".as_slice(),
+            head,
+            b"\x07mid\x07",
+            b"\x1b\\",
+            b" trail",
+        ]
+        .concat();
+        assert_eq!(
+            strip_replayable_rich_content(&input),
+            b"lead  trail".to_vec(),
+            "{name}: BEL then ST is removed whole"
+        );
+    }
+}
+
+/// AC-5 (FR5): the closing written at an aborted-body removal follows the
+/// written stream: inside a CSI and right after a lone ESC one DEL, in ground
+/// none; the aborted body writes nothing else.
+#[test]
+fn can_abort_the_closing_before_an_aborted_body_follows_the_written_state() {
+    let (_, kitty) = ABORT_BODIES[0];
+    let after_a_csi = [b"\x1b[6".as_slice(), kitty, ABORT_ESC_CAN].concat();
+    assert_eq!(
+        strip_replayable_rich_content(&after_a_csi),
+        b"\x1b[6\x7f\x1b\x18".to_vec(),
+        "inside a CSI: one DEL, then ESC and CAN"
+    );
+    let after_a_lone_esc = [b"\x1b".as_slice(), kitty, ABORT_ESC_CAN].concat();
+    assert_eq!(
+        strip_replayable_rich_content(&after_a_lone_esc),
+        b"\x1b\x7f\x1b\x18".to_vec(),
+        "after a lone ESC: one DEL, then ESC and CAN"
+    );
+    let in_ground = [b"text".as_slice(), kitty, ABORT_ESC_CAN].concat();
+    assert_eq!(
+        strip_replayable_rich_content(&in_ground),
+        b"text\x1b\x18".to_vec(),
+        "in ground: no DEL"
+    );
+}
+
+/// AC-5 (FR5): watch offsets at the introducer, strictly inside the body, at the
+/// aborting `ESC` and after it map to the positions the existing per-iteration
+/// rule gives: the introducer before the DEL, the others at the aborting `ESC`
+/// or shifted; remapped offsets are non-decreasing and within the output.
+#[test]
+fn can_abort_remapped_offsets_around_an_aborted_body() {
+    let (_, kitty) = ABORT_BODIES[0];
+    let input = [b"\x1b[6".as_slice(), kitty, ABORT_ESC_CAN].concat();
+    let introducer = 3;
+    let aborting = introducer + kitty.len();
+    let offsets = [
+        0,
+        introducer,
+        introducer + 1,
+        introducer + 5,
+        aborting - 1,
+        aborting,
+        aborting + 1,
+        input.len(),
+    ];
+    let (out, remapped) = strip_rich_content_and_remap(&input, &offsets);
+    assert_eq!(out, b"\x1b[6\x7f\x1b\x18".to_vec());
+    // Output: ESC [ 6 at 0..3, DEL at 3, the aborting ESC at 4, CAN at 5.
+    assert_eq!(remapped, vec![0, 3, 4, 4, 4, 4, 5, 6]);
+    assert!(remapped.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert!(remapped.iter().all(|&offset| offset <= out.len()));
+}
+
+/// Every input of AC-1, AC-3 and AC-4.
+fn abort_all_inputs() -> Vec<(String, Vec<u8>)> {
+    let mut inputs: Vec<(String, Vec<u8>)> = Vec::new();
+    for (name, body) in long_abort_bodies() {
+        inputs.push((
+            format!("long {name}"),
+            [
+                b"lead text\r\n".as_slice(),
+                &body[..],
+                ABORT_ESC_CAN,
+                b"main text",
+                ABORT_OSC0,
+            ]
+            .concat(),
+        ));
+    }
+    for (name, head) in ABORT_BODIES {
+        for continuation in ABORT_KEPT_CONTINUATIONS
+            .iter()
+            .chain(ABORT_TARGET_CONTINUATIONS)
+        {
+            inputs.push((
+                format!("{name} then {:?}", String::from_utf8_lossy(continuation)),
+                [b"lead ".as_slice(), head, continuation, b" trail"].concat(),
+            ));
+        }
+    }
+    inputs.extend(abort_kept_inputs());
+    inputs
+}
+
+/// AC-6 (FR6): the write-path strip returns the bytes of the snapshot strip, and
+/// the state-reporting form started from Ground with the designator flag clear
+/// returns the same bytes and the end state term_core stands in after them.
+#[test]
+fn can_abort_the_write_path_and_the_state_form_agree_with_the_snapshot_strip() {
+    for (name, input) in abort_all_inputs() {
+        let snapshot = strip_replayable_rich_content(&input);
+        assert!(
+            strip_pty_output_for_scrollback_write(&input) == snapshot,
+            "{name}: write path equals snapshot strip"
+        );
+        let (bytes, state) = strip_pty_output_for_scrollback_write_with_written_state(
+            &input,
+            false,
+            WrittenState::Ground,
+        );
+        assert!(
+            bytes == snapshot,
+            "{name}: the state form writes the same bytes"
+        );
+        assert_eq!(
+            state,
+            client_written_state(&bytes),
+            "{name}: the reported state is the one term_core stands in"
+        );
+    }
+}
+
+/// AC-7 (FR7, NFR1; TM-3): a timed test on input made only of aborted Kitty APC
+/// and SIXEL DCS bodies (20,000 units and more): both entry points return the
+/// exact expected output and the offsets map as the aborting-ESC rule says, inside
+/// the bound the designator-chain test uses, so such input cannot stall the strip.
+#[test]
+fn can_abort_aborted_bodies_in_bulk_are_one_bounded_pass() {
+    let unit: &[u8] = b"\x1b_Gi=1,a=d;AAAA\x1bPq#0;2;0;0;0;1;1";
+    let head: &[u8] = b"head";
+    let tail: &[u8] = b"\x1b\x18end";
+    let mut input = head.to_vec();
+    for _ in 0..20_000 {
+        input.extend_from_slice(unit);
+    }
+    let tail_start = input.len();
+    input.extend_from_slice(tail);
+    let expected = [head, tail].concat();
+    let offsets = [
+        0,
+        head.len(),
+        head.len() + unit.len() * 10_000 + 7,
+        tail_start,
+        input.len(),
+    ];
+
+    let start = std::time::Instant::now();
+    let out = strip_replayable_rich_content(&input);
+    let (remapped_out, remapped) = strip_rich_content_and_remap(&input, &offsets);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "aborted bodies took {:?}",
+        start.elapsed()
+    );
+    assert!(out == expected, "strip_replayable_rich_content output");
+    assert!(
+        remapped_out == expected,
+        "strip_rich_content_and_remap output"
+    );
+    // Everything between `head` and the aborting ESC of the tail is removed.
+    assert_eq!(
+        remapped,
+        vec![0, head.len(), head.len(), head.len(), expected.len()]
+    );
 }

@@ -1,0 +1,132 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib` finished with 4242 passed, 0 failed, 3 ignored.
+baseline_failures: []
+# Re-executed after the implementation and after the last source edit (cargo fmt, which changed
+# only the three files this task edits): `cargo test --lib` finished with 4252 passed, 0 failed,
+# 3 ignored (the baseline's 4242 plus the 10 new tests: 7 `can_abort_*` tests in
+# scrollback_filter/tests.rs and 3 in the module `snapshot_strip_can_abort`). The default-features
+# `cargo check` and the `--no-default-features` cargo check were each run after the implementation:
+# no error. Two earlier full runs (one before the implementation, one after it) each saw
+# `strip_concat_alternations_and_chains_finish_within_the_budget` exceed its 10 s wall-clock
+# budget (10.09 s and 10.20 s) while the machine load average was about 7; the baseline run and the
+# final run passed it, and it reads neither the Kitty / SIXEL body end nor anything this task
+# changed, so it is a load-dependent budget test, not a regression.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::scrollback_filter::tests::can_abort_a_long_body_closed_by_esc_can_keeps_the_text_written_after_it
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: the test failed at 'kitty apc: the body is removed up
+      to the aborting ESC and nothing after it (got 11 bytes, expected 33)': the old strip ended
+      the body at the OSC's ST and returned only the leading text. The loop stops at its first
+      failing assertion, so the SIXEL DCS case was not observed red on its own.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::snapshot_strip_can_abort::snapshot_strip_can_abort_a_kitty_apc_closed_at_a_cut_leaves_the_text_after_it
+      - mux::ipc::pty_spawn::tests::snapshot_strip_can_abort::snapshot_strip_can_abort_a_sixel_dcs_closed_at_a_cut_leaves_the_text_after_it
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: both tests failed at 'the snapshot strip gives ESC
+      and CAN, the text and the OSC 0 (got 0 bytes)': the old strip removed the whole ring, the
+      closure and the text with it. The write filter half (the cut writes ESC and CAN, then the
+      text) passed before the change, as it is not what this feature changes. The term_core view
+      comparisons behind the strip assertion were not observed red on their own.
+  AC-3:
+    tests:
+      - mux::scrollback_filter::tests::can_abort_a_short_body_is_removed_up_to_the_aborting_esc_and_the_esc_is_judged
+      - mux::ipc::pty_spawn::tests::round4_designator_cut::round4_cut_in_the_same_call_after_a_waiting_esc_brace_writes_one_esc
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change for the first test: it failed at 'kitty apc: kept
+      continuation "\u{1b}[31m"' (the old strip kept the unterminated Kitty body whole). The loop
+      stops at its first failing assertion, so the other rows (SIXEL DCS, the other kept
+      continuations and the strip-target continuations) were not observed red on their own. The
+      second test is the existing write filter test whose `ESC P q 1 ESC (` row pinned the old
+      kept-aborted-SIXEL behavior; it failed against the new strip with its old expectation
+      ('"\u{1b}Pq1\u{1b}("', left ESC ( ESC, right ESC P q 1 ESC ( ESC) and was updated to the new
+      expectation under its current name (the aborted SIXEL DCS is removed up to the aborting ESC;
+      an added `ESC P x 1` row keeps the old kept-whole expectation for the non-SIXEL DCS). Its
+      updated assertion itself was not watched red against the old strip.
+  AC-4:
+    tests:
+      - mux::scrollback_filter::tests::can_abort_bodies_without_an_abort_and_non_targets_are_kept_byte_for_byte
+    red_confirmed: false
+    red_reason: >-
+      The behavior pre-existed: a body with no ESC, a body ending in a lone ESC, a DCS whose
+      pre-abort range is not SIXEL, a non-Kitty APC and a BEL-only body were all kept byte for
+      byte by the old strip, and BEL followed by ST was removed whole. The test was green before
+      the change and stays green; it pins that the new scan does not remove or keep more than
+      FR3 and FR4 say.
+  AC-5:
+    tests:
+      - mux::scrollback_filter::tests::can_abort_the_closing_before_an_aborted_body_follows_the_written_state
+      - mux::scrollback_filter::tests::can_abort_remapped_offsets_around_an_aborted_body
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: the first test failed at 'inside a CSI: one DEL, then
+      ESC and CAN' (the old strip kept the Kitty body whole and wrote no DEL); the second failed
+      at the output assertion for the same reason, before its offset assertions. The lone-ESC and
+      ground rows of the first test and the offset rows of the second were not observed red on
+      their own.
+  AC-6:
+    tests:
+      - mux::scrollback_filter::tests::can_abort_the_write_path_and_the_state_form_agree_with_the_snapshot_strip
+      - mux::scrollback_filter::tests::post_strip_state_form_output_equals_the_write_path_strip
+      - mux::scrollback_filter::tests::strip_pty_output_for_scrollback_write_matches_snapshot_strip_for_everything
+      - mux::scrollback_filter::tests::the_state_taking_form_with_the_flag_clear_equals_the_existing_entry_points
+    red_confirmed: false
+    red_reason: >-
+      The write path and the snapshot path were already the one shared strip pass, so the
+      identity of their bytes and the agreement of the reported state with the end-state oracle
+      held for every AC-1, AC-3 and AC-4 input before the change as well (the new test was green
+      before the change). The test pins that the change keeps FR6; no red state occurred.
+  AC-7:
+    tests:
+      - mux::scrollback_filter::tests::strip_unterminated_introducers_complete_in_single_pass
+      - mux::scrollback_filter::tests::can_abort_aborted_bodies_in_bulk_are_one_bounded_pass
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change: strip_unterminated_introducers_complete_in_single_pass
+      failed at its updated assertion (the old strip returned the whole input, the expected output
+      is the last `ESC P 1;0;0q` followed by `plain`); can_abort_aborted_bodies_in_bulk_are_one_bounded_pass
+      failed at 'strip_replayable_rich_content output' (the old strip kept every aborted body).
+      The 2-second bound of the second test was not observed red: the old strip was also
+      linear, so only its exact-output assertions fail on the old code.
+  AC-8:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_neither_strip_reads_the_closure_as_a_target_or_as_st
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_the_escape_closure_has_no_effect_in_term_core
+    red_confirmed: true
+    red_reason: >-
+      Observed before the production change, with the two tests already carrying their new
+      expectations: the first failed at 'write path, kitty apc: the closure forms no ST' (the old
+      strip kept the open Kitty body and the closure whole, the new expectation is `before` then
+      ESC and CAN); the second failed at 'kitty apc: ESC + closure inserted at 3 aborts the body
+      there' (the old strip returned `headtail`). Each stops at its first failing assertion, so
+      the SIXEL rows, the strip-target loop over every open stream and the other insertion points
+      were not observed red on their own.
+  AC-9:
+    tests:
+      - mux::ipc::pty_spawn::tests::snapshot_strip_can_abort::snapshot_strip_can_abort_the_comments_describe_the_abort_aware_body_end
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_the_doc_comments_state_the_open_body_model
+    red_confirmed: true
+    red_reason: >-
+      Observed before the comment rewrite: the new test failed at 'write_filter.rs: a comment
+      still says "or ends an APC / DCS body at it"'. It stops at its first failing assertion, so
+      the other stale phrases and the required "aborting `ESC`" phrase were not observed red on
+      their own. The predecessor's doc-comment contract test was green before the change and stays
+      green; it is listed because it reads the same files with the same comment extraction.
+  AC-10:
+    tests:
+      - mux::ipc::pty_spawn::tests::overflow_open_string_cut::overflow_open_string_cut_the_doc_comments_state_the_open_body_model
+    red_confirmed: false
+    red_reason: >-
+      The outcomes are the full `--lib` run (4252 passed, 0 failed), the `--no-default-features`
+      `cargo check` (no error) and a diff review (every changed line of write_filter.rs is a `//`
+      comment line: git diff -U0 filtered for non-comment lines is empty); none of them has an
+      executable check that fails before the change. The existing doc-comment test reads the
+      changed write_filter.rs and the whole existing write filter suite in
+      `overflow_open_string_cut.rs` stays green, but neither detects a code change in
+      write_filter.rs; no red state occurred for this criterion.
