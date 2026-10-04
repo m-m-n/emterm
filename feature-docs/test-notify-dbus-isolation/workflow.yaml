@@ -127,7 +127,7 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: in_progress
+    status: merged
     branch: em-workflow/test-notify-dbus-isolation/task0001
   task0002:
     title: NotifyRustSink with injected worker functions; worker_thread tests on fakes for both OSes
