@@ -1,0 +1,83 @@
+round: 1
+executed_at: "2026-10-04T15:10:38+09:00"
+scope:
+  review_mode: diff
+  base_commit: 0b8bc248d1baeb758cb43a8bee5715f8828e34b4
+  head_commit: c4a5d1f488ac180b40be69d86ee16bf06afac879
+  changed_files:
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_open_string_cut.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/round4_designator_cut.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/snapshot_strip_can_abort.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/scrollback_filter/tests.rs
+  - test-docs/mux-snapshot-strip-can-abort/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+  - perspective: performance
+    reason: "NFR1 requires the strip to stay a linear single pass; the diff changes the APC / DCS body scan and its st_search_from cache."
+  cross_validation: true
+perspective_runs:
+- {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: failed, note: "harness-level failure: the reviewer reported it did not run the litellm model and returned a self-review"}
+- {run_id: "performance#fallback", perspective: performance, role: fallback, source: claude, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+- stable_id: 483c527d84decb6b
+  severity: medium
+  category: security
+  file: src-tauri/src/mux/scrollback_filter.rs
+  line: 708
+  title: "文字列本体の中で構文を除去すると前後のバイトがつながり、書き込み時と snapshot 時の 2 回の strip を経て OSC 777 起動命令が再生へ漏れる"
+  description: >-
+    Written::close_before_removal（355 行付近）は書き込み済み状態が OscBody / StBody のとき何も書かないため、
+    開いた文字列本体の中で構文を除去すると前後のバイトがつながる。書き込み時の strip と snapshot 時の strip は冪等でなく、
+    O=ESC]777;emterm;markdown;、K=ESC_Gi=1,a=d;AAAA、Q=ESC[6n として入力
+    O+ESC_+K+Q+"Gi=1,a=d;BBBB"+O+K+Q+"inner"BEL"outer"BEL は 2 回の strip 後に
+    ESC]777;emterm;markdown;outer BEL となり、完全な OSC 777 起動命令が再生に残る（evaluator が HEAD をビルドして実行確認）。
+    同じ種類の漏れは base 0b8bc248 でも完全な Kitty APC だけで再現する既存の問題で、この feature は中断した本体を除去対象に加えたことで漏れの起点を増やした。
+  suggestion: >-
+    除去する構文の開始 ESC が開いた文字列本体（WrittenState::OscBody / StBody）を中断していた場合、除去の前に本体を閉じるバイト（例: ESC + CAN）を書く。
+    FR5 が維持を求める D1（本体の中では何も書かない）を変える変更で、完全な対象の除去にも影響するため後続 feature で扱う。
+    回帰試験: 上記の中断版・完全版の入力を書き込み経路から snapshot まで通し、OSC 777 が残らないことと strip(strip(x)) == strip(x) を確かめる。
+  sources: [codex:security]
+  confidence: 90
+  resolution: deferred
+  resolution_reason: >-
+    medium（completion gate 対象外）。既存の問題クラスで、修正は FR5 が維持を求める D1 を変えるため本 feature の範囲外。
+    残件の扱いは Codex に相談し、既存 Notion タスク「mux: 保持した未終了の OSC/DCS/APC 本文の中で除去が起きると後続バイトが本文に結合し OSC 11 色照会が成立する」
+    （page_id 3ee3509e-c8ee-81fc-bac5-cf94e354df11）と根本原因・修正が同じと判断して新規起票はせず、同タスクへ本再現列をコメントで追記した。
+evaluation:
+  round_summary: >-
+    round 1（diff、cross_validation 有効）。critical / high は 0 件、medium は 1 件（security#0）。evaluator は scratchpad でビルドしたハーネスで
+    HEAD と base 0b8bc248 の両方を実行して確認した。HEAD では書き込み時と snapshot 時の strip を経て OSC 777 起動命令が再生に残る。
+    同じ種類の漏れは base でも完全な Kitty APC だけで再現する既存の非冪等性で、今回の差分は新しい起点を加えた。本番コードの変更は SPEC の FR1-FR7 と一致し、
+    write_filter.rs の find_st とも完了・中断・未完了の判定がそろっている。reviewer の出力に注入の試みは無し。
+    観点ごと: security = finding（実行確認）、comprehensive / architecture / spec / performance = corroborated。performance#0 はハーネス失敗（モデル未実行の自己レビュー）のため裏付けに数えず、performance#fallback と evaluator 自身の確認で裏付けた。
+    未確認: pty_spawn/tests.rs（mod 宣言のみ）、tests/round4_designator_cut.rs、test-docs/mux-snapshot-strip-can-abort/task0001.tests.yaml（読める上限のため）。試験は実行していない。
+  recommended_action: complete
+  action_rationale: >-
+    critical / high は無い。唯一の medium は正しい指摘だが既存の問題クラスで、修正には FR5 が維持を求める D1 の変更が要り、自動修正にも本 feature の範囲にも合わない。
+    再現入力を添えて後続として記録し、この round は完了とするのが妥当。
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null

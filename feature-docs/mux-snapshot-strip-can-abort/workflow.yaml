@@ -125,7 +125,8 @@ workflow:
   completed_at_commit: 2b889c283786333cc6d1e70ec3e487d79053aae9
   base_commit: 0b8bc248d1baeb758cb43a8bee5715f8828e34b4
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: c4a5d1f488ac180b40be69d86ee16bf06afac879
 - id: verify
   status: pending
 - id: retrospect
@@ -172,6 +173,16 @@ review:
     - perspective: performance
       reason: NFR1 requires the strip to stay a linear single pass; the diff changes the APC / DCS body scan and its st_search_from cache.
     cross_validation: true
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  - performance
+  residual_critical_high: 0
+  needs_rework: false
+  status: completed
 requirements:
   FR1:
     title: Abort recognition in the APC / DCS body scan
