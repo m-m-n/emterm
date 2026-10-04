@@ -1,12 +1,18 @@
 schema_version: 1
 feature: mux-snapshot-strip-can-abort
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
 base_revision: 98f41830211b0ab849c1286755dd6866d5b34c92
-last_input_digest: null
+last_input_digest: sha256:6dfa089afe02f093ef7a7aa9372f7bdb27fef17ddfa75b8867473bb361ab4e14
 active_request_id: null
-packets: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-04T14:11:33+09:00'
+    questions:
+    - question_id: requirement.aborted-body-handling
+      status: answered
 answers:
   create-spec.feature-identity:
     packet_id: orchestrator-gate
@@ -17,12 +23,46 @@ answers:
     - derive_from_task_description
     freeform: null
     normalized_answer: 'feature name derived from the task description: mux-snapshot-strip-can-abort'
-    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option derive_from_task_description; codex_consulted: false'
+    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option
+      derive_from_task_description; codex_consulted: false'
     question_id: create-spec.feature-identity
-worker_runs: []
+  requirement.aborted-body-handling:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T14:11:33+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - remove_aborted_body
+    freeform: null
+    normalized_answer: Remove the aborted Kitty APC / SIXEL DCS body (introducer up
+      to, not including, the aborting ESC) as a strip target; resume normal strip
+      judgement from the aborting ESC. A lone trailing ESC and a body with no ESC
+      stay kept; BEL is body data; SIXEL detection uses only the pre-abort range (a
+      DCS that never reached q is kept). Keep existing remap rules and O(n). Existing
+      AC-8 kitty/sixel expectation and strip_unterminated_introducers_complete_in_single_pass
+      expectation change accordingly.
+    resolution_note: 'gate: create-spec.requirement-clarification; batch-policies.yaml
+      action codex_consultation (record_as_assumption); codex_consulted: true (harness
+      codex, 1 turn, converged); Codex verified term_core dispatches an aborted APC/DCS
+      body to the image handlers (crates/term_core/src/parser/apc.rs:28, dcs.rs:28;
+      terminal_dispatch.rs:350), so keeping it risks image side effects on replay;
+      EC1 regression under keep; mapped by orchestrator to remove_aborted_body; opus_escalation:
+      not run'
+    question_id: requirement.aborted-body-handling
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:6dfa089afe02f093ef7a7aa9372f7bdb27fef17ddfa75b8867473bb361ab4e14
+  output_digest: sha256:99ba57dee67502f07454e2adf0d0c661668b1db08b13ee3d5384e3b37a0785ba
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
 last_error: null
