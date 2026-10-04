@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-strip-open-string-body-closure
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: f1608cad4c036d32d92b15100972af0956c73b0c
 last_input_digest: sha256:0caf838105531991688f6a678a18a92cebe25e2b4681430d33207b1787f6b31d
