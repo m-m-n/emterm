@@ -157,7 +157,8 @@ tasks:
     - NFR1
     - NFR2
     - NFR3
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-snapshot-strip-can-abort/task0001
 review: {}
 requirements:
   FR1:
