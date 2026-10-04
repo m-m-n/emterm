@@ -120,7 +120,8 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: pending
+    status: in_progress
+    branch: em-workflow/lib-budget-tests-load-tolerance/task0001
   task0002:
     title: Remove the wall-clock assert from the token-corpus replay test
     plan: tasks/task0002.md
@@ -132,7 +133,8 @@ tasks:
     requirements:
     - FR1
     - FR9
-    status: pending
+    status: in_progress
+    branch: em-workflow/lib-budget-tests-load-tolerance/task0002
 review:
   status: pending
   rounds_completed: 0
