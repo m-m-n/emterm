@@ -1,26 +1,70 @@
 schema_version: 1
 feature: test-notify-dbus-isolation
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: f41d0d4c4d72ffa6c67da44b87b67be865446023
 last_input_digest: sha256:2b8eeef68f5dd6298ec4cb73d7c306e40035951b535f8f28de31b7f4f7c62f2c
-active_request_id: create-spec-run-0001
-packets: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-04T20:02:12+09:00'
+    questions:
+    - question_id: requirement.windows-scope
+      status: answered
+    - question_id: requirement.regression-detection-scope
+      status: answered
+    - question_id: design.step.recommendation
+      status: answered
 answers:
   create-spec.feature-identity:
     packet_id: null
     answered_at: '2026-10-04T19:55:57+09:00'
     source: batch-decision-table
-    answer_mode: freeform
+    answer_mode: single_select
     selected_option_ids:
     - derive_from_task_description
     freeform: null
     normalized_answer: test-notify-dbus-isolation
     resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option_id derive_from_task_description (Notion タスクタイトル『テスト実行で本物のデスクトップ通知が発行され…』から導出)'
+  requirement.windows-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T20:02:12+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - cover_windows
+    freeform: null
+    normalized_answer: Windows も対象にする。Windows 版 notify_worker にも送信関数の注入点を足し、worker_thread の送信テストは両 OS で偽物の送信関数を使う。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 1 turn, converged) consulted; Opus
+      escalation: not run; options: cover_windows [chosen] / unix_only_gate_tests / unix_only_keep [not chosen]; key points: Windows 版は Notification::show を直接呼ぶため unix だけの修正では通知が残る(callbacks.rs:458)。注入方式は
+      unix の既存設計に揃えられ Windows に能力照会の追加は不要(callbacks.rs:370,449)。両 OS で偽物を使えば非同期送信と終了時間の既存テストを維持できる(callbacks/tests.rs:1491,1511)'
+  requirement.regression-detection-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T20:02:12+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - targeted
+    freeform: null
+    normalized_answer: '修正した 2 か所を固定するテストを置く: テストビルドの App::new() の送信部が本物でないことの検証と、worker_thread の送信が偽物の送信関数に届いたことの検証。全テスト横断の検出機構は入れない。'
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 1 turn, converged) consulted; Opus
+      escalation: not run; options: targeted [chosen] / global_guard [not chosen]; key points: App::new() は with_settings() を呼ぶため既定送信部の検証で生成経路を押さえられる(app/mod.rs:463,574)。既存の送信テストは経過時間のみ検証で偽物到達の確認を足せば修正経路を直接検証できる(callbacks/tests.rs:1492)。全体監視は
+      worker の join() エラーをテストへ伝える追加設計が要り範囲が広がる(callbacks.rs:578)'
+  design.step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-04T20:02:12+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step は推奨どおり skip（UI に触れない、テストビルドの通知経路の修正）
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously (analyst の推奨 skip を受け入れる)'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:2b8eeef68f5dd6298ec4cb73d7c306e40035951b535f8f28de31b7f4f7c62f2c
 artifacts: []
 patches: []
