@@ -607,7 +607,8 @@ fn round4_overflow_flush_in_the_last_segment_writes_no_closing_esc() {
 }
 
 /// AC-3 (FR3): an overflow flush followed by a cut writes nothing extra when
-/// the flushed run does not end waiting.
+/// the flushed run does not end waiting and ends in ground: in a complete
+/// designation and in plain text.
 #[test]
 fn round4_overflow_flush_then_a_cut_without_a_wait_writes_nothing_extra() {
     let pad = vec![b'p'; SCROLLBACK_FILTER_PENDING_CAP + 1];
@@ -628,19 +629,6 @@ fn round4_overflow_flush_then_a_cut_without_a_wait_writes_nothing_extra() {
     let mut g = ScrollbackWriteFilter::new();
     let outcome = cut_feed(&mut g, &pad, &[pad.len()]);
     assert_same_bytes(&outcome.bytes, &pad, "plain overflow");
-
-    // Ends inside the still-open OSC that the held run began: no wait.
-    let mut h = ScrollbackWriteFilter::new();
-    h.feed(b"\x1b]0;", DIMS);
-    let outcome = cut_feed(&mut h, &pad, &[pad.len()]);
-    assert_eq!(
-        outcome.bytes.len(),
-        4 + pad.len(),
-        "the flush emits the run, no ESC"
-    );
-    assert_ne!(outcome.bytes.last(), Some(&ESC));
-    assert!(h.pending().is_empty());
-    assert!(!h.awaiting_designator());
 }
 
 // ── AC-4 (EC-5): the switch sits in the designator slot ──────────────────

@@ -1,0 +1,70 @@
+schema_version: 2
+feature: mux-write-filter-overflow-open-string-cut
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.36
+    confidence: 0.64
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.64
+      '2': 0.36
+      '3': 0.0
+  observed_at: '2026-10-04T02:41:47+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.88
+    confidence: 0.87
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.12
+      '2': 0.88
+      '3': 0.0
+  observed_at: '2026-10-04T02:45:41+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_lone_esc.rs
+  - src-tauri/src/mux/scrollback_filter/tests.rs
+  changed_lines_approx: 180
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules:
+  - src-tauri/src/mux/scrollback_filter.rs
+  - src-tauri/src/mux/scrollback_filter/tests.rs
+  work_still_required: true
+  work_still_required_evidence: 3bcf727eでは、src-tauri/src/mux/scrollback_filter.rs:101
+    が文字列導入後をGroundにし、src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:577 がその状態を保留ESCの前の状態として保存する。カットでは同ファイル:639
+    が閉鎖を選ぶが、:171 のGroundでは空になる。src-tauri/src/mux/ipc/pty_spawn/tests/overflow_lone_esc.rs:96
+    は開いた文字列本体の閉鎖を空と固定し、:508 の復元確認もCSIの場合だけで、この再発を検出しない。crates/term_core/src/parser/osc.rs:12
+    はBELでOSCを完了し、:52 はESCに続く非ST文字でUnterminatedとして閉じる。開いた本体の状態保持、カット時のESC CAN出力、保留ESCと平文本体の両末尾での表示比較が必要になる。
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 12
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 6
+  changes_external_contract: false
+  changes_behavior: true
+decided_at: '2026-10-04T02:46:00+09:00'
