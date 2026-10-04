@@ -1,20 +1,39 @@
 schema_version: 1
 feature: lib-budget-tests-load-tolerance
 phase: create-plan
-status: dispatching
+status: applying_patch
 generation: 1
-base_revision: 656ab91ecf68ce494a208d5195ea22fbcc11bd2e
+base_revision: 68067a4871e8406bba133d26bbf6f10fdb3f836f
 last_input_digest: sha256:694e9bc5b0b530e1f89968f0bf21c7e17607b909f3b4f89b187cb9488ae08fa1
 active_request_id: create-plan-run-0001
 packets: {}
 answers: {}
 worker_runs:
 - request_id: create-plan-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:694e9bc5b0b530e1f89968f0bf21c7e17607b909f3b4f89b187cb9488ae08fa1
-  output_digest: null
-artifacts: []
-patches: []
+  output_digest: sha256:03038a3e350cf06fd37b73c97fa2f4886e5f89bb56b1812516a6dfae7e1da78a
+artifacts:
+- path: feature-docs/lib-budget-tests-load-tolerance/IMPLEMENTATION.md
+  sha256: sha256:9f5b1ab3800aac055068ad653ec6fd5d5db2c2ebb7f67ea5f66c1bb55a06f722
+  produced_by: create-plan-run-0001
+- path: feature-docs/lib-budget-tests-load-tolerance/VERIFICATION.md
+  sha256: sha256:b13e040a4522e28b6188ff4911c6878c2e6f6530681d11f167041c1c0fab2050
+  produced_by: create-plan-run-0001
+- path: feature-docs/lib-budget-tests-load-tolerance/THREAT-MODEL.md
+  sha256: sha256:b176ecfc301c41fac10f0a939aaf5caa8f5743d6182c92840d376a6380f2a196
+  produced_by: create-plan-run-0001
+- path: feature-docs/lib-budget-tests-load-tolerance/tasks/task0001.md
+  sha256: sha256:f8183006a47ffa532abcbc74053300877e482b8d362d2dbd26e9b54d308d6678
+  produced_by: create-plan-run-0001
+- path: feature-docs/lib-budget-tests-load-tolerance/tasks/task0002.md
+  sha256: sha256:61d53f1308047efd5270099f4bfa672e9764185f6bf3277c2b28974f551cc9ef
+  produced_by: create-plan-run-0001
+patches:
+- patch_id: create-plan-p0001
+  status: validated
+  base_input_digest: sha256:694e9bc5b0b530e1f89968f0bf21c7e17607b909f3b4f89b187cb9488ae08fa1
+  base_workflow_blob: bb9835ef39de079a4924b690003522ccadc0ec06
 stale_redispatch_count: 0
 resolved_input_cache: {}
 last_error: null
