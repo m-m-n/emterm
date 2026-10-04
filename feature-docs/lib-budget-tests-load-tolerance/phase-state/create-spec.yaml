@@ -1,0 +1,20 @@
+schema_version: 1
+feature: lib-budget-tests-load-tolerance
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: acfdc188bcbecb9ec7c0933dd3a9ac6dd28a0b05
+last_input_digest: sha256:3750c78e96a498a8b3e72669c2c5db28a7e81599f7d1b8f323776d6d37191b25
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:3750c78e96a498a8b3e72669c2c5db28a7e81599f7d1b8f323776d6d37191b25
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
