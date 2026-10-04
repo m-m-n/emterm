@@ -55,6 +55,27 @@ pub(in crate::mux) const CSI_CLOSING_BYTE: u8 = 0x7f;
 /// [`CSI_CLOSING_BYTE`] as a slice, for writing it into a byte run.
 pub(in crate::mux) const CSI_CLOSING: &[u8] = &[CSI_CLOSING_BYTE];
 
+/// The write that closes an open OSC body or an open DCS / APC body, defined
+/// once here (mux-write-filter-overflow-open-string-cut FR2, FR5, D2;
+/// mux-strip-open-string-body-closure D1): `ESC` (0x1B) followed by CAN (0x18).
+/// The write filter writes it at a cut when the written stream ends inside such a
+/// body; the strip writes it at a removed construct while the written stream is
+/// inside such a body ([`Written::close_before_removal`]).
+///
+/// `term_core` takes the `ESC` into the string's escape state, and the CAN as
+/// the byte that aborts the string (the string is dispatched, an OSC as
+/// `Unterminated`) and is processed as from the Escape state, where it is an
+/// unknown escape final: the escape completes and the parser returns to ground,
+/// without a character, a cursor move or a response of its own. That is what the
+/// client's parser did at the removed switch's `ESC`, so a replay stands in
+/// ground and the bytes written after the closure are never absorbed into the
+/// string (a later BEL cannot complete it with them). The `ESC` is followed by
+/// CAN, which opens no strip target, and `ESC` + CAN is not ST (`ESC \`), so
+/// neither strip reads the closure as the start of a strip target or ends an
+/// APC / DCS body at it. [`WrittenState`] takes both bytes from either body to
+/// ground.
+pub(in crate::mux) const STRING_BODY_CLOSING: &[u8] = &[0x1b, 0x18];
+
 /// The per-byte CSI transition of `term_core` (`csi_entry` / `csi_param`),
 /// defined once: the state-reporting strip
 /// ([`strip_pty_output_for_scrollback_write_with_written_state`]) follows it, and
@@ -207,6 +228,12 @@ impl OpenCsi {
 /// [`WrittenState::Escape`], from which `\` completes ST and any other byte
 /// aborts the string and is read as from that state.
 ///
+/// The strip is in the same position as a cut: where it removes a construct
+/// together with its opening `ESC` while the written stream is inside an OSC body
+/// or a DCS / APC body, it writes [`STRING_BODY_CLOSING`] first
+/// (mux-strip-open-string-body-closure D1), so the written stream leaves the
+/// removal in ground.
+///
 /// Defined here, in the shared strip module, so that this module never depends
 /// on the IPC layer; the write filter (`mux::ipc::pty_spawn`) carries it from one
 /// call to the next.
@@ -331,23 +358,34 @@ impl Written {
         }
     }
 
-    /// D1 (mux-strip-concat-query-closure FR1, FR4): called before the pass
+    /// D1 (mux-strip-concat-query-closure FR1, FR4; widened to the string
+    /// bodies by mux-strip-open-string-body-closure FR1): called before the pass
     /// removes a construct together with its opening `ESC`. When the written
     /// stream is inside a CSI (entry or parameter state) or right after a
     /// written lone `ESC`, the bytes before the construct and the bytes after
     /// it would otherwise be joined: one [`CSI_CLOSING_BYTE`] is written first.
     /// It cancels the CSI, or ends the pending escape, in `term_core` without a
     /// display, cursor or response effect, and leaves the written stream in
-    /// ground, so further constructs removed in the same run write nothing. In
-    /// ground, or after a complete string, nothing is written.
+    /// ground, so further constructs removed in the same run write nothing.
+    ///
+    /// When the written stream is inside an OSC body or a DCS / APC body, the
+    /// client's parser ended that string at the removed construct's `ESC`, so the
+    /// bytes after the construct would otherwise be absorbed into the string: it
+    /// is closed first with [`STRING_BODY_CLOSING`] (`ESC` + CAN), written through
+    /// [`Written::extend`], which leaves the written stream in ground. In ground,
+    /// after a complete string and in a pending charset designator, nothing is
+    /// written.
     ///
     /// It is written BEFORE any C0 byte re-emitted from a removed query: a C0
     /// byte right after a lone `ESC` would be consumed as that escape's final
-    /// byte instead of executing.
+    /// byte instead of executing, and a re-emitted BEL would end an open OSC
+    /// body, completing it with the bytes the body already holds.
     #[inline]
     fn close_before_removal(&mut self) {
-        if matches!(self.state, WrittenState::Csi(_) | WrittenState::Escape) {
-            self.push(CSI_CLOSING_BYTE);
+        match self.state {
+            WrittenState::Csi(_) | WrittenState::Escape => self.push(CSI_CLOSING_BYTE),
+            WrittenState::OscBody | WrittenState::StBody => self.extend(STRING_BODY_CLOSING),
+            WrittenState::Ground | WrittenState::Designator => {}
         }
     }
 }
@@ -367,8 +405,9 @@ const CAN_BYTE: u8 = 0x18;
 /// - An input DEL becomes CAN when the scan state just before it is inside a CSI
 ///   (entry or parameter sub-state) or right after an `ESC` ([`WrittenState::Csi`]
 ///   / [`WrittenState::Escape`]).
-/// - A DEL in ground, in an OSC / DCS / APC body (ground for [`WrittenState`]) and
-///   while a charset designator is pending is kept.
+/// - A DEL in ground, in an OSC body, in a DCS / APC body ([`WrittenState::OscBody`]
+///   / [`WrittenState::StBody`]) and while a charset designator is pending is
+///   kept.
 /// - Every other byte is copied unchanged, including a CAN already in the input.
 ///
 /// The scan starts in ground and advances by each ORIGINAL input byte through
@@ -445,7 +484,13 @@ pub(in crate::mux) fn vt100_replay_copy(bytes: &[u8]) -> Vec<u8> {
 /// written stream is inside a CSI, or right after a written lone `ESC`, one
 /// CSI_CLOSING (DEL) is written at its position first, so the bytes before and
 /// after it are never joined into an escape or a device query the raw stream
-/// never made (mux-strip-concat-query-closure D1). In ground nothing is added.
+/// never made (mux-strip-concat-query-closure D1). Where it is removed while the
+/// written stream is inside an OSC body or a DCS / APC body, STRING_BODY_CLOSING
+/// (`ESC` + CAN) is written at its position first, so the bytes after it are
+/// never absorbed into the string and completed by a later BEL into an OSC colour
+/// query the raw stream never made (mux-strip-open-string-body-closure D1). In
+/// ground, after a complete string and while a charset designator is pending,
+/// nothing is added.
 ///
 /// Runs in a single O(n) pass: once an `ESC \` (ST) terminator search runs off
 /// the end of the buffer, that "no more ST terminators" fact is cached in
@@ -529,10 +574,12 @@ pub(in crate::mux) fn strip_pty_output_for_scrollback_write_with_designator(
 /// ground; a byte that completes the carried CSI as an answered device query is
 /// written as CSI_CLOSING in place of itself (D2, [`Written::push`]). The
 /// opening `ESC` does not end or abort a string body the written stream is inside
-/// either; D1 writes nothing there and the body stays open. The transitions are
-/// `term_core`'s ([`csi_step`] and the escape and string-body states of
-/// [`WrittenState`]); the body states are reported whatever path wrote the bytes,
-/// not only an overflow flush. Extra state is O(1); there is no second pass.
+/// either, so D1 closes that body too: it writes [`STRING_BODY_CLOSING`] first
+/// (mux-strip-open-string-body-closure D1) and the stream leaves the removal in
+/// ground. The transitions are `term_core`'s ([`csi_step`] and the escape and
+/// string-body states of [`WrittenState`]); the body states are reported
+/// whatever path wrote the bytes, not only an overflow flush. Extra state is
+/// O(1); there is no second pass.
 ///
 /// Started from an open CSI, the output may differ from the ground-started
 /// strip of the carried bytes followed by `bytes` only by what D1 and D2 write:
@@ -572,10 +619,11 @@ fn strip_rich_content(bytes: &[u8]) -> Vec<u8> {
 /// strip removed before it, misaligning every later segment.
 ///
 /// An offset at the first byte of a sequence this pass REMOVES maps to the
-/// output position before whatever the removal writes (the closing byte D1
-/// inserts, see [`Written::close_before_removal`]). An offset strictly inside the
+/// output position before whatever the removal writes (the closure D1 inserts:
+/// a closing byte or [`STRING_BODY_CLOSING`], see
+/// [`Written::close_before_removal`]). An offset strictly inside the
 /// removed span, or right after it, maps to the output position after the
-/// closing byte and the C0 bytes re-emitted from a removed query (mux-strip-
+/// closure and the C0 bytes re-emitted from a removed query (mux-strip-
 /// concat-query-closure D5): the removed span contributes only those bytes.
 /// Remapped offsets are non-decreasing and within the output. An offset at or
 /// past `bytes.len()` maps to `out.len()` (the end of the stripped output).
