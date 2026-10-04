@@ -1,0 +1,168 @@
+schema_version: 1
+feature: mux-snapshot-strip-can-abort
+created: '2026-10-04'
+base_branch: main
+goal: |+
+  # mux: スナップショット除去処理が ESC + CAN による打ち切りを認識せず、上限超過した Kitty APC / SIXEL DCS の後の本文を消す
+  
+  Notion task: https://www.notion.so/3ee3509ec8ee812ab8a2cbfd1a030f9f (種別: バグ)
+  
+  ## 現象 (必須)
+  feature `mux-write-filter-overflow-open-string-cut`（ブランチ `em-workflow/mux-write-filter-overflow-open-string-cut/integration`）の review round 1 で残った medium 指摘 `f54c0279b8e89443`（comprehensive、deferred）。デグレではなく既存挙動。
+  上限（512 KiB）を超えて開いたまま書き込まれた Kitty APC（`ESC _ G`）や SIXEL DCS（`ESC P … q`）の本体は、カットで `ESC` + CAN によって閉じられる。しかしスナップショット組み立て時の除去処理（`strip_replayable_rich_content` → `strip_pass`）の `find_st_terminator` は `ESC` + CAN を打ち切りとして扱わず、次の `ESC \` まで走査を続ける。リングの後ろに ST 終端の列（ST 終端の OSC 0 / OSC 8、別の Kitty 画像など）があると、APC / DCS の開始からその ST までがまとめて除去され、カット後に書かれた本文と後続の OSC がスナップショット再生から消える。
+  ## 再現手順 (必須)
+  1. mux の pane に Kitty APC（`ESC _ G` …）または SIXEL DCS（`ESC P q` …）を 512 KiB 超の未終端本体で出力する
+  2. 次の read で画面切替（`ESC[?1049h` 等、カットを起こす列）を出力する
+  3. 続けてメインバッファに平文を出力し、その後に ST 終端の OSC（例: `ESC]0;title ESC \`）を出力する
+  4. snapshot を復元すると、手順 3 の平文と OSC が表示されない
+  ## 期待する挙動 (必須)
+  カットで `ESC` + CAN により閉じられた APC / DCS 本体の後ろのバイトは、スナップショット時の除去処理でも残り、再生でクライアントの見た状態と一致する。
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  ## 該当箇所 (任意)
+  - `src-tauri/src/mux/scrollback_filter.rs:436-457`（`strip_pass` の APC / DCS 除去）
+  - `src-tauri/src/mux/scrollback_filter.rs:516-530`（`find_st_terminator`）
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:197`（カット時の `ESC` + CAN 閉鎖）
+  - `src-tauri/src/mux/ipc/pty_spawn/tests/overflow_open_string_cut.rs:656-660`（既存挙動として言及しているコメント）
+  ## 実害・発生条件 (任意)
+  発生条件は狭い（cap を超える単一の未終端 Kitty APC / SIXEL DCS、画面切替、その後の ST 終端列がそろったとき）。影響は snapshot 再生時の表示だけ。親 feature では SPEC の NFR2（除去判定を変えない）/ NFR5（スナップショット時の除去処理を変えない）により対象外とした。
+  修正案: `strip_pass` の APC / DCS 除去走査が、本体内の `ESC` に `\` 以外が続く場合（とくに `ESC` + CAN）を打ち切りと認識し、打ち切り後のバイトを残す。`st_search_from` キャッシュによる O(n) は保つ。回帰テストとして、上限超過した Kitty APC / SIXEL DCS、カット、本文、ST 終端 OSC を含むリングを `strip_replayable_rich_content` に通してから term_core で再生し、本文が表示されることを確かめる。
+  
+parent_branch: em-workflow/mux-snapshot-strip-can-abort/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.97
+      '2': 0.03
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.56
+      '2': 0.44
+      '3': 0.0
+  at: '2026-10-04T13:59:05+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 79ebfa2e72fe12edc5662156c801b738b83fa783
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: No UI or visual change. The change is limited to the mux byte strip in src-tauri/src/mux/scrollback_filter.rs and its tests.
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review: {}
+requirements:
+  FR1:
+    title: Abort recognition in the APC / DCS body scan
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Bytes after the abort keep the existing judgement
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Removal of the aborted Kitty APC / SIXEL DCS body
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Unterminated and BEL cases stay kept
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: Existing strip rules unchanged
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Write path and snapshot path stay identical
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: Tests and comments that state the old behavior are updated
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Linear single pass
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: Write filter cut logic unchanged
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: CLI-only build
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []

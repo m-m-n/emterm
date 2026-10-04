@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-snapshot-strip-can-abort
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 98f41830211b0ab849c1286755dd6866d5b34c92
 last_input_digest: sha256:5b75319e1e5a97269fdbd8fd7f76382c8eec9c67d0642bb7ff87aed01c4ce8bc
