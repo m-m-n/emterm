@@ -1377,8 +1377,85 @@ mod notification_redaction {
 // exercise the real `NotifyRustSink` and assert on elapsed wall-clock
 // time, deliberately generous relative to `NOTIFY_WORKER_JOIN_TIMEOUT` so
 // CI variance never makes these flaky (Test Notes).
+//
+// test-notify-dbus-isolation task0002 (NFR1): the three sink tests build
+// the sink through `NotifyRustSink::with_worker_functions` with recording
+// fakes on both OSes, so no test here reaches notify-rust or a D-Bus
+// connection; none constructs the sink through `new()` or `Default`.
 mod worker_thread {
     use super::*;
+
+    /// Upper bound of [`SendRecorder::wait_until`]: generous on purpose so
+    /// host load never makes a delivery assertion flaky, yet still bounded
+    /// so a worker that never delivers fails the test instead of hanging.
+    const RECORDER_WAIT_DEADLINE: Duration = Duration::from_secs(5);
+
+    /// Records every `(summary, body)` pair the injected send function
+    /// receives, in call order, and always reports success. Shared between
+    /// the test body and the worker thread; holds no process-global state,
+    /// so the tests stay safe under the parallel test runner. Compiles on
+    /// every OS (the recorder in `worker_injection_points` is unix-only).
+    #[derive(Default)]
+    struct SendRecorder {
+        received: Mutex<Vec<(String, String)>>,
+    }
+
+    impl SendRecorder {
+        fn new() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+
+        fn record(&self, summary: &str, body: &str) -> Result<(), String> {
+            self.received
+                .lock()
+                .push((summary.to_string(), body.to_string()));
+            Ok(())
+        }
+
+        fn received(&self) -> Vec<(String, String)> {
+            self.received.lock().clone()
+        }
+
+        /// Poll until `condition` holds for the recorded pairs or
+        /// [`RECORDER_WAIT_DEADLINE`] passes, then return what was
+        /// recorded. Never waits unboundedly and never depends on the
+        /// sink's own drop timing.
+        fn wait_until(
+            &self,
+            condition: impl Fn(&[(String, String)]) -> bool,
+        ) -> Vec<(String, String)> {
+            let deadline = Instant::now() + RECORDER_WAIT_DEADLINE;
+            loop {
+                let received = self.received();
+                if condition(&received) || Instant::now() >= deadline {
+                    return received;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+
+    /// Build a sink whose worker uses the recording fake send, and on unix
+    /// a fake capability query that never touches D-Bus. The query result
+    /// does not affect these tests: their titles and bodies carry no
+    /// markup metacharacter, so the on-demand gate never invokes it.
+    /// Per-platform so each test body stays platform-neutral.
+    #[cfg(unix)]
+    fn sink_with_fakes(recorder: &Arc<SendRecorder>) -> NotifyRustSink {
+        let recorder = recorder.clone();
+        NotifyRustSink::with_worker_functions(
+            || Ok::<Vec<String>, String>(Vec::new()),
+            move |summary, body| recorder.record(summary, body),
+        )
+    }
+
+    /// Windows counterpart of [`sink_with_fakes`]: the Windows worker has
+    /// no capability query, so only the send is injected.
+    #[cfg(not(unix))]
+    fn sink_with_fakes(recorder: &Arc<SendRecorder>) -> NotifyRustSink {
+        let recorder = recorder.clone();
+        NotifyRustSink::with_worker_functions(move |summary, body| recorder.record(summary, body))
+    }
 
     // AC-3 (SPEC AC4 / FR5 / NFR3): capacity NOTIFY_QUEUE_CAPACITY fills
     // without a single drop; the very next submission is dropped, not
@@ -1487,9 +1564,15 @@ mod worker_thread {
     // regardless of how busy (or slow) the worker is. A synchronous
     // implementation performing D-Bus round-trips inline would take
     // orders of magnitude longer for the same burst.
+    //
+    // test-notify-dbus-isolation task0002 (AC-1, TS-3): the sink is built
+    // on fakes. The worker drains the queue concurrently with the burst,
+    // so how many notifications the fake receives is not fixed — only that
+    // at least one reaches it, which also proves the fake is wired in.
     #[test]
     fn sink_send_never_blocks_the_caller_even_past_queue_capacity() {
-        let sink = NotifyRustSink::new();
+        let recorder = SendRecorder::new();
+        let sink = sink_with_fakes(&recorder);
         let started = Instant::now();
         for i in 0..(NOTIFY_QUEUE_CAPACITY * 4) {
             sink.send(&format!("t{i}"), "b");
@@ -1499,6 +1582,12 @@ mod worker_thread {
             elapsed < Duration::from_millis(100),
             "send() appears to block the caller thread: {elapsed:?}"
         );
+
+        let received = recorder.wait_until(|received| !received.is_empty());
+        assert!(
+            !received.is_empty(),
+            "the injected fake send never received a notification from the worker"
+        );
     }
 
     // AC-6 (SPEC AC8 / FR7 / FR8 / NFR2, D2): dropping the sink after
@@ -1507,9 +1596,17 @@ mod worker_thread {
     // generous CI-safe bound (deliberately far above
     // `NOTIFY_WORKER_JOIN_TIMEOUT` itself — Test Notes — so this never
     // flakes on a loaded CI box).
+    //
+    // test-notify-dbus-isolation task0002 (AC-2, TS-4): the sink is built
+    // on fakes. The drop is measured first, then the recorder is awaited:
+    // the worker keeps draining items that were already queued after the
+    // sending side closes, so the three pairs arrive even when the drop's
+    // own bounded wait ends first — this test never relies on drop timing
+    // for delivery.
     #[test]
     fn dropping_the_sink_after_sending_returns_within_the_shutdown_deadline() {
-        let sink = NotifyRustSink::new();
+        let recorder = SendRecorder::new();
+        let sink = sink_with_fakes(&recorder);
         for i in 0..3 {
             sink.send(&format!("t{i}"), "b");
         }
@@ -1520,6 +1617,17 @@ mod worker_thread {
             elapsed < Duration::from_secs(2),
             "drop() exceeded the generous CI-safe shutdown bound: {elapsed:?}"
         );
+
+        let received = recorder.wait_until(|received| received.len() >= 3);
+        assert_eq!(
+            received,
+            vec![
+                ("t0".to_string(), "b".to_string()),
+                ("t1".to_string(), "b".to_string()),
+                ("t2".to_string(), "b".to_string()),
+            ],
+            "the fake send must receive exactly the three sent pairs, in send order"
+        );
     }
 
     // AC-6 (SPEC A9, D5): a sink dropped immediately after construction,
@@ -1529,13 +1637,18 @@ mod worker_thread {
     #[test]
     fn dropping_a_freshly_constructed_sink_with_no_notifications_returns_within_the_shutdown_deadline()
      {
-        let sink = NotifyRustSink::new();
+        let recorder = SendRecorder::new();
+        let sink = sink_with_fakes(&recorder);
         let started = Instant::now();
         drop(sink);
         let elapsed = started.elapsed();
         assert!(
             elapsed < Duration::from_secs(2),
             "drop() exceeded the generous CI-safe shutdown bound: {elapsed:?}"
+        );
+        assert!(
+            recorder.received().is_empty(),
+            "nothing was sent, so the fake send must have received nothing"
         );
     }
 
