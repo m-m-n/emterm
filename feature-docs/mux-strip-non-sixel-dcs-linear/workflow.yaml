@@ -91,7 +91,20 @@ workflow:
   status: completed
   completed_at_commit: b1e3399ba859810a980206dcf5554a525f446347
 - id: verify
-  status: in_progress
+  status: completed
+  completed_at_commit: b64269662e12081bbf2aa0b718dfbcf4c8809e94
+  result: pass
+  failed_items: []
+  summary: |
+    build: cargo check (default / --no-default-features) exit 0.
+    test: cargo test --lib run 7 times — 3 exit 0 (4296 passed), 4 failed on one pre-existing load-dependent test each
+    (strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget x3, 10.12 s vs 10 s budget, 3.75 s alone;
+    render::font::user_dir::tests::user_font_dir_prefers_xdg_data_home x1, env var race). Control run with
+    --skip strip_non_sixel_dcs_linear failed 2/4 on the same budget test; both tests are unchanged on main.
+    The 12 new tests passed in every run. TS-1..TS-6 pass, TS-7 pass (exit 0 achieved; flakes pre-existing),
+    TS-8 pass (12 tests listed under AC-1..AC-5, red_confirmed false). SC-2: diff under src-tauri/ is the new test
+    module and its registration only; Cargo.toml unchanged; no ignore attribute.
+    Verdict pass adopted after Codex consultation (option A over rework); see phase-state/batch-audit.yaml.
 - id: retrospect
   status: pending
 tasks:
