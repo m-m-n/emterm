@@ -32,8 +32,7 @@ goal: '# mux: 保持した未終了の OSC/DCS/APC 本文の中で除去が起�
 
   細工した出力を表示させる（例: 細工したファイルを `cat`）だけで成立する。
 
-  1. `ESC]11;` + 除去対象（例: `ESC]777;emterm;markdown;x BEL` や `ESC[6n`）+ `?BEL` を cut 無しで与えると、リングが `ESC]11;?BEL` になる。スナップショット strip も保持し、term_core は OSC 11 `?` を BEL 終端で処理して色応答（ThemeColorResponder）が返る。生の入力では除去対象の
-  `ESC` で OSC 11 が未終了として打ち切られ、応答は無い。
+  1. `ESC]11;` + 除去対象（例: `ESC]777;emterm;markdown;x BEL` や `ESC[6n`）+ `?BEL` を cut 無しで与えると、リングが `ESC]11;?BEL` になる。スナップショット strip も保持し、term_core は OSC 11 `?` を BEL 終端で処理して色応答（ThemeColorResponder）が返る。生の入力では除去対象の `ESC` で OSC 11 が未終了として打ち切られ、応答は無い。
 
   2. スナップショット再生中の応答はクライアントが破棄する（`src-tauri/src/tabs/replay.rs:96-105`）。一方、リングが `ESC]11;` + 除去対象で終わり、主画面の復帰スナップショットが末尾に何も足さない場合、再生後のパーサーが OSC 本文の中に残り、後から届くライブの `?BEL` に応答する。
 
@@ -57,8 +56,7 @@ goal: '# mux: 保持した未終了の OSC/DCS/APC 本文の中で除去が起�
 
   - `crates/term_core/src/parser/osc.rs:51`（生の入力では ESC + `\` 以外で OSC を Unterminated として送出）
 
-  - 固定済み期待値: `scrollback_filter::tests::strip_concat_a_construct_removed_in_ground_adds_no_closing` の `ESC]0;t` 行、`strip_concat_query::strip_concat_a_construct_removed_in_ground_or_a_kept_string_adds_no_closing`
-  の body_head ループ（変更時は決定記録が必要）
+  - 固定済み期待値: `scrollback_filter::tests::strip_concat_a_construct_removed_in_ground_adds_no_closing` の `ESC]0;t` 行、`strip_concat_query::strip_concat_a_construct_removed_in_ground_or_a_kept_string_adds_no_closing` の body_head ループ（変更時は決定記録が必要）
 
   - 経緯: feature mux-strip-join-escape-closure の create-spec で範囲外として残件化（`feature-docs/mux-strip-join-escape-closure/DECISIONS.md` に記録予定）
 
@@ -131,7 +129,42 @@ workflow:
   status: pending
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Close an open written string body at a removal
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_open_string_body_closure.rs
+    - feature-docs/mux-strip-open-string-body-closure/DECISIONS.md
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/overflow_open_string_cut.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_join_escape_closure.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - test-docs/mux-write-filter-overflow-open-string-cut/task0001.tests.yaml
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - FR8
+    - FR9
+    - FR10
+    - NFR1
+    - NFR2
+    - NFR3
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -144,89 +177,124 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-3
+    - TS-4
   FR2:
     title: Single definition of STRING_BODY_CLOSING
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-9
   FR3:
     title: Every entry point and every start state
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+    - TS-5
+    - TS-6
   FR4:
     title: Remap includes the closure
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-7
   FR5:
     title: Cut closure unchanged, no double closure
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-8
   FR6:
     title: Closure is inert to both strips and to the vt100 copy
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-8
   FR7:
     title: DoD regression tests
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
   FR8:
     title: Pinned expectations and renames
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-9
+    - TS-13
   FR9:
     title: Decision record
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-12
   FR10:
     title: Doc comments
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-10
   NFR1:
     title: Test and CLI-only check pass
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-9
+    - TS-11
   NFR2:
     title: Single linear pass
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-11
+    - TS-14
   NFR3:
     title: term_core unchanged; oracle convention; budgets
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-11
+    - TS-13
