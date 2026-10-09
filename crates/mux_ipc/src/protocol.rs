@@ -925,8 +925,9 @@ impl std::error::Error for ApcDecodeError {}
 /// Local mirror of the core agent-status module's state enum
 /// (`src-tauri/src/agent_status.rs`). `mux_ipc` must not depend on the
 /// binary crate, so this type owns its own serde representation; the
-/// lowercase string values (`idle`/`working`/`blocked`/`done`) are the
-/// wire contract shared between the two modules.
+/// lowercase string values (`idle`/`working`/`blocked`/`done`/`error`) are
+/// the wire contract shared between the two modules. `Error` is appended
+/// after the original four so their encoding is unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
@@ -934,6 +935,18 @@ pub enum AgentState {
     Working,
     Blocked,
     Done,
+    Error,
+}
+
+/// A mux pane's OSC 7501 (Program Status) summary carried by
+/// [`AgentStatusUpdateMsg`]: the aggregate state of the pane's record table,
+/// the deciding record's title (already sanitized for names by the daemon)
+/// and the deciding record's effective app.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramStatusSummary {
+    pub state: AgentState,
+    pub title: Option<String>,
+    pub app: Option<String>,
 }
 
 /// Daemon → GUI unsolicited push: a mux pane's agent status changed, or is
@@ -947,6 +960,10 @@ pub struct AgentStatusUpdateMsg {
     pub name: Option<String>,
     pub revision: u64,
     pub replay_derived: bool,
+    /// The pane's OSC 7501 summary; `None` when the pane has no records.
+    /// Appended last: the positional encoding lets an older reader ignore
+    /// the trailing item.
+    pub program_status: Option<ProgramStatusSummary>,
 }
 
 /// Request: read the last `lines` lines of a mux pane's visible content.

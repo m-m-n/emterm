@@ -279,7 +279,7 @@ fn event_type_notifications_enabled(
     notify_on_blocked: bool,
 ) -> bool {
     match state {
-        AgentState::Done => notify_on_done,
+        AgentState::Done | AgentState::Error => notify_on_done,
         AgentState::Blocked => notify_on_blocked,
         AgentState::Working | AgentState::Idle => false,
     }
@@ -417,6 +417,8 @@ pub fn agent_notification_body(
         (Locale::En, AgentState::Done) => "done",
         (Locale::Ja, AgentState::Blocked) => "ブロック中",
         (Locale::Ja, AgentState::Done) => "完了",
+        (Locale::En, AgentState::Error) => "error",
+        (Locale::Ja, AgentState::Error) => "エラー",
         // Working/Idle never reach here in practice (the caller gates on
         // `is_qualifying_agent_state` first) — matched exhaustively rather
         // than panicking on an unexpected state.

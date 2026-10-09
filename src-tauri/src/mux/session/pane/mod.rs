@@ -667,29 +667,84 @@ impl MuxPane {
     /// the latch, so [`Self::record_live_osc133_mark`] (the live OSC 133
     /// feed) and this method can never drift out of sync with each other.
     pub fn apply_agent_status_event(&self, event: AgentStatusEvent) -> u64 {
-        let is_clear = matches!(event, AgentStatusEvent::Clear);
+        self.apply_agent_status_change(Some(event), false)
+            .expect("an accepted event always bumps the revision")
+    }
+
+    /// The one mutation path of the pane's agent-status record: apply the
+    /// OSC 777 `event` (if any) and, when `prompt_start`, the OSC 7501
+    /// table's prompt-start operation, all under one hold of the record's
+    /// lock. Bumps the revision once when anything changed (an accepted
+    /// event always counts) and returns the new revision; returns `None`
+    /// when nothing changed. The inferred-clear latch follows the event
+    /// exactly as [`Self::apply_agent_status_event`] documents.
+    fn apply_agent_status_change(
+        &self,
+        event: Option<AgentStatusEvent>,
+        prompt_start: bool,
+    ) -> Option<u64> {
+        let is_clear = matches!(event, Some(AgentStatusEvent::Clear));
+        let is_set = matches!(event, Some(AgentStatusEvent::Set { .. }));
         let revision = {
             let mut status = self.agent_status.lock().unwrap();
+            let mut changed = false;
             match event {
-                AgentStatusEvent::Set { state, name } => {
+                Some(AgentStatusEvent::Set { state, name }) => {
                     status.state = Some(state);
                     status.name = name;
+                    changed = true;
                 }
-                AgentStatusEvent::Clear => {
+                Some(AgentStatusEvent::Clear) => {
                     status.state = None;
                     status.name = None;
+                    changed = true;
                 }
+                None => {}
+            }
+            if prompt_start && status.program_status.prompt_start() {
+                changed = true;
+            }
+            if !changed {
+                return None;
             }
             status.revision += 1;
             status.revision
         };
-        let mut latch = self.agent_status_exit_latch.lock().unwrap();
-        if is_clear {
-            latch.record_clear();
-        } else {
-            latch.record_set();
+        if is_clear || is_set {
+            let mut latch = self.agent_status_exit_latch.lock().unwrap();
+            if is_clear {
+                latch.record_clear();
+            } else {
+                latch.record_set();
+            }
         }
-        revision
+        Some(revision)
+    }
+
+    /// Apply an ACCEPTED OSC 7501 report to this pane's record table
+    /// (osc7501-program-status FR14, D7): the revision moves once, whether or
+    /// not the stored data changed. Returns the resulting revision.
+    ///
+    /// Callers must only pass a report `program_status::parse` returned for a
+    /// fully validated body; queries and ignored bodies never reach here.
+    pub fn apply_program_status_report(&self, report: crate::program_status::Report) -> u64 {
+        let mut status = self.agent_status.lock().unwrap();
+        status.program_status.apply(report);
+        status.revision += 1;
+        status.revision
+    }
+
+    /// Apply a terminal reset (RIS) to this pane's OSC 7501 records: every
+    /// record is removed. Returns the new revision when a record existed (the
+    /// revision moved), `None` when the table was already empty.
+    pub fn apply_program_status_reset(&self) -> Option<u64> {
+        let mut status = self.agent_status.lock().unwrap();
+        if status.program_status.reset() {
+            status.revision += 1;
+            Some(status.revision)
+        } else {
+            None
+        }
     }
 
     /// Record a live, main-screen-observed OSC 133 mark for this pane
@@ -700,25 +755,32 @@ impl MuxPane {
     /// same downstream broadcast the caller drives from the returned
     /// revision, no parallel clear logic (FR2).
     ///
+    /// A prompt start (`A`) also applies the OSC 7501 prompt-start operation
+    /// to the pane's record table (osc7501-program-status FR7): `working`,
+    /// `blocked` and `idle` records are removed, `done` and `error` stay. A
+    /// prompt start that fires the inferred clear AND removes records moves
+    /// the revision once.
+    ///
     /// Callers (the daemon's live PTY reader path for this pane) must only
     /// ever pass marks that are LIVE and main-screen-observed, in true
     /// arrival order relative to this pane's Set/Clear reports (FR4/FR5) —
     /// this method has no way to tell a live mark from a replayed one, so
     /// that guarantee is entirely the caller's responsibility.
     ///
-    /// Returns `Some(revision)` when an inferred clear fired; `None` when
-    /// the mark produced no state change (AC-2/AC-3: e.g. an `A` with no
-    /// preceding `D`, or any mark while disarmed).
+    /// Returns `Some(revision)` when the mark changed the record (an inferred
+    /// clear fired, or records were removed); `None` when it produced no
+    /// state change (AC-2/AC-3: e.g. an `A` with no preceding `D` and no
+    /// removable record, or any mark while disarmed).
     pub fn record_live_osc133_mark(&self, kind: PromptMarkKind) -> Option<u64> {
         let fired = {
             let mut latch = self.agent_status_exit_latch.lock().unwrap();
             latch.record_mark(kind)
         };
-        if fired {
-            Some(self.apply_agent_status_event(AgentStatusEvent::Clear))
-        } else {
-            None
+        let prompt_start = kind == PromptMarkKind::PromptStart;
+        if !fired && !prompt_start {
+            return None;
         }
+        self.apply_agent_status_change(fired.then_some(AgentStatusEvent::Clear), prompt_start)
     }
 
     /// Mark PTY as exited (task0001 SPEC FR3/FR4, task plan D2; task plan

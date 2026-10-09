@@ -8889,3 +8889,298 @@ mod strip_non_sixel_dcs_linear;
 // lib-budget-tests-load-tolerance task0001 (FR3, FR4, FR6, FR7, FR8): the thread CPU-time
 // reading, the CPU budget meter and its judgment, with their own tests.
 mod thread_cpu_time;
+
+// ── osc7501-program-status task0004 (AC-1, AC-2): OSC 7501 and RIS in the
+//    agent-status feed ────────────────────────────────────────────────────
+
+mod program_status_feed {
+    use super::*;
+    use crate::program_status::Terminator;
+    use term_core::terminal_core::TerminalCore;
+
+    const ESC: u8 = 0x1b;
+    const BEL: u8 = 0x07;
+
+    fn ps(body: &str, terminator: Terminator) -> AgentStatusFeedItem {
+        AgentStatusFeedItem::ProgramStatus {
+            body: body.to_string(),
+            terminator,
+        }
+    }
+
+    fn osc(body: &str, terminator: Terminator) -> Vec<u8> {
+        let mut bytes = vec![ESC, b']'];
+        bytes.extend_from_slice(body.as_bytes());
+        match terminator {
+            Terminator::Bel => bytes.push(BEL),
+            Terminator::St => bytes.extend_from_slice(b"\x1b\\"),
+        }
+        bytes
+    }
+
+    /// Feed one chunk whose whole extent is live main-screen content.
+    fn feed_live(scanner: &mut AgentStatusFeedScanner, chunk: &[u8]) -> Vec<AgentStatusFeedItem> {
+        scanner.feed(chunk, &[0..chunk.len()])
+    }
+
+    fn scan(chunk: &[u8]) -> Vec<AgentStatusFeedItem> {
+        feed_live(&mut AgentStatusFeedScanner::new(), chunk)
+    }
+
+    /// AC-1: a complete OSC 7501 yields one item carrying the text after
+    /// `7501;` and the terminator kind, for BEL and for ST.
+    #[test]
+    fn ac1_a_complete_osc_7501_yields_one_item_with_its_body_and_terminator() {
+        assert_eq!(
+            scan(&osc("7501;state=working:id=a/b", Terminator::Bel)),
+            vec![ps("state=working:id=a/b", Terminator::Bel)]
+        );
+        assert_eq!(
+            scan(&osc("7501;state=done:app=claude", Terminator::St)),
+            vec![ps("state=done:app=claude", Terminator::St)]
+        );
+        assert_eq!(
+            scan(&osc("7501;?", Terminator::Bel)),
+            vec![ps("?", Terminator::Bel)]
+        );
+        assert_eq!(
+            scan(&osc("7501;?", Terminator::St)),
+            vec![ps("?", Terminator::St)]
+        );
+    }
+
+    /// AC-1: only the canonical `7501;` prefix is an OSC 7501.
+    #[test]
+    fn ac1_only_the_canonical_prefix_is_an_osc_7501() {
+        for body in [
+            "7501",
+            "75010;x",
+            "07501;state=idle",
+            "750;state=idle",
+            "7502;x",
+        ] {
+            assert_eq!(scan(&osc(body, Terminator::Bel)), vec![], "{body}");
+        }
+    }
+
+    /// AC-1: ESC c yields one reset item, also when the pane is on the
+    /// alternate screen (no live span).
+    #[test]
+    fn ac1_ris_yields_one_reset_item_regardless_of_live_spans() {
+        assert_eq!(scan(b"abc\x1bcdef"), vec![AgentStatusFeedItem::Reset]);
+        let mut scanner = AgentStatusFeedScanner::new();
+        assert_eq!(
+            scanner.feed(b"\x1bc", &[]),
+            vec![AgentStatusFeedItem::Reset]
+        );
+    }
+
+    /// AC-1: reports are unconditional: an OSC 7501 outside every live span
+    /// is still emitted, while an OSC 133 mark there is not.
+    #[test]
+    fn ac1_program_status_is_emitted_outside_live_spans_and_marks_are_not() {
+        let mut chunk = osc("7501;state=error", Terminator::Bel);
+        chunk.extend_from_slice(&osc("133;A", Terminator::Bel));
+        let mut scanner = AgentStatusFeedScanner::new();
+        assert_eq!(
+            scanner.feed(&chunk, &[]),
+            vec![ps("state=error", Terminator::Bel)]
+        );
+    }
+
+    /// The reference stream of the ordering tests: every kind of item, both
+    /// terminators, in an order that differs from any per-kind grouping.
+    fn mixed_stream() -> (Vec<u8>, Vec<AgentStatusFeedItem>) {
+        let mut bytes = Vec::new();
+        let mut expected = Vec::new();
+        bytes.extend_from_slice(&osc("133;D", Terminator::Bel));
+        expected.push(AgentStatusFeedItem::Osc133Mark(
+            crate::prompts::PromptMarkKind::CommandEnd,
+        ));
+        bytes.extend_from_slice(&osc(
+            "777;emterm;agent-status;v=1;state=working",
+            Terminator::Bel,
+        ));
+        expected.push(AgentStatusFeedItem::Report(
+            "emterm;agent-status;v=1;state=working".to_string(),
+        ));
+        bytes.extend_from_slice(&osc("7501;state=error:title=aGk=", Terminator::St));
+        expected.push(ps("state=error:title=aGk=", Terminator::St));
+        bytes.extend_from_slice(b"text\x1bc");
+        expected.push(AgentStatusFeedItem::Reset);
+        bytes.extend_from_slice(&osc("133;A", Terminator::St));
+        expected.push(AgentStatusFeedItem::Osc133Mark(
+            crate::prompts::PromptMarkKind::PromptStart,
+        ));
+        bytes.extend_from_slice(&osc("7501;?", Terminator::Bel));
+        expected.push(ps("?", Terminator::Bel));
+        (bytes, expected)
+    }
+
+    /// AC-1: items keep the exact byte order of the stream across the four
+    /// kinds.
+    #[test]
+    fn ac1_items_keep_exact_byte_order_with_reports_and_live_marks() {
+        let (bytes, expected) = mixed_stream();
+        assert_eq!(scan(&bytes), expected);
+    }
+
+    /// AC-1: the same items come out when the stream is cut at any single
+    /// offset (inside an introducer, a body or a terminator), and when it
+    /// arrives one byte at a time.
+    #[test]
+    fn ac1_a_sequence_split_across_reads_yields_the_same_items() {
+        let (bytes, expected) = mixed_stream();
+        for cut in 0..=bytes.len() {
+            let mut scanner = AgentStatusFeedScanner::new();
+            let mut items = feed_live(&mut scanner, &bytes[..cut]);
+            items.extend(feed_live(&mut scanner, &bytes[cut..]));
+            assert_eq!(items, expected, "cut at {cut}");
+        }
+        let mut scanner = AgentStatusFeedScanner::new();
+        let mut items = Vec::new();
+        for byte in &bytes {
+            items.extend(feed_live(&mut scanner, std::slice::from_ref(byte)));
+        }
+        assert_eq!(items, expected, "one byte at a time");
+    }
+
+    /// AC-1: ESC c is a reset only where the terminal executes it. The
+    /// reference is `term_core`: for every stream, the scanner emits a reset
+    /// exactly when the core's scroll region (set before the stream) was
+    /// reset by it.
+    #[test]
+    fn ac1_a_reset_item_is_emitted_exactly_where_term_core_executes_ris() {
+        let streams: &[&[u8]] = &[
+            b"\x1bc",
+            b"\x1b\x1bc",
+            b"\x1b[1\x1bc",
+            b"\x1b]0;t\x07\x1bc",
+            b"\x1b]0;t\x1b\\\x1bc",
+            b"\x1b]0;t\x1bc",
+            b"\x1b]0;t\x1b\x1bc",
+            b"\x1b_x\x1bc",
+            b"\x1bPx\x1bc",
+            b"\xf0\x1bc",
+            b"\x1b(c",
+            b"\x1b(\x1bc",
+            b"\x1b)\x1bc",
+            b"\x1b]0;t\x1b(\x1bc",
+            b"\x1b[c",
+            b"\x1b*c",
+            b"\x1b#c",
+            b"abc c",
+            b"\x1b",
+        ];
+        for stream in streams {
+            let mut core = TerminalCore::new(80, 24, 100);
+            core.set_scroll_region(2, 5);
+            core.process_pty_data_fully(stream);
+            let executed = core.get_scroll_region_top() != 2;
+
+            let items = scan(stream);
+            let resets = items
+                .iter()
+                .filter(|i| **i == AgentStatusFeedItem::Reset)
+                .count();
+            assert_eq!(
+                resets,
+                usize::from(executed),
+                "{stream:?}: term_core executed RIS: {executed}, items: {items:?}"
+            );
+        }
+    }
+
+    /// AC-1: an ESC at the end of a read followed by `c` at the start of the
+    /// next is one reset; an ESC ( / ESC ) at the end of a read still claims
+    /// the first byte of the next.
+    #[test]
+    fn ac1_reset_and_designator_state_carry_across_reads() {
+        let mut scanner = AgentStatusFeedScanner::new();
+        assert_eq!(feed_live(&mut scanner, b"x\x1b"), vec![]);
+        assert_eq!(
+            feed_live(&mut scanner, b"cy"),
+            vec![AgentStatusFeedItem::Reset]
+        );
+
+        let mut scanner = AgentStatusFeedScanner::new();
+        assert_eq!(feed_live(&mut scanner, b"\x1b("), vec![]);
+        assert_eq!(feed_live(&mut scanner, b"\x1bc"), vec![]);
+    }
+
+    /// AC-1: OSC 777 and OSC 133 recognition is unchanged around an ESC that
+    /// term_core takes as a charset designator.
+    #[test]
+    fn ac1_existing_osc_recognition_is_unchanged_after_a_designator_escape() {
+        let mut chunk = b"\x1b(\x1b".to_vec();
+        chunk.extend_from_slice(b"]133;A\x07");
+        assert_eq!(
+            scan(&chunk),
+            vec![AgentStatusFeedItem::Osc133Mark(
+                crate::prompts::PromptMarkKind::PromptStart
+            )]
+        );
+    }
+
+    fn padded_7501_body(total_body_len: usize) -> String {
+        let prefix = "7501;title=";
+        format!("{prefix}{}", "A".repeat(total_body_len - prefix.len()))
+    }
+
+    /// AC-2: a body at the existing carry bound is delivered; one byte above
+    /// it yields no item (both terminators).
+    #[test]
+    fn ac2_a_body_above_the_carry_bound_yields_no_item() {
+        for terminator in [Terminator::Bel, Terminator::St] {
+            let at_bound = padded_7501_body(AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP);
+            assert_eq!(scan(&osc(&at_bound, terminator)).len(), 1, "{terminator:?}");
+
+            let above = padded_7501_body(AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP + 1);
+            assert_eq!(
+                scan(&osc(&above, terminator)),
+                vec![],
+                "{terminator:?}: over-long body"
+            );
+        }
+    }
+
+    /// AC-2: the bytes the scanner retains never exceed the bound, whether
+    /// the over-long body arrives whole, in pieces or never ends.
+    #[test]
+    fn ac2_retained_bytes_never_exceed_the_carry_bound() {
+        let mut stream = vec![ESC, b']'];
+        stream.extend_from_slice(
+            padded_7501_body(3 * AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP).as_bytes(),
+        );
+
+        for piece in [stream.len(), 1000, 7, 1] {
+            let mut scanner = AgentStatusFeedScanner::new();
+            for chunk in stream.chunks(piece) {
+                assert_eq!(feed_live(&mut scanner, chunk), vec![]);
+                assert!(
+                    scanner.retained_len() <= AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP,
+                    "piece {piece}: retained {} bytes",
+                    scanner.retained_len()
+                );
+            }
+        }
+    }
+
+    /// AC-2: an unterminated body yields no item (it stays in the bounded
+    /// carry), and the scanner recovers for the next complete sequence.
+    #[test]
+    fn ac2_an_unterminated_body_yields_no_item_and_the_scanner_recovers() {
+        let mut scanner = AgentStatusFeedScanner::new();
+        let mut open = vec![ESC, b']'];
+        open.extend_from_slice(b"7501;state=working");
+        assert_eq!(feed_live(&mut scanner, &open), vec![]);
+        assert_eq!(scanner.retained_len(), "7501;state=working".len());
+
+        // A fresh introducer cuts the open one; the new sequence completes.
+        assert_eq!(
+            feed_live(&mut scanner, &osc("7501;state=done", Terminator::Bel)),
+            vec![ps("state=done", Terminator::Bel)]
+        );
+        assert_eq!(scanner.retained_len(), 0);
+    }
+}
