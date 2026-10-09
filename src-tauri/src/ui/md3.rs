@@ -52,6 +52,7 @@ pub struct Palette {
     pub surface_variant: Color32,
     pub outline: Color32,
     pub outline_variant: Color32,
+    pub error: Color32,
     pub error_container: Color32,
     pub on_error_container: Color32,
 }
@@ -75,6 +76,7 @@ const PALETTE_PURPLE: Palette = Palette {
     surface_variant: hex(0x49454F),
     outline: hex(0x938F99),
     outline_variant: hex(0x49454F),
+    error: hex(0xF2B8B5),
     error_container: hex(0x8C1D18),
     on_error_container: hex(0xF9DEDC),
 };
@@ -96,6 +98,7 @@ const PALETTE_BLUE: Palette = Palette {
     surface_variant: hex(0x44464F),
     outline: hex(0x8E909A),
     outline_variant: hex(0x44464F),
+    error: hex(0xF2B8B5),
     error_container: hex(0x8C1D18),
     on_error_container: hex(0xF9DEDC),
 };
@@ -117,6 +120,7 @@ const PALETTE_GREEN: Palette = Palette {
     surface_variant: hex(0x404943),
     outline: hex(0x8A938C),
     outline_variant: hex(0x404943),
+    error: hex(0xF2B8B5),
     error_container: hex(0x8C1D18),
     on_error_container: hex(0xF9DEDC),
 };
@@ -138,6 +142,7 @@ const PALETTE_ORANGE: Palette = Palette {
     surface_variant: hex(0x524436),
     outline: hex(0x9D8E7D),
     outline_variant: hex(0x524436),
+    error: hex(0xF2B8B5),
     error_container: hex(0x8C1D18),
     on_error_container: hex(0xF9DEDC),
 };
@@ -159,6 +164,7 @@ const PALETTE_PINK: Palette = Palette {
     surface_variant: hex(0x514349),
     outline: hex(0x9D8A90),
     outline_variant: hex(0x514349),
+    error: hex(0xF2B8B5),
     error_container: hex(0x8C1D18),
     on_error_container: hex(0xF9DEDC),
 };
@@ -182,6 +188,7 @@ const PALETTE_PURPLE_LIGHT: Palette = Palette {
     surface_variant: hex(0xE7E0EC),
     outline: hex(0x79747E),
     outline_variant: hex(0xCAC4D0),
+    error: hex(0xB3261E),
     error_container: hex(0xF9DEDC),
     on_error_container: hex(0x410E0B),
 };
@@ -203,6 +210,7 @@ const PALETTE_BLUE_LIGHT: Palette = Palette {
     surface_variant: hex(0xE1E2EC),
     outline: hex(0x75767F),
     outline_variant: hex(0xC4C6D0),
+    error: hex(0xB3261E),
     error_container: hex(0xF9DEDC),
     on_error_container: hex(0x410E0B),
 };
@@ -224,6 +232,7 @@ const PALETTE_GREEN_LIGHT: Palette = Palette {
     surface_variant: hex(0xDBE5DD),
     outline: hex(0x717972),
     outline_variant: hex(0xBFC9C1),
+    error: hex(0xB3261E),
     error_container: hex(0xF9DEDC),
     on_error_container: hex(0x410E0B),
 };
@@ -245,6 +254,7 @@ const PALETTE_ORANGE_LIGHT: Palette = Palette {
     surface_variant: hex(0xF0E0CD),
     outline: hex(0x847465),
     outline_variant: hex(0xD4C4B1),
+    error: hex(0xB3261E),
     error_container: hex(0xF9DEDC),
     on_error_container: hex(0x410E0B),
 };
@@ -266,6 +276,7 @@ const PALETTE_PINK_LIGHT: Palette = Palette {
     surface_variant: hex(0xF0DBE1),
     outline: hex(0x837379),
     outline_variant: hex(0xD4BFC5),
+    error: hex(0xB3261E),
     error_container: hex(0xF9DEDC),
     on_error_container: hex(0x410E0B),
 };
@@ -402,6 +413,12 @@ pub fn outline_variant() -> Color32 {
 #[allow(dead_code)]
 pub fn surface_variant() -> Color32 {
     current().surface_variant
+}
+
+/// Error accent (the agent `error` badge, danger text/icon). Mirrors
+/// `--md-sys-color-error` per preset and brightness.
+pub fn error() -> Color32 {
+    current().error
 }
 
 /// Destructive button background (dialog destructive primary, error
@@ -560,6 +577,73 @@ mod tests {
                 Color32::from_rgb(0x41, 0x0E, 0x0B),
                 "light on_error_container for {preset:?}"
             );
+        }
+    }
+
+    /// `ui-theme-presets.ts` (the WebView build's per-preset token table),
+    /// embedded at compile time so the native palette is checked against the
+    /// real source rather than a second hand-copied table.
+    const PRESETS_TS: &str = include_str!("../../web-shared/settings/ui-theme-presets.ts");
+
+    /// The `error` token of `UI_THEME_PRESETS.<preset>.<brightness>`.
+    fn webview_error_token(preset: &str, brightness: &str) -> Color32 {
+        let after_preset = &PRESETS_TS[PRESETS_TS
+            .find(&format!("\n  {preset}: {{"))
+            .unwrap_or_else(|| panic!("preset {preset} present in ui-theme-presets.ts"))..];
+        let after_brightness = &after_preset[after_preset
+            .find(&format!("\n    {brightness}: {{"))
+            .unwrap_or_else(|| panic!("{preset}.{brightness} present in ui-theme-presets.ts"))..];
+        let key = "\n      error: \"#";
+        let at = after_brightness
+            .find(key)
+            .unwrap_or_else(|| panic!("{preset}.{brightness}.error present"))
+            + key.len();
+        hex(u32::from_str_radix(&after_brightness[at..at + 6], 16)
+            .unwrap_or_else(|_| panic!("{preset}.{brightness}.error is a #RRGGBB literal")))
+    }
+
+    #[test]
+    fn webview_error_token_reader_reads_the_known_defaults() {
+        // Guards the reader itself: purple dark / light `error`.
+        assert_eq!(
+            webview_error_token("purple", "dark"),
+            Color32::from_rgb(0xF2, 0xB8, 0xB5)
+        );
+        assert_eq!(
+            webview_error_token("purple", "light"),
+            Color32::from_rgb(0xB3, 0x26, 0x1E)
+        );
+    }
+
+    #[test]
+    fn error_role_equals_the_webview_error_token_for_every_preset_and_brightness() {
+        use crate::settings::UiTheme::{Dark, Light};
+        use crate::settings::UiThemePreset::*;
+        for (preset, name) in [
+            (Purple, "purple"),
+            (Blue, "blue"),
+            (Green, "green"),
+            (Orange, "orange"),
+            (Pink, "pink"),
+        ] {
+            for (theme, brightness) in [(Dark, "dark"), (Light, "light")] {
+                assert_eq!(
+                    palette_for(preset, theme).error,
+                    webview_error_token(name, brightness),
+                    "{name} {brightness}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn error_role_is_distinct_from_the_error_container_roles() {
+        use crate::settings::UiTheme::{Dark, Light};
+        use crate::settings::UiThemePreset::Purple;
+        for theme in [Dark, Light] {
+            let p = palette_for(Purple, theme);
+            assert_ne!(p.error, p.error_container);
+            assert_ne!(p.error, p.on_error_container);
         }
     }
 

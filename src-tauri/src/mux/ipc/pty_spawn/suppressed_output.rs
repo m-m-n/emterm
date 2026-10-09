@@ -48,7 +48,7 @@
 use std::ops::Range;
 
 use super::client_parity_scan::{
-    self, ScanItemKind, ScanOutcome, is_color_query, is_viewer_launch,
+    self, ScanItemKind, ScanOutcome, is_color_query, is_program_status_query, is_viewer_launch,
     reconstruct_osc_number_and_data,
 };
 use crate::mux::snapshot_tail::is_awaiting_designator;
@@ -347,9 +347,11 @@ struct EmittedItem {
 ///   verbatim (round-2 FR2). The snapshot is replayed with its responses
 ///   discarded, so a query that survived into the ring is never answered
 ///   through the snapshot; this is the same treatment CSI queries get.
+/// - OSC 7501 `?` queries: from any region, the whole sequence verbatim, like
+///   a color query. A 7501 report is never an item.
 /// - Viewer launches: from any region, the whole sequence verbatim.
-/// - The carried-over completion (FR6), when it is a color query or a
-///   deliverable viewer launch, verbatim — unless a scan item ends at the
+/// - The carried-over completion (FR6), when it is a color query, a 7501 query
+///   or a deliverable viewer launch, verbatim — unless a scan item ends at the
 ///   same chunk position: that is the same sequence, re-detected through the
 ///   retained window, and is emitted once. Items with identical content but
 ///   different end positions are distinct and all emitted.
@@ -358,9 +360,9 @@ fn assemble_items(outcome: &ScanOutcome, carried: Option<&CarriedOverCompletion<
     for item in &outcome.items {
         let chunk_end = item.range.end - outcome.boundary;
         let bytes = match item.kind {
-            ScanItemKind::ColorQuery | ScanItemKind::ViewerLaunch => {
-                outcome.combined[item.range.clone()].to_vec()
-            }
+            ScanItemKind::ColorQuery
+            | ScanItemKind::ViewerLaunch
+            | ScanItemKind::ProgramStatusQuery => outcome.combined[item.range.clone()].to_vec(),
             ScanItemKind::CsiQuery => strip_c0(&outcome.combined[item.range.clone()]).collect(),
         };
         items.push(EmittedItem { chunk_end, bytes });
@@ -387,9 +389,10 @@ fn assemble_items(outcome: &ScanOutcome, carried: Option<&CarriedOverCompletion<
 }
 
 /// Whether a carried-over sequence is one this builder delivers: a complete
-/// OSC (`ESC ] body BEL|ST`) that is a color query or a deliverable viewer
-/// launch. DCS/APC sequences and every other OSC are not — the body is
-/// recovered through the same delivery-side entry points the scan uses.
+/// OSC (`ESC ] body BEL|ST`) that is a color query, an OSC 7501 `?` query or a
+/// deliverable viewer launch. DCS/APC sequences and every other OSC - an
+/// OSC 7501 report included - are not; the body is recovered through the same
+/// delivery-side entry points the scan uses.
 fn is_deliverable_osc(bytes: &[u8]) -> bool {
     if bytes.len() < 3 || bytes[0] != 0x1b || bytes[1] != b']' {
         return false;
@@ -403,7 +406,7 @@ fn is_deliverable_osc(bytes: &[u8]) -> bool {
         return false;
     };
     let osc = reconstruct_osc_number_and_data(&bytes[2..body_end]);
-    is_color_query(&osc) || is_viewer_launch(&osc)
+    is_color_query(&osc) || is_program_status_query(&osc) || is_viewer_launch(&osc)
 }
 
 /// Filter out C0 control bytes (0x00-0x1A, 0x1C-0x1F) from `bytes` — never
@@ -447,6 +450,14 @@ mod tests {
 
     fn build(chunk: &[u8], ring_written_ranges: &[Range<usize>], pending: &[u8]) -> Vec<u8> {
         build_suppressed_replacement(chunk, ring_written_ranges, pending, &[])
+    }
+
+    /// How many times `needle` occurs in `haystack` (non-overlapping starts).
+    fn count_sub(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
     }
 
     #[test]
@@ -563,6 +574,144 @@ mod tests {
         let chunk = b"\x1b]10;#fff;?\x07";
         let result = build(chunk, &[], &[]);
         assert_eq!(result, chunk);
+    }
+
+    // ---- osc7501-program-status task0006 AC-3 (FR8, A3): OSC 7501 queries ----
+
+    #[test]
+    fn osc7501_query_outside_ring_written_ranges_is_redelivered_with_its_own_terminator() {
+        for chunk in [
+            b"\x1b]7501;?\x07".as_slice(),
+            b"\x1b]7501;?\x1b\\",
+            b"\x1b]07501;?\x07",
+        ] {
+            let result = build(chunk, &[], &[]);
+            assert_eq!(result, chunk, "chunk {:?}", String::from_utf8_lossy(chunk));
+        }
+    }
+
+    #[test]
+    fn osc7501_query_inside_ring_written_ranges_is_redelivered_once() {
+        // Like a color query: the snapshot is replayed with its responses
+        // discarded, so a query that survived into the ring is not answered
+        // through the snapshot; the replacement delivers it once.
+        for chunk in [b"\x1b]7501;?\x07".as_slice(), b"\x1b]7501;?\x1b\\"] {
+            let result = build(chunk, &[0..chunk.len()], &[]);
+            assert_eq!(result, chunk, "chunk {:?}", String::from_utf8_lossy(chunk));
+        }
+    }
+
+    #[test]
+    fn osc7501_report_in_a_suppressed_chunk_is_not_carried() {
+        for chunk in [
+            b"\x1b]7501;state=working\x07".as_slice(),
+            b"\x1b]7501;state=idle;id=a/b;app=claude\x1b\\",
+            b"\x1b]07501;state=done\x07",
+            b"\x1b]7501;clear\x07",
+            b"\x1b]7501;\x07",
+        ] {
+            assert!(
+                build(chunk, &[], &[]).is_empty(),
+                "alternate-screen span: {:?}",
+                String::from_utf8_lossy(chunk)
+            );
+            assert!(
+                build(chunk, &[0..chunk.len()], &[]).is_empty(),
+                "ring-written span: {:?}",
+                String::from_utf8_lossy(chunk)
+            );
+        }
+    }
+
+    #[test]
+    fn osc7501_near_misses_of_the_query_are_not_carried() {
+        for chunk in [
+            b"\x1b]7501;??\x07".as_slice(),
+            b"\x1b]7501; ?\x07",
+            b"\x1b]7500;?\x07",
+            b"\x1b]7502;?\x07",
+            b"\x1b]75010;?\x07",
+            b"\x1b]7501x;?\x07",
+        ] {
+            assert!(
+                build(chunk, &[], &[]).is_empty(),
+                "chunk {:?}",
+                String::from_utf8_lossy(chunk)
+            );
+        }
+    }
+
+    #[test]
+    fn osc7501_query_among_reports_and_text_is_carried_exactly_once() {
+        let query = b"\x1b]7501;?\x1b\\";
+        let chunk = [
+            b"out\x1b]7501;state=working\x07".as_slice(),
+            query,
+            b"more\x1b]7501;state=idle\x07end",
+        ]
+        .concat();
+        let result = build(&chunk, &[0..chunk.len()], &[]);
+        assert_eq!(result, query);
+        assert_eq!(count_sub(&result, query), 1);
+    }
+
+    #[test]
+    fn osc7501_query_keeps_stream_order_with_the_other_deliverable_items() {
+        let chunk = b"\x1b[6n\x1b]7501;?\x07\x1b]11;?\x07\x1b]7501;state=idle\x07\
+                      \x1b]777;emterm;markdown;begin\x07";
+        let result = build(chunk, &[0..chunk.len()], &[]);
+        assert_eq!(
+            result,
+            b"\x1b[6n\x1b]7501;?\x07\x1b]11;?\x07\x1b]777;emterm;markdown;begin\x07".as_slice()
+        );
+    }
+
+    #[test]
+    fn osc7501_query_split_across_window_and_chunk_is_delivered_once() {
+        let window = b"abc\x1b]7501;";
+        let chunk = b"?\x07";
+        let result = build_suppressed_replacement(chunk, &[0..chunk.len()], &[], window);
+        assert_eq!(result, b"\x1b]7501;?\x07".as_slice());
+    }
+
+    #[test]
+    fn osc7501_carried_over_query_is_delivered_with_either_terminator_and_a_report_is_dropped() {
+        for query in [&b"\x1b]7501;?\x07"[..], &b"\x1b]7501;?\x1b\\"[..]] {
+            let split = 4;
+            let chunk = query[split..].to_vec();
+            let out = build_with_carried(
+                &chunk,
+                &[0..chunk.len()],
+                &[],
+                &[],
+                Some((query, chunk.len())),
+            );
+            assert_eq!(out, query, "query {query:?}");
+        }
+        for report in [
+            &b"\x1b]7501;state=working\x07"[..],
+            &b"\x1b]7501;state=idle\x1b\\"[..],
+        ] {
+            let chunk = report[4..].to_vec();
+            let out = build_with_carried(
+                &chunk,
+                &[0..chunk.len()],
+                &[],
+                &[],
+                Some((report, chunk.len())),
+            );
+            assert!(out.is_empty(), "report {report:?}: {out:?}");
+        }
+    }
+
+    #[test]
+    fn osc7501_is_deliverable_only_as_a_complete_query() {
+        assert!(is_deliverable_osc(b"\x1b]7501;?\x07"));
+        assert!(is_deliverable_osc(b"\x1b]7501;?\x1b\\"));
+        assert!(is_deliverable_osc(b"\x1b]07501;?\x07"));
+        assert!(!is_deliverable_osc(b"\x1b]7501;state=working\x07"));
+        assert!(!is_deliverable_osc(b"\x1b]7501;??\x07"));
+        assert!(!is_deliverable_osc(b"\x1b]7501;?"));
     }
 
     // ---- FR10: cut tails ----

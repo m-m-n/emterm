@@ -126,6 +126,23 @@ impl App {
         self.agent_status.aggregate(keys.iter())
     }
 
+    /// The value of the status bar's `{agent_status}` template variable
+    /// (osc7501-program-status FR13): the state word of the active tab's
+    /// composite aggregate over the same key set the tab badge aggregates
+    /// ([`Self::agent_status_badge_for`]), or the empty string when there
+    /// is no active tab or no key carries a state.
+    ///
+    /// The word comes from the state vocabulary alone
+    /// ([`crate::agent_status::AgentState`]'s display form): agent names,
+    /// tab titles and any other terminal-supplied text never reach it
+    /// (NFR5).
+    pub(super) fn active_agent_status_word(&self) -> String {
+        self.active_tab()
+            .and_then(|tab| self.agent_status_badge_for(tab))
+            .map(|aggregated| aggregated.state.to_string())
+            .unwrap_or_default()
+    }
+
     /// A single mux pane's aggregated badge, by (connection scope, wire
     /// `pane_id`) (task0006: `ui::mux_sidebar` window-entry badge — one
     /// pane per window entry; scoped per mux-agent-status-pane-key-
@@ -332,12 +349,27 @@ impl App {
             // the only source for it (see `Self::mux_public_pane_ids`).
             self.mux_public_pane_ids
                 .insert((scope, update.pane_id), update.public_pane_id.clone());
-            self.agent_status.apply_daemon_update(
+            // osc7501-program-status SC-3/SC-4: the trailing OSC 7501
+            // summary item (absent for a pane without records) is stored
+            // next to the OSC 777 part, both verbatim with the daemon
+            // revision. The title was sanitized by the daemon and is used
+            // as received. A replay-derived update applies silently, as
+            // before.
+            let summary =
+                update
+                    .program_status
+                    .map(|s| crate::agent_status_model::ProgramStatusSummary {
+                        state: crate::agent_status_model::state_from_wire(s.state),
+                        title: s.title,
+                        app: s.app,
+                    });
+            self.agent_status.apply_daemon_update_with_summary(
                 scope,
                 update.pane_id,
                 update.state.map(crate::agent_status_model::state_from_wire),
                 update.name,
                 update.revision,
+                summary,
                 update.replay_derived,
             );
         }
