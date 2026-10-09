@@ -1,0 +1,27 @@
+schema_version: 1
+feature: osc7501-program-status
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: 8af873317a5c5dc527fa1bb7943cd0e1e399653a
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers:
+  create-spec.feature-identity:
+    packet_id: null
+    answered_at: '2026-10-10T01:00:18+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - derive_from_task_description
+    freeform: null
+    normalized_answer: osc7501-program-status
+    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option_id derive_from_task_description (Notion タスクタイトル『OSC 7501（Program Status Protocol）に対応する』から導出)'
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
