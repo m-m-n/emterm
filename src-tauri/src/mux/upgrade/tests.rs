@@ -1675,11 +1675,11 @@ fn pane_in<'a>(mgr: &'a SessionManager, sid: u32, wid: u32, pid: u32) -> &'a Mux
 }
 
 fn pane_table(pane: &MuxPane) -> Table {
-    pane.agent_status.lock().unwrap().table.clone()
+    pane.agent_status.lock().unwrap().program_status.clone()
 }
 
 fn install_program_table(pane: &MuxPane, table: Table) {
-    pane.agent_status.lock().unwrap().table = table;
+    pane.agent_status.lock().unwrap().program_status = table;
 }
 
 /// A manager with one already-exited pane (no descriptor), registered in a
@@ -1795,7 +1795,7 @@ fn ac3_refresh_pulls_in_a_program_record_added_after_snapshot() {
         let pane = pane_in(&mgr, sid, wid, pid);
         let mut status = pane.agent_status.lock().unwrap();
         set_program_record(
-            &mut status.table,
+            &mut status.program_status,
             "deploy",
             Record {
                 progress: Some(5),
@@ -1803,7 +1803,7 @@ fn ac3_refresh_pulls_in_a_program_record_added_after_snapshot() {
             },
         );
         set_program_record(
-            &mut status.table,
+            &mut status.program_status,
             "test",
             program_record(ProgramState::Done),
         );
@@ -1841,7 +1841,7 @@ fn ac3_refresh_drops_program_records_cleared_after_snapshot() {
             .agent_status
             .lock()
             .unwrap()
-            .table
+            .program_status
             .reset()
     );
 
@@ -1867,7 +1867,7 @@ fn ac3_refresh_pulls_in_a_program_record_added_to_an_exited_pane_after_snapshot(
         let pane = pane_in(&mgr, sid, wid, pid);
         let mut status = pane.agent_status.lock().unwrap();
         set_program_record(
-            &mut status.table,
+            &mut status.program_status,
             "late",
             program_record(ProgramState::Idle),
         );
@@ -1974,7 +1974,7 @@ fn ac4_restored_program_table_evicts_the_same_record_next() {
     assert_eq!(pane_table(restored), pane_table(original));
     for pane in [original, restored] {
         set_program_record(
-            &mut pane.agent_status.lock().unwrap().table,
+            &mut pane.agent_status.lock().unwrap().program_status,
             "extra",
             program_record(ProgramState::Working),
         );
