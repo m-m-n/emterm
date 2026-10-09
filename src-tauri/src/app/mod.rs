@@ -873,8 +873,10 @@ impl App {
     /// The render pipeline calls this once per frame and hands the
     /// result to [`crate::ui::status_bar::draw`]. Mux attach state is
     /// not an input (mux-status-bar-removal task0001, FR1/FR5): the
-    /// view model is a pure function of settings and the OSC
-    /// `777;statusbar` dispatcher's own state.
+    /// view model is a pure function of settings, the OSC
+    /// `777;statusbar` dispatcher's own state, and the `{agent_status}`
+    /// word of the active tab's agent-status aggregate
+    /// (osc7501-program-status FR13).
     pub fn status_bar_view_model(&self) -> crate::status_bar::StatusBarViewModel {
         // Refresh the cwd snapshot the providers read through their
         // `CwdSource` closure. The lock is held only for the duration
@@ -883,6 +885,15 @@ impl App {
             .active_tab()
             .and_then(|t| t.cb_state.lock().cwd.clone());
         *self.active_cwd.lock() = active_cwd_value;
+
+        // Refresh the `{agent_status}` provider from the active tab's
+        // composite aggregate. Setting it on every build reflects tab
+        // switches, tab closes, mux window switches and agent-status
+        // batches without separate hooks; an unchanged value has no side
+        // effect (no version bump, no wake).
+        self.status_bar_runtime
+            .agent_status_provider()
+            .set_value(&self.active_agent_status_word());
 
         self.status_bar_runtime
             .build_view_model(&self.settings.statusbar)
