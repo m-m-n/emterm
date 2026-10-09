@@ -125,7 +125,8 @@ tasks:
     - NFR1
     - NFR2
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc7501-program-status/task0001
   task0002:
     title: Error state, composite pane state and the wire summary
     plan: tasks/task0002.md
@@ -161,7 +162,8 @@ tasks:
     - FR16
     - FR18
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc7501-program-status/task0002
   task0003:
     title: Plain-tab OSC 7501 ingestion and query response
     plan: tasks/task0003.md
@@ -194,7 +196,8 @@ tasks:
     - FR14
     - NFR3
     - NFR4
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc7501-program-status/task0003
   task0004:
     title: mux daemon OSC 7501 delivery and composite wait
     plan: tasks/task0004.md
@@ -227,7 +230,8 @@ tasks:
     - FR14
     - FR16
     - NFR3
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc7501-program-status/task0004
   task0005:
     title: Status bar template variable {agent_status}
     plan: tasks/task0005.md
@@ -246,7 +250,8 @@ tasks:
     requirements:
     - FR13
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc7501-program-status/task0005
   task0006:
     title: mux replay stripping and suppressed-output parity for OSC 7501
     plan: tasks/task0006.md
@@ -265,7 +270,8 @@ tasks:
     requirements:
     - FR8
     - FR15
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc7501-program-status/task0006
   task0007:
     title: Hot-upgrade handoff of OSC 7501 records
     plan: tasks/task0007.md
