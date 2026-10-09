@@ -177,6 +177,7 @@ fn agent_status_update_decodes_and_latches_for_app_pump_all() {
         name: Some("claude".to_string()),
         revision: 3,
         replay_derived: false,
+        program_status: None,
     };
     let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 10, &update);
     let changed = tab.apply_mux_message(msg);

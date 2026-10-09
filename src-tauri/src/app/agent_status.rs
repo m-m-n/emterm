@@ -309,12 +309,27 @@ impl App {
             // the only source for it (see `Self::mux_public_pane_ids`).
             self.mux_public_pane_ids
                 .insert((scope, update.pane_id), update.public_pane_id.clone());
-            self.agent_status.apply_daemon_update(
+            // osc7501-program-status SC-3/SC-4: the trailing OSC 7501
+            // summary item (absent for a pane without records) is stored
+            // next to the OSC 777 part, both verbatim with the daemon
+            // revision. The title was sanitized by the daemon and is used
+            // as received. A replay-derived update applies silently, as
+            // before.
+            let summary =
+                update
+                    .program_status
+                    .map(|s| crate::agent_status_model::ProgramStatusSummary {
+                        state: crate::agent_status_model::state_from_wire(s.state),
+                        title: s.title,
+                        app: s.app,
+                    });
+            self.agent_status.apply_daemon_update_with_summary(
                 scope,
                 update.pane_id,
                 update.state.map(crate::agent_status_model::state_from_wire),
                 update.name,
                 update.revision,
+                summary,
                 update.replay_derived,
             );
         }
