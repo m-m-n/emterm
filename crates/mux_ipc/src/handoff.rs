@@ -45,16 +45,20 @@ use crate::protocol::AgentState;
 /// alternate-screen state (flag + formatted-contents dump) across a
 /// hot-upgrade boundary, for the same positional-decode reason the
 /// version-2 bump documents above.
-pub const HANDOFF_SCHEMA_VERSION: u32 = 3;
+///
+/// Bumped to 4 (osc7501-program-status task0007, SPEC FR17):
+/// [`HandoffPane`] gained the pane's OSC 7501 record list
+/// ([`HandoffPane::program_records`]), carried in update order across a
+/// hot-upgrade boundary, for the same positional-decode reason as above.
+pub const HANDOFF_SCHEMA_VERSION: u32 = 4;
 
 /// Inclusive range of [`HandoffDocument`] schema versions this build can
 /// restore.
 ///
-/// Today the range contains only [`HANDOFF_SCHEMA_VERSION`]; a future build
-/// widens it (e.g. `PREVIOUS_HANDOFF_SCHEMA_VERSION..=HANDOFF_SCHEMA_VERSION`)
-/// so it can also restore its immediate predecessor's format.
-/// [`decode_handoff_document`] rejects any document whose version falls
-/// outside this range.
+/// Every version from 1 up to [`HANDOFF_SCHEMA_VERSION`] can be restored:
+/// each earlier version has its own decode shape that upgrades into the
+/// current [`HandoffDocument`]. [`decode_handoff_document`] rejects any
+/// document whose version falls outside this range.
 pub const SUPPORTED_HANDOFF_SCHEMA_VERSIONS: RangeInclusive<u32> = 1..=HANDOFF_SCHEMA_VERSION;
 
 /// One pane's transferable state.
@@ -116,6 +120,33 @@ pub struct HandoffPane {
     /// main-buffer pane, an exited pane, or a version-1/version-2-originated
     /// document.
     pub alt_screen_dump: Vec<u8>,
+    /// This pane's OSC 7501 (Program Status) records, least recently
+    /// updated first (osc7501-program-status task0007, SPEC FR17). Empty
+    /// for a pane with no records and for a document of schema version 3
+    /// or earlier, which predates OSC 7501.
+    pub program_records: Vec<HandoffProgramRecord>,
+}
+
+/// One OSC 7501 (Program Status) record as plain values.
+///
+/// `mux_ipc` knows nothing of the daemon-side record types (module docs),
+/// so the state and the kind travel as their protocol words and the title
+/// and msg as decoded text. Restore re-validates every record before using
+/// it, so nothing here is trusted to be well-formed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffProgramRecord {
+    /// The record id; the empty text denotes the root.
+    pub id: String,
+    /// The state word: `idle`, `working`, `done`, `blocked` or `error`.
+    pub state: String,
+    /// The kind word of a `blocked` record.
+    pub kind: Option<String>,
+    pub progress: Option<u32>,
+    pub app: Option<String>,
+    /// The decoded title.
+    pub title: Option<String>,
+    /// The decoded msg.
+    pub msg: Option<String>,
 }
 
 /// Version-1 shape of [`HandoffPane`] (pre-task0004): identical to the
@@ -244,13 +275,13 @@ impl From<HandoffDocumentV1> for HandoffDocumentV2 {
 }
 
 /// Version-2 shape of [`HandoffPane`] (pre-task0002, mux-hot-upgrade-alt-screen):
-/// identical to the current struct minus the two alt-screen fields.
+/// identical to [`HandoffPaneV3`] minus the two alt-screen fields.
 ///
 /// Kept only so [`decode_handoff_document`] can read a schema-version-2
 /// document written by a pre-task0002 daemon during hot-upgrade and upgrade
-/// it into the current [`HandoffPane`] with the alt-screen fields defaulted
-/// to `false` / empty (no alt-screen state was ever recorded under the old
-/// schema).
+/// it (through [`HandoffPaneV3`]) into the current [`HandoffPane`] with the
+/// alt-screen fields defaulted to `false` / empty (no alt-screen state was
+/// ever recorded under the old schema).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HandoffPaneV2 {
     id: u32,
@@ -270,9 +301,9 @@ struct HandoffPaneV2 {
     latch_generation: u64,
 }
 
-impl From<HandoffPaneV2> for HandoffPane {
+impl From<HandoffPaneV2> for HandoffPaneV3 {
     fn from(v2: HandoffPaneV2) -> Self {
-        HandoffPane {
+        HandoffPaneV3 {
             id: v2.id,
             cols: v2.cols,
             rows: v2.rows,
@@ -296,7 +327,7 @@ impl From<HandoffPaneV2> for HandoffPane {
     }
 }
 
-/// Version-2 shape of [`HandoffWindow`]: identical to the current struct,
+/// Version-2 shape of [`HandoffWindow`]: identical to [`HandoffWindowV3`],
 /// but its panes are [`HandoffPaneV2`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HandoffWindowV2 {
@@ -307,19 +338,19 @@ struct HandoffWindowV2 {
     panes: Vec<HandoffPaneV2>,
 }
 
-impl From<HandoffWindowV2> for HandoffWindow {
+impl From<HandoffWindowV2> for HandoffWindowV3 {
     fn from(v2: HandoffWindowV2) -> Self {
-        HandoffWindow {
+        HandoffWindowV3 {
             id: v2.id,
             name: v2.name,
             active_pane_id: v2.active_pane_id,
             next_pane_id: v2.next_pane_id,
-            panes: v2.panes.into_iter().map(HandoffPane::from).collect(),
+            panes: v2.panes.into_iter().map(HandoffPaneV3::from).collect(),
         }
     }
 }
 
-/// Version-2 shape of [`HandoffSession`]: identical to the current struct,
+/// Version-2 shape of [`HandoffSession`]: identical to [`HandoffSessionV3`],
 /// but its windows are [`HandoffWindowV2`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HandoffSessionV2 {
@@ -331,20 +362,20 @@ struct HandoffSessionV2 {
     windows: Vec<HandoffWindowV2>,
 }
 
-impl From<HandoffSessionV2> for HandoffSession {
+impl From<HandoffSessionV2> for HandoffSessionV3 {
     fn from(v2: HandoffSessionV2) -> Self {
-        HandoffSession {
+        HandoffSessionV3 {
             id: v2.id,
             name: v2.name,
             window_order: v2.window_order,
             active_window_id: v2.active_window_id,
             next_window_id: v2.next_window_id,
-            windows: v2.windows.into_iter().map(HandoffWindow::from).collect(),
+            windows: v2.windows.into_iter().map(HandoffWindowV3::from).collect(),
         }
     }
 }
 
-/// Version-2 shape of [`HandoffDocument`]: identical to the current struct,
+/// Version-2 shape of [`HandoffDocument`]: identical to [`HandoffDocumentV3`],
 /// but its sessions are [`HandoffSessionV2`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HandoffDocumentV2 {
@@ -356,15 +387,147 @@ struct HandoffDocumentV2 {
     sessions: Vec<HandoffSessionV2>,
 }
 
-impl From<HandoffDocumentV2> for HandoffDocument {
+impl From<HandoffDocumentV2> for HandoffDocumentV3 {
     fn from(v2: HandoffDocumentV2) -> Self {
-        HandoffDocument {
-            schema_version: HANDOFF_SCHEMA_VERSION,
+        HandoffDocumentV3 {
+            schema_version: 3,
             incarnation: v2.incarnation,
             listen_fd: v2.listen_fd,
             next_session_id: v2.next_session_id,
             next_pane_id: v2.next_pane_id,
-            sessions: v2.sessions.into_iter().map(HandoffSession::from).collect(),
+            sessions: v2
+                .sessions
+                .into_iter()
+                .map(HandoffSessionV3::from)
+                .collect(),
+        }
+    }
+}
+
+/// Version-3 shape of [`HandoffPane`] (pre-osc7501-program-status task0007):
+/// identical to the current struct minus the OSC 7501 record list.
+///
+/// Kept only so [`decode_handoff_document`] can read a schema-version-3
+/// document written by an older daemon during hot-upgrade and upgrade it
+/// into the current [`HandoffPane`] with an empty record list (no OSC 7501
+/// state was ever recorded under that schema).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffPaneV3 {
+    id: u32,
+    cols: u16,
+    rows: u16,
+    cwd: Option<String>,
+    title: Option<String>,
+    agent_state: Option<AgentState>,
+    agent_name: Option<String>,
+    agent_revision: u64,
+    exited: bool,
+    child_pid: Option<u32>,
+    master_fd: Option<i32>,
+    scrollback: Vec<u8>,
+    latch_armed: bool,
+    latch_command_ended: bool,
+    latch_generation: u64,
+    alt_screen: bool,
+    alt_screen_dump: Vec<u8>,
+}
+
+impl From<HandoffPaneV3> for HandoffPane {
+    fn from(v3: HandoffPaneV3) -> Self {
+        HandoffPane {
+            id: v3.id,
+            cols: v3.cols,
+            rows: v3.rows,
+            cwd: v3.cwd,
+            title: v3.title,
+            agent_state: v3.agent_state,
+            agent_name: v3.agent_name,
+            agent_revision: v3.agent_revision,
+            exited: v3.exited,
+            child_pid: v3.child_pid,
+            master_fd: v3.master_fd,
+            scrollback: v3.scrollback,
+            latch_armed: v3.latch_armed,
+            latch_command_ended: v3.latch_command_ended,
+            latch_generation: v3.latch_generation,
+            alt_screen: v3.alt_screen,
+            alt_screen_dump: v3.alt_screen_dump,
+            // A version-3 document predates OSC 7501: no pane carries
+            // records.
+            program_records: Vec::new(),
+        }
+    }
+}
+
+/// Version-3 shape of [`HandoffWindow`]: identical to the current struct,
+/// but its panes are [`HandoffPaneV3`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffWindowV3 {
+    id: u32,
+    name: String,
+    active_pane_id: Option<u32>,
+    next_pane_id: u32,
+    panes: Vec<HandoffPaneV3>,
+}
+
+impl From<HandoffWindowV3> for HandoffWindow {
+    fn from(v3: HandoffWindowV3) -> Self {
+        HandoffWindow {
+            id: v3.id,
+            name: v3.name,
+            active_pane_id: v3.active_pane_id,
+            next_pane_id: v3.next_pane_id,
+            panes: v3.panes.into_iter().map(HandoffPane::from).collect(),
+        }
+    }
+}
+
+/// Version-3 shape of [`HandoffSession`]: identical to the current struct,
+/// but its windows are [`HandoffWindowV3`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffSessionV3 {
+    id: u32,
+    name: String,
+    window_order: Vec<u32>,
+    active_window_id: Option<u32>,
+    next_window_id: u32,
+    windows: Vec<HandoffWindowV3>,
+}
+
+impl From<HandoffSessionV3> for HandoffSession {
+    fn from(v3: HandoffSessionV3) -> Self {
+        HandoffSession {
+            id: v3.id,
+            name: v3.name,
+            window_order: v3.window_order,
+            active_window_id: v3.active_window_id,
+            next_window_id: v3.next_window_id,
+            windows: v3.windows.into_iter().map(HandoffWindow::from).collect(),
+        }
+    }
+}
+
+/// Version-3 shape of [`HandoffDocument`]: identical to the current struct,
+/// but its sessions are [`HandoffSessionV3`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffDocumentV3 {
+    schema_version: u32,
+    incarnation: String,
+    listen_fd: i32,
+    next_session_id: u32,
+    next_pane_id: u32,
+    sessions: Vec<HandoffSessionV3>,
+}
+
+impl From<HandoffDocumentV3> for HandoffDocument {
+    fn from(v3: HandoffDocumentV3) -> Self {
+        HandoffDocument {
+            schema_version: HANDOFF_SCHEMA_VERSION,
+            incarnation: v3.incarnation,
+            listen_fd: v3.listen_fd,
+            next_session_id: v3.next_session_id,
+            next_pane_id: v3.next_pane_id,
+            sessions: v3.sessions.into_iter().map(HandoffSession::from).collect(),
         }
     }
 }
@@ -476,8 +639,9 @@ pub fn encode_handoff_document(doc: &HandoffDocument) -> Vec<u8> {
 /// distinguishable from a version mismatch.
 ///
 /// Dispatch per version: version 1 decodes through the full chain
-/// (`HandoffDocumentV1` -> `HandoffDocumentV2` -> current); version 2
-/// decodes through the `HandoffDocumentV2` -> current conversion; version
+/// (`HandoffDocumentV1` -> `HandoffDocumentV2` -> `HandoffDocumentV3` ->
+/// current); version 2 through `HandoffDocumentV2` -> `HandoffDocumentV3` ->
+/// current; version 3 through `HandoffDocumentV3` -> current; version
 /// [`HANDOFF_SCHEMA_VERSION`] decodes directly.
 pub fn decode_handoff_document(bytes: &[u8]) -> Result<HandoffDocument, HandoffDecodeError> {
     let version: u32 = bincode::deserialize(bytes).map_err(|_| HandoffDecodeError::Malformed)?;
@@ -491,12 +655,19 @@ pub fn decode_handoff_document(bytes: &[u8]) -> Result<HandoffDocument, HandoffD
         let doc_v1: HandoffDocumentV1 =
             bincode::deserialize(bytes).map_err(|_| HandoffDecodeError::Malformed)?;
         let doc_v2: HandoffDocumentV2 = doc_v1.into();
-        return Ok(HandoffDocument::from(doc_v2));
+        let doc_v3: HandoffDocumentV3 = doc_v2.into();
+        return Ok(HandoffDocument::from(doc_v3));
     }
     if version == 2 {
         let doc_v2: HandoffDocumentV2 =
             bincode::deserialize(bytes).map_err(|_| HandoffDecodeError::Malformed)?;
-        return Ok(HandoffDocument::from(doc_v2));
+        let doc_v3: HandoffDocumentV3 = doc_v2.into();
+        return Ok(HandoffDocument::from(doc_v3));
+    }
+    if version == 3 {
+        let doc_v3: HandoffDocumentV3 =
+            bincode::deserialize(bytes).map_err(|_| HandoffDecodeError::Malformed)?;
+        return Ok(HandoffDocument::from(doc_v3));
     }
     bincode::deserialize(bytes).map_err(|_| HandoffDecodeError::Malformed)
 }
@@ -534,7 +705,54 @@ mod tests {
             // preservation the criterion names.
             alt_screen: true,
             alt_screen_dump: vec![0x1b, b'[', b'2', b'J', 0x00, 0xff, 0xfe, b'a', b'l', b't'],
+            // osc7501-program-status task0007: records in an order that is
+            // neither sorted by id nor by state, so the round-trip equality
+            // also pins the order.
+            program_records: sample_records(),
         }
+    }
+
+    fn program_record(id: &str, state: &str) -> HandoffProgramRecord {
+        HandoffProgramRecord {
+            id: id.to_string(),
+            state: state.to_string(),
+            kind: None,
+            progress: None,
+            app: None,
+            title: None,
+            msg: None,
+        }
+    }
+
+    /// Records exercising every field: the root (empty id), an absent
+    /// optional in each position, a non-ASCII title and the extreme
+    /// progress values.
+    fn sample_records() -> Vec<HandoffProgramRecord> {
+        vec![
+            HandoffProgramRecord {
+                kind: Some("permission".to_string()),
+                progress: Some(40),
+                app: Some("claude".to_string()),
+                title: Some("ビルド中 / build".to_string()),
+                msg: Some("allow write to /tmp/out?".to_string()),
+                ..program_record("agent/sub", "blocked")
+            },
+            HandoffProgramRecord {
+                progress: Some(100),
+                ..program_record("", "working")
+            },
+            program_record("a", "idle"),
+            HandoffProgramRecord {
+                app: Some("ci".to_string()),
+                msg: Some("exit status 2".to_string()),
+                ..program_record("agent", "error")
+            },
+            HandoffProgramRecord {
+                progress: Some(0),
+                title: Some("t".to_string()),
+                ..program_record("agent/other", "working")
+            },
+        ]
     }
 
     fn sample_document() -> HandoffDocument {
@@ -642,6 +860,7 @@ mod tests {
             // to carry.
             alt_screen: false,
             alt_screen_dump: Vec::new(),
+            program_records: Vec::new(),
         };
         let doc = HandoffDocument {
             schema_version: HANDOFF_SCHEMA_VERSION,
@@ -776,6 +995,9 @@ mod tests {
         // chain.
         assert!(!pane.alt_screen);
         assert!(pane.alt_screen_dump.is_empty());
+        // osc7501-program-status task0007 AC-2: and with no OSC 7501
+        // records either.
+        assert!(pane.program_records.is_empty());
     }
 
     /// AC-2: a version-2-shaped document (written by a pre-task0002 daemon,
@@ -846,14 +1068,146 @@ mod tests {
         // document never recorded any.
         assert!(!pane.alt_screen);
         assert!(pane.alt_screen_dump.is_empty());
+        // osc7501-program-status task0007 AC-2: nor OSC 7501 records.
+        assert!(pane.program_records.is_empty());
     }
 
-    /// AC-1: `HANDOFF_SCHEMA_VERSION` is 3 and `SUPPORTED_HANDOFF_SCHEMA_VERSIONS`
-    /// advertises 1..=3.
+    /// osc7501-program-status task0007 AC-2: a version-3-shaped document
+    /// (written before OSC 7501 records existed) decodes into the current
+    /// shape with an empty record list on every pane, and every other field
+    /// is preserved.
     #[test]
-    fn test_handoff_schema_version_is_3_with_supported_range_1_to_3() {
-        assert_eq!(HANDOFF_SCHEMA_VERSION, 3);
-        assert_eq!(SUPPORTED_HANDOFF_SCHEMA_VERSIONS, 1..=3);
+    fn test_decode_handoff_document_upgrades_v3_document_with_no_program_records() {
+        let pane_v3 = |id: u32| HandoffPaneV3 {
+            id,
+            cols: 100,
+            rows: 40,
+            cwd: Some("/home/user/project".to_string()),
+            title: Some("zsh".to_string()),
+            agent_state: Some(AgentState::Working),
+            agent_name: Some("claude".to_string()),
+            agent_revision: 5,
+            exited: false,
+            child_pid: Some(4242),
+            master_fd: Some(11),
+            scrollback: vec![0x1b, b'[', b'2', b'J', 0x00, 0xff, 0xfe, b'o', b'k'],
+            latch_armed: true,
+            latch_command_ended: true,
+            latch_generation: 3,
+            alt_screen: true,
+            alt_screen_dump: vec![b'a', b'l', b't'],
+        };
+        let doc_v3 = HandoffDocumentV3 {
+            schema_version: 3,
+            incarnation: "c3d4e5f6".to_string(),
+            listen_fd: 3,
+            next_session_id: 2,
+            next_pane_id: 9,
+            sessions: vec![HandoffSessionV3 {
+                id: 1,
+                name: "main".to_string(),
+                window_order: vec![1],
+                active_window_id: Some(1),
+                next_window_id: 2,
+                windows: vec![HandoffWindowV3 {
+                    id: 1,
+                    name: "shell".to_string(),
+                    active_pane_id: Some(7),
+                    next_pane_id: 9,
+                    panes: vec![pane_v3(7), pane_v3(8)],
+                }],
+            }],
+        };
+        let encoded = bincode::serialize(&doc_v3).expect("v3 document serialization");
+
+        let decoded = decode_handoff_document(&encoded).expect("v3 document should decode");
+
+        assert_eq!(decoded.schema_version, HANDOFF_SCHEMA_VERSION);
+        assert_eq!(decoded.incarnation, "c3d4e5f6");
+        assert_eq!(decoded.next_pane_id, 9);
+        let panes = &decoded.sessions[0].windows[0].panes;
+        assert_eq!(panes.len(), 2);
+        for (pane, expected_id) in panes.iter().zip([7, 8]) {
+            assert_eq!(pane.id, expected_id);
+            assert_eq!((pane.cols, pane.rows), (100, 40));
+            assert_eq!(pane.agent_revision, 5);
+            assert_eq!(pane.child_pid, Some(4242));
+            assert!(pane.latch_armed && pane.latch_command_ended);
+            assert_eq!(pane.latch_generation, 3);
+            assert!(pane.alt_screen);
+            assert_eq!(pane.alt_screen_dump, b"alt".to_vec());
+            assert!(
+                pane.program_records.is_empty(),
+                "a version-3 pane must decode with no OSC 7501 records"
+            );
+        }
+    }
+
+    /// osc7501-program-status task0007 AC-2: a version one above the
+    /// current one is rejected as an unsupported version (not as a
+    /// malformed document), and the supported range does not include it.
+    #[test]
+    fn test_decode_handoff_document_rejects_the_version_above_the_current_one() {
+        let doc = sample_document();
+        let mut encoded = encode_handoff_document(&doc);
+        let above = HANDOFF_SCHEMA_VERSION + 1;
+        encoded[0..4].copy_from_slice(&above.to_le_bytes());
+
+        assert!(!SUPPORTED_HANDOFF_SCHEMA_VERSIONS.contains(&above));
+        assert_eq!(
+            decode_handoff_document(&encoded),
+            Err(HandoffDecodeError::UnsupportedVersion {
+                found: above,
+                supported: SUPPORTED_HANDOFF_SCHEMA_VERSIONS,
+            })
+        );
+    }
+
+    /// osc7501-program-status task0007 AC-1: `HANDOFF_SCHEMA_VERSION` is 4
+    /// (one above version 3) and `SUPPORTED_HANDOFF_SCHEMA_VERSIONS`
+    /// advertises 1..=4.
+    #[test]
+    fn test_handoff_schema_version_is_4_with_supported_range_1_to_4() {
+        assert_eq!(HANDOFF_SCHEMA_VERSION, 4);
+        assert_eq!(SUPPORTED_HANDOFF_SCHEMA_VERSIONS, 1..=4);
+    }
+
+    /// osc7501-program-status task0007 AC-1: a document whose panes carry
+    /// OSC 7501 records encodes and decodes with every record field and the
+    /// order intact, per pane.
+    #[test]
+    fn test_program_records_round_trip_with_every_field_and_order_intact() {
+        let mut doc = sample_document();
+        let mut reversed = sample_records();
+        reversed.reverse();
+        {
+            let panes = &mut doc.sessions[0].windows[1].panes;
+            panes[0].program_records = reversed.clone();
+            panes[1].program_records = Vec::new();
+        }
+
+        let encoded = encode_handoff_document(&doc);
+        let decoded = decode_handoff_document(&encoded).expect("decode should succeed");
+
+        let first = &decoded.sessions[0].windows[0].panes[0];
+        assert_eq!(first.program_records, sample_records());
+        let second_window = &decoded.sessions[0].windows[1].panes;
+        assert_eq!(second_window[0].program_records, reversed);
+        assert!(second_window[1].program_records.is_empty());
+        let ids = |records: &[HandoffProgramRecord]| {
+            records.iter().map(|r| r.id.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(&first.program_records),
+            ["agent/sub", "", "a", "agent", "agent/other"],
+            "the update order must survive the round trip"
+        );
+        let full = &first.program_records[0];
+        assert_eq!(full.kind.as_deref(), Some("permission"));
+        assert_eq!(full.progress, Some(40));
+        assert_eq!(full.app.as_deref(), Some("claude"));
+        assert_eq!(full.title.as_deref(), Some("ビルド中 / build"));
+        assert_eq!(full.msg.as_deref(), Some("allow write to /tmp/out?"));
     }
 
     /// AC-1 (continued): the round-trip in
