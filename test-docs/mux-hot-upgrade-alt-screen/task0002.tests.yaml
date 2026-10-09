@@ -65,8 +65,9 @@ final_failures:
 
 acceptance_tests:
   AC-1:
+    # Superseded: schema version 3 with the supported range 1..=3 is replaced by feature-docs/osc7501-program-status/SPEC.md FR17.
     tests:
-      - handoff::tests::test_handoff_schema_version_is_3_with_supported_range_1_to_3
+      - handoff::tests::test_handoff_schema_version_is_4_with_supported_range_1_to_4
       - handoff::tests::test_alt_screen_flag_and_dump_round_trip_byte_for_byte
       - handoff::tests::test_handoff_document_round_trips_with_full_tree
     red_confirmed: false

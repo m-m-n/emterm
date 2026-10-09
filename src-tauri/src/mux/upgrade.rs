@@ -36,6 +36,15 @@
 //! formerly-alt-screen pane's shadow parser reports the alternate screen
 //! again immediately after restore.
 //!
+//! osc7501-program-status task0007 (SPEC FR17) extends the same pair to
+//! carry each pane's OSC 7501 record table (handoff schema version 4): the
+//! snapshot and the refresh write the table out through
+//! [`crate::program_status::Table::export`] (least recently updated first,
+//! for live and exited panes alike), and restore feeds the list back
+//! through [`crate::program_status::Table::import`], which re-validates
+//! every record and applies the record cap, so the restored table shows,
+//! aggregates and evicts exactly as the captured one did.
+//!
 //! task0006 (review rework, finding `2e6f18b4dc0a7593`) confirmed that
 //! `snapshot`'s read of the tree is atomic (taken under the
 //! `SessionManager` lock) but is NOT a cut of the live event stream: pane
@@ -64,8 +73,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 use portable_pty::MasterPty;
 
 use mux_ipc::handoff::{
-    HANDOFF_SCHEMA_VERSION, HandoffDecodeError, HandoffDocument, HandoffPane, HandoffSession,
-    HandoffWindow, decode_handoff_document, encode_handoff_document,
+    HANDOFF_SCHEMA_VERSION, HandoffDecodeError, HandoffDocument, HandoffPane, HandoffProgramRecord,
+    HandoffSession, HandoffWindow, decode_handoff_document, encode_handoff_document,
 };
 
 use crate::agent_status_exit_latch::AgentStatusExitLatch;
@@ -81,6 +90,7 @@ use crate::mux::session::pane::{
 };
 use crate::mux::session::session::MuxSession;
 use crate::mux::session::window::MuxWindow;
+use crate::program_status::{ExportedRecord, Table};
 
 /// Handoff file name, placed alongside the daemon's listen socket (same
 /// directory, which is already created owner-only — see `daemon::socket_path`
@@ -348,6 +358,40 @@ pub fn remove_handoff_file(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
+/// A pane's OSC 7501 records as handoff values, least recently updated
+/// first (SC-1 export, field for field).
+fn export_program_records(table: &Table) -> Vec<HandoffProgramRecord> {
+    table
+        .export()
+        .into_iter()
+        .map(|record| HandoffProgramRecord {
+            id: record.id,
+            state: record.state,
+            kind: record.kind,
+            progress: record.progress,
+            app: record.app,
+            title: record.title,
+            msg: record.msg,
+        })
+        .collect()
+}
+
+/// The table a document's record list restores to (SC-1 import): every
+/// record is re-validated, an invalid one is dropped, and at most the most
+/// recently updated [`crate::program_status::MAX_RECORDS`] valid records
+/// are kept. The document is not trusted to be well-formed.
+fn import_program_records(records: &[HandoffProgramRecord]) -> Table {
+    Table::import(records.iter().map(|record| ExportedRecord {
+        id: record.id.clone(),
+        state: record.state.clone(),
+        kind: record.kind.clone(),
+        progress: record.progress,
+        app: record.app.clone(),
+        title: record.title.clone(),
+        msg: record.msg.clone(),
+    }))
+}
+
 /// task0006 (review rework, finding `2e6f18b4dc0a7593`): re-read each still
 /// live pane's CURRENT `agent_status` and inferred-clear latch state from
 /// `mgr` and patch those fields, in place, into the matching pane entries of
@@ -392,21 +436,23 @@ pub fn remove_handoff_file(path: &Path) {
 /// portion of the window — has already elapsed) is what makes the residual
 /// gap small rather than eliminating it.
 ///
-/// Panes recorded exited in `document` (`master_fd: None`), panes no longer
-/// found in `mgr`, and panes that have since exited in `mgr` are left
-/// untouched — refreshing exited-pane state is a separate, pre-existing
-/// concern (the descriptor/exited-flag mismatch that can also arise if a
-/// pane exits during this same window) that this function does not attempt
-/// to fix.
+/// osc7501-program-status task0007 (SPEC FR17): the pane's OSC 7501 record
+/// list is re-read for EVERY pane `mgr` still holds, live or exited, through
+/// the same SC-1 export the snapshot uses (a record added after the
+/// snapshot appears after the refresh, and an id updated again moves to the
+/// end of the order). For a live pane it is read under the same
+/// `agent_status` lock as the state, name and revision.
+///
+/// Apart from those records, panes recorded exited in `document`
+/// (`master_fd: None`), panes no longer found in `mgr`, and panes that have
+/// since exited in `mgr` are left untouched — refreshing the rest of
+/// exited-pane state is a separate, pre-existing concern (the
+/// descriptor/exited-flag mismatch that can also arise if a pane exits
+/// during this same window) that this function does not attempt to fix.
 pub fn refresh_live_agent_state(document: &mut HandoffDocument, mgr: &SessionManager) {
     for session_doc in &mut document.sessions {
         for window_doc in &mut session_doc.windows {
             for pane_doc in &mut window_doc.panes {
-                if pane_doc.master_fd.is_none() {
-                    // Recorded exited (or already had no descriptor) --
-                    // nothing live to refresh from.
-                    continue;
-                }
                 let Some((sid, wid)) = mgr.find_pane(pane_doc.id) else {
                     continue;
                 };
@@ -417,16 +463,23 @@ pub fn refresh_live_agent_state(document: &mut HandoffDocument, mgr: &SessionMan
                 else {
                     continue;
                 };
-                if pane.exited {
+                if pane_doc.master_fd.is_none() || pane.exited {
+                    // Recorded exited (or already had no descriptor), or
+                    // exited since -- nothing live to refresh from, except
+                    // the OSC 7501 records (SPEC FR17: live and exited
+                    // panes alike).
+                    pane_doc.program_records =
+                        export_program_records(&pane.agent_status.lock().unwrap().table);
                     continue;
                 }
 
-                let (agent_state, agent_name, agent_revision) = {
+                let (agent_state, agent_name, agent_revision, program_records) = {
                     let status = pane.agent_status.lock().unwrap();
                     (
                         status.state.map(to_wire_state),
                         status.name.clone(),
                         status.revision,
+                        export_program_records(&status.table),
                     )
                 };
                 let (latch_armed, latch_command_ended, latch_generation) =
@@ -447,6 +500,7 @@ pub fn refresh_live_agent_state(document: &mut HandoffDocument, mgr: &SessionMan
                 pane_doc.latch_generation = latch_generation;
                 pane_doc.alt_screen = alt_screen;
                 pane_doc.alt_screen_dump = alt_screen_dump;
+                pane_doc.program_records = program_records;
             }
         }
     }
@@ -600,12 +654,16 @@ fn snapshot_pane(pane: &MuxPane) -> Result<HandoffPane, SnapshotError> {
         (None, None)
     };
 
-    let (agent_state, agent_name, agent_revision) = {
+    // osc7501-program-status task0007 (SPEC FR17): the OSC 7501 records are
+    // read under the same lock as the OSC 777 state and revision, for live
+    // and exited panes alike.
+    let (agent_state, agent_name, agent_revision, program_records) = {
         let status = pane.agent_status.lock().unwrap();
         (
             status.state.map(to_wire_state),
             status.name.clone(),
             status.revision,
+            export_program_records(&status.table),
         )
     };
     // task0004 (SPEC FR6): capture this pane's inferred-clear latch state
@@ -645,6 +703,7 @@ fn snapshot_pane(pane: &MuxPane) -> Result<HandoffPane, SnapshotError> {
         latch_generation,
         alt_screen,
         alt_screen_dump,
+        program_records,
     })
 }
 
@@ -744,6 +803,12 @@ fn restore_pane(
         state: doc.agent_state.map(from_wire_state),
         name: doc.agent_name.clone(),
         revision: doc.agent_revision,
+        // osc7501-program-status task0007 (SPEC FR17, TM-7): the record
+        // table goes through SC-1 import, which re-validates every record
+        // and applies the cap, and is installed together with the OSC 777
+        // state and revision for every restore outcome below (live-adopted
+        // or exited).
+        table: import_program_records(&doc.program_records),
     };
     let scrollback = ScrollbackRingBuffer::load_snapshot(&ScrollbackSnapshot {
         capacity: DEFAULT_SCROLLBACK_CAPACITY,

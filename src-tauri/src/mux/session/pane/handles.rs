@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::agent_status::AgentState;
 use crate::agent_status_exit_latch::AgentStatusExitLatch;
+use crate::program_status::Table;
 use crate::prompts::PromptMarkKind;
 
 use super::output_capture::OutputCapture;
@@ -105,11 +106,16 @@ pub type SharedAgentStatusReportSender = Arc<StdMutex<Option<AgentStatusReportSe
 /// `AgentStatusEvent` a caller already validated via `agent_status::parse`).
 /// State is in-memory only and is discarded when the owning `MuxPane` is
 /// dropped (pane destroy / PtyExited reap).
+///
+/// `table` is the pane's OSC 7501 (Program Status) record table (SC-5),
+/// kept under the same lock as the OSC 777 state and the revision; it is
+/// empty by default.
 #[derive(Debug, Clone, Default)]
 pub struct AgentStatus {
     pub state: Option<AgentState>,
     pub name: Option<String>,
     pub revision: u64,
+    pub table: Table,
 }
 
 /// Thread-safe shared reference to a pane's agent-status state.
