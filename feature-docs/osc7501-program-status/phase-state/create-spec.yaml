@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: 8af873317a5c5dc527fa1bb7943cd0e1e399653a
 last_input_digest: sha256:a8ed14ed42f63e219c0b26f3ec6383c22ba6e3baea7d4abd15d3d1f68e392aac
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -176,7 +176,16 @@ worker_runs:
   status: completed
   input_digest: sha256:a8ed14ed42f63e219c0b26f3ec6383c22ba6e3baea7d4abd15d3d1f68e392aac
   output_digest: sha256:3df6e15904ef10b9ba8692a6fc252547294b4c14e2f18dcd80c489c040aa3522
-artifacts: []
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:ac7252ac9da0036a567b020c3e7710ab0c514594af55af39efeca6f43b99af03
+artifacts:
+- path: feature-docs/osc7501-program-status/REQUIREMENTS.md
+  sha256: sha256:8d4ccf7edf9257bf3e863e3ae30a20b26a4c61e91548ef4e947466bf2d09b645
+  produced_by: create-spec-run-0003
+- path: feature-docs/osc7501-program-status/SPEC.md
+  sha256: sha256:768bd6b543baca7b963ec986cb2c2d1c4fc508171c7b7a07222ad5cf738e9643
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
