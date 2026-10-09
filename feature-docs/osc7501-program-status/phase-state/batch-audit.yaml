@@ -19,3 +19,12 @@ records:
     freeform: "decline auto-addition of src-tauri/src/mux/upgrade.rs to task0004 files"
     normalized_answer: "decline auto-addition of src-tauri/src/mux/upgrade.rs to task0004 files"
     resolution_note: "task_id: task0004; path: src-tauri/src/mux/upgrade.rs; declined: the acceptance-criterion / requirement identifier part is missing and the failure is not stated as a named test that cannot be written or pass (rationale given: AgentStatus gained a field, restored pane starts with an empty table)"
+  - question_id: implement.wake-decline
+    packet_id: null
+    answered_at: "2026-10-10T02:54:59+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "decline auto-addition of test-docs/mux-hot-upgrade-alt-screen/task0002.tests.yaml to task0007 files"
+    normalized_answer: "decline auto-addition of test-docs/mux-hot-upgrade-alt-screen/task0002.tests.yaml to task0007 files"
+    resolution_note: "task_id: task0007; path: test-docs/mux-hot-upgrade-alt-screen/task0002.tests.yaml; declined: the acceptance-criterion / requirement identifier part is missing and no named test fails without the path (rationale: predecessor test record renamed per .claude/rules/test-docs-records.md)"

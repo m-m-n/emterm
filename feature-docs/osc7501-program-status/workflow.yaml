@@ -292,7 +292,7 @@ tasks:
     complexity: high
     requirements:
     - FR17
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-program-status/task0007
 review:
   status: pending
