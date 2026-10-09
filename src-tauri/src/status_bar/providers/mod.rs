@@ -5,12 +5,14 @@
 //! providers (Git, custom commands) own a dedicated worker thread —
 //! the UI thread reads cached values without blocking.
 
+pub mod agent_status;
 pub mod command;
 pub mod cwd;
 pub mod git_branch;
 pub mod time;
 pub mod worker;
 
+pub use agent_status::AgentStatusProvider;
 pub use command::CommandProvider;
 pub use cwd::{CwdProvider, CwdSource};
 pub use git_branch::GitBranchProvider;

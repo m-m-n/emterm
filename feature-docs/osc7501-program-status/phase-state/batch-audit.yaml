@@ -1,0 +1,21 @@
+schema_version: 1
+feature: osc7501-program-status
+records:
+  - question_id: implement.wake-decline
+    packet_id: null
+    answered_at: "2026-10-10T02:50:04+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "decline auto-addition of src-tauri/src/app/tests/agent_status.rs to task0004 files"
+    normalized_answer: "decline auto-addition of src-tauri/src/app/tests/agent_status.rs to task0004 files"
+    resolution_note: "task_id: task0004; path: src-tauri/src/app/tests/agent_status.rs; declined: the acceptance-criterion / requirement identifier part is missing (the deviation names no AC-n of task0004's plan and no registered requirement id); the path and observable-outcome parts were present (E0063 test build failure after task0002 and task0005 merged)"
+  - question_id: implement.wake-decline
+    packet_id: null
+    answered_at: "2026-10-10T02:50:04+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "decline auto-addition of src-tauri/src/mux/upgrade.rs to task0004 files"
+    normalized_answer: "decline auto-addition of src-tauri/src/mux/upgrade.rs to task0004 files"
+    resolution_note: "task_id: task0004; path: src-tauri/src/mux/upgrade.rs; declined: the acceptance-criterion / requirement identifier part is missing and the failure is not stated as a named test that cannot be written or pass (rationale given: AgentStatus gained a field, restored pane starts with an empty table)"

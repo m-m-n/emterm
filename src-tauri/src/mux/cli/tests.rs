@@ -201,6 +201,47 @@ fn parse_agent_states_rejects_empty() {
     assert!(parse_agent_states(",").is_err());
 }
 
+// ---- osc7501-program-status task0002 AC-8: `--state` accepts `error` ----
+
+#[test]
+fn parse_agent_states_accepts_error() {
+    assert_eq!(
+        parse_agent_states("error").unwrap(),
+        vec![AgentState::Error]
+    );
+}
+
+#[test]
+fn parse_agent_states_accepts_lists_including_error() {
+    assert_eq!(
+        parse_agent_states("done,error").unwrap(),
+        vec![AgentState::Done, AgentState::Error]
+    );
+    assert_eq!(
+        parse_agent_states(" blocked , error , idle ").unwrap(),
+        vec![AgentState::Blocked, AgentState::Error, AgentState::Idle]
+    );
+}
+
+#[test]
+fn parse_agent_states_unknown_state_error_names_all_five_states() {
+    let err = parse_agent_states("bogus").unwrap_err();
+    assert!(
+        err.contains("idle|working|blocked|done|error"),
+        "usage error must list all five states, got: {err}"
+    );
+}
+
+#[test]
+fn agent_status_subcommand_still_rejects_error_as_a_usage_error() {
+    // `emterm agent-status` keeps offering only its existing states: clap
+    // rejects `error` during argument parsing (usage exit code 2).
+    assert_eq!(
+        crate::cli::run(&["agent-status".to_string(), "error".to_string()]),
+        2
+    );
+}
+
 // ---- `emterm mux attach` legacy-daemon recovery (task0001) ----
 //
 // A fake daemon is a bare `UnixListener` thread rather than a real

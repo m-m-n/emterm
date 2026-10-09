@@ -1,0 +1,112 @@
+task_id: task0004
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_a_complete_osc_7501_yields_one_item_with_its_body_and_terminator
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_only_the_canonical_prefix_is_an_osc_7501
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_ris_yields_one_reset_item_regardless_of_live_spans
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_program_status_is_emitted_outside_live_spans_and_marks_are_not
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_items_keep_exact_byte_order_with_reports_and_live_marks
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_a_sequence_split_across_reads_yields_the_same_items
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_a_reset_item_is_emitted_exactly_where_term_core_executes_ris
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_reset_and_designator_state_carry_across_reads
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_existing_osc_recognition_is_unchanged_after_a_designator_escape
+    red_confirmed: true
+    red_reason: >-
+      Before the scanner learned OSC 7501 and RIS it emitted no
+      ProgramStatus or Reset item: the assertions on the emitted items failed
+      with `left: []` (complete 7501 with BEL and ST, 7501 outside live spans,
+      RIS regardless of live spans, carry across reads), and the order tests
+      saw only the OSC 777 report and the 133 marks
+      (`[Osc133Mark(CommandEnd), Report(...), Osc133Mark(PromptStart)]`
+      without the 7501 item in between). The oracle test failed with
+      "term_core executed RIS: true, items: []". The guard tests
+      ac1_only_the_canonical_prefix_is_an_osc_7501 and
+      ac1_existing_osc_recognition_is_unchanged_after_a_designator_escape
+      assert behavior that must stay unchanged and passed before the change;
+      they are included as regression guards, not as red-to-green proofs.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac2_a_body_above_the_carry_bound_yields_no_item
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac2_an_unterminated_body_yields_no_item_and_the_scanner_recovers
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac2_retained_bytes_never_exceed_the_carry_bound
+    red_confirmed: true
+    red_reason: >-
+      Before the 7501 branch existed, the at-bound body that must be accepted
+      yielded no item (`assertion left == right failed: Bel`, left: 0), and
+      the recovery item after an unterminated body was missing
+      (`left: []`). ac2_retained_bytes_never_exceed_the_carry_bound asserts
+      the bound that the existing carry already held and passed before the
+      change; it is included as a regression guard, not as a red-to-green
+      proof.
+  AC-3:
+    tests:
+      - mux::session::pane::tests::program_status_record::ac3_an_accepted_report_changes_the_table_and_bumps_the_revision_once
+      - mux::session::pane::tests::program_status_record::ac3_the_composite_state_follows_both_sources
+      - mux::daemon::tests::program_status_daemon::ac3_an_accepted_report_broadcasts_one_update_with_the_summary
+      - mux::daemon::tests::program_status_daemon::ac3_the_summary_title_is_sanitized
+      - mux::daemon::tests::program_status_daemon::ac3_the_summary_follows_the_deciding_record_and_the_inherited_app
+      - mux::daemon::tests::program_status_daemon::ac3_a_query_or_an_ignored_body_changes_nothing
+      - mux::daemon::tests::program_status_daemon::ac3_each_bump_re_evaluates_waiters
+    red_confirmed: true
+    red_reason: >-
+      Before the pane operations and the daemon ingestion existed, an
+      accepted report left the revision at 0 and the table empty
+      (`assertion left == right failed, left: 0`), the composite stayed at
+      the OSC 777 state (`left: Some(Done)`), no AgentStatusUpdate was
+      broadcast ("an AgentStatusUpdate must be broadcast: Elapsed(())"), and
+      the waiter was never resolved ("the waiter must be resolved:
+      Elapsed(())"). ac3_a_query_or_an_ignored_body_changes_nothing asserts
+      that nothing changes and passed before the change; it is included as a
+      guard for the no-bump half of the criterion, not as a red-to-green
+      proof (its positive follow-up report is covered by the other tests).
+  AC-4:
+    tests:
+      - mux::session::pane::tests::program_status_record::ac4_a_prompt_start_removes_working_blocked_and_idle_and_keeps_done_and_error
+      - mux::session::pane::tests::program_status_record::ac4_marks_other_than_a_prompt_start_leave_the_table_alone
+      - mux::session::pane::tests::program_status_record::ac4_a_prompt_start_with_an_empty_table_does_not_bump
+      - mux::session::pane::tests::program_status_record::ac4_a_reset_removes_every_record_and_bumps_only_when_something_existed
+      - mux::session::pane::tests::program_status_record::ac4_one_prompt_start_covering_the_inferred_clear_and_the_table_bumps_once
+      - mux::session::pane::tests::program_status_record::ac4_the_records_go_away_with_the_pane
+      - mux::daemon::tests::program_status_daemon::ac4_a_live_prompt_start_broadcasts_only_when_records_were_removed
+      - mux::daemon::tests::program_status_daemon::ac4_a_reset_broadcasts_only_when_records_existed
+      - mux::daemon::tests::program_status_daemon::ac4_items_for_an_unknown_pane_are_dropped
+      - mux::daemon::tests::program_status_daemon::ac4_only_a_live_main_screen_prompt_start_and_ris_reach_the_table
+    red_confirmed: true
+    red_reason: >-
+      Before the lifecycle operations existed, a prompt start returned no
+      revision and removed nothing (`left: None`), a reset returned `None`
+      with records present, the end-to-end test through the real
+      pty_reader_loop and run_agent_status_task saw `left: (0, 0)`, and the
+      daemon broadcast tests timed out waiting for the AgentStatusUpdate. The
+      tests ac4_a_prompt_start_with_an_empty_table_does_not_bump,
+      ac4_one_prompt_start_covering_the_inferred_clear_and_the_table_bumps_once,
+      ac4_the_records_go_away_with_the_pane and
+      ac4_items_for_an_unknown_pane_are_dropped assert absence or an
+      unchanged count and passed before the change; they are included as
+      guards, not as red-to-green proofs.
+  AC-5:
+    tests:
+      - mux::daemon::tests::program_status_daemon::ac5_the_resync_after_a_snapshot_carries_the_summary
+      - mux::daemon::tests::program_status_daemon::ac5_the_resync_after_a_pane_snapshot_carries_the_summary
+      - mux::daemon::tests::program_status_daemon::ac5_a_pane_emptied_of_records_resyncs_with_an_absent_summary
+    red_confirmed: true
+    red_reason: >-
+      Before the resync messages were built from the table, the seeding
+      report produced no AgentStatusUpdate and each test failed with "an
+      AgentStatusUpdate must be broadcast: Elapsed(())".
+  AC-6:
+    tests:
+      - mux::ipc::handlers::tests::wait_composite::ac6_a_wait_for_error_is_satisfied_by_an_osc7501_error_record
+      - mux::ipc::handlers::tests::wait_composite::ac6_a_wait_for_working_is_satisfied_while_osc777_says_done
+      - mux::ipc::handlers::tests::wait_composite::ac6_a_registered_waiter_is_resolved_by_an_osc7501_report
+      - mux::ipc::handlers::tests::wait_composite::ac6_an_osc777_only_pane_waits_exactly_as_before
+    red_confirmed: true
+    red_reason: >-
+      Before the wait evaluated the composite, the waits for an OSC 7501
+      state failed with `AgentApiError { kind: Timeout, message: "wait timed
+      out" }`. ac6_an_osc777_only_pane_waits_exactly_as_before asserts the
+      unchanged OSC 777-only behavior and passed before the change; it is
+      included as a regression guard, not as a red-to-green proof.

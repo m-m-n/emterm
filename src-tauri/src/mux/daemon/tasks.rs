@@ -5,13 +5,14 @@
 use std::sync::Arc;
 
 use mux_ipc::protocol::{
-    AgentStatusUpdateMsg, MessageType, MuxMessage, NotifyMsg, RenameWindowMsg,
+    AgentStatusUpdateMsg, MessageType, MuxMessage, NotifyMsg, ProgramStatusSummary, RenameWindowMsg,
 };
 use tokio::sync::{Mutex, mpsc};
 
 use crate::mux::ipc::handlers::{handle_destroy_pane, reevaluate_agent_waiters};
 use crate::mux::session::manager::SessionManager;
-use crate::mux::session::pane::{AgentStatusFeedItem, MuxPane, PaneId};
+use crate::mux::session::pane::{AgentStatus, AgentStatusFeedItem, MuxPane, PaneId};
+use crate::program_status::{Parsed, Terminator};
 use crate::prompts::PromptMarkKind;
 
 /// Apply a title change to the SessionManager with diff detection.
@@ -123,6 +124,7 @@ pub(in crate::mux) fn to_wire_state(
         Core::Working => Wire::Working,
         Core::Blocked => Wire::Blocked,
         Core::Done => Wire::Done,
+        Core::Error => Wire::Error,
     }
 }
 
@@ -140,21 +142,38 @@ pub(in crate::mux) fn from_wire_state(
         Wire::Working => Core::Working,
         Wire::Blocked => Core::Blocked,
         Wire::Done => Core::Done,
+        Wire::Error => Core::Error,
     }
+}
+
+/// The wire OSC 7501 summary item of a pane's record table: the aggregate
+/// state, the deciding record's title (already sanitized for names by the
+/// table's summary) and its effective app; absent for an empty table.
+fn program_status_summary_item(status: &AgentStatus) -> Option<ProgramStatusSummary> {
+    let summary = status.program_status.summary()?;
+    let state = crate::agent_status::AgentState::from_program_status_word(summary.state.word())?;
+    Some(ProgramStatusSummary {
+        state: to_wire_state(state),
+        title: summary.title,
+        app: summary.app,
+    })
 }
 
 /// Re-evaluate `pane`'s registered `WaitAgentState` waiters (task0004 "Wait
 /// implementation", level-triggered, no polling) and build the
 /// `AgentStatusUpdate` (`replay_derived: false`) message for its CURRENT
-/// state at `revision`. Caller still holds `mgr`'s lock (needed for
-/// `public_pane_id`) and is responsible for dropping it and sending the
-/// returned message afterward.
+/// state at `revision`. The message carries the OSC 777 part and, next to
+/// it, the OSC 7501 summary item (absent for a pane without records).
+/// Caller still holds `mgr`'s lock (needed for `public_pane_id`) and is
+/// responsible for dropping it and sending the returned message afterward.
 ///
-/// Shared by [`apply_agent_status_report`] (explicit OSC 777 Set/Clear) and
+/// Shared by [`apply_agent_status_report`] (explicit OSC 777 Set/Clear),
 /// [`apply_live_osc133_mark`] (task0003, SPEC FR1/FR2 — the inferred clear a
-/// live OSC 133 `D`→`A` transition produces) so both ways a pane's
-/// agent-status revision can change go through IDENTICAL waiter
-/// re-evaluation / broadcast-payload logic — no parallel logic (FR2).
+/// live OSC 133 `D`→`A` transition produces, and the OSC 7501 records a
+/// prompt start removes), [`apply_program_status_report`] and
+/// [`apply_program_status_reset`] so every way a pane's agent-status
+/// revision can change goes through IDENTICAL waiter re-evaluation /
+/// broadcast-payload logic — no parallel logic (FR2).
 fn build_agent_status_update_message(
     mgr: &SessionManager,
     pane: &MuxPane,
@@ -162,9 +181,13 @@ fn build_agent_status_update_message(
     revision: u64,
 ) -> MuxMessage {
     reevaluate_agent_waiters(pane);
-    let (state, name) = {
+    let (state, name, program_status) = {
         let status = pane.agent_status.lock().unwrap();
-        (status.state, status.name.clone())
+        (
+            status.state,
+            status.name.clone(),
+            program_status_summary_item(&status),
+        )
     };
     let public_pane_id = mgr.public_pane_id(pane_id);
     let payload = AgentStatusUpdateMsg {
@@ -174,6 +197,7 @@ fn build_agent_status_update_message(
         name,
         revision,
         replay_derived: false,
+        program_status,
     };
     MuxMessage::control(MessageType::AgentStatusUpdate, pane_id, &payload)
 }
@@ -264,13 +288,83 @@ pub(super) async fn apply_live_osc133_mark(
     }
 }
 
+/// Look up a pane by id across every session.
+fn find_pane_by_id(mgr: &SessionManager, pane_id: u32) -> Option<&MuxPane> {
+    let (sid, wid) = mgr.find_pane(pane_id)?;
+    mgr.get_session(sid)?.windows.get(&wid)?.panes.get(&pane_id)
+}
+
+/// Apply one complete OSC 7501 sequence to its pane and broadcast the result
+/// (osc7501-program-status FR14, D7).
+///
+/// `body` is the text after `7501;`. It is parsed first, outside the
+/// session-manager lock: a query (the attached GUI answers it, A3) or a
+/// discarded / ignored body changes nothing and broadcasts nothing; the
+/// rejected input is not logged. An accepted report is applied to the pane's
+/// record table (the revision moves once) and exactly one
+/// `AgentStatusUpdate` (`replay_derived: false`) is broadcast. Nothing
+/// depends on whether a GUI is attached.
+pub(super) async fn apply_program_status_report(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    pane_id: u32,
+    body: String,
+    terminator: Terminator,
+) {
+    let Parsed::Report(report) = crate::program_status::parse(&body, terminator) else {
+        return;
+    };
+
+    let mgr = session_manager.lock().await;
+    let Some(pane) = find_pane_by_id(&mgr, pane_id) else {
+        log::debug!("apply_program_status_report: pane {} not found", pane_id);
+        return;
+    };
+
+    let revision = pane.apply_program_status_report(report);
+    let msg = build_agent_status_update_message(&mgr, pane, pane_id, revision);
+    let notify_tx = mgr.notify_tx().clone();
+    drop(mgr);
+
+    if let Err(e) = notify_tx.send(msg) {
+        log::debug!("apply_program_status_report: no active subscribers: {}", e);
+    }
+}
+
+/// Apply a terminal reset (RIS) to its pane's OSC 7501 records and — only if
+/// a record existed — broadcast the resulting update through the same path
+/// an accepted report takes (osc7501-program-status FR7 / FR14, D7).
+pub(super) async fn apply_program_status_reset(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    pane_id: u32,
+) {
+    let mgr = session_manager.lock().await;
+    let Some(pane) = find_pane_by_id(&mgr, pane_id) else {
+        log::debug!("apply_program_status_reset: pane {} not found", pane_id);
+        return;
+    };
+
+    let Some(revision) = pane.apply_program_status_reset() else {
+        // The table was already empty: no change, no broadcast.
+        return;
+    };
+    let msg = build_agent_status_update_message(&mgr, pane, pane_id, revision);
+    let notify_tx = mgr.notify_tx().clone();
+    drop(mgr);
+
+    if let Err(e) = notify_tx.send(msg) {
+        log::debug!("apply_program_status_reset: no active subscribers: {}", e);
+    }
+}
+
 /// Run the daemon-level agent-status task.
 ///
 /// Consumes `(pane_id, item)` from every pane's reader thread (regardless of
 /// attach state, SPEC FR3) and dispatches each [`AgentStatusFeedItem`] to
-/// [`apply_agent_status_report`] (an OSC 777 report) or
-/// [`apply_live_osc133_mark`] (task0003, a live OSC 133 mark) IN RECEIVE
-/// ORDER — a single sequential `while let` loop over one channel, never two
+/// [`apply_agent_status_report`] (an OSC 777 report),
+/// [`apply_live_osc133_mark`] (task0003, a live OSC 133 mark),
+/// [`apply_program_status_report`] (a complete OSC 7501) or
+/// [`apply_program_status_reset`] (RIS) IN RECEIVE ORDER — a single
+/// sequential `while let` loop over one channel, never two
 /// independently-scheduled queues, is what gives SPEC FR4 its ordering
 /// guarantee. Exits when all senders are dropped (daemon shutdown).
 pub(super) async fn run_agent_status_task(
@@ -286,6 +380,12 @@ pub(super) async fn run_agent_status_task(
             AgentStatusFeedItem::Osc133Mark(kind) => {
                 apply_live_osc133_mark(&session_manager, pane_id, kind).await;
             }
+            AgentStatusFeedItem::ProgramStatus { body, terminator } => {
+                apply_program_status_report(&session_manager, pane_id, body, terminator).await;
+            }
+            AgentStatusFeedItem::Reset => {
+                apply_program_status_reset(&session_manager, pane_id).await;
+            }
         }
     }
     log::info!("Agent-status task exiting");
@@ -296,6 +396,11 @@ pub(super) async fn run_agent_status_task(
 /// snapshot (SPEC FR4/FR5, task0003 AC-5, task0013 AC-1/AC-2/AC-3). Called
 /// after a client receives a snapshot (attach / window switch) so state —
 /// stripped from the replayed bytes — is resynced out-of-band.
+///
+/// Each message also carries the pane's OSC 7501 summary item (absent for a
+/// pane without records). Its `revision > 0` condition covers a pane whose
+/// only activity was OSC 7501, since every change of the record table moves
+/// the revision.
 ///
 /// Emits for every pane with `revision > 0`, i.e. every pane that has ever
 /// had an accepted report, REGARDLESS of whether its current `state` is
@@ -329,6 +434,7 @@ pub(in crate::mux) async fn sync_agent_status_after_snapshot(
             name: status.name.clone(),
             revision: status.revision,
             replay_derived: true,
+            program_status: program_status_summary_item(&status),
         });
     }
     let notify_tx = mgr.notify_tx().clone();
@@ -378,6 +484,7 @@ pub(in crate::mux) async fn sync_agent_status_after_pane_snapshot(
         name: status.name.clone(),
         revision: status.revision,
         replay_derived: true,
+        program_status: program_status_summary_item(&status),
     };
     drop(status);
     let notify_tx = mgr.notify_tx().clone();
@@ -433,4 +540,34 @@ pub(super) async fn graceful_shutdown(session_manager: &Arc<Mutex<SessionManager
         }
     }
     log::info!("Graceful shutdown: closed {} PTY(s)", pane_count);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// osc7501-program-status task0002 AC-1: the daemon's core <-> wire
+    /// state conversions are total over `error` and round-trip all five
+    /// states.
+    #[test]
+    fn state_conversions_round_trip_all_five_states() {
+        use crate::agent_status::AgentState as Core;
+        use mux_ipc::protocol::AgentState as Wire;
+        assert_eq!(to_wire_state(Core::Error), Wire::Error);
+        assert_eq!(from_wire_state(Wire::Error), Core::Error);
+        for state in Core::ALL_WITH_ERROR {
+            assert_eq!(from_wire_state(to_wire_state(state)), state, "{state:?}");
+        }
+    }
+
+    /// The existing four states keep their pre-feature wire mapping.
+    #[test]
+    fn state_conversions_keep_the_existing_four_mappings() {
+        use crate::agent_status::AgentState as Core;
+        use mux_ipc::protocol::AgentState as Wire;
+        assert_eq!(to_wire_state(Core::Idle), Wire::Idle);
+        assert_eq!(to_wire_state(Core::Working), Wire::Working);
+        assert_eq!(to_wire_state(Core::Blocked), Wire::Blocked);
+        assert_eq!(to_wire_state(Core::Done), Wire::Done);
+    }
 }

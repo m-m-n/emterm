@@ -2950,3 +2950,456 @@ async fn read_frame_async<S: tokio::io::AsyncRead + Unpin>(stream: &mut S) -> Mu
         .expect("read frame body");
     MuxMessage::from_frame_body(&frame_buf).expect("valid frame")
 }
+
+// ── OSC 7501 in the daemon (osc7501-program-status task0004,
+//    AC-3 / AC-4 / AC-5) ──────────────────────────────────────────────────
+
+mod program_status_daemon {
+    use super::*;
+    use crate::program_status::Terminator;
+    use base64::Engine as _;
+    use mux_ipc::protocol::{AgentState as WireState, ProgramStatusSummary};
+
+    type NotifyRx = tokio::sync::broadcast::Receiver<mux_ipc::protocol::MuxMessage>;
+
+    const PANE_ID: u32 = 77;
+
+    fn b64(text: &str) -> String {
+        base64::engine::general_purpose::STANDARD.encode(text)
+    }
+
+    /// A manager holding one pane that no GUI is attached to (Detached,
+    /// system-origin), with a subscriber on the broadcast channel.
+    async fn detached_pane_manager() -> (Arc<Mutex<SessionManager>>, u32, NotifyRx) {
+        use crate::mux::session::pane::{
+            DetachReason, MuxPane, PaneOutputTarget, SharedOutputTarget,
+        };
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+        }));
+        let pane = MuxPane::new_test(PANE_ID, 80, 24, target);
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let sid = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+            sid
+        };
+        let rx = mgr.lock().await.notify_tx().subscribe();
+        (mgr, sid, rx)
+    }
+
+    async fn next_update(rx: &mut NotifyRx) -> AgentStatusUpdateMsg {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("an AgentStatusUpdate must be broadcast")
+            .unwrap();
+        assert_eq!(msg.msg_type, MessageType::AgentStatusUpdate);
+        msg.decode_payload().unwrap()
+    }
+
+    async fn assert_quiet(rx: &mut NotifyRx, what: &str) {
+        let none = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
+        assert!(none.is_err(), "{what}: nothing may be broadcast");
+    }
+
+    async fn revision_and_records(mgr: &Arc<Mutex<SessionManager>>) -> (u64, usize) {
+        let m = mgr.lock().await;
+        let (sid, wid) = m.find_pane(PANE_ID).unwrap();
+        let pane = &m.get_session(sid).unwrap().windows[&wid].panes[&PANE_ID];
+        let status = pane.agent_status.lock().unwrap();
+        (status.revision, status.program_status.len())
+    }
+
+    async fn report(mgr: &Arc<Mutex<SessionManager>>, body: &str) {
+        apply_program_status_report(mgr, PANE_ID, body.to_string(), Terminator::Bel).await;
+    }
+
+    /// AC-3: an accepted report bumps the revision once and broadcasts one
+    /// non-replay update whose summary item carries the aggregate state, the
+    /// sanitized title and the effective app — with no GUI attached.
+    #[tokio::test]
+    async fn ac3_an_accepted_report_broadcasts_one_update_with_the_summary() {
+        let (mgr, _sid, mut rx) = detached_pane_manager().await;
+
+        report(
+            &mgr,
+            &format!("state=working:app=claude:title={}", b64("my task")),
+        )
+        .await;
+
+        let update = next_update(&mut rx).await;
+        assert_eq!(update.pane_id, PANE_ID);
+        assert_eq!(update.state, None, "the OSC 777 part is untouched");
+        assert_eq!(update.name, None);
+        assert_eq!(update.revision, 1);
+        assert!(!update.replay_derived);
+        assert_eq!(
+            update.program_status,
+            Some(ProgramStatusSummary {
+                state: WireState::Working,
+                title: Some("my task".to_string()),
+                app: Some("claude".to_string()),
+            })
+        );
+        assert_quiet(&mut rx, "exactly one update per accepted report").await;
+        assert_eq!(revision_and_records(&mgr).await, (1, 1));
+    }
+
+    /// AC-3: the title in the summary item is the sanitized one: invisible
+    /// and bidirectional formatting characters removed, cut to 80 characters.
+    #[tokio::test]
+    async fn ac3_the_summary_title_is_sanitized() {
+        let (mgr, _sid, mut rx) = detached_pane_manager().await;
+
+        report(
+            &mgr,
+            &format!("state=done:title={}", b64("a\u{202E}b\u{200B}c\u{FEFF}d")),
+        )
+        .await;
+        let update = next_update(&mut rx).await;
+        assert_eq!(
+            update.program_status.unwrap().title.as_deref(),
+            Some("abcd")
+        );
+
+        report(&mgr, &format!("state=done:title={}", b64(&"x".repeat(150)))).await;
+        let update = next_update(&mut rx).await;
+        assert_eq!(update.program_status.unwrap().title, Some("x".repeat(80)));
+    }
+
+    /// AC-3: the summary reflects the deciding record and its inherited app.
+    #[tokio::test]
+    async fn ac3_the_summary_follows_the_deciding_record_and_the_inherited_app() {
+        let (mgr, _sid, mut rx) = detached_pane_manager().await;
+
+        report(&mgr, "state=idle:app=claude").await;
+        let _ = next_update(&mut rx).await;
+        report(&mgr, "state=error:id=a/b").await;
+        let update = next_update(&mut rx).await;
+        assert_eq!(
+            update.program_status,
+            Some(ProgramStatusSummary {
+                state: WireState::Error,
+                title: None,
+                app: Some("claude".to_string()),
+            }),
+            "the child takes the root record's app"
+        );
+        assert_eq!(update.revision, 2);
+    }
+
+    /// AC-3: a query or an ignored/discarded body changes nothing and
+    /// broadcasts nothing.
+    #[tokio::test]
+    async fn ac3_a_query_or_an_ignored_body_changes_nothing() {
+        let (mgr, _sid, mut rx) = detached_pane_manager().await;
+        let too_long = format!("state=working:app={}", "a".repeat(4100));
+
+        for body in [
+            "?",
+            "state=bogus",
+            "app=claude",
+            "state=working:id=a//b",
+            "state=working:title=a",
+            too_long.as_str(),
+        ] {
+            report(&mgr, body).await;
+            assert_quiet(&mut rx, body).await;
+        }
+        apply_program_status_report(&mgr, PANE_ID, "?".to_string(), Terminator::St).await;
+        assert_quiet(&mut rx, "query with ST").await;
+        assert_eq!(revision_and_records(&mgr).await, (0, 0));
+
+        // The first accepted report is the first bump.
+        report(&mgr, "state=working").await;
+        assert_eq!(next_update(&mut rx).await.revision, 1);
+    }
+
+    /// AC-3: each bump re-evaluates the pane's waiters: a waiter for `error`
+    /// is satisfied by an OSC 7501 `error` record, and a waiter whose
+    /// receiver is gone is swept.
+    #[tokio::test]
+    async fn ac3_each_bump_re_evaluates_waiters() {
+        let (mgr, _sid, _rx) = detached_pane_manager().await;
+        let (error_tx, error_rx) = oneshot::channel();
+        let (gone_tx, gone_rx) = oneshot::channel();
+        {
+            let m = mgr.lock().await;
+            let (sid, wid) = m.find_pane(PANE_ID).unwrap();
+            let pane = &m.get_session(sid).unwrap().windows[&wid].panes[&PANE_ID];
+            let mut waiters = pane.agent_waiters.lock().unwrap();
+            waiters.push(crate::mux::session::pane::AgentWaiter {
+                states: vec![crate::agent_status::AgentState::Error],
+                after_revision: None,
+                responder: Some(error_tx),
+            });
+            waiters.push(crate::mux::session::pane::AgentWaiter {
+                states: vec![crate::agent_status::AgentState::Idle],
+                after_revision: None,
+                responder: Some(gone_tx),
+            });
+        }
+        drop(gone_rx);
+
+        report(&mgr, "state=error").await;
+
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), error_rx)
+            .await
+            .expect("the waiter must be resolved")
+            .unwrap();
+        assert_eq!(
+            outcome,
+            crate::mux::session::pane::AgentWaitOutcome::Matched {
+                state: crate::agent_status::AgentState::Error,
+                revision: 1,
+            }
+        );
+        let m = mgr.lock().await;
+        let (sid, wid) = m.find_pane(PANE_ID).unwrap();
+        let pane = &m.get_session(sid).unwrap().windows[&wid].panes[&PANE_ID];
+        assert!(pane.agent_waiters.lock().unwrap().is_empty());
+    }
+
+    /// AC-4: a live prompt start removes `working`, `blocked` and `idle`
+    /// records and keeps `done` and `error`; the bump and the broadcast
+    /// happen only when the table changed.
+    #[tokio::test]
+    async fn ac4_a_live_prompt_start_broadcasts_only_when_records_were_removed() {
+        let (mgr, _sid, mut rx) = detached_pane_manager().await;
+        report(&mgr, "state=working:id=w").await;
+        report(&mgr, "state=done:id=d:app=tool").await;
+        let _ = next_update(&mut rx).await;
+        let _ = next_update(&mut rx).await;
+
+        apply_live_osc133_mark(&mgr, PANE_ID, PromptMarkKind::PromptStart).await;
+        let update = next_update(&mut rx).await;
+        assert_eq!(update.revision, 3);
+        assert!(!update.replay_derived);
+        assert_eq!(
+            update.program_status,
+            Some(ProgramStatusSummary {
+                state: WireState::Done,
+                title: None,
+                app: Some("tool".to_string()),
+            })
+        );
+
+        apply_live_osc133_mark(&mgr, PANE_ID, PromptMarkKind::PromptStart).await;
+        assert_quiet(&mut rx, "a prompt start that removed nothing").await;
+        apply_live_osc133_mark(&mgr, PANE_ID, PromptMarkKind::CommandEnd).await;
+        assert_quiet(&mut rx, "a command end").await;
+        assert_eq!(revision_and_records(&mgr).await, (3, 1));
+    }
+
+    /// AC-4: a reset removes every record; the bump and the broadcast happen
+    /// only when a record existed.
+    #[tokio::test]
+    async fn ac4_a_reset_broadcasts_only_when_records_existed() {
+        let (mgr, _sid, mut rx) = detached_pane_manager().await;
+        apply_program_status_reset(&mgr, PANE_ID).await;
+        assert_quiet(&mut rx, "a reset of an empty table").await;
+
+        report(&mgr, "state=done:id=a").await;
+        report(&mgr, "state=error:id=b").await;
+        let _ = next_update(&mut rx).await;
+        let _ = next_update(&mut rx).await;
+
+        apply_program_status_reset(&mgr, PANE_ID).await;
+        let update = next_update(&mut rx).await;
+        assert_eq!(update.revision, 3);
+        assert_eq!(update.program_status, None);
+        assert_eq!(revision_and_records(&mgr).await, (3, 0));
+
+        apply_program_status_reset(&mgr, PANE_ID).await;
+        assert_quiet(&mut rx, "a second reset").await;
+    }
+
+    /// AC-3 / AC-4: items for a pane that is gone are dropped quietly.
+    #[tokio::test]
+    async fn ac4_items_for_an_unknown_pane_are_dropped() {
+        let (mgr, _sid, mut rx) = detached_pane_manager().await;
+        apply_program_status_report(&mgr, 9999, "state=working".to_string(), Terminator::Bel).await;
+        apply_program_status_reset(&mgr, 9999).await;
+        assert_quiet(&mut rx, "an unknown pane").await;
+
+        // The known pane is unaffected.
+        report(&mgr, "state=idle").await;
+        assert_eq!(next_update(&mut rx).await.revision, 1);
+    }
+
+    /// AC-5: the resync after a snapshot is replay-derived and carries the
+    /// summary item, including for a pane whose only activity was OSC 7501.
+    #[tokio::test]
+    async fn ac5_the_resync_after_a_snapshot_carries_the_summary() {
+        let (mgr, sid, mut rx) = detached_pane_manager().await;
+        report(&mgr, &format!("state=blocked:app=a:title={}", b64("t"))).await;
+        let _ = next_update(&mut rx).await;
+
+        sync_agent_status_after_snapshot(&mgr, sid).await;
+        let update = next_update(&mut rx).await;
+        assert!(update.replay_derived);
+        assert_eq!(update.state, None);
+        assert_eq!(update.revision, 1);
+        assert_eq!(
+            update.program_status,
+            Some(ProgramStatusSummary {
+                state: WireState::Blocked,
+                title: Some("t".to_string()),
+                app: Some("a".to_string()),
+            })
+        );
+        assert_quiet(&mut rx, "one resync message per pane").await;
+    }
+
+    /// AC-5: the same for the single-pane (window switch) resync.
+    #[tokio::test]
+    async fn ac5_the_resync_after_a_pane_snapshot_carries_the_summary() {
+        let (mgr, _sid, mut rx) = detached_pane_manager().await;
+        report(&mgr, "state=error").await;
+        let _ = next_update(&mut rx).await;
+
+        sync_agent_status_after_pane_snapshot(&mgr, PANE_ID).await;
+        let update = next_update(&mut rx).await;
+        assert!(update.replay_derived);
+        assert_eq!(update.revision, 1);
+        assert_eq!(
+            update.program_status,
+            Some(ProgramStatusSummary {
+                state: WireState::Error,
+                title: None,
+                app: None,
+            })
+        );
+    }
+
+    /// AC-5: a pane whose records were all removed still resyncs (its
+    /// revision is above zero) with an absent summary item, so the GUI drops
+    /// what it showed.
+    #[tokio::test]
+    async fn ac5_a_pane_emptied_of_records_resyncs_with_an_absent_summary() {
+        let (mgr, sid, mut rx) = detached_pane_manager().await;
+        report(&mgr, "state=error").await;
+        apply_program_status_reset(&mgr, PANE_ID).await;
+        let _ = next_update(&mut rx).await;
+        let _ = next_update(&mut rx).await;
+
+        sync_agent_status_after_snapshot(&mgr, sid).await;
+        let update = next_update(&mut rx).await;
+        assert!(update.replay_derived);
+        assert_eq!(update.revision, 2);
+        assert_eq!(update.program_status, None);
+    }
+
+    /// Drive `bytes` through the real reader loop, scanner and agent-status
+    /// task of a Detached pane, and return the pane's record count and
+    /// revision afterwards.
+    async fn run_through_reader_and_task(bytes: Vec<u8>) -> (usize, u64) {
+        use crate::mux::session::pane::{
+            DetachReason, MuxPane, PaneOutputTarget, SharedOutputTarget,
+        };
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+        }));
+        let pane = MuxPane::new_test(PANE_ID, 80, 24, target);
+        let (tx, rx) = mpsc::channel(16);
+        *pane.agent_status_report_sender.lock().unwrap() = Some(tx);
+
+        let sender_slot = pane.agent_status_report_sender.clone();
+        let (output_target, shadow_parser, cwd, title, title_sender) = (
+            pane.output_target.clone(),
+            pane.shadow_parser.clone(),
+            pane.cwd.clone(),
+            pane.title.clone(),
+            pane.title_sender.clone(),
+        );
+        let (notification_sender, raw_passthrough, passthrough_scanner, scrollback, dims, capture) = (
+            pane.notification_sender.clone(),
+            pane.raw_passthrough.clone(),
+            pane.passthrough_scanner.clone(),
+            pane.scrollback.clone(),
+            pane.dims.clone(),
+            pane.output_capture.clone(),
+        );
+
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+        }
+        let task = tokio::spawn(run_agent_status_task(mgr.clone(), rx));
+
+        let reader: Box<dyn std::io::Read + Send> = Box::new(std::io::Cursor::new(bytes));
+        let slot = sender_slot.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::mux::ipc::pty_spawn::pty_reader_loop(
+                PANE_ID,
+                reader,
+                output_target,
+                shadow_parser,
+                cwd,
+                title,
+                title_sender,
+                notification_sender,
+                slot,
+                raw_passthrough,
+                passthrough_scanner,
+                scrollback,
+                dims,
+                Arc::new(StdMutex::new(None)),
+                capture,
+            );
+        })
+        .await
+        .unwrap();
+        // Close the channel so the task drains and exits.
+        *sender_slot.lock().unwrap() = None;
+        task.await.unwrap();
+
+        let (revision, records) = revision_and_records(&mgr).await;
+        (records, revision)
+    }
+
+    /// AC-4: through the real reader and task, a prompt start on the main
+    /// screen removes `working` records while one in the alternate screen
+    /// never reaches the table; RIS removes everything.
+    #[tokio::test]
+    async fn ac4_only_a_live_main_screen_prompt_start_and_ris_reach_the_table() {
+        let report = b"\x1b]7501;state=working:id=w\x07\x1b]7501;state=done:id=d\x07".to_vec();
+
+        // A prompt start on the alternate screen: records stay.
+        let mut alt = report.clone();
+        alt.extend_from_slice(b"\x1b[?1049h\x1b]133;A\x07\x1b[?1049l");
+        assert_eq!(run_through_reader_and_task(alt).await, (2, 2));
+
+        // The same prompt start on the main screen removes `working`.
+        let mut main = report.clone();
+        main.extend_from_slice(b"\x1b]133;A\x07");
+        assert_eq!(run_through_reader_and_task(main).await, (1, 3));
+
+        // RIS removes every record, on either screen.
+        let mut ris = report.clone();
+        ris.extend_from_slice(b"\x1b[?1049h\x1bc");
+        assert_eq!(run_through_reader_and_task(ris).await, (0, 3));
+
+        // Reports, a prompt start and a reset keep their byte order.
+        let mut ordered = b"\x1b]7501;state=working\x07\x1b]133;A\x07".to_vec();
+        ordered.extend_from_slice(b"\x1b]7501;state=error\x07");
+        assert_eq!(run_through_reader_and_task(ordered).await, (1, 3));
+    }
+}
