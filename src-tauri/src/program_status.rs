@@ -1,82 +1,63 @@
 //! Build-agnostic Program Status core (OSC 7501, Program Status Protocol
-//! draft 0.3): body parser, per-terminal record table, lifecycle
-//! operations and the table's summary (IMPLEMENTATION.md SC-1).
+//! draft 0.3): record-state vocabulary, body parser, per-terminal record
+//! table, lifecycle operations, aggregate summary, title sanitization for
+//! names, and re-validating export/import.
 //!
-//! Compiled WITHOUT the `gui` feature (CLI-shared), like
-//! [`crate::agent_status`]; it depends only on always-built crates.
+//! Compiled WITHOUT the `gui` feature (CLI-shared): the plain-tab ingestion,
+//! the mux daemon and the GUI model all consume this module, and it depends
+//! on nothing feature-gated (SPEC NFR1).
 //!
-//! This worktree carries the MINIMUM of SC-1 that plain-tab ingestion
-//! (task0003) needs (IMPLEMENTATION.md D10): the parser, the table's
-//! replacement / clear / cap rules, the two lifecycle operations and the
-//! summary. The module's owner (task0001) supersedes this file; export /
-//! import and any behavior beyond what plain-tab ingestion reads are
-//! deliberately absent here. `kind`, `progress` and `msg` are validated
-//! but not stored: no consumer displays them (SPEC FR5).
+//! Written from the protocol text only; no external implementation was
+//! consulted (SPEC NFR2).
 //!
-//! Rejected or ignored input is never logged: it is untrusted and could
-//! flood the log.
-
-use std::collections::HashMap;
+//! Wire grammar (the OSC body after the `ESC ] 7501 ;` introducer and before
+//! the BEL / `ESC \` terminator):
+//! - Query: the body is exactly `?`.
+//! - Report: `key=value` pairs joined by `:`. Keys are lowercase ASCII
+//!   letters; values use the bytes `A-Z a-z 0-9 _ . , + / = -`. Pairs that
+//!   do not fit are skipped, unknown keys are ignored and the last
+//!   surviving occurrence of a repeated key wins.
+//!
+//! Parsing is pure and side-effect free. A rejected report is never logged:
+//! it is untrusted input and could flood the log.
 
 use base64::Engine as _;
 use base64::alphabet;
-use base64::engine::DecodePaddingMode;
-use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
+use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 
-/// Introducer bytes counted toward the whole-sequence limit: `ESC`, `]`,
-/// `7501` and `;`.
-const INTRODUCER_BYTES: usize = 7;
-/// Whole-sequence limit in bytes (introducer + body + terminator).
-const MAX_SEQUENCE_BYTES: usize = 4096;
-/// Record cap per terminal (SPEC FR6).
+/// Longest accepted whole sequence, introducer and terminator included.
+pub const MAX_SEQUENCE_BYTES: usize = 4096;
+/// Records kept per terminal; the least recently updated one is evicted
+/// when a new id would exceed it.
 pub const MAX_RECORDS: usize = 256;
-const MAX_TITLE_ENCODED_BYTES: usize = 256;
-const MAX_TITLE_DECODED_BYTES: usize = 192;
-const MAX_MSG_ENCODED_BYTES: usize = 2732;
-const MAX_MSG_DECODED_BYTES: usize = 2048;
-const MAX_ID_SEGMENTS: usize = 8;
-const MAX_ID_BYTES: usize = 128;
-const MAX_SEGMENT_BYTES: usize = 32;
-const MAX_APP_BYTES: usize = 32;
-/// Title length cap for names, in Unicode scalar values (IMPLEMENTATION.md
-/// D9).
-const MAX_NAME_TITLE_CHARS: usize = 80;
+/// Longest title used as a name, in Unicode scalar values.
+pub const MAX_NAME_TITLE_CHARS: usize = 80;
 
-/// Padded and unpadded base64 are both accepted.
+/// `ESC ] 7501 ;` — ESC, `]`, the four digits and `;`.
+const INTRODUCER_BYTES: usize = 7;
+const MAX_ENCODED_TITLE_BYTES: usize = 256;
+const MAX_DECODED_TITLE_BYTES: usize = 192;
+const MAX_ENCODED_MSG_BYTES: usize = 2732;
+const MAX_DECODED_MSG_BYTES: usize = 2048;
+const MAX_ID_SEGMENTS: usize = 8;
+const MAX_ID_SEGMENT_BYTES: usize = 32;
+const MAX_ID_BYTES: usize = 128;
+const MAX_APP_BYTES: usize = 32;
+const MAX_PROGRESS: u32 = 100;
+
+/// Standard-alphabet base64 that accepts both the padded and the unpadded
+/// form.
 const BASE64: GeneralPurpose = GeneralPurpose::new(
     &alphabet::STANDARD,
     GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
 );
 
-/// Which string terminator ended the OSC sequence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Terminator {
-    /// BEL (0x07).
-    Bel,
-    /// ST (`ESC \`).
-    St,
-}
+// ── Vocabulary ────────────────────────────────────────────────────────
 
-impl Terminator {
-    fn byte_len(self) -> usize {
-        match self {
-            Terminator::Bel => 1,
-            Terminator::St => 2,
-        }
-    }
-
-    /// The terminator's bytes as written on the wire.
-    pub fn as_bytes(self) -> &'static [u8] {
-        match self {
-            Terminator::Bel => b"\x07",
-            Terminator::St => b"\x1b\\",
-        }
-    }
-}
-
-/// A stored record state. `clear` is a report action, never a state.
+/// The states a stored record can hold. `clear` is a report action, never
+/// a stored state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RecordState {
+pub enum ProgramState {
     Idle,
     Working,
     Done,
@@ -84,47 +65,126 @@ pub enum RecordState {
     Error,
 }
 
-impl RecordState {
-    /// The protocol's lowercase state word.
+impl ProgramState {
+    /// Every stored state, for exhaustive iteration.
+    pub const ALL: [ProgramState; 5] = [
+        ProgramState::Idle,
+        ProgramState::Working,
+        ProgramState::Done,
+        ProgramState::Blocked,
+        ProgramState::Error,
+    ];
+
+    /// The lowercase protocol word.
     pub fn word(self) -> &'static str {
         match self {
-            RecordState::Idle => "idle",
-            RecordState::Working => "working",
-            RecordState::Done => "done",
-            RecordState::Blocked => "blocked",
-            RecordState::Error => "error",
+            ProgramState::Idle => "idle",
+            ProgramState::Working => "working",
+            ProgramState::Done => "done",
+            ProgramState::Blocked => "blocked",
+            ProgramState::Error => "error",
         }
     }
 
-    /// Composition rank (IMPLEMENTATION.md D2): blocked > working > error >
-    /// done > idle.
-    fn rank(self) -> u8 {
+    /// The state for a protocol word; `None` for anything else (including
+    /// `clear`, which is not a stored state).
+    pub fn from_word(word: &str) -> Option<ProgramState> {
+        match word {
+            "idle" => Some(ProgramState::Idle),
+            "working" => Some(ProgramState::Working),
+            "done" => Some(ProgramState::Done),
+            "blocked" => Some(ProgramState::Blocked),
+            "error" => Some(ProgramState::Error),
+            _ => None,
+        }
+    }
+
+    /// The composition rank: blocked > working > error > done > idle. A
+    /// larger value is a higher state. There is no read flag at this level.
+    pub fn rank(self) -> u8 {
         match self {
-            RecordState::Blocked => 4,
-            RecordState::Working => 3,
-            RecordState::Error => 2,
-            RecordState::Done => 1,
-            RecordState::Idle => 0,
+            ProgramState::Idle => 0,
+            ProgramState::Done => 1,
+            ProgramState::Error => 2,
+            ProgramState::Working => 3,
+            ProgramState::Blocked => 4,
         }
     }
 }
 
-/// One validated, ready-to-apply report.
+/// Why a `blocked` record is blocked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Kind {
+    Permission,
+    Question,
+    Auth,
+}
+
+impl Kind {
+    /// The lowercase protocol word.
+    pub fn word(self) -> &'static str {
+        match self {
+            Kind::Permission => "permission",
+            Kind::Question => "question",
+            Kind::Auth => "auth",
+        }
+    }
+
+    /// The kind for a protocol word; `None` for anything else.
+    pub fn from_word(word: &str) -> Option<Kind> {
+        match word {
+            "permission" => Some(Kind::Permission),
+            "question" => Some(Kind::Question),
+            "auth" => Some(Kind::Auth),
+            _ => None,
+        }
+    }
+}
+
+/// How the OSC sequence ended. It decides the whole-sequence length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Terminator {
+    /// BEL, one byte.
+    Bel,
+    /// ST (`ESC \`), two bytes.
+    St,
+}
+
+impl Terminator {
+    fn len(self) -> usize {
+        match self {
+            Terminator::Bel => 1,
+            Terminator::St => 2,
+        }
+    }
+}
+
+// ── Parsed forms ──────────────────────────────────────────────────────
+
+/// One stored record. Title and msg are decoded plain text and are never
+/// interpreted; kind is held only for `blocked`, progress only for
+/// `working` / `blocked`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Record {
+    pub state: ProgramState,
+    pub kind: Option<Kind>,
+    pub progress: Option<u8>,
+    pub app: Option<String>,
+    pub title: Option<String>,
+    pub msg: Option<String>,
+}
+
+/// A validated report, ready to apply. The id is the empty string for the
+/// root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Report {
-    /// `state=clear`: remove the id and its descendants, or every record
-    /// when no id is given.
-    Clear { id: Option<String> },
-    /// Any other state: fully replace the id's record.
-    Set {
-        id: Option<String>,
-        state: RecordState,
-        title: Option<String>,
-        app: Option<String>,
-    },
+    /// Replace the id's record with this one.
+    Set { id: String, record: Record },
+    /// Remove the id and its descendants; the empty id removes everything.
+    Clear { id: String },
 }
 
-/// Result of [`parse`].
+/// The outcome of parsing one OSC 7501 body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Parsed {
     /// The body is exactly `?`.
@@ -135,280 +195,472 @@ pub enum Parsed {
     Ignored,
 }
 
-/// Parse the text after `7501;` of a terminated OSC sequence. Pure: no side
-/// effects and no logging.
+/// Parse the text that follows `7501;` in a terminated sequence.
 pub fn parse(body: &str, terminator: Terminator) -> Parsed {
-    if body == "?" {
+    parse_bytes(body.as_bytes(), terminator)
+}
+
+/// [`parse`] for callers that hold the body as raw bytes.
+pub fn parse_bytes(body: &[u8], terminator: Terminator) -> Parsed {
+    if body == b"?" {
         return Parsed::Query;
     }
-    if INTRODUCER_BYTES + body.len() + terminator.byte_len() > MAX_SEQUENCE_BYTES {
+    if INTRODUCER_BYTES + body.len() + terminator.len() > MAX_SEQUENCE_BYTES {
         return Parsed::Ignored;
     }
 
-    let mut state = None;
-    let mut id = None;
-    let mut title = None;
-    let mut msg = None;
-    let mut app = None;
-    for pair in body.split(':') {
-        let Some((key, value)) = pair.split_once('=') else {
-            continue;
-        };
-        if key.is_empty() || !key.bytes().all(|b| b.is_ascii_lowercase()) {
-            continue;
-        }
-        if !value.bytes().all(|b| {
-            b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b',' | b'+' | b'/' | b'=' | b'-')
-        }) {
-            continue;
-        }
-        match key {
-            "state" => state = Some(value),
-            "id" => id = Some(value),
-            "title" => title = Some(value),
-            "msg" => msg = Some(value),
-            "app" => app = Some(value),
-            _ => {}
-        }
-    }
+    let pairs = Pairs::collect(body);
 
-    // Whole-report discard conditions.
-    let Some(title) = decode_text(title, MAX_TITLE_ENCODED_BYTES, MAX_TITLE_DECODED_BYTES) else {
+    let Ok(title) = decode_text(
+        pairs.title,
+        MAX_ENCODED_TITLE_BYTES,
+        MAX_DECODED_TITLE_BYTES,
+    ) else {
         return Parsed::Ignored;
     };
-    if decode_text(msg, MAX_MSG_ENCODED_BYTES, MAX_MSG_DECODED_BYTES).is_none() {
+    let Ok(msg) = decode_text(pairs.msg, MAX_ENCODED_MSG_BYTES, MAX_DECODED_MSG_BYTES) else {
+        return Parsed::Ignored;
+    };
+
+    let Some(state_word) = pairs.state.map(ascii) else {
+        return Parsed::Ignored;
+    };
+    let clear = state_word == "clear";
+    let state = ProgramState::from_word(state_word);
+    if !clear && state.is_none() {
         return Parsed::Ignored;
     }
 
-    // Whole-report ignore conditions.
-    let Some(state) = state else {
-        return Parsed::Ignored;
-    };
-    let id = match id {
-        None => None,
-        Some(value) if valid_id(value) => Some(value.to_string()),
+    let id = match pairs.id {
+        None => String::new(),
+        Some(value) if valid_id(value) => ascii(value).to_owned(),
         Some(_) => return Parsed::Ignored,
     };
 
-    if state == "clear" {
+    let Some(state) = state else {
         return Parsed::Report(Report::Clear { id });
-    }
-    let state = match state {
-        "idle" => RecordState::Idle,
-        "working" => RecordState::Working,
-        "done" => RecordState::Done,
-        "blocked" => RecordState::Blocked,
-        "error" => RecordState::Error,
-        _ => return Parsed::Ignored,
     };
-    let app = app
-        .filter(|a| valid_segment(a, MAX_APP_BYTES))
-        .map(str::to_string);
+
+    let kind = match state {
+        ProgramState::Blocked => pairs.kind.map(ascii).and_then(Kind::from_word),
+        _ => None,
+    };
+    let progress = match state {
+        ProgramState::Working | ProgramState::Blocked => pairs.progress,
+        _ => None,
+    };
+    let app = pairs
+        .app
+        .filter(|value| valid_app(value))
+        .map(|value| ascii(value).to_owned());
+
     Parsed::Report(Report::Set {
         id,
-        state,
-        title,
-        app,
+        record: Record {
+            state,
+            kind,
+            progress,
+            app,
+            title,
+            msg,
+        },
     })
 }
 
-/// Decode an optional base64 `title` / `msg` value. `None` means the whole
-/// report is discarded; `Some(None)` means the value is absent or empty.
+/// The surviving value of each known key, after the pair grammar and the
+/// last-occurrence-wins rule.
+#[derive(Default)]
+struct Pairs<'a> {
+    state: Option<&'a [u8]>,
+    id: Option<&'a [u8]>,
+    kind: Option<&'a [u8]>,
+    progress: Option<u8>,
+    app: Option<&'a [u8]>,
+    title: Option<&'a [u8]>,
+    msg: Option<&'a [u8]>,
+}
+
+impl<'a> Pairs<'a> {
+    fn collect(body: &'a [u8]) -> Self {
+        let mut pairs = Pairs::default();
+        for pair in body.split(|&b| b == b':') {
+            let Some(eq) = pair.iter().position(|&b| b == b'=') else {
+                continue;
+            };
+            let (key, value) = (&pair[..eq], &pair[eq + 1..]);
+            if key.is_empty() || !key.iter().all(u8::is_ascii_lowercase) {
+                continue;
+            }
+            if !value.iter().all(|&b| is_value_byte(b)) {
+                continue;
+            }
+            match key {
+                b"state" => pairs.state = Some(value),
+                b"id" => pairs.id = Some(value),
+                b"kind" => pairs.kind = Some(value),
+                b"progress" => {
+                    if let Some(progress) = parse_progress(value) {
+                        pairs.progress = Some(progress);
+                    }
+                }
+                b"app" => pairs.app = Some(value),
+                b"title" => pairs.title = Some(value),
+                b"msg" => pairs.msg = Some(value),
+                _ => {}
+            }
+        }
+        pairs
+    }
+}
+
+/// `A-Z a-z 0-9 _ . , + / = -`
+fn is_value_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b',' | b'+' | b'/' | b'=' | b'-')
+}
+
+/// `A-Z a-z 0-9 _ . + -`
+fn is_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'+' | b'-')
+}
+
+/// Value bytes are validated ASCII before this is reached.
+fn ascii(value: &[u8]) -> &str {
+    std::str::from_utf8(value).unwrap_or("")
+}
+
+/// Decimal digits only, 0 to 100.
+fn parse_progress(value: &[u8]) -> Option<u8> {
+    if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut n: u32 = 0;
+    for &digit in value {
+        n = n * 10 + u32::from(digit - b'0');
+        if n > MAX_PROGRESS {
+            return None;
+        }
+    }
+    u8::try_from(n).ok()
+}
+
+/// One to eight `/`-separated segments of one to 32 name bytes, 128 bytes
+/// at most in total.
+fn valid_id(id: &[u8]) -> bool {
+    if id.is_empty() || id.len() > MAX_ID_BYTES {
+        return false;
+    }
+    let mut segments = 0;
+    for segment in id.split(|&b| b == b'/') {
+        segments += 1;
+        if segments > MAX_ID_SEGMENTS
+            || segment.is_empty()
+            || segment.len() > MAX_ID_SEGMENT_BYTES
+            || !segment.iter().all(|&b| is_name_byte(b))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn valid_app(app: &[u8]) -> bool {
+    !app.is_empty() && app.len() <= MAX_APP_BYTES && app.iter().all(|&b| is_name_byte(b))
+}
+
+/// Decode a base64 title / msg value. `Err` means the whole report is
+/// discarded; an empty decoded text counts as absent.
 fn decode_text(
-    encoded: Option<&str>,
+    value: Option<&[u8]>,
     max_encoded: usize,
     max_decoded: usize,
-) -> Option<Option<String>> {
-    let Some(encoded) = encoded else {
-        return Some(None);
+) -> Result<Option<String>, ()> {
+    let Some(value) = value else {
+        return Ok(None);
     };
-    if encoded.len() > max_encoded {
-        return None;
+    if value.len() > max_encoded {
+        return Err(());
     }
-    let bytes = BASE64.decode(encoded.as_bytes()).ok()?;
+    let bytes = BASE64.decode(value).map_err(|_| ())?;
     if bytes.len() > max_decoded {
-        return None;
+        return Err(());
     }
-    let text = String::from_utf8(bytes).ok()?;
+    let text = String::from_utf8(bytes).map_err(|_| ())?;
     if text.chars().any(char::is_control) {
-        return None;
+        return Err(());
     }
-    Some(if text.is_empty() { None } else { Some(text) })
+    Ok(if text.is_empty() { None } else { Some(text) })
 }
 
-/// `[A-Za-z0-9_.+-]{1,max}`.
-fn valid_segment(segment: &str, max: usize) -> bool {
-    !segment.is_empty()
-        && segment.len() <= max
-        && segment
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'+' | b'-'))
+// ── Title sanitization for names ──────────────────────────────────────
+
+/// Turn a title into something safe to use as a name: control characters
+/// (C0, DEL, C1) and invisible formatting characters are removed, then the
+/// result is cut to [`MAX_NAME_TITLE_CHARS`] Unicode scalar values. The
+/// text is otherwise left as is; it is never interpreted.
+pub fn sanitize_title(title: &str) -> String {
+    title
+        .chars()
+        .filter(|&c| !c.is_control() && !is_invisible_format(c))
+        .take(MAX_NAME_TITLE_CHARS)
+        .collect()
 }
 
-/// 1 to 8 `/`-separated segments, 128 bytes at most in total.
-fn valid_id(id: &str) -> bool {
-    id.len() <= MAX_ID_BYTES
-        && id.split('/').count() <= MAX_ID_SEGMENTS
-        && id.split('/').all(|s| valid_segment(s, MAX_SEGMENT_BYTES))
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x00AD                  // soft hyphen
+        | 0x061C                // Arabic letter mark
+        | 0x180E                // Mongolian vowel separator
+        | 0x200B..=0x200F       // zero-width space / joiners / direction marks
+        | 0x2028..=0x202E       // line / paragraph separators, bidi embeddings
+        | 0x2060..=0x206F       // word joiner, invisible operators, bidi isolates
+        | 0xFEFF                // zero-width no-break space / BOM
+        | 0xFFF9..=0xFFFB       // interlinear annotation
+        | 0xE0000..=0xE007F     // tag characters
+    )
 }
 
-#[derive(Debug, Clone)]
-struct StoredRecord {
-    state: RecordState,
-    title: Option<String>,
-    app: Option<String>,
-    /// Update order: larger is more recently updated.
-    updated: u64,
+// ── Record table ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Entry {
+    id: String,
+    record: Record,
 }
 
-/// The table's summary: the deciding record's state, sanitized title and
-/// effective app.
+/// The aggregate of a table: the deciding record's state, its sanitized
+/// title, and its effective app.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Summary {
-    pub state: RecordState,
-    /// The deciding record's title after [`sanitize_title_for_name`];
-    /// absent when missing or empty after sanitization.
+    pub state: ProgramState,
+    /// Absent when the deciding record has no title or the title is empty
+    /// after sanitization.
     pub title: Option<String>,
-    /// The deciding record's own app, else the nearest ancestor record's.
+    /// The deciding record's own app, else the app of its nearest ancestor
+    /// record present at summary time.
     pub app: Option<String>,
 }
 
-/// One terminal's record table. The root record (no id) is keyed by the
-/// empty string and is an ancestor of every id.
-#[derive(Debug, Clone, Default)]
-pub struct ProgramStatusTable {
-    records: HashMap<String, StoredRecord>,
-    clock: u64,
+/// One record as plain values, for handoff between processes. The empty id
+/// denotes the root; the state and the kind are protocol words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportedRecord {
+    pub id: String,
+    pub state: String,
+    pub kind: Option<String>,
+    pub progress: Option<u32>,
+    pub app: Option<String>,
+    pub title: Option<String>,
+    pub msg: Option<String>,
 }
 
-impl ProgramStatusTable {
-    pub fn new() -> Self {
-        Self::default()
-    }
+/// The record table of one terminal. Records are kept least recently
+/// updated first, which is the order eviction and export follow.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Table {
+    entries: Vec<Entry>,
+}
 
+impl Table {
+    /// Number of records.
     pub fn len(&self) -> usize {
-        self.records.len()
+        self.entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.records.is_empty()
+        self.entries.is_empty()
     }
 
-    /// Apply one validated report.
+    /// The record stored under `id` (the empty id is the root).
+    pub fn get(&self, id: &str) -> Option<&Record> {
+        self.entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| &entry.record)
+    }
+
+    /// Records with their ids, least recently updated first.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Record)> {
+        self.entries
+            .iter()
+            .map(|entry| (entry.id.as_str(), &entry.record))
+    }
+
+    /// Apply an accepted report. A set replaces the id's record entirely and
+    /// makes it the most recently updated; a clear removes a subtree or
+    /// everything. Every accepted report counts as accepted whether or not
+    /// the stored data changed.
     pub fn apply(&mut self, report: Report) {
         match report {
-            Report::Clear { id: None } => self.records.clear(),
-            Report::Clear { id: Some(id) } => {
-                let prefix = format!("{id}/");
-                self.records
-                    .retain(|key, _| key != &id && !key.starts_with(&prefix));
-            }
-            Report::Set {
-                id,
-                state,
-                title,
-                app,
-            } => {
-                let key = id.unwrap_or_default();
-                if !self.records.contains_key(&key) && self.records.len() >= MAX_RECORDS {
-                    self.evict_least_recently_updated();
-                }
-                self.clock += 1;
-                self.records.insert(
-                    key,
-                    StoredRecord {
-                        state,
-                        title,
-                        app,
-                        updated: self.clock,
-                    },
-                );
-            }
+            Report::Set { id, record } => self.put(id, record),
+            Report::Clear { id } if id.is_empty() => self.entries.clear(),
+            Report::Clear { id } => self.entries.retain(|entry| !in_subtree(&entry.id, &id)),
         }
     }
 
-    fn evict_least_recently_updated(&mut self) {
-        if let Some(oldest) = self
-            .records
-            .iter()
-            .min_by_key(|(_, record)| record.updated)
-            .map(|(key, _)| key.clone())
-        {
-            self.records.remove(&oldest);
-        }
-    }
-
-    /// Live main-screen OSC 133 A: remove `working`, `blocked` and `idle`
-    /// records; keep `done` and `error`. Returns whether anything was
-    /// removed.
+    /// A live main-screen prompt start: removes `working`, `blocked` and
+    /// `idle` records and keeps `done` and `error`. Returns whether anything
+    /// was removed.
     pub fn prompt_start(&mut self) -> bool {
-        let before = self.records.len();
-        self.records
-            .retain(|_, record| matches!(record.state, RecordState::Done | RecordState::Error));
-        self.records.len() != before
+        let before = self.entries.len();
+        self.entries
+            .retain(|entry| matches!(entry.record.state, ProgramState::Done | ProgramState::Error));
+        self.entries.len() != before
     }
 
-    /// RIS: remove every record. Returns whether any existed.
+    /// Remove every record. Returns whether any existed.
     pub fn reset(&mut self) -> bool {
-        let existed = !self.records.is_empty();
-        self.records.clear();
+        let existed = !self.entries.is_empty();
+        self.entries.clear();
         existed
     }
 
-    /// Absent for an empty table; otherwise the deciding record (highest
-    /// rank, ties to the most recently updated) with its sanitized title and
-    /// effective app.
+    /// The aggregate of the table; `None` when it is empty.
     pub fn summary(&self) -> Option<Summary> {
-        let (key, record) = self
-            .records
-            .iter()
-            .max_by_key(|(_, record)| (record.state.rank(), record.updated))?;
-        let title = record
-            .title
-            .as_deref()
-            .map(sanitize_title_for_name)
-            .filter(|t| !t.is_empty());
-        let app = record.app.clone().or_else(|| self.inherited_app(key));
+        let mut deciding: Option<&Entry> = None;
+        for entry in &self.entries {
+            // Oldest first, so on a rank tie the later (more recently
+            // updated) record replaces the earlier one.
+            match deciding {
+                Some(best) if entry.record.state.rank() < best.record.state.rank() => {}
+                _ => deciding = Some(entry),
+            }
+        }
+        let deciding = deciding?;
         Some(Summary {
-            state: record.state,
-            title,
-            app,
+            state: deciding.record.state,
+            title: deciding
+                .record
+                .title
+                .as_deref()
+                .map(sanitize_title)
+                .filter(|title| !title.is_empty()),
+            app: self.effective_app(deciding),
         })
     }
 
-    /// The app of the nearest ancestor record that has one. `a/b/c` has the
-    /// ancestors `a/b`, `a` and the root.
-    fn inherited_app(&self, key: &str) -> Option<String> {
-        let mut current = key;
-        while !current.is_empty() {
-            current = current.rsplit_once('/').map_or("", |(parent, _)| parent);
-            if let Some(app) = self.records.get(current).and_then(|r| r.app.clone()) {
-                return Some(app);
+    /// Every record as plain values, least recently updated first.
+    pub fn export(&self) -> Vec<ExportedRecord> {
+        self.entries
+            .iter()
+            .map(|entry| ExportedRecord {
+                id: entry.id.clone(),
+                state: entry.record.state.word().to_owned(),
+                kind: entry.record.kind.map(|kind| kind.word().to_owned()),
+                progress: entry.record.progress.map(u32::from),
+                app: entry.record.app.clone(),
+                title: entry.record.title.clone(),
+                msg: entry.record.msg.clone(),
+            })
+            .collect()
+    }
+
+    /// Rebuild a table from exported records, oldest first. Each record is
+    /// re-validated against the id, app, kind, progress, title and msg rules
+    /// and dropped when it violates one; when more than [`MAX_RECORDS`]
+    /// valid records remain, the most recently updated ones are kept.
+    pub fn import(records: impl IntoIterator<Item = ExportedRecord>) -> Table {
+        let mut table = Table::default();
+        for exported in records {
+            if let Some((id, record)) = validate_exported(exported) {
+                table.put(id, record);
+            }
+        }
+        table
+    }
+
+    fn put(&mut self, id: String, record: Record) {
+        if let Some(pos) = self.entries.iter().position(|entry| entry.id == id) {
+            self.entries.remove(pos);
+        } else if self.entries.len() >= MAX_RECORDS {
+            self.entries.remove(0);
+        }
+        self.entries.push(Entry { id, record });
+    }
+
+    /// The record's own app, else the app of the nearest ancestor record
+    /// that has one (the root is every id's ancestor).
+    fn effective_app(&self, entry: &Entry) -> Option<String> {
+        if let Some(app) = &entry.record.app {
+            return Some(app.clone());
+        }
+        let mut id = entry.id.as_str();
+        while !id.is_empty() {
+            id = id.rfind('/').map_or("", |slash| &id[..slash]);
+            if let Some(app) = self.get(id).and_then(|record| record.app.as_ref()) {
+                return Some(app.clone());
             }
         }
         None
     }
 }
 
-/// IMPLEMENTATION.md D9: remove control characters and invisible
-/// formatting characters, then truncate to 80 Unicode scalar values.
-pub fn sanitize_title_for_name(title: &str) -> String {
-    title
-        .chars()
-        .filter(|c| !c.is_control() && !is_invisible_formatting(*c))
-        .take(MAX_NAME_TITLE_CHARS)
-        .collect()
+/// `id` is `root` itself or lies below it on a segment boundary.
+fn in_subtree(id: &str, root: &str) -> bool {
+    id == root
+        || id
+            .strip_prefix(root)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
-fn is_invisible_formatting(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{061C}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{2028}'..='\u{202E}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{2069}'
-            | '\u{FEFF}'
-    )
+fn validate_exported(exported: ExportedRecord) -> Option<(String, Record)> {
+    let ExportedRecord {
+        id,
+        state,
+        kind,
+        progress,
+        app,
+        title,
+        msg,
+    } = exported;
+
+    if !id.is_empty() && !valid_id(id.as_bytes()) {
+        return None;
+    }
+    let state = ProgramState::from_word(&state)?;
+    let kind = match kind {
+        None => None,
+        Some(word) if state == ProgramState::Blocked => Some(Kind::from_word(&word)?),
+        Some(_) => return None,
+    };
+    let progress = match progress {
+        None => None,
+        Some(value)
+            if matches!(state, ProgramState::Working | ProgramState::Blocked)
+                && value <= MAX_PROGRESS =>
+        {
+            Some(u8::try_from(value).ok()?)
+        }
+        Some(_) => return None,
+    };
+    if app.as_ref().is_some_and(|app| !valid_app(app.as_bytes())) {
+        return None;
+    }
+    let title = validate_text(title, MAX_DECODED_TITLE_BYTES)?;
+    let msg = validate_text(msg, MAX_DECODED_MSG_BYTES)?;
+
+    Some((
+        id,
+        Record {
+            state,
+            kind,
+            progress,
+            app,
+            title,
+            msg,
+        },
+    ))
 }
+
+/// `None` when the text breaks a rule; an empty text counts as absent.
+fn validate_text(text: Option<String>, max_bytes: usize) -> Option<Option<String>> {
+    match text {
+        None => Some(None),
+        Some(text) if text.is_empty() => Some(None),
+        Some(text) if text.len() > max_bytes || text.chars().any(char::is_control) => None,
+        Some(text) => Some(Some(text)),
+    }
+}
+
+#[cfg(test)]
+mod tests;

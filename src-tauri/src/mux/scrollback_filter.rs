@@ -488,6 +488,9 @@ pub(in crate::mux) fn vt100_replay_copy(bytes: &[u8]) -> Vec<u8> {
 ///   terminated; recovered the same way). `ESC ] 9999 ; emterm-mux ; …`
 ///   (mux control) is KEPT.
 /// - OSC 777 agent-status reports (`ESC ] 777 ; emterm ; agent-status ; …`).
+/// - OSC 7501 program-status reports and `?` queries (`ESC ] 7501 ; … `, BEL or
+///   ST terminated; the number is recovered the same way, so `07501;…` is
+///   stripped too). Other OSC numbers - 7500 and 7502 included - are KEPT.
 /// - CSI device queries that `crates/term_core/src/csi_dispatch.rs` answers
 ///   with a response, so a snapshot replay never makes the GUI synthesize a
 ///   stale reply: DSR / CPR (`ESC[5n`, `ESC[6n`), DA1 / DA2 (`ESC[c`,
@@ -952,9 +955,12 @@ fn dcs_is_sixel(body: &[u8]) -> bool {
 /// does not validate the body as UTF-8, because this runs for every OSC the
 /// shell emits on the write path (round3 FR8). The strip
 /// selection is: a viewer launch of every kind (image included), a Markdown
-/// launch, and an agent-status report (SPEC FR4: the OSC report itself is
+/// launch, an agent-status report (SPEC FR4: the OSC report itself is
 /// never replayed — the daemon resyncs current state out-of-band after a
-/// snapshot). Fold marks, mux control, every other kind and number, and an
+/// snapshot), and an OSC 7501 program-status report or query (a replayed
+/// report would re-apply a stale record, a replayed query would have the
+/// attached GUI answer again; the daemon delivers state out-of-band the same
+/// way). Fold marks, mux control, every other kind and number, and an
 /// overflowed number are kept.
 ///
 /// Identical for the write path and the snapshot path (task0004 round-4
@@ -964,7 +970,8 @@ fn is_replayable_osc_body(body: &[u8]) -> bool {
     match osc_body_identity(body) {
         OscIdentity::ViewerLaunch(_)
         | OscIdentity::MarkdownLaunch
-        | OscIdentity::AgentStatusReport => true,
+        | OscIdentity::AgentStatusReport
+        | OscIdentity::ProgramStatus => true,
         OscIdentity::NotIdentified => false,
     }
 }

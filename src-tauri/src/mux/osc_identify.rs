@@ -8,7 +8,10 @@
 //! so a viewer launch written with a leading-zero number (`0777;…`) or with
 //! non-digit bytes before the first `;` (`777emterm;;markdown;…`) is seen as
 //! the same launch by both sides and can neither survive in the ring while
-//! also being delivered, nor be lost.
+//! also being delivered, nor be lost. The same holds for OSC 7501 (Program
+//! Status Protocol): [`OscIdentity::ProgramStatus`] is decided by the number
+//! alone, so a report or query in any spelling of 7501 is the same sequence
+//! for the strip and for the delivery scan (osc7501-program-status task0006).
 //!
 //! Two responsibilities:
 //!
@@ -40,6 +43,9 @@ const OSC_NUMBER_MARKDOWN: u16 = 9999;
 /// The data token of the Markdown launch on [`OSC_NUMBER_MARKDOWN`].
 const MARKDOWN_LAUNCH_TOKEN: &str = "emterm-md";
 
+/// The OSC number of the Program Status Protocol (reports and the `?` query).
+const OSC_NUMBER_PROGRAM_STATUS: u16 = 7501;
+
 /// An OSC body's number and data as term_core reconstructs them.
 ///
 /// `number` is `None` when the accumulation exceeds term_core's `u16`
@@ -62,6 +68,9 @@ pub(in crate::mux) enum OscIdentity {
     MarkdownLaunch,
     /// OSC 777 `emterm;agent-status[;…]`.
     AgentStatusReport,
+    /// OSC 7501 (Program Status Protocol): a report or the `?` query,
+    /// whatever its data. The number alone decides; the data is not read.
+    ProgramStatus,
     /// Everything else: fold, emterm-mux, other kinds, other numbers, an
     /// absent number.
     NotIdentified,
@@ -136,6 +145,7 @@ pub(in crate::mux) fn identify_osc(osc: &RecoveredOsc) -> OscIdentity {
                 OscIdentity::NotIdentified
             }
         }
+        Some(OSC_NUMBER_PROGRAM_STATUS) => OscIdentity::ProgramStatus,
         _ => OscIdentity::NotIdentified,
     }
 }
@@ -180,6 +190,10 @@ pub(in crate::mux) fn osc_body_identity(body: &[u8]) -> OscIdentity {
     let Ok(number) = u16::try_from(acc) else {
         return OscIdentity::NotIdentified;
     };
+    // Program status is decided by the number alone: no data view is needed.
+    if number == OSC_NUMBER_PROGRAM_STATUS {
+        return OscIdentity::ProgramStatus;
+    }
     if number != OSC_NUMBER_EMTERM && number != OSC_NUMBER_MARKDOWN {
         return OscIdentity::NotIdentified;
     }
@@ -413,6 +427,101 @@ mod tests {
         }
     }
 
+    // ---- osc7501-program-status task0006 AC-1 (FR15): program status ----
+
+    /// Bodies whose reconstructed number is 7501: canonical and leading-zero
+    /// spellings, reports of any data, the `?` query, a body without data, a
+    /// non-digit byte before the first `;` and invalid UTF-8 data.
+    fn program_status_forms() -> Vec<Vec<u8>> {
+        vec![
+            b"7501;?".to_vec(),
+            b"7501;state=working".to_vec(),
+            b"7501;id=a/b;state=idle;app=claude".to_vec(),
+            b"7501;".to_vec(),
+            b"7501".to_vec(),
+            b"07501;?".to_vec(),
+            b"0000007501;state=done".to_vec(),
+            b"7501x;?".to_vec(),
+            b"75x01;?".to_vec(),
+            b"7501emterm;;?".to_vec(),
+            b"?7501;?".to_vec(),
+            b"7501;\xff\xfe".to_vec(),
+            b"7501;emterm;markdown;begin".to_vec(),
+            b"7501;777;emterm;agent-status".to_vec(),
+        ]
+    }
+
+    #[test]
+    fn osc7501_ac1_program_status_is_identified_in_all_forms() {
+        for body in program_status_forms() {
+            assert_eq!(
+                identify_body(&body),
+                OscIdentity::ProgramStatus,
+                "reference identity of {:?}",
+                String::from_utf8_lossy(&body)
+            );
+            assert_eq!(
+                osc_body_identity(&body),
+                OscIdentity::ProgramStatus,
+                "zero-allocation identity of {:?}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+    }
+
+    #[test]
+    fn osc7501_ac1_numbers_next_to_7501_keep_their_identity() {
+        for body in [
+            b"7500;?".as_slice(),
+            b"7502;?",
+            b"750;?",
+            b"501;?",
+            b"17501;?",
+            b"75010;?",
+            b"7;501;?",
+            b"0;7501",
+            b";7501;?",
+            b"",
+        ] {
+            assert_eq!(
+                identify_body(body),
+                OscIdentity::NotIdentified,
+                "reference identity of {:?}",
+                String::from_utf8_lossy(body)
+            );
+            assert_eq!(
+                osc_body_identity(body),
+                OscIdentity::NotIdentified,
+                "zero-allocation identity of {:?}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    #[test]
+    fn osc7501_ac1_the_other_identities_are_unchanged() {
+        assert_eq!(
+            osc_body_identity(b"777;emterm;markdown;x"),
+            OscIdentity::ViewerLaunch("markdown")
+        );
+        assert_eq!(
+            osc_body_identity(b"777;emterm;agent-status;v=1"),
+            OscIdentity::AgentStatusReport
+        );
+        assert_eq!(
+            osc_body_identity(b"9999;emterm-md;x"),
+            OscIdentity::MarkdownLaunch
+        );
+        assert_eq!(
+            osc_body_identity(b"777;emterm;fold;x"),
+            OscIdentity::NotIdentified
+        );
+        assert_eq!(
+            osc_body_identity(b"9999;emterm-mux;x"),
+            OscIdentity::NotIdentified
+        );
+    }
+
     // ---- round3 FR8 (b3e644c5e2d31809): allocation-free identification ----
 
     /// Test-only global allocator wrapper that counts allocation requests
@@ -620,6 +729,31 @@ mod tests {
             b"\xff9999;emterm-md",
             b"\xff",
             b";\xff",
+            // OSC 7501 (program status): the number alone, near misses and
+            // the same spellings as the other identities.
+            b"7501;?",
+            b"7501;state=working;id=a/b",
+            b"7501",
+            b"7501;",
+            b"07501;?",
+            b"00007501;state=done",
+            b"7501x;?",
+            b"75x01;?",
+            b"7x5x0x1;?",
+            b"7501emterm;;?",
+            b"7501;emterm;markdown;begin",
+            b"7501;\xff\xfe",
+            b"\xff7501;?",
+            b"7501\xff;?",
+            b"7500;?",
+            b"7502;?",
+            b"750;?",
+            b"17501;?",
+            b"75010;?",
+            b"65535;?",
+            b"65536;?",
+            b"0;7501;?",
+            b";7501;?",
         ];
         corpus.extend(fixed.iter().map(|body| body.to_vec()));
 
@@ -640,6 +774,12 @@ mod tests {
         let mut zeros = vec![b'0'; 100_000];
         zeros.extend_from_slice(b"777;emterm;json");
         corpus.push(zeros);
+        let mut program_status = b"7501;".to_vec();
+        program_status.extend(std::iter::repeat_n(b'x', 100_000));
+        corpus.push(program_status);
+        let mut zeros_then_program_status = vec![b'0'; 100_000];
+        zeros_then_program_status.extend_from_slice(b"7501;?");
+        corpus.push(zeros_then_program_status);
 
         // Every body up to 4 bytes long over the significant bytes: digits,
         // `;`, `e`, `m` and one invalid byte.
@@ -651,9 +791,11 @@ mod tests {
         let tokens: &[&[u8]] = &[
             b"777",
             b"9999",
+            b"7501",
             b"0",
             b"7",
             b";",
+            b"?",
             b"emterm;",
             b"emterm-md",
             b"markdown",
@@ -698,6 +840,7 @@ mod tests {
         for expected in [
             OscIdentity::MarkdownLaunch,
             OscIdentity::AgentStatusReport,
+            OscIdentity::ProgramStatus,
             OscIdentity::NotIdentified,
         ] {
             assert!(
@@ -797,6 +940,9 @@ mod tests {
         let mut markdown = b"9999;emterm-md;".to_vec();
         markdown.resize(MIB, b'9');
         bodies.push(markdown);
+        let mut program_status = b"7501;".to_vec();
+        program_status.resize(MIB, INVALID);
+        bodies.push(program_status);
         let mut long_head = vec![b'x'; MIB - 16];
         long_head.extend_from_slice(b";emterm-md");
         bodies.push(long_head);
@@ -830,6 +976,9 @@ mod tests {
         let mut zeros_then_markdown = vec![b'0'; 1_000_000];
         zeros_then_markdown.extend_from_slice(b"9999;emterm-md");
         bodies.push(zeros_then_markdown);
+        let mut zeros_then_program_status = vec![b'0'; 1_000_000];
+        zeros_then_program_status.extend_from_slice(b"7501;?");
+        bodies.push(zeros_then_program_status);
         // One million zeros, nothing else: number zero.
         bodies.push(vec![b'0'; 1_000_000]);
 
