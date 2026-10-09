@@ -701,11 +701,18 @@ const KEPT_BODIES: &[&[u8]] = &[
     b"0777;emterm;status-bar;line",
     b"777;other;x",
     b"778;emterm;markdown;begin",
+    // Numbers next to 7501 (osc7501-program-status task0006): not program
+    // status, so kept.
+    b"7500;?",
+    b"7502;?",
+    b"750;?",
+    b"17501;?",
     // u16 overflow (as-06): no route can be established, so nothing is
     // identified and nothing is stripped.
     b"65536;emterm;markdown;begin",
     b"70000;emterm;markdown;begin",
     b"99999;emterm-md;begin",
+    b"75010;?",
 ];
 
 fn osc(body: &[u8], terminator: &[u8]) -> Vec<u8> {
@@ -816,6 +823,170 @@ fn every_strip_entry_point_keeps_non_launch_and_overflowed_osc_bodies() {
     }
 }
 
+// ── OSC 7501 program-status strip (osc7501-program-status task0006, AC-2) ──
+
+/// OSC 7501 bodies the strip must remove: reports and the `?` query, in the
+/// canonical spelling and in the spellings the client's parser reconstructs to
+/// the same number (leading zeros, a non-digit byte before the first `;`).
+const PROGRAM_STATUS_BODIES: &[&[u8]] = &[
+    b"7501;?",
+    b"7501;state=working;id=a/b;app=claude",
+    b"7501;state=idle",
+    b"7501;state=done;title=Zm9v;msg=YmFy",
+    b"7501;",
+    b"7501",
+    b"07501;?",
+    b"0000007501;state=done",
+    b"7501x;?",
+    b"7501emterm;;?",
+];
+
+const BOTH_TERMINATORS: [&[u8]; 2] = [b"\x07", b"\x1b\\"];
+
+/// AC-2: the ring-write strip removes every OSC 7501 report and query with
+/// either terminator and leaves the surrounding bytes as they were.
+#[test]
+fn osc7501_ring_write_strip_removes_reports_and_queries() {
+    for body in PROGRAM_STATUS_BODIES {
+        for terminator in BOTH_TERMINATORS {
+            let mut input = b"before".to_vec();
+            input.extend_from_slice(&osc(body, terminator));
+            input.extend_from_slice(b"after");
+            assert_eq!(
+                strip_pty_output_for_scrollback_write(&input),
+                b"beforeafter",
+                "body {:?} must be stripped on ring write",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+}
+
+/// AC-2: the snapshot strip removes the same set.
+#[test]
+fn osc7501_snapshot_strip_removes_reports_and_queries() {
+    for body in PROGRAM_STATUS_BODIES {
+        for terminator in BOTH_TERMINATORS {
+            let mut input = b"before".to_vec();
+            input.extend_from_slice(&osc(body, terminator));
+            input.extend_from_slice(b"after");
+            assert_eq!(
+                strip_replayable_rich_content(&input),
+                b"beforeafter",
+                "body {:?} must be stripped on snapshot assembly",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+}
+
+/// AC-2: the strip-and-remap entry point (snapshot byte assembly) removes the
+/// same set and maps a watch offset inside or after the sequence consistently.
+#[test]
+fn osc7501_strip_and_remap_removes_reports_and_queries_and_remaps_offsets() {
+    for body in PROGRAM_STATUS_BODIES {
+        for terminator in BOTH_TERMINATORS {
+            let mut input = b"before".to_vec();
+            let seq_start = input.len();
+            input.extend_from_slice(&osc(body, terminator));
+            let seq_end = input.len();
+            input.extend_from_slice(b"after");
+            let watch = [
+                seq_start - 1,
+                seq_start,
+                seq_start + 2,
+                seq_end,
+                seq_end + 1,
+            ];
+            let (out, remapped) = strip_rich_content_and_remap(&input, &watch);
+            assert_eq!(
+                out,
+                b"beforeafter",
+                "body {:?}",
+                String::from_utf8_lossy(body)
+            );
+            assert_eq!(
+                remapped,
+                vec![
+                    seq_start - 1,
+                    seq_start,
+                    seq_start,
+                    seq_start,
+                    seq_start + 1
+                ],
+                "body {:?}: remapped watch offsets",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+}
+
+/// AC-2: every sequence the strip kept before is still kept, byte for byte,
+/// when OSC 7501 sequences sit between them - fold marks, mux control, a
+/// title, the neighbouring OSC numbers and plain CSI.
+#[test]
+fn osc7501_strip_leaves_every_previously_kept_sequence_unchanged() {
+    let kept: &[&[u8]] = &[
+        b"\x1b]777;emterm;fold;start;1\x07",
+        b"\x1b]9999;emterm-mux;state;1\x1b\\",
+        b"\x1b]0;title\x07",
+        b"\x1b]7500;?\x07",
+        b"\x1b]7502;?\x1b\\",
+        b"\x1b]75010;?\x07",
+        b"\x1b[1;31mcolored\x1b[0m",
+        b"\x1b[?1049h",
+        b"plain $ text\r\n",
+    ];
+    let mut input = Vec::new();
+    let mut expected = Vec::new();
+    for (i, sequence) in kept.iter().enumerate() {
+        input.extend_from_slice(&osc(b"7501;?", BOTH_TERMINATORS[i % 2]));
+        input.extend_from_slice(sequence);
+        input.extend_from_slice(&osc(b"7501;state=working", BOTH_TERMINATORS[(i + 1) % 2]));
+        expected.extend_from_slice(sequence);
+    }
+    assert_every_entry_point(&input, &expected, "kept sequences between OSC 7501");
+}
+
+/// AC-2 (TM-5): a ring that saw OSC 7501 traffic yields replay bytes that
+/// carry none of it - whether the ring was written through the write-path strip
+/// or holds the raw stream, for the reattach snapshot and the visibility
+/// resume snapshot alike.
+#[test]
+fn osc7501_replay_bytes_built_from_a_ring_that_saw_the_traffic_carry_no_osc_7501() {
+    use crate::mux::snapshot_bytes::{build_resume_snapshot_bytes, build_snapshot_bytes};
+
+    let mut raw = b"$ build\r\n".to_vec();
+    raw.extend_from_slice(&osc(b"7501;state=working;id=build;app=make", b"\x07"));
+    raw.extend_from_slice(b"compiling 7501 files\r\n");
+    raw.extend_from_slice(&osc(b"7501;?", b"\x1b\\"));
+    raw.extend_from_slice(&osc(b"07501;state=done;id=build", b"\x07"));
+    raw.extend_from_slice(b"\x1b]777;emterm;fold;start;1\x07");
+    raw.extend_from_slice(b"$ ");
+    let expected: &[u8] = b"$ build\r\ncompiling 7501 files\r\n\x1b]777;emterm;fold;start;1\x07$ ";
+
+    let written_ring = strip_pty_output_for_scrollback_write(&raw);
+    assert_eq!(
+        written_ring, expected,
+        "the ring write path keeps no OSC 7501"
+    );
+
+    for (label, ring) in [("write-stripped ring", &written_ring), ("raw ring", &raw)] {
+        let (reattach, _) = build_snapshot_bytes(ring, &[], b"", false, (80, 24));
+        assert_eq!(
+            reattach,
+            [b"\x1b[3J\x1b[H\x1b[2J".as_slice(), expected, b"\x1b[?1049l"].concat(),
+            "{label}: reattach snapshot"
+        );
+        let (resume, _) = build_resume_snapshot_bytes(ring, &[], b"", false, (80, 24));
+        assert_eq!(
+            resume,
+            [b"\x1b[H\x1b[2J".as_slice(), expected].concat(),
+            "{label}: resume snapshot"
+        );
+    }
+}
+
 // ── designator-aware strip (mux-suppressed-output-round3-fixes task0002,
 //    FR2 / FR3) ──────────────────────────────────────────────────────────
 //
@@ -830,6 +1001,8 @@ const DESIGNATOR_ESC_KEPT_RUNS: &[&[u8]] = &[
     b"\x1b)\x1b[6n",
     b"\x1b(\x1b]777;emterm;markdown;x\x07",
     b"\x1b)\x1b]777;emterm;agent-status;v=1;state=idle\x07",
+    b"\x1b(\x1b]7501;?\x07",
+    b"\x1b)\x1b]7501;state=idle\x1b\\",
     b"\x1b(\x1b_Gi=1,a=T;PAYLOAD\x1b\\",
     b"\x1b)\x1bPq#0;2;0;0;0\x1b\\",
     b"\x1b(\x1b]9999;emterm-md;begin\x1b\\",
@@ -1242,13 +1415,16 @@ const POST_STRIP_MD_LAUNCH: &[u8] = b"\x1b]9999;emterm-md;begin\x1b\\";
 const POST_STRIP_AGENT_STATUS: &[u8] = b"\x1b]777;emterm;agent-status;v=1;state=idle\x07";
 const POST_STRIP_SIXEL: &[u8] = b"\x1bPq#0;2;0;0;0\x1b\\";
 const POST_STRIP_QUERY: &[u8] = b"\x1b[6n";
+const POST_STRIP_PROGRAM_STATUS: &[u8] = b"\x1b]7501;state=working;id=a/b\x07";
 
 /// The constructs the write-path strip removes whole: the five the write
-/// filter holds across calls and an answered CSI device query.
-const POST_STRIP_REMOVED: [(&str, &[u8]); 6] = [
+/// filter holds across calls, an OSC 7501 program-status report and an
+/// answered CSI device query.
+const POST_STRIP_REMOVED: [(&str, &[u8]); 7] = [
     ("osc 777 launch", POST_STRIP_LAUNCH),
     ("osc 9999 emterm-md", POST_STRIP_MD_LAUNCH),
     ("agent-status", POST_STRIP_AGENT_STATUS),
+    ("osc 7501 program status", POST_STRIP_PROGRAM_STATUS),
     ("kitty apc", POST_STRIP_KITTY),
     ("sixel dcs", POST_STRIP_SIXEL),
     ("csi query", POST_STRIP_QUERY),
@@ -1850,7 +2026,11 @@ fn post_strip_identity_corpus() -> Vec<Vec<u8>> {
         corpus.push([esc, construct, b"(\x1b(".as_slice(), construct].concat());
         corpus.push([b"\x1b[6".as_slice(), esc, construct, b"[6".as_slice()].concat());
     }
-    for body in NON_CANONICAL_STRIPPED_BODIES.iter().chain(KEPT_BODIES) {
+    for body in NON_CANONICAL_STRIPPED_BODIES
+        .iter()
+        .chain(PROGRAM_STATUS_BODIES)
+        .chain(KEPT_BODIES)
+    {
         for terminator in [b"\x07".as_slice(), b"\x1b\\".as_slice()] {
             let mut input = b"before\x1b[6".to_vec();
             input.extend_from_slice(&osc(body, terminator));
@@ -2065,6 +2245,12 @@ pub(in crate::mux) const CONCAT_TARGETS: &[(&str, &[u8], &[u8])] = &[
     (
         "agent-status",
         b"\x1b]777;emterm;agent-status;v=1;state=idle\x07",
+        b"",
+    ),
+    ("osc 7501 query (BEL)", b"\x1b]7501;?\x07", b""),
+    (
+        "osc 7501 report (ST)",
+        b"\x1b]7501;state=working;id=a/b\x1b\\",
         b"",
     ),
     ("kitty apc", b"\x1b_Gi=1,a=d;AAAA\x1b\\", b""),
