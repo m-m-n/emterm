@@ -282,11 +282,11 @@ impl App {
     /// `summary_changes` are the plain tabs' OSC 7501 summary changes this
     /// pump (osc7501-program-status D4). They apply after the OSC 777 inputs
     /// above and before the transition drain below, each converted through
-    /// the SC-2 five-word conversion; an entry that does not convert (and an
-    /// absent summary) removes the tab's OSC 7501 contribution. Accepted
-    /// caveat (D4): when both protocols conflict inside one pump, an
-    /// intermediate transition may differ from strict byte order; the final
-    /// state is the same.
+    /// [`crate::agent_status::AgentState::from_program_status_word`]; an
+    /// entry that does not convert (and an absent summary) removes the tab's
+    /// OSC 7501 contribution. Accepted caveat (D4): when both protocols
+    /// conflict inside one pump, an intermediate transition may differ from
+    /// strict byte order; the final state is the same.
     pub(super) fn apply_agent_status_batch(
         &mut self,
         plain_events: Vec<(u64, crate::agent_status::AgentStatusEvent)>,
@@ -327,12 +327,13 @@ impl App {
         }
         for (tab_stable_id, summary) in summary_changes {
             let summary = summary.and_then(|summary| {
-                crate::agent_status::state_from_five_word(summary.state.word()).map(|state| {
-                    crate::agent_status_model::ProgramStatusSummary {
-                        state,
-                        title: summary.title,
-                        app: summary.app,
-                    }
+                let state = crate::agent_status::AgentState::from_program_status_word(
+                    summary.state.word(),
+                )?;
+                Some(crate::agent_status_model::ProgramStatusSummary {
+                    state,
+                    title: summary.title,
+                    app: summary.app,
                 })
             });
             self.agent_status

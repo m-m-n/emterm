@@ -430,7 +430,7 @@ pub struct Tab {
     /// `process_outer_via_core` from the callback state's ordered 7501 feed;
     /// never touched by mux inner content (the daemon owns a mux pane's
     /// table).
-    program_status: crate::program_status::ProgramStatusTable,
+    program_status: crate::program_status::Table,
     /// The summary `program_status` had after the last applied feed item, so
     /// a later item is recorded on [`Self::pending_program_status_changes`]
     /// only when it changes the summary.
@@ -815,7 +815,7 @@ impl Tab {
             pending_window_appended: false,
             pending_agent_status_events: Vec::new(),
             pending_latch_inputs: Vec::new(),
-            program_status: crate::program_status::ProgramStatusTable::new(),
+            program_status: crate::program_status::Table::default(),
             program_status_summary: None,
             pending_program_status_changes: Vec::new(),
             pending_agent_status_updates: Vec::new(),

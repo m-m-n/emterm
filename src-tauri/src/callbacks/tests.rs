@@ -411,10 +411,15 @@ fn osc_100_agent_status_invalid_payload_falls_through_to_osc_queue() {
 
 fn working_report(id: &str) -> crate::program_status::Report {
     crate::program_status::Report::Set {
-        id: Some(id.to_string()),
-        state: crate::program_status::RecordState::Working,
-        title: None,
-        app: None,
+        id: id.to_string(),
+        record: crate::program_status::Record {
+            state: crate::program_status::ProgramState::Working,
+            kind: None,
+            progress: None,
+            app: None,
+            title: None,
+            msg: None,
+        },
     }
 }
 

@@ -1542,7 +1542,7 @@ fn wrote_any_osc7501(tab: &Tab) -> bool {
         .any(|w| w.windows(needle.len()).any(|win| win == needle))
 }
 
-fn summary_of(state: crate::program_status::RecordState) -> crate::program_status::Summary {
+fn summary_of(state: crate::program_status::ProgramState) -> crate::program_status::Summary {
     crate::program_status::Summary {
         state,
         title: None,
@@ -1552,13 +1552,18 @@ fn summary_of(state: crate::program_status::RecordState) -> crate::program_statu
 
 fn set_record(
     id: &str,
-    state: crate::program_status::RecordState,
+    state: crate::program_status::ProgramState,
 ) -> crate::program_status::Report {
     crate::program_status::Report::Set {
-        id: Some(id.to_string()),
-        state,
-        title: None,
-        app: None,
+        id: id.to_string(),
+        record: crate::program_status::Record {
+            state,
+            kind: None,
+            progress: None,
+            app: None,
+            title: None,
+            msg: None,
+        },
     }
 }
 
@@ -1702,7 +1707,7 @@ fn osc7501_query_leaves_the_tabs_records_unchanged() {
     let before = tab.program_status.summary();
     assert_eq!(
         before,
-        Some(summary_of(crate::program_status::RecordState::Working))
+        Some(summary_of(crate::program_status::ProgramState::Working))
     );
 
     tab.process_combined(osc7501("?", true));
@@ -1717,7 +1722,7 @@ fn osc7501_query_leaves_the_tabs_records_unchanged() {
 /// arrival order; each summary change is recorded in that order.
 #[test]
 fn osc7501_reports_with_either_terminator_reach_the_table_in_arrival_order() {
-    use crate::program_status::RecordState::{Blocked, Working};
+    use crate::program_status::ProgramState::{Blocked, Working};
 
     let mut tab = test_tab();
     let mut bytes = osc7501("id=a:state=working", false);
@@ -1739,7 +1744,7 @@ fn osc7501_reports_with_either_terminator_reach_the_table_in_arrival_order() {
 /// so swapping the arrival order swaps the outcome.
 #[test]
 fn osc7501_reports_for_one_id_follow_arrival_order() {
-    use crate::program_status::RecordState::{Done, Working};
+    use crate::program_status::ProgramState::{Done, Working};
 
     let mut done_last = test_tab();
     let mut bytes = osc7501("id=x:state=working", false);
@@ -1777,7 +1782,7 @@ fn osc7501_rejected_reports_record_no_summary_change() {
 /// Feed `bytes` to a fresh plain tab holding `done`, `error`, `working`,
 /// `blocked` and `idle` records.
 fn tab_with_one_record_per_state() -> Tab {
-    use crate::program_status::RecordState::{Blocked, Done, Error, Idle, Working};
+    use crate::program_status::ProgramState::{Blocked, Done, Error, Idle, Working};
     let mut tab = test_tab();
     for (id, state) in [
         ("w", Working),
@@ -1797,7 +1802,7 @@ fn tab_with_one_record_per_state() -> Tab {
 /// `idle` records and keeps `done` and `error`.
 #[test]
 fn osc7501_prompt_start_on_the_main_screen_keeps_only_done_and_error() {
-    use crate::program_status::RecordState::{Done, Error};
+    use crate::program_status::ProgramState::{Done, Error};
 
     let mut tab = tab_with_one_record_per_state();
     tab.process_combined(b"\x1b]133;A\x07".to_vec());
@@ -1834,7 +1839,7 @@ fn osc7501_other_prompt_marks_remove_nothing() {
 /// a report before it is removed, a report after it stays.
 #[test]
 fn osc7501_prompt_start_honors_byte_order_against_reports_in_the_same_pump() {
-    use crate::program_status::RecordState::{Done, Working};
+    use crate::program_status::ProgramState::{Done, Working};
 
     let mut tab = test_tab();
     let mut bytes = osc7501("id=before:state=working", false);
@@ -1897,7 +1902,7 @@ fn osc7501_alternate_screen_prompt_start_does_not_count_when_a_main_one_follows_
 /// the same pump.
 #[test]
 fn osc7501_ris_removes_every_record_and_honors_byte_order() {
-    use crate::program_status::RecordState::Done;
+    use crate::program_status::ProgramState::Done;
 
     let mut tab = tab_with_one_record_per_state();
     tab.process_combined(b"\x1bc".to_vec());
@@ -1936,7 +1941,7 @@ fn osc7501_prompt_start_behind_a_ris_in_the_same_pump_stays_live() {
     assert_eq!(
         tab.take_pending_program_status_changes(),
         vec![
-            Some(summary_of(crate::program_status::RecordState::Working)),
+            Some(summary_of(crate::program_status::ProgramState::Working)),
             None
         ]
     );
@@ -1956,14 +1961,14 @@ fn osc7501_decstr_removes_nothing() {
 /// nor its pending summary changes.
 #[test]
 fn osc7501_mux_inner_content_changes_neither_the_table_nor_the_pending_changes() {
-    use crate::program_status::RecordState::Done;
+    use crate::program_status::ProgramState::Done;
 
     let pane = 10;
     let mut tab = mux_tab_active_pane(pane);
     tab.program_status.apply(set_record("kept", Done));
     tab.program_status.apply(set_record(
         "gone",
-        crate::program_status::RecordState::Working,
+        crate::program_status::ProgramState::Working,
     ));
     let before = tab.program_status.summary();
 
@@ -2010,7 +2015,7 @@ fn osc7501_same_pump_detach_discards_inner_reports_and_keeps_the_plain_tail() {
     );
     assert_eq!(
         tab.take_pending_program_status_changes(),
-        vec![Some(summary_of(crate::program_status::RecordState::Done))]
+        vec![Some(summary_of(crate::program_status::ProgramState::Done))]
     );
 }
 
