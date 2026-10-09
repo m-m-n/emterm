@@ -140,7 +140,13 @@ impl Tab {
             .iter()
             .filter_map(|m| crate::prompts::PromptMarkKind::from_byte(m.kind))
             .collect();
-        let latch_feed = std::mem::take(&mut self.cb_state.lock().pending_latch_feed);
+        let (latch_feed, program_status_feed) = {
+            let mut s = self.cb_state.lock();
+            (
+                std::mem::take(&mut s.pending_latch_feed),
+                std::mem::take(&mut s.pending_program_status_feed),
+            )
+        };
         if !latch_feed.is_empty() {
             self.pending_latch_inputs
                 .extend(crate::agent_status_model::reconcile_latch_feed(
@@ -148,10 +154,68 @@ impl Tab {
                     &live_kinds,
                 ));
         }
+        self.apply_program_status_feed(program_status_feed, &live_kinds);
         self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
         // New PTY bytes reached the core — latch for the
         // inactive-tab activity path (WebView `onOutputActivity`).
         self.output_pending = true;
+    }
+
+    /// Apply this pump's ordered OSC 7501 feed to the tab's record table
+    /// (osc7501-program-status D4, FR7).
+    ///
+    /// Reports and resets apply in feed order. A prompt-mark candidate
+    /// applies only when the SAME pump's live, main-screen marks
+    /// (`live_marks`, `term_core`'s alt-screen-filtered list) confirm it —
+    /// the same forward walk `reconcile_latch_feed` uses — and only a
+    /// confirmed prompt START removes records. A reset also discards every
+    /// mark `term_core` had captured before it (`TerminalCore::reset`), so
+    /// candidates ahead of the feed's last reset can never be live and are
+    /// skipped without consuming a live mark.
+    ///
+    /// After each item that changes the summary, the new summary (or `None`
+    /// for its absence) joins [`Tab::pending_program_status_changes`] for
+    /// `App::pump_all` to apply to the model. Bounded by the table's caps
+    /// (NFR4): nothing here blocks or does I/O.
+    fn apply_program_status_feed(
+        &mut self,
+        feed: Vec<crate::callbacks::ProgramStatusFeedItem>,
+        live_marks: &[crate::prompts::PromptMarkKind],
+    ) {
+        use crate::callbacks::ProgramStatusFeedItem as Item;
+        use crate::prompts::PromptMarkKind;
+
+        let last_reset = feed
+            .iter()
+            .rposition(|item| matches!(item, Item::Reset))
+            .unwrap_or(0);
+        let mut live_idx = 0;
+        for (index, item) in feed.into_iter().enumerate() {
+            let touched = match item {
+                Item::Report(report) => {
+                    self.program_status.apply(report);
+                    true
+                }
+                Item::PromptMark(kind) => {
+                    if index < last_reset || live_marks.get(live_idx) != Some(&kind) {
+                        // Captured before a reset, or on the alternate
+                        // screen: not a live mark.
+                        false
+                    } else {
+                        live_idx += 1;
+                        kind == PromptMarkKind::PromptStart && self.program_status.prompt_start()
+                    }
+                }
+                Item::Reset => self.program_status.reset(),
+            };
+            if touched {
+                let summary = self.program_status.summary();
+                if summary != self.program_status_summary {
+                    self.program_status_summary = summary.clone();
+                    self.pending_program_status_changes.push(summary);
+                }
+            }
+        }
     }
 
     /// FR1/FR4/FR5: whether a `PtyOutput` frame may join the coalesce
@@ -451,6 +515,13 @@ impl Tab {
                 let mut s = self.cb_state.lock();
                 s.pending_agent_status.clear();
                 s.pending_latch_feed.clear();
+                // The OSC 7501 feed is discarded at the same point for the
+                // same reason (osc7501-program-status D6, FR14): the daemon
+                // owns a mux pane's records, so 7501 reports, prompt marks
+                // and resets parsed from mux inner content must change
+                // neither this tab's table nor the model. Queries in that
+                // content were already answered by the responder.
+                s.pending_program_status_feed.clear();
             }
             // FR5: re-route the post-`Detached` tail through `self.core` in this
             // same pump. The `Detached` arm already cleared the grid via

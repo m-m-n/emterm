@@ -261,10 +261,20 @@ impl App {
     /// they belong with — reintroducing the very reordering this pairing
     /// exists to prevent. Events with no matching latch input are applied
     /// afterwards, in their original order.
+    ///
+    /// `summary_changes` are the plain tabs' OSC 7501 summary changes this
+    /// pump (osc7501-program-status D4). They apply after the OSC 777 inputs
+    /// above and before the transition drain below, each converted through
+    /// the SC-2 five-word conversion; an entry that does not convert (and an
+    /// absent summary) removes the tab's OSC 7501 contribution. Accepted
+    /// caveat (D4): when both protocols conflict inside one pump, an
+    /// intermediate transition may differ from strict byte order; the final
+    /// state is the same.
     pub(super) fn apply_agent_status_batch(
         &mut self,
         plain_events: Vec<(u64, crate::agent_status::AgentStatusEvent)>,
         latch_inputs: Vec<(u64, crate::agent_status_model::ResolvedLatchInput)>,
+        summary_changes: Vec<(u64, Option<crate::program_status::Summary>)>,
         updates: Vec<(u64, mux_ipc::protocol::AgentStatusUpdateMsg)>,
         closed_panes: Vec<(u64, u32)>,
     ) {
@@ -297,6 +307,19 @@ impl App {
         for (tab_stable_id, event) in plain_events.into_iter().flatten() {
             self.agent_status
                 .apply_plain_tab_event(tab_stable_id, event);
+        }
+        for (tab_stable_id, summary) in summary_changes {
+            let summary = summary.and_then(|summary| {
+                crate::agent_status::state_from_five_word(summary.state.word()).map(|state| {
+                    crate::agent_status_model::ProgramStatusSummary {
+                        state,
+                        title: summary.title,
+                        app: summary.app,
+                    }
+                })
+            });
+            self.agent_status
+                .apply_plain_tab_summary(tab_stable_id, summary);
         }
         for (tab_stable_id, update) in updates {
             // mux-agent-status-pane-key-collision FR1: every mux drain

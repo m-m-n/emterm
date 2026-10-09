@@ -1102,6 +1102,12 @@ impl App {
             u64,
             crate::agent_status_model::ResolvedLatchInput,
         )> = Vec::new();
+        // osc7501-program-status D4: each plain tab's OSC 7501 summary
+        // changes this pump (tagged with the tab's `stable_id`), applied
+        // after that tab's OSC 777 inputs. See
+        // `Tab::pending_program_status_changes`'s doc.
+        let mut agent_status_summary_changes: Vec<(u64, Option<crate::program_status::Summary>)> =
+            Vec::new();
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             // Phase 4-C (APC redesign): `Tab::pump` already routes
             // APC-encoded mux messages into the tab's own state via
@@ -1125,6 +1131,9 @@ impl App {
             }
             for input in tab.take_pending_latch_inputs() {
                 agent_status_latch_inputs.push((tab_stable_id, input));
+            }
+            for change in tab.take_pending_program_status_changes() {
+                agent_status_summary_changes.push((tab_stable_id, change));
             }
             // mux-agent-status-pane-key-collision FR1: tag both mux drains
             // with this tab's `stable_id` before they reach the batch
@@ -1337,6 +1346,7 @@ impl App {
         self.apply_agent_status_batch(
             agent_status_plain_events,
             agent_status_latch_inputs,
+            agent_status_summary_changes,
             agent_status_updates,
             agent_status_closed_panes,
         );

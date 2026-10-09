@@ -1,0 +1,130 @@
+task_id: task0003
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - tabs::tests::output_pipeline::osc7501_maps_to_the_dedicated_action_code_on_a_new_tab_core
+      - tabs::tests::replay::osc7501_mapping_survives_the_offthread_core_swap
+      - tabs::tests::replay::osc7501_ingestion_and_query_response_survive_the_offthread_core_swap
+    red_confirmed: true
+    red_reason: >-
+      Observed failing before the implementation. A new tab core and a
+      post-swap core reported [(255, "state=working"), (255, "?")]
+      (OSC_UNKNOWN) where [(103, ...)] was expected; after the swap the
+      report did not reach the table (left 0, right 1). The tests
+      callbacks::tests::osc_program_status_action_is_a_no_op_for_on_osc
+      (written after the implementation) and
+      tabs::tests::output_pipeline::osc7501_action_code_is_distinct_from_every_other_host_code
+      (constant guard, passed before the implementation) also cover this
+      criterion and are not listed because no red was observed for them.
+      Mutation check after implementation: removing the 7501 registration
+      in apply_offthread_swap makes
+      osc7501_mapping_survives_the_offthread_core_swap fail.
+  AC-2:
+    tests:
+      - tabs::tests::output_pipeline::osc7501_query_with_bel_is_answered_once_with_bel
+      - tabs::tests::output_pipeline::osc7501_query_with_st_is_answered_once_with_st
+      - tabs::tests::output_pipeline::osc7501_query_leaves_the_tabs_records_unchanged
+      - app::tests::agent_status::pump_all_osc7501_query_leaves_the_model_unchanged
+    red_confirmed: true
+    red_reason: >-
+      Observed failing before the implementation. The BEL and ST query
+      tests got "writes: []" (left 0, right 1 answers). The two
+      query-leaves-state-unchanged tests failed at their preparatory
+      report ingestion (table None vs Some(Working); model entry missing).
+      The no-answer clause for unterminated and non-"?" bodies has no
+      observed red: tabs::tests::output_pipeline::osc7501_unterminated_query_gets_no_answer
+      and tabs::tests::output_pipeline::osc7501_non_query_bodies_get_no_answer
+      passed before the implementation (nothing answered at all), and
+      callbacks::tests::osc_7501_query_is_answered_with_the_querys_own_terminator,
+      callbacks::tests::osc_7501_unterminated_string_gets_no_answer_and_no_feed_item,
+      callbacks::tests::osc_7501_ignored_body_gets_no_answer_and_no_feed_item
+      were written after the implementation. These five are not listed.
+  AC-3:
+    tests:
+      - tabs::tests::output_pipeline::osc7501_reports_with_either_terminator_reach_the_table_in_arrival_order
+      - tabs::tests::output_pipeline::osc7501_reports_for_one_id_follow_arrival_order
+      - app::tests::agent_status::pump_all_osc7501_reports_with_either_terminator_reach_the_model_and_badge
+      - app::tests::agent_status::pump_all_osc7501_composes_with_the_osc777_state
+      - app::tests::agent_status::pump_all_osc7501_composes_with_the_osc777_state_within_one_pump
+      - app::tests::agent_status::pump_all_osc7501_summary_transitions_drive_notifications
+    red_confirmed: true
+    red_reason: >-
+      Observed failing before the implementation. The table stayed empty
+      (left 0, right 2; None vs Some(Done)); the model had no entry
+      (None vs Some(Working)); the composite showed only the OSC 777 part
+      (Some(Done) vs Some(Working), Some(Idle) vs Some(Working)); a
+      transition to done produced no notification (0 vs 1). The clause "a
+      tab that receives only OSC 777 shows exactly what it showed before"
+      has no observed red:
+      app::tests::agent_status::pump_all_osc7501_leaves_an_osc777_only_tab_unchanged,
+      app::tests::agent_status::pump_all_osc7501_report_behind_a_higher_osc777_state_is_not_a_transition
+      and tabs::tests::output_pipeline::osc7501_rejected_reports_record_no_summary_change
+      passed before the implementation (regression guards), and
+      callbacks::tests::osc_7501_report_is_pushed_to_the_feed_without_an_answer,
+      callbacks::tests::program_status_feed_preserves_true_order_of_reports_marks_and_resets
+      were written after the implementation. These are not listed.
+  AC-4:
+    tests:
+      - tabs::tests::output_pipeline::osc7501_prompt_start_on_the_main_screen_keeps_only_done_and_error
+      - tabs::tests::output_pipeline::osc7501_other_prompt_marks_remove_nothing
+      - tabs::tests::output_pipeline::osc7501_prompt_start_honors_byte_order_against_reports_in_the_same_pump
+      - tabs::tests::output_pipeline::osc7501_prompt_start_on_the_alternate_screen_removes_nothing
+      - tabs::tests::output_pipeline::osc7501_alternate_screen_prompt_start_does_not_count_when_a_main_one_follows_in_the_same_pump
+      - tabs::tests::output_pipeline::osc7501_ris_removes_every_record_and_honors_byte_order
+      - tabs::tests::output_pipeline::osc7501_decstr_removes_nothing
+    red_confirmed: true
+    red_reason: >-
+      Observed failing before the implementation. The tests failed because
+      reports were not ingested at all (precondition of five records left
+      0, right 5; byte-order case left 0, right 2; alternate-screen case
+      left 0, right 1); the removal assertions themselves were first
+      exercised once ingestion existed. Not listed because it was written
+      after the implementation:
+      tabs::tests::output_pipeline::osc7501_prompt_start_behind_a_ris_in_the_same_pump_stays_live
+      (mutation check: dropping the skip of marks parsed before the last
+      reset makes it fail).
+  AC-5:
+    tests:
+      - app::tests::agent_status::close_tab_discards_osc7501_records_and_a_later_tab_never_inherits_them
+    red_confirmed: true
+    red_reason: >-
+      Observed failing before the implementation: the test's precondition
+      "assertion failed: core_state_of(&app, closed_id).is_some()" failed
+      because reports were not ingested, so the discard on close was first
+      exercised once ingestion existed.
+  AC-6:
+    tests:
+      - tabs::tests::output_pipeline::osc7501_mux_inner_query_is_answered_once_through_the_pane_route
+      - tabs::tests::output_pipeline::osc7501_same_pump_detach_discards_inner_reports_and_keeps_the_plain_tail
+    red_confirmed: true
+    red_reason: >-
+      Observed failing before the implementation. The mux inner query got
+      no answer (left 0, right 1, writes without the answer frame); the
+      same-pump detach case did not ingest the plain tail (left 0, right
+      1). The "table and model unchanged" clause has no pre-implementation
+      red because nothing ingested inner content then:
+      tabs::tests::output_pipeline::osc7501_mux_inner_content_changes_neither_the_table_nor_the_pending_changes
+      and app::tests::agent_status::pump_all_osc7501_mux_inner_content_does_not_reach_the_model
+      passed before the implementation, and
+      tabs::tests::output_pipeline::osc7501_mux_inner_reports_do_not_leak_into_a_later_plain_pump
+      was written after the implementation. These three are not listed.
+      Mutation check after implementation: removing the mux-attached
+      clear of the 7501 feed makes
+      osc7501_same_pump_detach_discards_inner_reports_and_keeps_the_plain_tail
+      and osc7501_mux_inner_reports_do_not_leak_into_a_later_plain_pump
+      fail.
+  AC-7:
+    tests:
+      - tabs::tests::output_pipeline::payload_has_device_query_detects_osc7501_queries
+      - tabs::tests::output_pipeline::osc7501_query_frame_breaks_coalesce_run
+    red_confirmed: true
+    red_reason: >-
+      Observed failing before the implementation: the classifier test
+      failed at the BEL case and the coalesce-run test got 1 flush where
+      2 were expected. The false cases (report, incomplete query, plain
+      text) have no observed red:
+      tabs::tests::output_pipeline::payload_has_device_query_rejects_osc7501_non_queries
+      passed before the implementation and is not listed.

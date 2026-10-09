@@ -407,6 +407,146 @@ fn osc_100_agent_status_invalid_payload_falls_through_to_osc_queue() {
     assert_eq!(s.osc_queue.len(), 1);
 }
 
+// ── osc7501-program-status task0003: responder and 7501 feed ────────
+
+fn working_report(id: &str) -> crate::program_status::Report {
+    crate::program_status::Report::Set {
+        id: Some(id.to_string()),
+        state: crate::program_status::RecordState::Working,
+        title: None,
+        app: None,
+    }
+}
+
+#[test]
+fn osc_7501_query_is_answered_with_the_querys_own_terminator() {
+    let h = default_harness();
+    assert_eq!(
+        h.responder().respond(7501, "?", OscTerminator::Bel),
+        vec![b"\x1b]7501;?\x07".to_vec()]
+    );
+    assert_eq!(
+        h.responder().respond(7501, "?", OscTerminator::St),
+        vec![b"\x1b]7501;?\x1b\\".to_vec()]
+    );
+    assert!(
+        h.state.lock().pending_program_status_feed.is_empty(),
+        "a query is not a feed item"
+    );
+}
+
+#[test]
+fn osc_7501_unterminated_string_gets_no_answer_and_no_feed_item() {
+    let h = default_harness();
+    for payload in ["?", "state=working"] {
+        assert!(
+            h.responder()
+                .respond(7501, payload, OscTerminator::Unterminated)
+                .is_empty()
+        );
+    }
+    assert!(h.state.lock().pending_program_status_feed.is_empty());
+}
+
+#[test]
+fn osc_7501_report_is_pushed_to_the_feed_without_an_answer() {
+    let h = default_harness();
+    for terminator in [OscTerminator::Bel, OscTerminator::St] {
+        assert!(
+            h.responder()
+                .respond(7501, "id=a:state=working", terminator)
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        h.state.lock().pending_program_status_feed,
+        vec![
+            ProgramStatusFeedItem::Report(working_report("a")),
+            ProgramStatusFeedItem::Report(working_report("a")),
+        ]
+    );
+}
+
+#[test]
+fn osc_7501_ignored_body_gets_no_answer_and_no_feed_item() {
+    let h = default_harness();
+    for payload in [
+        "",
+        "??",
+        "state=sleeping",
+        "id=a/:state=working",
+        "state=working:msg=A",
+    ] {
+        assert!(
+            h.responder()
+                .respond(7501, payload, OscTerminator::Bel)
+                .is_empty(),
+            "payload {payload:?}"
+        );
+    }
+    assert!(h.state.lock().pending_program_status_feed.is_empty());
+}
+
+#[test]
+fn osc_7501_responder_leaves_other_codes_alone() {
+    let h = default_harness();
+    assert!(
+        h.responder()
+            .respond(7500, "?", OscTerminator::Bel)
+            .is_empty()
+    );
+    assert!(
+        h.responder()
+            .respond(7502, "?", OscTerminator::Bel)
+            .is_empty()
+    );
+    assert!(h.state.lock().pending_program_status_feed.is_empty());
+}
+
+#[test]
+fn osc_program_status_action_is_a_no_op_for_on_osc() {
+    let h = default_harness();
+    h.cb.on_osc(OSC_PROGRAM_STATUS, "state=working");
+    h.cb.on_osc(OSC_PROGRAM_STATUS, "?");
+    let s = h.state.lock();
+    assert!(s.pending_program_status_feed.is_empty());
+    assert!(s.pending_agent_status.is_empty());
+    assert!(s.pending_latch_feed.is_empty());
+    assert!(s.osc_queue.is_empty());
+}
+
+#[test]
+fn program_status_feed_preserves_true_order_of_reports_marks_and_resets() {
+    // D4: reports (responder), prompt-mark candidates (OSC 133 callback)
+    // and the RIS reset share ONE ordered feed, in the true synchronous
+    // call order.
+    let h = default_harness();
+    h.responder()
+        .respond(7501, "id=a:state=working", OscTerminator::Bel);
+    h.cb.on_osc(OSC_SEMANTIC_PROMPT, "A");
+    h.cb.on_reset();
+    h.responder()
+        .respond(7501, "id=a:state=working", OscTerminator::St);
+    h.cb.on_osc(OSC_SEMANTIC_PROMPT, "D;0");
+    assert_eq!(
+        h.state.lock().pending_program_status_feed,
+        vec![
+            ProgramStatusFeedItem::Report(working_report("a")),
+            ProgramStatusFeedItem::PromptMark(crate::prompts::PromptMarkKind::PromptStart),
+            ProgramStatusFeedItem::Reset,
+            ProgramStatusFeedItem::Report(working_report("a")),
+            ProgramStatusFeedItem::PromptMark(crate::prompts::PromptMarkKind::CommandEnd),
+        ]
+    );
+}
+
+#[test]
+fn osc_133_unrecognized_kind_does_not_push_to_the_program_status_feed() {
+    let h = default_harness();
+    h.cb.on_osc(OSC_SEMANTIC_PROMPT, "Z");
+    assert!(h.state.lock().pending_program_status_feed.is_empty());
+}
+
 // ── agent-exit-after-icon (task0002): pending_latch_feed ordering ──
 
 #[test]

@@ -425,6 +425,21 @@ pub struct Tab {
     /// [`Self::take_pending_latch_inputs`] and feeds each entry to
     /// `AgentStatusModel`'s per-tab latch, in order.
     pending_latch_inputs: Vec<crate::agent_status_model::ResolvedLatchInput>,
+    /// This tab's OSC 7501 record table (osc7501-program-status D1): it
+    /// belongs to the tab and is dropped with it. Fed by
+    /// `process_outer_via_core` from the callback state's ordered 7501 feed;
+    /// never touched by mux inner content (the daemon owns a mux pane's
+    /// table).
+    program_status: crate::program_status::ProgramStatusTable,
+    /// The summary `program_status` had after the last applied feed item, so
+    /// a later item is recorded on [`Self::pending_program_status_changes`]
+    /// only when it changes the summary.
+    program_status_summary: Option<crate::program_status::Summary>,
+    /// Every summary change (the new summary, or `None` for its absence)
+    /// the 7501 feed caused, in order. `App::pump_all` drains it via
+    /// [`Tab::take_pending_program_status_changes`] and applies each entry to
+    /// `App::agent_status`.
+    pending_program_status_changes: Vec<Option<crate::program_status::Summary>>,
     /// Daemon-pushed `AgentStatusUpdate` messages decoded by
     /// [`Self::apply_mux_message`]'s `MessageType::AgentStatusUpdate` arm
     /// this pump (task0005 AC-2). `App::pump_all` drains it via
@@ -724,6 +739,14 @@ impl Tab {
             mux_ipc::protocol::MUX_OSC_PARAM,
             crate::callbacks::OSC_MUX_INBAND,
         );
+        // OSC 7501 (Program Status) rides the same mechanism: map it to its
+        // dedicated internal action code so it never reaches the
+        // unknown-OSC path (osc7501-program-status FR1). The swapped-in
+        // core re-registers it too (`apply_offthread_swap`).
+        core.register_osc_app_param(
+            crate::callbacks::OSC_PROGRAM_STATUS_PARAM,
+            crate::callbacks::OSC_PROGRAM_STATUS,
+        );
         let cb_state = Arc::new(Mutex::new(NativeCallbackState::default()));
         // Seed the theme from settings (font_size_pt + cursor_style)
         // so the first frame renders at the user's configured size
@@ -792,6 +815,9 @@ impl Tab {
             pending_window_appended: false,
             pending_agent_status_events: Vec::new(),
             pending_latch_inputs: Vec::new(),
+            program_status: crate::program_status::ProgramStatusTable::new(),
+            program_status_summary: None,
+            pending_program_status_changes: Vec::new(),
             pending_agent_status_updates: Vec::new(),
             pending_closed_agent_status_panes: Vec::new(),
             pending_switch: None,
@@ -887,6 +913,15 @@ impl Tab {
         &mut self,
     ) -> Vec<crate::agent_status::AgentStatusEvent> {
         std::mem::take(&mut self.pending_agent_status_events)
+    }
+
+    /// Drain the OSC 7501 summary changes this pump's feed caused, in order
+    /// (osc7501-program-status D4). See
+    /// [`Self::pending_program_status_changes`]'s doc.
+    pub fn take_pending_program_status_changes(
+        &mut self,
+    ) -> Vec<Option<crate::program_status::Summary>> {
+        std::mem::take(&mut self.pending_program_status_changes)
     }
 
     /// Drain this tab's resolved inferred-clear latch inputs this pump

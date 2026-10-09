@@ -86,6 +86,18 @@ pub const OSC_ITERM2: u8 = 101;
 /// `on_osc(102, …)`. The `emterm-mux;` prefix is recognized in this app
 /// layer, not in the core.
 pub const OSC_MUX_INBAND: u8 = 102;
+/// OSC 103 (wire 7501): Program Status Protocol.
+///
+/// `term_core` embeds no application protocol number: the host maps the
+/// otherwise-unknown OSC [`OSC_PROGRAM_STATUS_PARAM`] to this action code via
+/// `TerminalCore::register_osc_app_param`, at every core a tab uses (see
+/// `Tab::build` and `Tab::apply_offthread_swap`). The `on_osc` arm for this
+/// code does nothing: all OSC 7501 work happens in
+/// [`ThemeColorResponder::respond`], the only place that sees the string
+/// terminator.
+pub const OSC_PROGRAM_STATUS: u8 = 103;
+/// The OSC parameter of the Program Status Protocol (OSC 7501).
+pub const OSC_PROGRAM_STATUS_PARAM: u16 = 7501;
 /// OSC 255: unknown / unmapped action.
 pub const OSC_UNKNOWN: u8 = 255;
 
@@ -202,6 +214,26 @@ pub enum LatchFeedEvent {
     Clear,
     /// An OSC 133 mark CANDIDATE, not yet confirmed live.
     PromptMark(crate::prompts::PromptMarkKind),
+}
+
+/// One entry in [`NativeCallbackState::pending_program_status_feed`]
+/// (osc7501-program-status D4): the plain tab's ordered OSC 7501 feed.
+///
+/// Reports come from the OSC responder (the only place that sees the
+/// terminator), prompt-mark CANDIDATES from the OSC 133 callback and the
+/// reset from the RIS callback — all pushed in true synchronous call order,
+/// so the output pipeline can apply them to the tab's record table in byte
+/// order. A prompt mark is a candidate because the OSC 133 callback also
+/// fires on the alternate screen; the pipeline keeps only the ones the same
+/// pump's live, main-screen marks confirm (see `LatchFeedEvent`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgramStatusFeedItem {
+    /// A validated OSC 7501 report.
+    Report(crate::program_status::Report),
+    /// An OSC 133 mark CANDIDATE, not yet confirmed live.
+    PromptMark(crate::prompts::PromptMarkKind),
+    /// A full terminal reset (RIS).
+    Reset,
 }
 
 /// Trait abstracting the OS-notification surface. `NotifyRustSink` is the
@@ -929,6 +961,10 @@ pub struct NativeCallbackState {
     /// contract. `Tab::process_outer_via_core` drains and reconciles this
     /// every pump.
     pub pending_latch_feed: Vec<LatchFeedEvent>,
+    /// Ordered OSC 7501 feed (osc7501-program-status D4). See
+    /// [`ProgramStatusFeedItem`]'s doc. `Tab::process_outer_via_core`
+    /// drains it every pump; a mux-attached pump discards it.
+    pub pending_program_status_feed: Vec<ProgramStatusFeedItem>,
 }
 
 /// `TerminalCallbacks` implementation for native consumers.
@@ -1075,6 +1111,13 @@ impl NativeCallbacks {
         if changed {
             self.mark_theme_dirty();
         }
+        // osc7501-program-status FR7: RIS removes every OSC 7501 record. The
+        // reset joins the ordered 7501 feed so it applies between the
+        // reports on either side of it.
+        self.state
+            .lock()
+            .pending_program_status_feed
+            .push(ProgramStatusFeedItem::Reset);
     }
 
     fn handle_notify(&self, data: &str) {
@@ -1199,13 +1242,23 @@ impl TerminalCallbacks for NativeCallbacks {
                     .copied()
                     .and_then(crate::prompts::PromptMarkKind::from_byte)
                 {
-                    self.state
-                        .lock()
-                        .pending_latch_feed
-                        .push(LatchFeedEvent::PromptMark(kind));
+                    let mut s = self.state.lock();
+                    s.pending_latch_feed.push(LatchFeedEvent::PromptMark(kind));
+                    // osc7501-program-status D4: the plain tab's OSC 7501
+                    // feed gets the same candidate, in the same call order
+                    // as the reports the responder pushes, so a prompt
+                    // start lands between the reports around it.
+                    s.pending_program_status_feed
+                        .push(ProgramStatusFeedItem::PromptMark(kind));
                 }
                 log::debug!("OSC 133 mark seen: {data}");
             }
+            // OSC 7501 (Program Status): reports and queries are handled by
+            // the SC-2 responder (`ThemeColorResponder::respond`), which is
+            // consulted before this callback and is the only place that
+            // sees the terminator. An explicit no-op arm so a mapped 7501
+            // is neither logged as "unhandled" nor mistaken for OSC_UNKNOWN.
+            OSC_PROGRAM_STATUS => {}
             OSC_EMTERM_EXTENSION => {
                 // Phase 4-C (APC redesign): mux no longer rides on OSC 777.
                 // Control messages now flow via APC `emterm-mux;<base64>` in
@@ -1326,8 +1379,16 @@ impl TerminalCallbacks for NativeCallbacks {
 /// The reset / cursor-style codes (22/104/110/111/112) are untouched: they
 /// still flow through `NativeCallbacks::on_osc` -> `handle_theme` exactly
 /// as before this feature (task0003's territory) — this responder is
-/// inert for every code but 4/10/11/12 (SC-2's "a code the responder does
-/// not own returns an empty `Vec`" contract).
+/// inert for every code but 4/10/11/12 and OSC 7501 (SC-2's "a code the
+/// responder does not own returns an empty `Vec`" contract).
+///
+/// OSC 7501 (osc7501-program-status D4/D6): the responder is also the
+/// plain tab's Program Status entry point, because it is the only place
+/// that sees the string terminator. A query is answered with the query's
+/// own terminator; a report is pushed onto the callback state's ordered
+/// 7501 feed (the tab applies it later, in byte order, against its record
+/// table). Nothing else — an unterminated string, an ignored or discarded
+/// body — produces an answer or a feed item, and nothing is logged.
 pub struct ThemeColorResponder {
     theme: Arc<Mutex<Theme>>,
     state: Arc<Mutex<NativeCallbackState>>,
@@ -1336,6 +1397,36 @@ pub struct ThemeColorResponder {
 impl ThemeColorResponder {
     pub fn new(theme: Arc<Mutex<Theme>>, state: Arc<Mutex<NativeCallbackState>>) -> Self {
         Self { theme, state }
+    }
+
+    /// OSC 7501: answer a query, record a report, ignore everything else.
+    fn respond_program_status(
+        &self,
+        payload: &str,
+        terminator: term_core::OscTerminator,
+    ) -> Vec<Vec<u8>> {
+        use crate::program_status::{Parsed, Terminator, parse};
+
+        let terminator = match terminator {
+            term_core::OscTerminator::Bel => Terminator::Bel,
+            term_core::OscTerminator::St => Terminator::St,
+            term_core::OscTerminator::Unterminated => return Vec::new(),
+        };
+        match parse(payload, terminator) {
+            Parsed::Query => {
+                let mut answer = format!("\x1b]{OSC_PROGRAM_STATUS_PARAM};?").into_bytes();
+                answer.extend_from_slice(terminator.as_bytes());
+                vec![answer]
+            }
+            Parsed::Report(report) => {
+                self.state
+                    .lock()
+                    .pending_program_status_feed
+                    .push(ProgramStatusFeedItem::Report(report));
+                Vec::new()
+            }
+            Parsed::Ignored => Vec::new(),
+        }
     }
 }
 
@@ -1346,6 +1437,9 @@ impl term_core::OscResponder for ThemeColorResponder {
         payload: &str,
         terminator: term_core::OscTerminator,
     ) -> Vec<Vec<u8>> {
+        if code == OSC_PROGRAM_STATUS_PARAM {
+            return self.respond_program_status(payload, terminator);
+        }
         if !matches!(code, 4 | 10 | 11 | 12) {
             return Vec::new();
         }

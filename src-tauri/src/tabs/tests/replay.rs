@@ -1134,6 +1134,56 @@ fn ac2_offthread_swap_preserves_osc_9999_app_param_registration() {
     );
 }
 
+/// osc7501-program-status AC-1: the core installed by the off-thread swap
+/// maps OSC 7501 to the dedicated internal action code, exactly like the
+/// core the tab was built with — without the mapping re-registered on the
+/// swapped-in core, the sequence would reach `on_osc` as `OSC_UNKNOWN`.
+#[test]
+fn osc7501_mapping_survives_the_offthread_core_swap() {
+    let mut tab = test_tab();
+    tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+    assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+    let recorder = Arc::new(OscRecorder::default());
+    tab.core.lock().callbacks = Some(Box::new(RecorderCallbacks(recorder.clone())));
+    tab.core
+        .lock()
+        .process_pty_data_fully(b"\x1b]7501;state=working\x07\x1b]7501;?\x1b\\");
+
+    assert_eq!(
+        recorder.events.lock().as_slice(),
+        &[
+            (
+                crate::callbacks::OSC_PROGRAM_STATUS,
+                "state=working".to_string()
+            ),
+            (crate::callbacks::OSC_PROGRAM_STATUS, "?".to_string()),
+        ],
+        "OSC 7501 must still map to the dedicated action code after the swap"
+    );
+}
+
+/// osc7501-program-status AC-1/AC-2: after the swap the tab still ingests
+/// OSC 7501 reports and answers queries (the responder travels with the
+/// swapped-in core).
+#[test]
+fn osc7501_ingestion_and_query_response_survive_the_offthread_core_swap() {
+    let mut tab = test_tab();
+    tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+    assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+    assert!(tab.mux_session_name.is_none(), "still a plain tab");
+
+    tab.process_combined(b"\x1b]7501;state=working\x07\x1b]7501;?\x07".to_vec());
+
+    assert_eq!(tab.program_status.len(), 1, "the report reached the table");
+    let answers = tab
+        .test_outbound_writes()
+        .iter()
+        .filter(|w| w.as_slice() == b"\x1b]7501;?\x07")
+        .count();
+    assert_eq!(answers, 1, "the query was answered once");
+}
+
 /// AC-3 (SPEC TS-3): after an off-thread swap, a pre-mux Welcome frame in
 /// OSC 9999 form arriving on the outer-stream path (`process_outer_via_core`,
 /// taken while `mux_session_name` is `None`) reaches `apply_mux_message`.

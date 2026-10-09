@@ -1507,3 +1507,646 @@ fn osc_color_query_delivered_exactly_once_on_live_output_path() {
         "expected exactly one delivery of {expected:?}, got {matches} within {writes:?}"
     );
 }
+
+// ── osc7501-program-status task0003: plain-tab OSC 7501 ingestion ─────
+//
+// Byte-level tests over the live output path (`process_combined`) for the
+// OSC 7501 mapping, query response, lifecycle and mux-discard rules. The
+// parser / table rules themselves are SC-1's (task0001) and are not
+// re-tested here.
+
+/// `ESC ] 7501 ; <body>` with the BEL (`st == false`) or ST terminator.
+fn osc7501(body: &str, st: bool) -> Vec<u8> {
+    let mut out = format!("\x1b]7501;{body}").into_bytes();
+    out.extend_from_slice(if st { b"\x1b\\" } else { b"\x07" });
+    out
+}
+
+fn osc7501_answer(st: bool) -> Vec<u8> {
+    osc7501("?", st)
+}
+
+/// How many outbound writes equal `expected` byte for byte.
+fn count_writes_equal(tab: &Tab, expected: &[u8]) -> usize {
+    tab.test_outbound_writes()
+        .iter()
+        .filter(|w| w.as_slice() == expected)
+        .count()
+}
+
+/// Whether any outbound write mentions OSC 7501 at all.
+fn wrote_any_osc7501(tab: &Tab) -> bool {
+    let needle = b"]7501;";
+    tab.test_outbound_writes()
+        .iter()
+        .any(|w| w.windows(needle.len()).any(|win| win == needle))
+}
+
+fn summary_of(state: crate::program_status::RecordState) -> crate::program_status::Summary {
+    crate::program_status::Summary {
+        state,
+        title: None,
+        app: None,
+    }
+}
+
+fn set_record(
+    id: &str,
+    state: crate::program_status::RecordState,
+) -> crate::program_status::Report {
+    crate::program_status::Report::Set {
+        id: Some(id.to_string()),
+        state,
+        title: None,
+        app: None,
+    }
+}
+
+#[derive(Default)]
+struct ActionRecorder {
+    events: Mutex<Vec<(u8, String)>>,
+}
+
+struct ActionRecorderCallbacks(Arc<ActionRecorder>);
+
+impl term_core::callbacks::TerminalCallbacks for ActionRecorderCallbacks {
+    fn on_osc(&self, action_type: u8, data: &str) {
+        self.0.events.lock().push((action_type, data.to_string()));
+    }
+    fn on_apc(&self, _data: &[u8]) {}
+    fn on_dcs(&self, _data: &[u8]) {}
+    fn on_bell(&self) {}
+}
+
+/// AC-1: the core `Tab::build` creates maps OSC 7501 to the dedicated
+/// internal action code, so the sequence reaches `on_osc` as that code and
+/// never as the unknown-OSC action.
+#[test]
+fn osc7501_maps_to_the_dedicated_action_code_on_a_new_tab_core() {
+    let tab = test_tab();
+    let recorder = Arc::new(ActionRecorder::default());
+    tab.core.lock().callbacks = Some(Box::new(ActionRecorderCallbacks(recorder.clone())));
+
+    let mut bytes = osc7501("state=working", false);
+    bytes.extend_from_slice(&osc7501("?", true));
+    tab.core.lock().process_pty_data_fully(&bytes);
+
+    assert_eq!(
+        recorder.events.lock().as_slice(),
+        &[
+            (
+                crate::callbacks::OSC_PROGRAM_STATUS,
+                "state=working".to_string()
+            ),
+            (crate::callbacks::OSC_PROGRAM_STATUS, "?".to_string()),
+        ],
+        "OSC 7501 must reach on_osc as the dedicated action code, never as OSC_UNKNOWN"
+    );
+}
+
+/// AC-1: the internal action code the mapping uses collides with no code
+/// `term_core` handles natively or the host already registers.
+#[test]
+fn osc7501_action_code_is_distinct_from_every_other_host_code() {
+    let code = crate::callbacks::OSC_PROGRAM_STATUS;
+    for other in [
+        crate::callbacks::OSC_MUX_INBAND,
+        crate::callbacks::OSC_EMTERM_EXTENSION,
+        crate::callbacks::OSC_ITERM2,
+        crate::callbacks::OSC_UNKNOWN,
+        crate::callbacks::OSC_SEMANTIC_PROMPT,
+        crate::callbacks::OSC_RESET_COLOR_PALETTE,
+    ] {
+        assert_ne!(code, other);
+    }
+}
+
+/// AC-2: a body of exactly `?` terminated by BEL is answered with BEL.
+#[test]
+fn osc7501_query_with_bel_is_answered_once_with_bel() {
+    let mut tab = test_tab();
+    tab.process_combined(osc7501("?", false));
+    assert_eq!(
+        count_writes_equal(&tab, b"\x1b]7501;?\x07"),
+        1,
+        "writes: {:?}",
+        tab.test_outbound_writes()
+    );
+}
+
+/// AC-2: a body of exactly `?` terminated by ST is answered with ST.
+#[test]
+fn osc7501_query_with_st_is_answered_once_with_st() {
+    let mut tab = test_tab();
+    tab.process_combined(osc7501("?", true));
+    assert_eq!(
+        count_writes_equal(&tab, b"\x1b]7501;?\x1b\\"),
+        1,
+        "writes: {:?}",
+        tab.test_outbound_writes()
+    );
+    assert_eq!(
+        count_writes_equal(&tab, b"\x1b]7501;?\x07"),
+        0,
+        "an ST query must not be answered with BEL"
+    );
+}
+
+/// AC-2: an unterminated sequence gets no answer, whether the stream ends
+/// there or another escape sequence cancels the string terminator.
+#[test]
+fn osc7501_unterminated_query_gets_no_answer() {
+    let mut at_end = test_tab();
+    at_end.process_combined(b"\x1b]7501;?".to_vec());
+    assert!(!wrote_any_osc7501(&at_end), "stream ends inside the query");
+
+    let mut cancelled = test_tab();
+    cancelled.process_combined(b"\x1b]7501;?\x1b[0m".to_vec());
+    assert!(
+        !wrote_any_osc7501(&cancelled),
+        "ESC followed by a non-backslash byte ends the string unterminated"
+    );
+}
+
+/// AC-2: any body other than exactly `?` gets no answer, with either
+/// terminator.
+#[test]
+fn osc7501_non_query_bodies_get_no_answer() {
+    for body in [
+        "",
+        "??",
+        "? ",
+        "?:",
+        "state=working",
+        "id=a:state=clear",
+        "x?",
+    ] {
+        for st in [false, true] {
+            let mut tab = test_tab();
+            tab.process_combined(osc7501(body, st));
+            assert!(
+                !wrote_any_osc7501(&tab),
+                "body {body:?} (st={st}) must not be answered"
+            );
+        }
+    }
+}
+
+/// AC-2: a query leaves the tab's records and pending summary changes
+/// unchanged and produces exactly one answer.
+#[test]
+fn osc7501_query_leaves_the_tabs_records_unchanged() {
+    let mut tab = test_tab();
+    tab.process_combined(osc7501("id=a:state=working", false));
+    tab.take_pending_program_status_changes();
+    let before = tab.program_status.summary();
+    assert_eq!(
+        before,
+        Some(summary_of(crate::program_status::RecordState::Working))
+    );
+
+    tab.process_combined(osc7501("?", true));
+
+    assert_eq!(tab.program_status.len(), 1);
+    assert_eq!(tab.program_status.summary(), before);
+    assert!(tab.take_pending_program_status_changes().is_empty());
+    assert_eq!(count_writes_equal(&tab, b"\x1b]7501;?\x1b\\"), 1);
+}
+
+/// AC-3: reports terminated by BEL and by ST both reach the table in
+/// arrival order; each summary change is recorded in that order.
+#[test]
+fn osc7501_reports_with_either_terminator_reach_the_table_in_arrival_order() {
+    use crate::program_status::RecordState::{Blocked, Working};
+
+    let mut tab = test_tab();
+    let mut bytes = osc7501("id=a:state=working", false);
+    bytes.extend_from_slice(&osc7501("id=b:state=blocked", true));
+    tab.process_combined(bytes);
+
+    assert_eq!(tab.program_status.len(), 2);
+    assert_eq!(
+        tab.take_pending_program_status_changes(),
+        vec![Some(summary_of(Working)), Some(summary_of(Blocked))]
+    );
+    assert!(
+        tab.take_pending_program_status_changes().is_empty(),
+        "the take operation drains the list"
+    );
+}
+
+/// AC-3: for the same id, the report that arrives last decides the record,
+/// so swapping the arrival order swaps the outcome.
+#[test]
+fn osc7501_reports_for_one_id_follow_arrival_order() {
+    use crate::program_status::RecordState::{Done, Working};
+
+    let mut done_last = test_tab();
+    let mut bytes = osc7501("id=x:state=working", false);
+    bytes.extend_from_slice(&osc7501("id=x:state=done", true));
+    done_last.process_combined(bytes);
+    assert_eq!(done_last.program_status.summary(), Some(summary_of(Done)));
+
+    let mut working_last = test_tab();
+    let mut bytes = osc7501("id=x:state=done", true);
+    bytes.extend_from_slice(&osc7501("id=x:state=working", false));
+    working_last.process_combined(bytes);
+    assert_eq!(
+        working_last.program_status.summary(),
+        Some(summary_of(Working))
+    );
+    assert_eq!(
+        working_last.take_pending_program_status_changes(),
+        vec![Some(summary_of(Done)), Some(summary_of(Working))]
+    );
+}
+
+/// AC-3: an ignored or discarded report changes nothing and records no
+/// summary change.
+#[test]
+fn osc7501_rejected_reports_record_no_summary_change() {
+    let mut tab = test_tab();
+    let mut bytes = osc7501("state=sleeping", false);
+    bytes.extend_from_slice(&osc7501("id=a/:state=working", false));
+    bytes.extend_from_slice(&osc7501("state=working:title=A", false));
+    tab.process_combined(bytes);
+    assert_eq!(tab.program_status.len(), 0);
+    assert!(tab.take_pending_program_status_changes().is_empty());
+}
+
+/// Feed `bytes` to a fresh plain tab holding `done`, `error`, `working`,
+/// `blocked` and `idle` records.
+fn tab_with_one_record_per_state() -> Tab {
+    use crate::program_status::RecordState::{Blocked, Done, Error, Idle, Working};
+    let mut tab = test_tab();
+    for (id, state) in [
+        ("w", Working),
+        ("b", Blocked),
+        ("i", Idle),
+        ("d", Done),
+        ("e", Error),
+    ] {
+        tab.process_combined(osc7501(&format!("id={id}:state={}", state.word()), false));
+    }
+    assert_eq!(tab.program_status.len(), 5);
+    tab.take_pending_program_status_changes();
+    tab
+}
+
+/// AC-4: a live main-screen OSC 133 A removes `working`, `blocked` and
+/// `idle` records and keeps `done` and `error`.
+#[test]
+fn osc7501_prompt_start_on_the_main_screen_keeps_only_done_and_error() {
+    use crate::program_status::RecordState::{Done, Error};
+
+    let mut tab = tab_with_one_record_per_state();
+    tab.process_combined(b"\x1b]133;A\x07".to_vec());
+    assert_eq!(tab.program_status.len(), 2);
+    assert_eq!(
+        tab.program_status.summary(),
+        Some(summary_of(Error)),
+        "error outranks done, and nothing outranking error survived"
+    );
+    assert_eq!(
+        tab.take_pending_program_status_changes(),
+        vec![Some(summary_of(Error))]
+    );
+
+    // `done` alone survives when no `error` record exists.
+    let mut tab = test_tab();
+    tab.process_combined(osc7501("id=w:state=working", false));
+    tab.process_combined(osc7501("id=d:state=done", false));
+    tab.process_combined(b"\x1b]133;A\x1b\\".to_vec());
+    assert_eq!(tab.program_status.len(), 1);
+    assert_eq!(tab.program_status.summary(), Some(summary_of(Done)));
+}
+
+/// AC-4: OSC 133 marks other than A remove nothing.
+#[test]
+fn osc7501_other_prompt_marks_remove_nothing() {
+    let mut tab = tab_with_one_record_per_state();
+    tab.process_combined(b"\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07".to_vec());
+    assert_eq!(tab.program_status.len(), 5);
+    assert!(tab.take_pending_program_status_changes().is_empty());
+}
+
+/// AC-4: the OSC 133 A honors byte order against reports in the same pump:
+/// a report before it is removed, a report after it stays.
+#[test]
+fn osc7501_prompt_start_honors_byte_order_against_reports_in_the_same_pump() {
+    use crate::program_status::RecordState::{Done, Working};
+
+    let mut tab = test_tab();
+    let mut bytes = osc7501("id=before:state=working", false);
+    bytes.extend_from_slice(b"\x1b]133;A\x07");
+    bytes.extend_from_slice(&osc7501("id=after:state=done", false));
+    bytes.extend_from_slice(&osc7501("id=after2:state=working", true));
+    tab.process_combined(bytes);
+
+    assert_eq!(
+        tab.program_status.len(),
+        2,
+        "`before` is gone, `after*` stay"
+    );
+    assert_eq!(
+        tab.take_pending_program_status_changes(),
+        vec![
+            Some(summary_of(Working)), // before
+            None,                      // OSC 133 A removed it
+            Some(summary_of(Done)),    // after
+            Some(summary_of(Working)), // after2
+        ]
+    );
+}
+
+/// AC-4: an OSC 133 A on the alternate screen removes nothing, and neither
+/// does switching the alternate screen on and off.
+#[test]
+fn osc7501_prompt_start_on_the_alternate_screen_removes_nothing() {
+    let mut tab = tab_with_one_record_per_state();
+
+    tab.process_combined(b"\x1b[?1049h".to_vec());
+    assert_eq!(tab.program_status.len(), 5, "entering the alternate screen");
+    tab.process_combined(b"\x1b]133;A\x07".to_vec());
+    assert_eq!(tab.program_status.len(), 5, "A on the alternate screen");
+    tab.process_combined(b"\x1b[?1049l".to_vec());
+    assert_eq!(tab.program_status.len(), 5, "leaving the alternate screen");
+    assert!(tab.take_pending_program_status_changes().is_empty());
+
+    // The alternate-screen A must not poison the next live main-screen A.
+    tab.process_combined(b"\x1b]133;A\x07".to_vec());
+    assert_eq!(tab.program_status.len(), 2);
+}
+
+/// AC-4: the alternate-screen A and a main-screen A in ONE pump are told
+/// apart by the live marks: only the main-screen one removes records.
+#[test]
+fn osc7501_alternate_screen_prompt_start_does_not_count_when_a_main_one_follows_in_the_same_pump() {
+    let mut tab = test_tab();
+    let mut bytes = osc7501("id=w:state=working", false);
+    bytes.extend_from_slice(b"\x1b[?1049h\x1b]133;A\x07\x1b[?1049l");
+    tab.process_combined(bytes);
+    assert_eq!(
+        tab.program_status.len(),
+        1,
+        "alternate-screen A removed nothing"
+    );
+}
+
+/// AC-4: RIS removes every record and honors byte order against reports in
+/// the same pump.
+#[test]
+fn osc7501_ris_removes_every_record_and_honors_byte_order() {
+    use crate::program_status::RecordState::Done;
+
+    let mut tab = tab_with_one_record_per_state();
+    tab.process_combined(b"\x1bc".to_vec());
+    assert_eq!(tab.program_status.len(), 0);
+    assert_eq!(tab.take_pending_program_status_changes(), vec![None]);
+
+    let mut tab = test_tab();
+    let mut bytes = osc7501("id=before:state=done", false);
+    bytes.extend_from_slice(b"\x1bc");
+    bytes.extend_from_slice(&osc7501("id=after:state=done", true));
+    tab.process_combined(bytes);
+    assert_eq!(tab.program_status.len(), 1);
+    assert_eq!(tab.program_status.summary(), Some(summary_of(Done)));
+    assert_eq!(
+        tab.take_pending_program_status_changes(),
+        vec![Some(summary_of(Done)), None, Some(summary_of(Done))]
+    );
+}
+
+/// AC-4: RIS also discards the marks `term_core` captured before it, so an
+/// OSC 133 A ahead of the RIS in the same pump must not be mistaken for the
+/// live A behind it: the A after the RIS removes the report that followed
+/// the RIS.
+#[test]
+fn osc7501_prompt_start_behind_a_ris_in_the_same_pump_stays_live() {
+    let mut tab = test_tab();
+    let mut bytes = b"\x1b]133;A\x07\x1bc".to_vec();
+    bytes.extend_from_slice(&osc7501("id=after:state=working", false));
+    bytes.extend_from_slice(b"\x1b]133;A\x07");
+    tab.process_combined(bytes);
+    assert_eq!(
+        tab.program_status.len(),
+        0,
+        "the A behind the RIS is live and removes the working record"
+    );
+    assert_eq!(
+        tab.take_pending_program_status_changes(),
+        vec![
+            Some(summary_of(crate::program_status::RecordState::Working)),
+            None
+        ]
+    );
+}
+
+/// AC-4: DECSTR (soft terminal reset) removes nothing.
+#[test]
+fn osc7501_decstr_removes_nothing() {
+    let mut tab = tab_with_one_record_per_state();
+    tab.process_combined(b"\x1b[!p".to_vec());
+    assert_eq!(tab.program_status.len(), 5);
+    assert!(tab.take_pending_program_status_changes().is_empty());
+}
+
+/// AC-6: while a tab is mux-attached at pump start, 7501 reports, OSC 133
+/// A and RIS parsed from mux inner content change neither the tab's table
+/// nor its pending summary changes.
+#[test]
+fn osc7501_mux_inner_content_changes_neither_the_table_nor_the_pending_changes() {
+    use crate::program_status::RecordState::Done;
+
+    let pane = 10;
+    let mut tab = mux_tab_active_pane(pane);
+    tab.program_status.apply(set_record("kept", Done));
+    tab.program_status.apply(set_record(
+        "gone",
+        crate::program_status::RecordState::Working,
+    ));
+    let before = tab.program_status.summary();
+
+    for inner in [
+        osc7501("id=x:state=blocked", false),
+        osc7501("id=x:state=clear", true),
+        osc7501("state=clear", false),
+        b"\x1b]133;A\x07".to_vec(),
+        b"\x1bc".to_vec(),
+    ] {
+        tab.test_process_combined(pty_output_apc(pane, &inner));
+        assert_eq!(tab.program_status.len(), 2, "inner content {inner:?}");
+        assert_eq!(tab.program_status.summary(), before);
+        assert!(
+            tab.take_pending_program_status_changes().is_empty(),
+            "inner content {inner:?}"
+        );
+    }
+}
+
+/// AC-6: in a pump that starts mux-attached and detaches mid-buffer, the
+/// inner content's 7501 reports are discarded while the plain-shell bytes
+/// behind the `Detached` frame are ingested.
+#[test]
+fn osc7501_same_pump_detach_discards_inner_reports_and_keeps_the_plain_tail() {
+    let pane = 10;
+    let mut tab = mux_tab_active_pane(pane);
+
+    let detached = crate::mux::apc::encode_emterm_mux(&MuxMessage {
+        msg_type: MessageType::Detached,
+        pane_id: 0,
+        payload: Vec::new(),
+    });
+    let mut combined = pty_output_apc(pane, &osc7501("id=inner:state=blocked", false));
+    combined.extend_from_slice(&detached);
+    combined.extend_from_slice(&osc7501("id=plain:state=done", false));
+    tab.test_process_combined(combined);
+
+    assert!(tab.mux_session_name.is_none(), "detached");
+    assert_eq!(
+        tab.program_status.len(),
+        1,
+        "only the plain-tab report behind the Detached frame is applied"
+    );
+    assert_eq!(
+        tab.take_pending_program_status_changes(),
+        vec![Some(summary_of(crate::program_status::RecordState::Done))]
+    );
+}
+
+/// AC-6: 7501 reports parsed from mux inner content in one pump do not
+/// linger and get applied by a later pump of the same tab, including the
+/// first plain-shell pump after a detach.
+#[test]
+fn osc7501_mux_inner_reports_do_not_leak_into_a_later_plain_pump() {
+    let pane = 10;
+    let mut tab = mux_tab_active_pane(pane);
+    tab.test_process_combined(pty_output_apc(
+        pane,
+        &osc7501("id=inner:state=blocked", false),
+    ));
+    assert_eq!(tab.program_status.len(), 0, "mux-attached pump");
+
+    let detached = crate::mux::apc::encode_emterm_mux(&MuxMessage {
+        msg_type: MessageType::Detached,
+        pane_id: 0,
+        payload: Vec::new(),
+    });
+    tab.test_process_combined(detached);
+    assert!(tab.mux_session_name.is_none(), "detached");
+    tab.test_process_combined(b"plain shell output\r\n".to_vec());
+
+    assert_eq!(
+        tab.program_status.len(),
+        0,
+        "the inner report was discarded, not carried into the plain pump"
+    );
+    assert!(tab.take_pending_program_status_changes().is_empty());
+}
+
+/// AC-6: a 7501 query in mux inner content is answered exactly once, as a
+/// `PtyInput` frame for the active pane (the existing device-response
+/// route), with the query's own terminator.
+#[test]
+fn osc7501_mux_inner_query_is_answered_once_through_the_pane_route() {
+    for st in [false, true] {
+        let pane = 10;
+        let mut tab = mux_tab_active_pane(pane);
+        tab.test_process_combined(pty_output_apc(pane, &osc7501("?", st)));
+
+        let answer = osc7501_answer(st);
+        assert_eq!(
+            count_writes_equal(&tab, &answer),
+            1,
+            "st={st}, writes: {:?}",
+            tab.test_outbound_writes()
+        );
+        let frames: Vec<_> = tab
+            .test_control_frames()
+            .into_iter()
+            .filter(|f| f.payload == answer)
+            .collect();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].msg_type, MessageType::PtyInput);
+        assert_eq!(frames[0].pane_id, pane);
+        assert!(tab.take_pending_program_status_changes().is_empty());
+    }
+}
+
+/// AC-7: the coalesce gate treats a complete OSC 7501 `?` query as a device
+/// query with either terminator.
+#[test]
+fn payload_has_device_query_detects_osc7501_queries() {
+    assert!(payload_has_device_query(b"\x1b]7501;?\x07"), "BEL");
+    assert!(payload_has_device_query(b"\x1b]7501;?\x1b\\"), "ST");
+    assert!(
+        payload_has_device_query(b"hello\x1b]7501;?\x07world"),
+        "embedded in surrounding text"
+    );
+    assert!(
+        payload_has_device_query(b"\x1b]7501;state=working\x07\x1b]7501;?\x1b\\"),
+        "a query following a report"
+    );
+}
+
+/// AC-7: a 7501 report, an incomplete or non-exact query and plain text are
+/// not device queries.
+#[test]
+fn payload_has_device_query_rejects_osc7501_non_queries() {
+    assert!(
+        !payload_has_device_query(b"\x1b]7501;state=working\x07"),
+        "report"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]7501;id=a:state=working:title=Pw==\x1b\\"),
+        "report with a base64 value"
+    );
+    assert!(!payload_has_device_query(b"\x1b]7501;?"), "no terminator");
+    assert!(
+        !payload_has_device_query(b"\x1b]7501;?\x1b"),
+        "lone ESC at the end"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]7501;?\x1b[0m"),
+        "ESC followed by another sequence cancels the string terminator"
+    );
+    assert!(!payload_has_device_query(b"\x1b]7501;??\x07"), "body ??");
+    assert!(
+        !payload_has_device_query(b"\x1b]7501;? \x07"),
+        "body with a space"
+    );
+    assert!(!payload_has_device_query(b"\x1b]7501;\x07"), "empty body");
+    assert!(
+        !payload_has_device_query(b"\x1b]7501?\x07"),
+        "no body separator"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]75010;?\x07"),
+        "a different OSC parameter"
+    );
+    assert!(
+        !payload_has_device_query(b"plain 7501;? text\r\n"),
+        "plain text"
+    );
+}
+
+/// AC-7 (NFR2 parity with the color-query case): a 7501 query frame breaks
+/// the coalesce run and is parsed on its own.
+#[test]
+fn osc7501_query_frame_breaks_coalesce_run() {
+    let pane = 10;
+    let mut split = mux_tab_active_pane(pane);
+    let mut split_buf = Vec::new();
+    split_buf.extend_from_slice(&pty_output_apc(pane, b"aaa\r\n"));
+    split_buf.extend_from_slice(&pty_output_apc(pane, &osc7501("?", false)));
+    split_buf.extend_from_slice(&pty_output_apc(pane, b"ccc\r\n"));
+    let before = split.test_coalesce_parse_passes();
+    split.test_process_combined(split_buf);
+    assert_eq!(
+        split.test_coalesce_parse_passes() - before,
+        2,
+        "a 7501 query frame breaks the run: leading-run flush + loop-end flush"
+    );
+    assert_eq!(split.test_row_text(0), "aaa");
+    assert_eq!(split.test_row_text(1), "ccc");
+}

@@ -550,8 +550,9 @@ impl Tab {
         //        whose responder was never registered (edge case) yields
         //        `new_core.osc_responder = None`, already the default, so
         //        no panic.
-        //      - the mux inband OSC param is re-registered on the new core
-        //        with the same call `Tab::new` makes.
+        //      - the mux inband OSC param and the OSC 7501 (Program Status)
+        //        param are re-registered on the new core with the same
+        //        calls `Tab::build` makes.
         //    With all three carried, the swapped-in core ends up
         //    behaviorally identical to a never-swapped tab core.
         {
@@ -562,6 +563,10 @@ impl Tab {
             new_core.register_osc_app_param(
                 mux_ipc::protocol::MUX_OSC_PARAM,
                 crate::callbacks::OSC_MUX_INBAND,
+            );
+            new_core.register_osc_app_param(
+                crate::callbacks::OSC_PROGRAM_STATUS_PARAM,
+                crate::callbacks::OSC_PROGRAM_STATUS,
             );
             *live = new_core;
             // Discard any device responses (DA1 / DSR / XTWINOPS / …) left
