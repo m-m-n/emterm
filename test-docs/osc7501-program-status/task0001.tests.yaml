@@ -1,0 +1,150 @@
+task_id: task0001
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal
+# Re-executed after the implementation and the record: only the first baseline entry failed
+# (a thread-CPU-time budget test that is load sensitive); the other passed in that run.
+# An earlier re-run at a load average above 20 also failed three mux PTY timing tests
+# (from_restored_pane_can_write_and_read_through_its_adopted_master and two
+# *_redelivers_alt_screen_and_main_screen_color_queries_once tests, all Timeout); they
+# passed in the next full run, and nothing they read was changed by this task.
+final_failures:
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+acceptance_tests:
+  AC-1:
+    tests:
+      - program_status::tests::ac1_an_invalid_progress_pair_does_not_override_an_earlier_valid_one
+      - program_status::tests::ac1_an_unknown_kind_leaves_it_absent_without_rejecting_the_report
+      - program_status::tests::ac1_app_must_match_the_name_pattern_otherwise_it_is_absent
+      - program_status::tests::ac1_a_query_is_not_a_report
+      - program_status::tests::ac1_a_repeated_key_resolves_to_its_last_valid_occurrence
+      - program_status::tests::ac1_a_skipped_pair_does_not_override_an_earlier_valid_one
+      - program_status::tests::ac1_both_terminators_parse_the_same_body
+      - program_status::tests::ac1_each_of_the_six_state_words_is_recognized
+      - program_status::tests::ac1_kind_is_kept_only_for_blocked
+      - program_status::tests::ac1_malformed_pairs_are_skipped_and_the_rest_applies
+      - program_status::tests::ac1_only_the_body_question_mark_is_a_query
+      - program_status::tests::ac1_parse_bytes_agrees_with_parse
+      - program_status::tests::ac1_progress_is_an_integer_from_0_to_100
+      - program_status::tests::ac1_progress_is_kept_only_for_working_and_blocked
+      - program_status::tests::ac1_state_words_round_trip_and_clear_is_not_a_state
+      - program_status::tests::ac1_the_pair_splits_at_its_first_equals_sign
+      - program_status::tests::ac1_unknown_keys_are_ignored
+    red_confirmed: true
+    red_reason: >-
+      Run against a stub whose parse returns Ignored for every body and whose state words are empty: 15 of the 17 tests failed, for example ac1_each_of_the_six_state_words_is_recognized ("expected a Set report for \"state=\", got Ignored") and ac1_only_the_body_question_mark_is_a_query (left: Ignored where Query was expected). ac1_unknown_keys_are_ignored and ac1_parse_bytes_agrees_with_parse passed against the stub because both sides of their comparison were Ignored; they have no red of their own.
+  AC-2:
+    tests:
+      - program_status::tests::ac2_a_control_character_in_a_decoded_value_discards_the_report
+      - program_status::tests::ac2_a_decoded_value_that_is_not_utf8_discards_the_report
+      - program_status::tests::ac2_a_missing_or_unknown_state_is_ignored
+      - program_status::tests::ac2_an_empty_decoded_title_or_msg_counts_as_absent
+      - program_status::tests::ac2_an_invalid_id_is_ignored
+      - program_status::tests::ac2_a_sequence_of_exactly_4096_bytes_is_accepted_and_4097_is_discarded
+      - program_status::tests::ac2_a_valid_id_is_accepted
+      - program_status::tests::ac2_base64_is_accepted_padded_and_unpadded
+      - program_status::tests::ac2_every_discard_and_ignore_case_leaves_the_table_unchanged
+      - program_status::tests::ac2_invalid_base64_discards_the_report
+      - program_status::tests::ac2_msg_above_the_encoded_or_decoded_cap_discards_the_report
+      - program_status::tests::ac2_msg_is_accepted_up_to_2732_encoded_and_2048_decoded_bytes
+      - program_status::tests::ac2_non_control_characters_are_kept_verbatim_by_the_parser
+      - program_status::tests::ac2_the_terminator_counts_toward_the_sequence_length
+      - program_status::tests::ac2_title_above_the_encoded_or_decoded_cap_discards_the_report
+      - program_status::tests::ac2_title_and_msg_rules_apply_to_a_clear_report_as_well
+      - program_status::tests::ac2_title_is_accepted_up_to_256_encoded_and_192_decoded_bytes
+    red_confirmed: true
+    red_reason: >-
+      Run against the same stub: 9 of the 17 tests failed, the ones that require a report to be accepted, for example ac2_a_sequence_of_exactly_4096_bytes_is_accepted_and_4097_is_discarded ("Bel: 4096 bytes must be accepted, got Ignored"). The other 8 tests assert Ignored (discard or ignore cases, for example ac2_invalid_base64_discards_the_report) and passed against a stub that ignores everything, so they were not observed to fail; they now fail if a discard condition is dropped, but that was not watched.
+  AC-3:
+    tests:
+      - program_status::tests::ac3_a_clear_that_removes_nothing_is_still_an_accepted_report
+      - program_status::tests::ac3_apply_orders_records_by_last_update
+      - program_status::tests::ac3_a_report_fully_replaces_its_id_record
+      - program_status::tests::ac3_clear_of_a_nested_id_keeps_its_ancestors
+      - program_status::tests::ac3_clear_with_an_id_removes_it_and_its_descendants_on_segment_boundaries
+      - program_status::tests::ac3_clear_without_an_id_removes_every_record_including_the_root
+      - program_status::tests::ac3_re_reporting_an_existing_id_refreshes_recency_and_evicts_nothing
+      - program_status::tests::ac3_the_257th_distinct_id_evicts_the_least_recently_updated_record
+      - program_status::tests::ac3_the_cap_applies_to_the_root_record_like_any_other
+      - program_status::tests::ac3_the_root_and_each_id_are_separate_records
+    red_confirmed: true
+    red_reason: >-
+      Run against the same stub (empty table, apply does nothing): all 10 tests failed, for example ac3_the_257th_distinct_id_evicts_the_least_recently_updated_record (assertion left: 0 against 256 records).
+  AC-4:
+    tests:
+      - program_status::tests::ac4_prompt_start_keeps_the_next_eviction_order_of_survivors
+      - program_status::tests::ac4_prompt_start_removes_each_removable_state_on_its_own
+      - program_status::tests::ac4_prompt_start_removes_working_blocked_idle_and_keeps_done_and_error
+      - program_status::tests::ac4_prompt_start_reports_false_when_nothing_was_removed
+      - program_status::tests::ac4_reset_on_an_empty_table_reports_false
+      - program_status::tests::ac4_reset_removes_every_record_and_reports_whether_any_existed
+    red_confirmed: true
+    red_reason: >-
+      Run against the same stub: 4 of the 6 tests failed, for example ac4_prompt_start_removes_working_blocked_idle_and_keeps_done_and_error ("assertion failed: table.prompt_start()"). The two tests that assert the operation returns false (ac4_prompt_start_reports_false_when_nothing_was_removed, ac4_reset_on_an_empty_table_reports_false) passed against the stub, which returns false; they were not observed to fail.
+  AC-5:
+    tests:
+      - program_status::tests::ac5_a_done_child_does_not_mask_a_working_root_and_error_ranks_above_done
+      - program_status::tests::ac5_a_higher_rank_beats_recency
+      - program_status::tests::ac5_an_ancestor_without_an_app_passes_the_lookup_further_up
+      - program_status::tests::ac5_an_empty_table_has_no_summary
+      - program_status::tests::ac5_a_record_with_its_own_app_keeps_it
+      - program_status::tests::ac5_a_record_without_app_takes_the_app_of_its_nearest_present_ancestor
+      - program_status::tests::ac5_a_single_record_decides_alone
+      - program_status::tests::ac5_a_title_that_is_empty_after_sanitization_is_absent
+      - program_status::tests::ac5_rank_is_blocked_working_error_done_idle
+      - program_status::tests::ac5_siblings_prefixes_and_descendants_are_not_ancestors
+      - program_status::tests::ac5_summary_does_not_modify_the_table
+      - program_status::tests::ac5_the_ancestor_is_looked_up_at_summary_time
+      - program_status::tests::ac5_the_deciding_records_missing_title_is_not_borrowed_from_another_record
+      - program_status::tests::ac5_the_root_counts_as_an_ancestor_of_every_id
+      - program_status::tests::ac5_the_state_is_the_highest_by_blocked_working_error_done_idle
+      - program_status::tests::ac5_the_summary_title_is_cut_to_80_characters
+      - program_status::tests::ac5_the_title_is_sanitized_in_the_summary
+      - program_status::tests::ac5_ties_across_the_root_and_a_descendant_follow_recency_too
+      - program_status::tests::ac5_ties_go_to_the_most_recently_updated_record
+      - program_status::tests::ac5_title_and_app_come_from_the_deciding_record
+    red_confirmed: true
+    red_reason: >-
+      Run against the same stub (summary always None, rank always 0): 17 of the 20 tests failed, for example ac5_rank_is_blocked_working_error_done_idle ("Idle must rank below Done") and ac5_the_state_is_the_highest_by_blocked_working_error_done_idle (left: None). ac5_an_empty_table_has_no_summary, ac5_summary_does_not_modify_the_table and ac5_the_deciding_records_missing_title_is_not_borrowed_from_another_record passed against the stub (None / unchanged table); they were not observed to fail.
+  AC-6:
+    tests:
+      - program_status::tests::ac6_control_characters_are_removed
+      - program_status::tests::ac6_every_listed_invisible_formatting_character_is_removed
+      - program_status::tests::ac6_ordinary_text_is_kept_as_is
+      - program_status::tests::ac6_removal_happens_before_truncation
+      - program_status::tests::ac6_the_result_is_truncated_to_80_characters
+      - program_status::tests::ac6_title_and_msg_are_kept_as_plain_text_and_never_interpreted
+      - program_status::tests::ac6_truncation_counts_characters_not_bytes
+    red_confirmed: true
+    red_reason: >-
+      Run against the same stub (sanitize_title returns its input unchanged): 6 of the 7 tests failed, for example ac6_the_result_is_truncated_to_80_characters (the 81-character input came back unchanged). ac6_ordinary_text_is_kept_as_is passed against the stub because it asserts that ordinary text is left alone; it was not observed to fail.
+  AC-7:
+    tests:
+      - program_status::tests::ac7_export_lists_records_oldest_updated_first_with_all_fields
+      - program_status::tests::ac7_export_of_an_empty_table_is_empty
+      - program_status::tests::ac7_import_drops_a_record_that_violates_any_rule
+      - program_status::tests::ac7_importing_an_export_yields_an_equal_table
+      - program_status::tests::ac7_import_keeps_at_most_the_256_most_recently_updated_records
+      - program_status::tests::ac7_import_keeps_valid_boundary_values
+      - program_status::tests::ac7_import_re_validates_an_exported_table_without_loss
+      - program_status::tests::ac7_invalid_records_do_not_count_toward_the_cap
+      - program_status::tests::ac7_the_imported_table_evicts_the_same_record_next
+    red_confirmed: true
+    red_reason: >-
+      Run against the same stub (export returns an empty list, import returns an empty table): 6 of the 9 tests failed, for example ac7_export_lists_records_oldest_updated_first_with_all_fields (left: []). ac7_export_of_an_empty_table_is_empty, ac7_importing_an_export_yields_an_equal_table and ac7_import_re_validates_an_exported_table_without_loss passed against the stub (every table compares equal to the empty one); they were not observed to fail.
+  AC-8:
+    tests:
+      - program_status::tests::ac8_the_module_is_declared_without_a_gui_gate
+      - program_status::tests::ac8_the_module_uses_only_always_built_crates
+    red_confirmed: true
+    red_reason: >-
+      With the module declared in lib.rs behind the gui feature gate (the wrong
+      placement) and the stub in place,
+      ac8_the_module_is_declared_without_a_gui_gate failed with "the declaration
+      must not sit behind a cfg gate" (the gate attribute was found directly above
+      the declaration). Its failure was watched, then the declaration was moved into
+      the always-built list. ac8_the_module_uses_only_always_built_crates passed
+      against the stub (the stub has no use lines), so it was not observed to fail.
+      The compile half of the criterion, the cargo check with --no-default-features
+      from core-commands.md, was run only after the implementation existed (exit 0);
+      its failure was not observed.
