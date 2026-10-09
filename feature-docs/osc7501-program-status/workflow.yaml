@@ -292,7 +292,8 @@ tasks:
     complexity: high
     requirements:
     - FR17
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc7501-program-status/task0007
 review:
   status: pending
   rounds_completed: 0
