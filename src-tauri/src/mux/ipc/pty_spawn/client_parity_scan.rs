@@ -62,6 +62,9 @@ pub(in crate::mux) enum ScanItemKind {
     ColorQuery,
     /// A complete OSC 777/9999 viewer-launch sequence (FR7, D3).
     ViewerLaunch,
+    /// A complete OSC 7501 `?` query (the attached GUI answers it; osc7501-
+    /// program-status D6). A 7501 report is never an item.
+    ProgramStatusQuery,
 }
 
 /// One extracted item: its kind and its byte range in [`ScanOutcome::combined`]'s
@@ -520,6 +523,11 @@ fn walk_view(view: &[u8], start: usize, detect_tail: bool) -> Reading {
                             kind: ScanItemKind::ColorQuery,
                             range: pos..term_end,
                         });
+                    } else if is_program_status_query(&osc) {
+                        items.push(ScanItem {
+                            kind: ScanItemKind::ProgramStatusQuery,
+                            range: pos..term_end,
+                        });
                     } else if is_viewer_launch(&osc) {
                         items.push(ScanItem {
                             kind: ScanItemKind::ViewerLaunch,
@@ -661,6 +669,15 @@ fn osc_default_color_has_query_item(data: &str, osc_number: u16) -> bool {
     false
 }
 
+/// Whether this OSC dispatch is an OSC 7501 `?` query: the number is 7501
+/// (the shared identification, [`identify_osc`]) and the reconstructed data is
+/// exactly `?`. Every other 7501 dispatch is a report, which the client's
+/// parser records and which the daemon delivers out of band, so it is never
+/// carried by the suppressed-chunk replacement.
+pub(in crate::mux) fn is_program_status_query(osc: &ReconstructedOsc) -> bool {
+    identify_osc(osc) == OscIdentity::ProgramStatus && osc.data == "?"
+}
+
 /// FR7/D3: whether this OSC dispatch is a viewer-launch — a complete OSC
 /// 777 `emterm;<kind>;...` where `<kind>` is one of the viewer kinds the GUI
 /// actually opens a child window for, or a complete OSC 9999
@@ -668,7 +685,9 @@ fn osc_default_color_has_query_item(data: &str, osc_number: u16) -> bool {
 ///
 /// The delivery side's selection over the shared identification
 /// ([`identify_osc`]): every viewer launch except `image`, and Markdown
-/// launches. Never an agent-status report, never a not-identified OSC.
+/// launches. Never an agent-status report, never a program-status OSC (a 7501
+/// query is delivered through [`is_program_status_query`]), never a
+/// not-identified OSC.
 ///
 /// D3 finding: `image` is excluded even though it is listed in the
 /// viewer-kind SSOT ([`crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS`]) — the
@@ -680,7 +699,9 @@ pub(in crate::mux) fn is_viewer_launch(osc: &ReconstructedOsc) -> bool {
     match identify_osc(osc) {
         OscIdentity::ViewerLaunch(kind) => kind != "image",
         OscIdentity::MarkdownLaunch => true,
-        OscIdentity::AgentStatusReport | OscIdentity::NotIdentified => false,
+        OscIdentity::AgentStatusReport
+        | OscIdentity::ProgramStatus
+        | OscIdentity::NotIdentified => false,
     }
 }
 
@@ -757,6 +778,168 @@ mod tests {
         ] {
             assert!(!launch_predicate(body.as_bytes()), "body {body:?}");
         }
+    }
+
+    // ---- osc7501-program-status task0006 AC-3 (FR8, A3): OSC 7501 queries ----
+
+    fn program_status_query_predicate(body: &[u8]) -> bool {
+        is_program_status_query(&reconstruct_osc_number_and_data(body))
+    }
+
+    /// AC-3: only a complete OSC 7501 whose reconstructed data is exactly `?`
+    /// is a query; reports, near misses and other numbers are not.
+    #[test]
+    fn osc7501_query_predicate_selects_exactly_the_question_mark_query() {
+        for body in [b"7501;?".as_slice(), b"07501;?", b"0000007501;?"] {
+            assert!(
+                program_status_query_predicate(body),
+                "body {:?}",
+                String::from_utf8_lossy(body)
+            );
+        }
+        for body in [
+            b"7501;??".as_slice(),
+            b"7501; ?",
+            b"7501;? ",
+            b"7501;?;",
+            b"7501;",
+            b"7501",
+            b"7501;state=working",
+            b"7501;clear",
+            b"7501x;?",
+            b"7501;\xff",
+            b"7500;?",
+            b"7502;?",
+            b"750;?",
+            b"75010;?",
+            b"17501;?",
+            b"10;?",
+            b"4;1;?",
+            b"777;emterm;markdown;?",
+        ] {
+            assert!(
+                !program_status_query_predicate(body),
+                "body {:?}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    /// AC-3: the viewer-launch selection and the color-query rule do not
+    /// take OSC 7501 in, whatever its data.
+    #[test]
+    fn osc7501_is_neither_a_viewer_launch_nor_a_color_query() {
+        for body in [
+            b"7501;?".as_slice(),
+            b"07501;?",
+            b"7501;state=working",
+            b"7501;emterm;markdown;begin",
+            b"7501",
+        ] {
+            let osc = reconstruct_osc_number_and_data(body);
+            assert!(
+                !is_viewer_launch(&osc),
+                "body {:?}",
+                String::from_utf8_lossy(body)
+            );
+            assert!(
+                !is_color_query(&osc),
+                "body {:?}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    /// AC-3: the scan reports a complete OSC 7501 query as one item that spans
+    /// the whole sequence, terminator included, for either terminator.
+    #[test]
+    fn osc7501_scan_reports_a_complete_query_as_one_item_with_its_own_terminator() {
+        for chunk in [
+            b"\x1b]7501;?\x07".as_slice(),
+            b"\x1b]7501;?\x1b\\",
+            b"\x1b]07501;?\x07",
+        ] {
+            let outcome = scan(&[], chunk, &[]);
+            assert_eq!(
+                outcome.items,
+                vec![ScanItem {
+                    kind: ScanItemKind::ProgramStatusQuery,
+                    range: 0..chunk.len()
+                }],
+                "chunk {:?}",
+                String::from_utf8_lossy(chunk)
+            );
+            assert_eq!(outcome.tail, None);
+        }
+    }
+
+    /// AC-3: a 7501 report is never an item, and an incomplete query is a
+    /// tail, not an item.
+    #[test]
+    fn osc7501_scan_reports_no_item_for_a_report_and_a_tail_for_an_incomplete_query() {
+        for chunk in [
+            b"\x1b]7501;state=working\x07".as_slice(),
+            b"\x1b]7501;state=idle;id=a\x1b\\",
+            b"\x1b]7501;??\x07",
+            b"\x1b]7501;\x07",
+        ] {
+            let outcome = scan(&[], chunk, &[]);
+            assert!(
+                outcome.items.is_empty(),
+                "chunk {:?}: {:?}",
+                String::from_utf8_lossy(chunk),
+                outcome.items
+            );
+            assert_eq!(outcome.tail, None);
+        }
+        let outcome = scan(&[], b"ok\x1b]7501;?", &[]);
+        assert!(outcome.items.is_empty());
+        assert_eq!(outcome.tail, Some(2..10));
+    }
+
+    /// AC-3: a query that began in the retained window and completes in the
+    /// chunk is reported once, whole.
+    #[test]
+    fn osc7501_scan_reports_a_query_split_across_window_and_chunk_once() {
+        let window = b"abc\x1b]7501;";
+        let chunk = b"?\x07";
+        let outcome = scan(window, chunk, &[]);
+        assert_eq!(outcome.items.len(), 1, "{:?}", outcome.items);
+        let item = &outcome.items[0];
+        assert_eq!(item.kind, ScanItemKind::ProgramStatusQuery);
+        assert_eq!(
+            &outcome.combined[item.range.clone()],
+            b"\x1b]7501;?\x07".as_slice()
+        );
+    }
+
+    /// AC-3: the other item kinds keep being reported around a 7501 query, in
+    /// stream order, and the 7501 report between them is skipped.
+    #[test]
+    fn osc7501_scan_keeps_stream_order_with_the_other_item_kinds() {
+        let chunk = b"\x1b[6n\x1b]7501;?\x07\x1b]11;?\x07\x1b]7501;state=idle\x07\
+                      \x1b]777;emterm;markdown;begin\x07";
+        let outcome = scan(&[], chunk, &[]);
+        let seen: Vec<(ScanItemKind, &[u8])> = outcome
+            .items
+            .iter()
+            .map(|item| (item.kind, &outcome.combined[item.range.clone()]))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                (ScanItemKind::CsiQuery, b"\x1b[6n".as_slice()),
+                (
+                    ScanItemKind::ProgramStatusQuery,
+                    b"\x1b]7501;?\x07".as_slice()
+                ),
+                (ScanItemKind::ColorQuery, b"\x1b]11;?\x07".as_slice()),
+                (
+                    ScanItemKind::ViewerLaunch,
+                    b"\x1b]777;emterm;markdown;begin\x07".as_slice()
+                ),
+            ]
+        );
     }
 
     fn count_occurrences(haystack: &[u8], needle: &[u8]) -> usize {
