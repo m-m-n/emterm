@@ -125,7 +125,7 @@ tasks:
     - NFR1
     - NFR2
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-program-status/task0001
   task0002:
     title: Error state, composite pane state and the wire summary
