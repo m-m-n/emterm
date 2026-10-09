@@ -1,17 +1,30 @@
 task_id: task0007
-baseline_failures:             # full `--lib` run on the unmodified worktree before any change: 4420 passed, 1 failed, 3 ignored
-  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
-final_failures: []             # full `--lib` re-run after the implementation and after this record was written: 4433 passed, 0 failed, 3 ignored
+# Refreshed after the parent-side adoption (merge-task.sh exit 1, cycle 1).
+# First inheritance (before any change): the full `--lib` run on the unmodified worktree
+# gave 4420 passed, 1 failed, 3 ignored; the failure was
+# mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# (a thread-CPU-time budget test that is load sensitive; other implementers were building
+# in parallel).
+# Second inheritance (parent adopted): the adoption commit alone does not compile, because
+# this task's `HandoffPane::program_records` (mux_ipc, auto-merged) is required by the
+# adopted parent `upgrade.rs`, which has no such field. So the inherited-state suite could
+# not be run before the re-implementation; the full `--lib` run right after the
+# re-implementation had no failing test, which also means no failure was inherited.
+baseline_failures: []
+# Re-executed full `--lib` run after the re-implementation on the adopted parent:
+# 4554 passed, 0 failed, 3 ignored.
+final_failures: []
 # Notes on where the tests live:
 # - `handoff::tests::*` are unit tests of the `mux_ipc` crate. The project's test command
 #   (`cargo test --manifest-path src-tauri/Cargo.toml --lib`) runs only the `emterm` package
 #   and does not include them; they are selected with
-#   `cargo test --manifest-path crates/mux_ipc/Cargo.toml --lib` (125 passed, 0 failed
-#   after the implementation).
+#   `cargo test --manifest-path crates/mux_ipc/Cargo.toml --lib` (131 passed, 0 failed
+#   after the implementation on the adopted parent).
 # - `mux::upgrade::tests::*` are `--lib` tests of the `emterm` package.
 # - D10: SC-1 (task0001) was already present in this worktree; SC-5 (task0004) was not, so
-#   only the minimum of it was added (the `table` field of `AgentStatus`) and no test was
-#   written for SC-1 or SC-5 behavior.
+#   a minimal `table` field of `AgentStatus` was first added here and no test was written
+#   for SC-1 or SC-5 behavior. The parent-side adoption replaced it with the owner's SC-5
+#   (field `program_status`); the re-implementation reads and installs that field.
 acceptance_tests:
   AC-1:
     tests:
