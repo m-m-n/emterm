@@ -1,6 +1,10 @@
 task_id: task0003
-baseline_failures:
-  - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
+# Refreshed after the parent-side adoption: baseline is the parent branch
+# tip's suite (4542 passed, 0 failed), measured with this task's changes
+# reverted in the working tree.
+baseline_failures: []
+# Re-executed after the re-implementation and the final parent merge
+# (4586 passed, 0 failed).
 final_failures: []
 acceptance_tests:
   AC-1:
