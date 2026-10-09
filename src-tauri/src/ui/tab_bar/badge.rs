@@ -53,10 +53,16 @@ pub const BLOCKED_BADGE_EMOJI_SEEN: &str = "\u{2754}";
 /// `done` once seen reuses [`IDLE_BADGE_EMOJI`] rather than a dedicated
 /// constant (FR6).
 pub const DONE_BADGE_EMOJI_UNSEEN: &str = "\u{2705}";
+/// Grapheme cluster rendered for the `error` state while unseen
+/// (osc7501-program-status A12) — U+274C CROSS MARK. Single-codepoint,
+/// default-emoji-presentation (no VS-16), same format as the other badge
+/// clusters. `error` once seen reuses [`IDLE_BADGE_EMOJI`], as `done` does.
+pub const ERROR_BADGE_EMOJI_UNSEEN: &str = "\u{274C}";
 
 /// Color role for a semantic agent state (task0006 AC-4, `IMPLEMENTATION.md`
 /// Conventions): blocked -> `on_error_container`, working -> `primary`,
-/// done -> `on_secondary_container`, idle -> `on_surface_variant`. Shared by
+/// done -> `on_secondary_container`, idle -> `on_surface_variant`,
+/// error -> `error` (osc7501-program-status A12). Shared by
 /// [`ui::mux_sidebar`](crate::ui::mux_sidebar) and
 /// [`ui::status_bar`](crate::ui::status_bar) so the mapping lives in one place.
 pub fn agent_state_color(state: AgentState) -> Color32 {
@@ -65,18 +71,19 @@ pub fn agent_state_color(state: AgentState) -> Color32 {
         AgentState::Working => md3::primary(),
         AgentState::Done => md3::on_secondary_container(),
         AgentState::Idle => md3::on_surface_variant(),
+        AgentState::Error => md3::error(),
     }
 }
 
 /// Whether a badge for `agg` renders as a filled dot (`true`) or a
 /// [`AGENT_BADGE_RING_WIDTH`] ring (`false`) — task0006 AC-1: "unseen
-/// blocked/done render filled, seen render as ring; working / idle have a
+/// blocked/done/error render filled, seen render as ring; working / idle have a
 /// single (filled / muted) form" (idle's "muted" look comes from its color,
 /// `on_surface_variant`, not from a different dot shape — both working and
 /// idle always render filled).
 pub fn agent_badge_filled(agg: Aggregated) -> bool {
     match agg.state {
-        AgentState::Blocked | AgentState::Done => agg.unseen,
+        AgentState::Blocked | AgentState::Done | AgentState::Error => agg.unseen,
         AgentState::Working | AgentState::Idle => true,
     }
 }
@@ -100,12 +107,14 @@ pub enum BadgePresentation {
 }
 
 /// Choose the presentation for `agg` (task0001 Design 1, AC-1) — total
-/// over all four agent states, no side effects, callable from unit tests
+/// over all five agent states, no side effects, callable from unit tests
 /// without any UI context (TS1). All four states resolve to
 /// [`BadgePresentation::Emoji`] (agent-badge-emoji task0001 D2): working
 /// (`WORKING_BADGE_EMOJI`) / idle (`IDLE_BADGE_EMOJI`) unseen/seen alike;
 /// blocked (`BLOCKED_BADGE_EMOJI_UNSEEN` / `_SEEN`); done
-/// (`DONE_BADGE_EMOJI_UNSEEN` unseen, `IDLE_BADGE_EMOJI` once seen — FR2).
+/// (`DONE_BADGE_EMOJI_UNSEEN` unseen, `IDLE_BADGE_EMOJI` once seen — FR2);
+/// error (`ERROR_BADGE_EMOJI_UNSEEN` unseen, `IDLE_BADGE_EMOJI` once seen —
+/// osc7501-program-status A12).
 pub fn badge_presentation(agg: Aggregated) -> BadgePresentation {
     let cluster = match agg.state {
         AgentState::Working => WORKING_BADGE_EMOJI,
@@ -120,6 +129,13 @@ pub fn badge_presentation(agg: Aggregated) -> BadgePresentation {
         AgentState::Done => {
             if agg.unseen {
                 DONE_BADGE_EMOJI_UNSEEN
+            } else {
+                IDLE_BADGE_EMOJI
+            }
+        }
+        AgentState::Error => {
+            if agg.unseen {
+                ERROR_BADGE_EMOJI_UNSEEN
             } else {
                 IDLE_BADGE_EMOJI
             }

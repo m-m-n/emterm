@@ -4384,3 +4384,205 @@ fn ac2_visibility_restore_decides_the_construct_outside_both_exclusions() {
         "the decider must run with neither the capture exclusion nor the boundary exclusion held"
     );
 }
+
+// ── OSC 7501 record table in the pane's agent-status record
+//    (osc7501-program-status task0004, AC-3 / AC-4) ───────────────────────
+
+mod program_status_record {
+    use super::*;
+    use crate::program_status::{Parsed, Report, Terminator, parse};
+
+    fn report(body: &str) -> Report {
+        match parse(body, Terminator::Bel) {
+            Parsed::Report(report) => report,
+            other => panic!("{body}: expected a report, got {other:?}"),
+        }
+    }
+
+    fn new_pane(id: PaneId) -> MuxPane {
+        MuxPane::new_test(id, 80, 24, make_output_target())
+    }
+
+    fn table_len(pane: &MuxPane) -> usize {
+        pane.agent_status.lock().unwrap().program_status.len()
+    }
+
+    fn revision(pane: &MuxPane) -> u64 {
+        pane.agent_status.lock().unwrap().revision
+    }
+
+    /// AC-3: an accepted report changes the table and bumps the revision
+    /// exactly once; a re-report of the same record is accepted too.
+    #[test]
+    fn ac3_an_accepted_report_changes_the_table_and_bumps_the_revision_once() {
+        let pane = new_pane(1);
+        assert_eq!(table_len(&pane), 0);
+
+        let first = pane.apply_program_status_report(report("state=working:id=a"));
+        assert_eq!(first, 1);
+        assert_eq!(revision(&pane), 1);
+        assert_eq!(table_len(&pane), 1);
+
+        let again = pane.apply_program_status_report(report("state=working:id=a"));
+        assert_eq!(again, 2);
+        assert_eq!(table_len(&pane), 1);
+
+        let cleared = pane.apply_program_status_report(report("state=clear:id=a"));
+        assert_eq!(cleared, 3, "a clear is an accepted report");
+        assert_eq!(table_len(&pane), 0);
+    }
+
+    /// AC-3: the OSC 777 part of the record is untouched by an OSC 7501
+    /// report, and the composite follows both.
+    #[test]
+    fn ac3_the_composite_state_follows_both_sources() {
+        let pane = new_pane(2);
+        assert_eq!(pane.agent_status.lock().unwrap().composite_state(), None);
+
+        pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Done,
+            name: None,
+        });
+        assert_eq!(
+            pane.agent_status.lock().unwrap().composite_state(),
+            Some(AgentState::Done),
+            "an empty table leaves the OSC 777 state as it is"
+        );
+
+        pane.apply_program_status_report(report("state=working"));
+        {
+            let status = pane.agent_status.lock().unwrap();
+            assert_eq!(status.state, Some(AgentState::Done));
+            assert_eq!(status.composite_state(), Some(AgentState::Working));
+        }
+
+        pane.apply_agent_status_event(AgentStatusEvent::Clear);
+        pane.apply_program_status_report(report("state=error"));
+        assert_eq!(
+            pane.agent_status.lock().unwrap().composite_state(),
+            Some(AgentState::Error)
+        );
+    }
+
+    fn fill_every_state(pane: &MuxPane) {
+        for body in [
+            "state=working:id=w",
+            "state=blocked:id=b",
+            "state=idle:id=i",
+            "state=done:id=d",
+            "state=error:id=e",
+        ] {
+            pane.apply_program_status_report(report(body));
+        }
+    }
+
+    /// AC-4: a live prompt start removes `working`, `blocked` and `idle`
+    /// records and keeps `done` and `error`, bumping the revision once.
+    #[test]
+    fn ac4_a_prompt_start_removes_working_blocked_and_idle_and_keeps_done_and_error() {
+        let pane = new_pane(3);
+        fill_every_state(&pane);
+        let before = revision(&pane);
+
+        let bumped = pane.record_live_osc133_mark(PromptMarkKind::PromptStart);
+        assert_eq!(bumped, Some(before + 1));
+        assert_eq!(revision(&pane), before + 1);
+
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.program_status.len(), 2);
+        assert_eq!(status.composite_state(), Some(AgentState::Error));
+        drop(status);
+
+        // Only done and error remain: nothing more to remove.
+        assert_eq!(
+            pane.record_live_osc133_mark(PromptMarkKind::PromptStart),
+            None
+        );
+        assert_eq!(revision(&pane), before + 1);
+    }
+
+    /// AC-4: a mark that is not a prompt start never reaches the table.
+    #[test]
+    fn ac4_marks_other_than_a_prompt_start_leave_the_table_alone() {
+        let pane = new_pane(4);
+        fill_every_state(&pane);
+        let before = revision(&pane);
+        for kind in [PromptMarkKind::CommandEnd] {
+            assert_eq!(pane.record_live_osc133_mark(kind), None);
+        }
+        assert_eq!(revision(&pane), before);
+        assert_eq!(table_len(&pane), 5);
+    }
+
+    /// AC-4: a prompt start with an empty table changes nothing.
+    #[test]
+    fn ac4_a_prompt_start_with_an_empty_table_does_not_bump() {
+        let pane = new_pane(5);
+        assert_eq!(
+            pane.record_live_osc133_mark(PromptMarkKind::PromptStart),
+            None
+        );
+        assert_eq!(revision(&pane), 0);
+    }
+
+    /// AC-4: a reset removes every record, bumping only when one existed.
+    #[test]
+    fn ac4_a_reset_removes_every_record_and_bumps_only_when_something_existed() {
+        let pane = new_pane(6);
+        assert_eq!(pane.apply_program_status_reset(), None);
+        assert_eq!(revision(&pane), 0);
+
+        fill_every_state(&pane);
+        let before = revision(&pane);
+        assert_eq!(pane.apply_program_status_reset(), Some(before + 1));
+        assert_eq!(table_len(&pane), 0);
+
+        assert_eq!(pane.apply_program_status_reset(), None);
+        assert_eq!(revision(&pane), before + 1);
+    }
+
+    /// AC-4: when one prompt start both fires the OSC 777 inferred clear and
+    /// empties records, the revision moves once.
+    #[test]
+    fn ac4_one_prompt_start_covering_the_inferred_clear_and_the_table_bumps_once() {
+        let pane = new_pane(7);
+        pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Working,
+            name: None,
+        });
+        pane.apply_program_status_report(report("state=working:id=a"));
+        assert_eq!(table_len(&pane), 1);
+        let before = revision(&pane);
+
+        assert_eq!(
+            pane.record_live_osc133_mark(PromptMarkKind::CommandEnd),
+            None
+        );
+        assert_eq!(
+            pane.record_live_osc133_mark(PromptMarkKind::PromptStart),
+            Some(before + 1)
+        );
+
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.state, None, "the inferred clear applied");
+        assert_eq!(status.program_status.len(), 0, "the records were removed");
+        assert_eq!(status.revision, before + 1);
+    }
+
+    /// AC-4: the records live in the pane's agent-status record and nowhere
+    /// else, so they go away with the pane.
+    #[test]
+    fn ac4_the_records_go_away_with_the_pane() {
+        let pane = new_pane(8);
+        pane.apply_program_status_report(report("state=done:id=a"));
+        assert_eq!(table_len(&pane), 1);
+        let record = pane.agent_status.clone();
+        assert_eq!(Arc::strong_count(&record), 2);
+        drop(pane);
+        assert_eq!(
+            Arc::strong_count(&record),
+            1,
+            "nothing but the pane held the record"
+        );
+    }
+}

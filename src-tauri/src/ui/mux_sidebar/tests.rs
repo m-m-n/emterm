@@ -1345,3 +1345,113 @@ fn ac5_working_to_done_transition_causes_no_name_column_shift() {
         "a working -> done badge transition must cause no name-column x-shift"
     );
 }
+
+// ── osc7501-program-status task0002 AC-6: error aggregate in the sidebar ──
+
+/// A rasterizer that records every cluster it is asked to shape, so a test
+/// can see which badge emoji the shared painter requested.
+struct RecordingEmojiRasterizer {
+    shaped: std::sync::Mutex<Vec<String>>,
+}
+
+impl crate::render::font::traits::GlyphRasterizer for RecordingEmojiRasterizer {
+    fn shape(
+        &self,
+        cluster: &str,
+        font: crate::render::font::traits::FontId,
+        size_px: f32,
+    ) -> Vec<crate::render::font::traits::ShapedGlyph> {
+        self.shaped.lock().unwrap().push(cluster.to_string());
+        crate::render::font::traits::GlyphRasterizer::shape(
+            &StubEmojiRasterizer,
+            cluster,
+            font,
+            size_px,
+        )
+    }
+
+    fn raster(
+        &self,
+        font: crate::render::font::traits::FontId,
+        glyph_id: u32,
+        size_px: f32,
+    ) -> Option<crate::render::font::traits::GlyphBitmap> {
+        crate::render::font::traits::GlyphRasterizer::raster(
+            &StubEmojiRasterizer,
+            font,
+            glyph_id,
+            size_px,
+        )
+    }
+
+    fn has_codepoint(&self, font: crate::render::font::traits::FontId, cp: u32) -> bool {
+        crate::render::font::traits::GlyphRasterizer::has_codepoint(&StubEmojiRasterizer, font, cp)
+    }
+}
+
+/// Render one sidebar row with `badge` through the shared painter and
+/// return the clusters the rasterizer was asked for.
+fn clusters_painted_for(badge: Aggregated) -> Vec<String> {
+    let mut items = entries(1, 0);
+    items[0].badge = Some(badge);
+    let rasterizer = RecordingEmojiRasterizer {
+        shaped: std::sync::Mutex::new(Vec::new()),
+    };
+    let fallback = stub_emoji_fallback();
+    let cache = parking_lot::Mutex::new(crate::ui::emoji_cache::EmojiTextureCache::new());
+    let emoji = EmojiResources {
+        rasterizer: &rasterizer,
+        fallback: &fallback,
+        cache: &cache,
+    };
+    let ctx = egui::Context::default();
+    let mut input = RawInput::default();
+    input.screen_rect = Some(screen_rect());
+    let _ = ctx.run(input, |ctx| {
+        let _ = draw(
+            ctx,
+            &items,
+            Placement::Persistent,
+            MIN_WIDTH,
+            1.0,
+            Some(&emoji),
+        );
+    });
+    rasterizer.shaped.into_inner().unwrap()
+}
+
+#[test]
+fn error_aggregate_paints_the_shared_presentation_cluster() {
+    use crate::ui::tab_bar::{BadgePresentation, badge_presentation};
+    for (unseen, expected) in [
+        (true, "\u{274C}"),
+        (false, crate::ui::tab_bar::IDLE_BADGE_EMOJI),
+    ] {
+        let agg = Aggregated {
+            state: crate::agent_status::AgentState::Error,
+            unseen,
+        };
+        let BadgePresentation::Emoji { cluster, .. } = badge_presentation(agg);
+        assert_eq!(cluster, expected, "shared presentation, unseen={unseen}");
+        let painted = clusters_painted_for(agg);
+        assert!(
+            painted.iter().any(|c| c == expected),
+            "sidebar must request {expected:?} for an error aggregate (unseen={unseen}); got {painted:?}"
+        );
+    }
+}
+
+#[test]
+fn error_aggregate_keeps_the_name_column_where_other_badges_put_it() {
+    let mut working = entries(1, 0);
+    working[0].badge = Some(Aggregated {
+        state: crate::agent_status::AgentState::Working,
+        unseen: true,
+    });
+    let mut error = entries(1, 0);
+    error[0].badge = Some(Aggregated {
+        state: crate::agent_status::AgentState::Error,
+        unseen: true,
+    });
+    assert_eq!(name_text_x(&working), name_text_x(&error));
+}

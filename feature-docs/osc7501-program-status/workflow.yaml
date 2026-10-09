@@ -162,7 +162,7 @@ tasks:
     - FR16
     - FR18
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-program-status/task0002
   task0003:
     title: Plain-tab OSC 7501 ingestion and query response
@@ -230,7 +230,7 @@ tasks:
     - FR14
     - FR16
     - NFR3
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-program-status/task0004
   task0005:
     title: Status bar template variable {agent_status}
@@ -250,7 +250,7 @@ tasks:
     requirements:
     - FR13
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-program-status/task0005
   task0006:
     title: mux replay stripping and suppressed-output parity for OSC 7501
@@ -270,7 +270,7 @@ tasks:
     requirements:
     - FR8
     - FR15
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-program-status/task0006
   task0007:
     title: Hot-upgrade handoff of OSC 7501 records
@@ -292,7 +292,8 @@ tasks:
     complexity: high
     requirements:
     - FR17
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc7501-program-status/task0007
 review:
   status: pending
   rounds_completed: 0
