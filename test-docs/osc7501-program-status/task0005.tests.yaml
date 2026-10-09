@@ -1,0 +1,96 @@
+task_id: task0005
+# cargo test --lib on the unmodified worktree: 4307 passed, 2 failed, 3 ignored.
+# Both failures are wall-clock / thread-CPU budget tests in mux::ipc::pty_spawn
+# ("took 15.4s", "thread CPU time 13.07s against the budget 10s"); the host was
+# at load average ~25 from parallel task builds. Unrelated to this task's files.
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# Re-executed after implementation and after this record was written:
+# 4332 passed, 1 failed, 3 ignored (25 new tests; the one failure is a baseline
+# member). Earlier re-runs of the same tree under the same host load also
+# tripped other budget tests in mux::ipc::pty_spawn (post_strip_cut_csi,
+# strip_open_string_body_closure) and one PTY-echo test in mux::session::pane
+# (from_restored_pane_can_write_and_read_through_its_adopted_master); each passed
+# in the baseline run and in other runs of this tree, and none touches a file of
+# this task.
+final_failures:
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+acceptance_tests:
+  AC-1:
+    tests:
+      - status_bar::runtime::tests::ac1_agent_status_template_resolves_to_the_providers_current_value
+      - status_bar::runtime::tests::ac1_agent_status_variable_resolves_inside_surrounding_text_on_any_side
+      - status_bar::runtime::tests::ac1_default_templates_do_not_contain_the_agent_status_variable
+    red_confirmed: true
+    red_reason: >
+      With the provider constructed but not registered in the runtime's
+      engine, the two resolution tests failed: ac1_agent_status_template_
+      resolves_to_the_providers_current_value panicked with `left: ""` where
+      "working" was expected (an unknown variable resolves to the empty
+      string), and the surrounding-text test failed the same way. The
+      default-templates test passed before the implementation (the default
+      templates never contained the variable); it stays as a guard for the
+      "defaults unchanged" half of the criterion.
+  AC-2:
+    tests:
+      - app::tests::agent_status::ac2_agent_status_variable_is_empty_when_no_key_carries_a_state
+      - app::tests::agent_status::ac2_agent_status_variable_is_empty_without_any_tab
+      - app::tests::agent_status::ac2_agent_status_variable_is_the_state_word_on_a_plain_tab
+      - app::tests::agent_status::ac2_agent_status_variable_aggregates_the_window_groups_panes_like_the_badge
+      - app::tests::agent_status::ac2_agent_status_variable_ignores_other_tabs_and_panes_outside_the_group
+    red_confirmed: true
+    red_reason: >
+      With App's helper stubbed to return the empty string, the plain-tab tests
+      failed (`left: ""`, `right: "working"`). The window-group test's first red
+      run failed for the wrong reason (its own seed helper built one window for
+      two panes and tripped MuxWindowGroup::seed's length assertion), so its
+      red was re-observed after fixing the helper by temporarily restricting
+      the helper to the tab's own PaneKey::Tab key: it then failed with
+      `left: ""`, `right: "working"` -- i.e. it catches a value that does not
+      use the same key set as the tab badge. The helper was restored right
+      after. The no-tab and other-tabs/outside-the-group tests assert the
+      empty string and passed against the stub; they are guards against a
+      value that leaks across tabs or out of the group.
+  AC-3:
+    tests:
+      - status_bar::providers::agent_status::tests::ac3_set_value_with_a_different_value_bumps_version_and_wakes_once
+      - status_bar::providers::agent_status::tests::ac3_set_value_with_the_same_value_changes_neither_version_nor_wake
+      - status_bar::providers::agent_status::tests::ac3_setting_the_empty_string_on_a_fresh_provider_is_not_a_change
+      - status_bar::providers::agent_status::tests::ac3_clearing_to_the_empty_string_bumps_version_and_wakes
+      - status_bar::runtime::tests::runtime_injects_wake_into_agent_status_provider
+      - app::tests::agent_status::ac3_agent_status_provider_version_advances_only_on_a_real_change
+    red_confirmed: true
+    red_reason: >
+      With set_value stubbed to a no-op, the provider tests failed
+      (`assertion failed: p.version(None) > v0`, and the wake count stayed 0),
+      the runtime wake test failed with "runtime must wire the wake handle into
+      AgentStatusProvider::set_value", and the App-level version test failed
+      with "a changed value changes the view model". The same-value and
+      empty-on-fresh tests passed against the stub (they assert absence of
+      side effects) and guard the idempotence half of the criterion.
+  AC-4:
+    tests:
+      - app::tests::agent_status::ac4_agent_status_variable_never_carries_names_titles_or_markup
+    red_confirmed: true
+    red_reason: >
+      With App's helper stubbed to the empty string, the test failed on its
+      first assertion (`state idle: one plain text run`, left: 0, right: 1).
+      The test iterates AgentState::ALL (the four OSC 777 states; the `error`
+      word enters through SC-2/SC-4 and is verified end to end by TS5 after
+      integration) with a markup-bearing name on the tab key and on a group
+      pane, a markup-bearing tab title and a markup-bearing learned public
+      pane id, and asserts exactly one uncolored run equal to the state word.
+  AC-5:
+    tests:
+      - app::tests::agent_status::ac5_agent_status_variable_refreshes_after_a_plain_tab_status_change
+      - app::tests::agent_status::ac5_agent_status_variable_refreshes_after_a_daemon_pane_update
+      - app::tests::agent_status::ac5_agent_status_variable_follows_the_active_tab_on_switch
+      - app::tests::agent_status::ac5_agent_status_variable_follows_the_new_active_tab_after_closing_the_active_one
+    red_confirmed: true
+    red_reason: >
+      With App's helper stubbed to the empty string and the view model not
+      wired to it, all four failed with `left: ""` where "working" / "blocked"
+      was expected (after pump_all, after the daemon update, after switching
+      tabs, after closing the active tab). The daemon-update test also failed
+      under the key-set mutation described in AC-2.
