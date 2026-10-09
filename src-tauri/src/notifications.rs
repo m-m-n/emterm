@@ -244,10 +244,11 @@ pub fn notification_body(title: &SanitizedTitle, kind: ActivityKind, locale: Loc
 pub struct AgentTransition {
     pub old_state: Option<AgentState>,
     pub new_state: AgentState,
-    /// Sanitized agent name, sanitized upstream at parse time by the core
-    /// `agent_status` module's `sanitize_name`; `None` when the pane never
-    /// reported one. [`agent_notification_body`] uses this value as-is and
-    /// does not re-sanitize it.
+    /// Sanitized agent name, sanitized upstream (the core `agent_status`
+    /// module's `sanitize_name` for an OSC 777 name; the OSC 7501 title
+    /// sanitization for a Program Status title); `None` when the pane never
+    /// reported one. [`agent_notification_body`] uses this value as plain
+    /// text as-is and does not re-sanitize or interpret it.
     pub name: Option<String>,
 }
 
@@ -258,15 +259,20 @@ pub struct AgentTransition {
 pub const AGENT_NOTIFICATION_RATE_LIMIT: Duration = Duration::from_secs(30);
 
 /// Whether `state` is a qualifying transition target for an agent
-/// notification (AC-1): only `Blocked` and `Done` fire; `Working`/`Idle`
-/// never do.
+/// notification (AC-1): only `Blocked`, `Done` and `Error` fire;
+/// `Working`/`Idle` never do.
 pub fn is_qualifying_agent_state(state: AgentState) -> bool {
-    matches!(state, AgentState::Blocked | AgentState::Done)
+    matches!(
+        state,
+        AgentState::Blocked | AgentState::Done | AgentState::Error
+    )
 }
 
 /// Event-type toggle applicable to `state` (task0001 design: "done 遷移に
 /// は `agent_notify_on_done`、blocked 遷移には `agent_notify_on_blocked`
-/// が対応する"). The state -> toggle mapping lives here — the single
+/// が対応する"; osc7501-program-status FR12: a transition to `error` is
+/// gated by `agent_notify_on_done` as well — no separate setting). The
+/// state -> toggle mapping lives here — the single
 /// place [`should_fire_agent_notification`] consults it — so tests can
 /// verify the two toggles are independent without duplicating the
 /// mapping logic. `Working`/`Idle` never reach a meaningful answer here
@@ -279,7 +285,7 @@ fn event_type_notifications_enabled(
     notify_on_blocked: bool,
 ) -> bool {
     match state {
-        AgentState::Done => notify_on_done,
+        AgentState::Done | AgentState::Error => notify_on_done,
         AgentState::Blocked => notify_on_blocked,
         AgentState::Working | AgentState::Idle => false,
     }
@@ -415,8 +421,10 @@ pub fn agent_notification_body(
     let state_msg = match (locale, transition.new_state) {
         (Locale::En, AgentState::Blocked) => "blocked",
         (Locale::En, AgentState::Done) => "done",
+        (Locale::En, AgentState::Error) => "error",
         (Locale::Ja, AgentState::Blocked) => "ブロック中",
         (Locale::Ja, AgentState::Done) => "完了",
+        (Locale::Ja, AgentState::Error) => "エラー",
         // Working/Idle never reach here in practice (the caller gates on
         // `is_qualifying_agent_state` first) — matched exhaustively rather
         // than panicking on an unexpected state.
@@ -1152,5 +1160,153 @@ mod tests {
         let title = sanitize_title("a\x07b\x00c\u{9f}d");
         let body = agent_notification_body(&transition(AgentState::Blocked), &title, Locale::En);
         assert_eq!(body, "claude: abcd (blocked)");
+    }
+
+    // ── osc7501-program-status task0002 AC-7: error notifications ───
+
+    #[test]
+    fn error_is_a_qualifying_agent_state() {
+        assert!(is_qualifying_agent_state(AgentState::Error));
+    }
+
+    // AC-7: a transition to `error` is gated by the done toggle and is
+    // independent of the blocked toggle (FR12: no new setting).
+    #[test]
+    fn error_transition_is_gated_by_the_done_toggle_only() {
+        // pane_visible, notify_visible_pane, agent_notifications,
+        // global_notifications, notify_on_done, notify_on_blocked, rate_ok
+        assert!(should_fire_agent_notification(
+            AgentState::Error,
+            false,
+            true,
+            true,
+            true,
+            true,
+            false,
+            true
+        ));
+        assert!(!should_fire_agent_notification(
+            AgentState::Error,
+            false,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true
+        ));
+        assert!(!should_fire_agent_notification(
+            AgentState::Error,
+            false,
+            true,
+            true,
+            true,
+            false,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn event_type_notifications_enabled_maps_error_to_the_done_toggle() {
+        assert!(event_type_notifications_enabled(
+            AgentState::Error,
+            true,
+            false
+        ));
+        assert!(!event_type_notifications_enabled(
+            AgentState::Error,
+            false,
+            true
+        ));
+    }
+
+    // AC-7: every other existing gate still suppresses an error
+    // transition.
+    #[test]
+    fn error_transition_keeps_every_existing_gate() {
+        // Visible pane with the visible-pane setting off.
+        assert!(!should_fire_agent_notification(
+            AgentState::Error,
+            true,
+            false,
+            true,
+            true,
+            true,
+            true,
+            true
+        ));
+        // ... and passing with the setting on.
+        assert!(should_fire_agent_notification(
+            AgentState::Error,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+        ));
+        // Agent-status notifications off.
+        assert!(!should_fire_agent_notification(
+            AgentState::Error,
+            false,
+            true,
+            false,
+            true,
+            true,
+            true,
+            true
+        ));
+        // Global notifications off.
+        assert!(!should_fire_agent_notification(
+            AgentState::Error,
+            false,
+            true,
+            true,
+            false,
+            true,
+            true,
+            true
+        ));
+        // Rate limit.
+        assert!(!should_fire_agent_notification(
+            AgentState::Error,
+            false,
+            true,
+            true,
+            true,
+            true,
+            true,
+            false
+        ));
+    }
+
+    // AC-7 (A14): the state word is `error` / `エラー`.
+    #[test]
+    fn agent_notification_body_uses_the_error_state_word() {
+        let title = sanitize_title("my-tab");
+        assert_eq!(
+            agent_notification_body(&transition(AgentState::Error), &title, Locale::En),
+            "claude: my-tab (error)"
+        );
+        assert_eq!(
+            agent_notification_body(&transition(AgentState::Error), &title, Locale::Ja),
+            "claude: my-tab (エラー)"
+        );
+    }
+
+    // AC-7 (TM-4): the transition's name goes into the body as plain text —
+    // no markup interpretation, no rewriting (escaping happens in the
+    // existing send path).
+    #[test]
+    fn agent_notification_body_carries_the_name_as_plain_text() {
+        let mut t = transition(AgentState::Error);
+        t.name = Some("<b>build</b> & <i>x</i>".to_string());
+        let title = sanitize_title("my-tab");
+        assert_eq!(
+            agent_notification_body(&t, &title, Locale::En),
+            "<b>build</b> & <i>x</i>: my-tab (error)"
+        );
     }
 }

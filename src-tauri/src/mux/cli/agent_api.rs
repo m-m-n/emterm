@@ -59,6 +59,7 @@ fn parse_agent_state_str(s: &str) -> Option<AgentState> {
         "working" => Some(AgentState::Working),
         "blocked" => Some(AgentState::Blocked),
         "done" => Some(AgentState::Done),
+        "error" => Some(AgentState::Error),
         _ => None,
     }
 }
@@ -76,7 +77,7 @@ pub(in crate::mux::cli) fn parse_agent_states(s: &str) -> Result<Vec<AgentState>
             Some(state) => states.push(state),
             None => {
                 return Err(format!(
-                    "unknown state {part:?} (expected idle|working|blocked|done)"
+                    "unknown state {part:?} (expected idle|working|blocked|done|error)"
                 ));
             }
         }

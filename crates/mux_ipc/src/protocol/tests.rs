@@ -830,6 +830,7 @@ fn test_agent_status_update_msg_round_trip_set() {
         name: Some("build".to_string()),
         revision: 3,
         replay_derived: false,
+        program_status: None,
     };
     let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update);
     let parsed = MuxMessage::from_frame_body(&msg.to_frame_body()).unwrap();
@@ -855,6 +856,7 @@ fn test_agent_status_update_msg_round_trip_clear_replay_derived() {
         name: None,
         revision: 9,
         replay_derived: true,
+        program_status: None,
     };
     let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 12, &update);
     let decoded: AgentStatusUpdateMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
@@ -1032,6 +1034,150 @@ fn test_agent_state_wire_strings() {
         let json = serde_json::to_string(&state).unwrap();
         assert_eq!(json, expected_json);
     }
+}
+
+// ---- osc7501-program-status task0002: error state and summary item ----
+
+/// AC-1: the wire `error` state serializes as `error` and parses back.
+#[test]
+fn test_agent_state_error_wire_string() {
+    assert_eq!(
+        serde_json::to_string(&AgentState::Error).unwrap(),
+        "\"error\""
+    );
+    assert_eq!(
+        serde_json::from_str::<AgentState>("\"error\"").unwrap(),
+        AgentState::Error
+    );
+}
+
+/// AC-1 (D3): `error` is appended after the existing values, so the
+/// positional encoding of the existing four never changes. Compares the
+/// encoded bytes against the pre-feature encoding (a `u32` little-endian
+/// variant index in declaration order).
+#[test]
+fn test_agent_state_existing_four_encode_exactly_as_before() {
+    let before: [(AgentState, [u8; 4]); 4] = [
+        (AgentState::Idle, [0, 0, 0, 0]),
+        (AgentState::Working, [1, 0, 0, 0]),
+        (AgentState::Blocked, [2, 0, 0, 0]),
+        (AgentState::Done, [3, 0, 0, 0]),
+    ];
+    for (state, bytes) in before {
+        assert_eq!(bincode::serialize(&state).unwrap(), bytes, "{state:?}");
+        assert_eq!(bincode::deserialize::<AgentState>(&bytes).unwrap(), state);
+    }
+    assert_eq!(
+        bincode::serialize(&AgentState::Error).unwrap(),
+        [4, 0, 0, 0],
+        "error is appended after the existing values"
+    );
+}
+
+/// The agent-status update message as it was encoded before the OSC 7501
+/// summary item existed (task0002 of the mux agent-status feature).
+#[derive(Debug, Serialize, Deserialize)]
+struct LegacyAgentStatusUpdateMsg {
+    pane_id: u32,
+    public_pane_id: String,
+    state: Option<AgentState>,
+    name: Option<String>,
+    revision: u64,
+    replay_derived: bool,
+}
+
+fn update_with_summary(program_status: Option<ProgramStatusSummary>) -> AgentStatusUpdateMsg {
+    AgentStatusUpdateMsg {
+        pane_id: 7,
+        public_pane_id: "ab12cd34-7".to_string(),
+        state: Some(AgentState::Working),
+        name: Some("build".to_string()),
+        revision: 3,
+        replay_derived: false,
+        program_status,
+    }
+}
+
+/// AC-5 (SC-3): the update message carries the optional OSC 7501 summary
+/// item (wire state, sanitized title, effective app) and it round-trips
+/// through the control-message encoding.
+#[test]
+fn test_agent_status_update_msg_round_trip_with_program_status_summary() {
+    let summary = ProgramStatusSummary {
+        state: AgentState::Error,
+        title: Some("cargo build".to_string()),
+        app: Some("cargo".to_string()),
+    };
+    let update = update_with_summary(Some(summary.clone()));
+    let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update);
+    let decoded: AgentStatusUpdateMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
+        .unwrap()
+        .decode_payload()
+        .unwrap();
+    assert_eq!(decoded.program_status, Some(summary));
+    assert_eq!(decoded.state, Some(AgentState::Working));
+    assert_eq!(decoded.revision, 3);
+}
+
+/// AC-5: a summary with no title and no app round-trips as such.
+#[test]
+fn test_agent_status_update_msg_round_trip_summary_without_title_or_app() {
+    let summary = ProgramStatusSummary {
+        state: AgentState::Done,
+        title: None,
+        app: None,
+    };
+    let update = update_with_summary(Some(summary.clone()));
+    let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update);
+    let decoded: AgentStatusUpdateMsg = msg.decode_payload().unwrap();
+    assert_eq!(decoded.program_status, Some(summary));
+}
+
+/// AC-5: the item is absent for a pane without records and round-trips as
+/// absent.
+#[test]
+fn test_agent_status_update_msg_round_trip_summary_absent() {
+    let update = update_with_summary(None);
+    let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update);
+    let decoded: AgentStatusUpdateMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
+        .unwrap()
+        .decode_payload()
+        .unwrap();
+    assert_eq!(decoded.program_status, None);
+}
+
+/// AC-5 (D3): the summary item is the TRAILING item of the message. With
+/// the item absent the encoding is the pre-feature encoding plus one
+/// trailing byte, and a reader that predates the item decodes the new
+/// bytes (trailing data ignored).
+#[test]
+fn test_agent_status_update_msg_summary_is_a_trailing_optional_item() {
+    let legacy = LegacyAgentStatusUpdateMsg {
+        pane_id: 7,
+        public_pane_id: "ab12cd34-7".to_string(),
+        state: Some(AgentState::Working),
+        name: Some("build".to_string()),
+        revision: 3,
+        replay_derived: false,
+    };
+    let legacy_bytes = bincode::serialize(&legacy).unwrap();
+
+    let absent_bytes = bincode::serialize(&update_with_summary(None)).unwrap();
+    assert_eq!(&absent_bytes[..legacy_bytes.len()], &legacy_bytes[..]);
+    assert_eq!(absent_bytes.len(), legacy_bytes.len() + 1);
+
+    let present_bytes = bincode::serialize(&update_with_summary(Some(ProgramStatusSummary {
+        state: AgentState::Error,
+        title: Some("t".to_string()),
+        app: None,
+    })))
+    .unwrap();
+    assert_eq!(&present_bytes[..legacy_bytes.len()], &legacy_bytes[..]);
+
+    let old_reader: LegacyAgentStatusUpdateMsg = bincode::deserialize(&present_bytes).unwrap();
+    assert_eq!(old_reader.pane_id, 7);
+    assert_eq!(old_reader.state, Some(AgentState::Working));
+    assert_eq!(old_reader.revision, 3);
 }
 
 // ---- public pane ID helpers (task0002) ----

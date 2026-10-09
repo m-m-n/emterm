@@ -536,6 +536,7 @@ fn pump_all_closed_mux_pane_discards_agent_notification_rate_limit_state() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -589,6 +590,7 @@ fn pump_all_ac5_replay_derived_update_does_not_notify() {
         name: None,
         revision: 1,
         replay_derived: true,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -905,6 +907,7 @@ fn pump_all_applies_daemon_agent_status_update_to_model() {
         name: Some("agent".to_string()),
         revision: 7,
         replay_derived: false,
+        program_status: None,
     };
     let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 42, &update);
     app.on_mux_message(0, msg);
@@ -994,6 +997,7 @@ fn pump_all_learns_public_pane_id_from_daemon_agent_status_update() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 42, &update);
     app.on_mux_message(0, msg);
@@ -1043,6 +1047,7 @@ fn closing_a_mux_pane_forgets_its_public_pane_id() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     let update_msg = MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update);
     app.on_mux_message(0, update_msg);
@@ -1229,6 +1234,7 @@ fn ts5_public_pane_id_map_and_rate_limit_key_are_scoped() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1241,6 +1247,7 @@ fn ts5_public_pane_id_map_and_rate_limit_key_are_scoped() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         1,
@@ -1350,6 +1357,7 @@ fn ts7_batch_apply_with_two_scopes_sharing_a_wire_pane_id_stays_independent() {
         name: Some("agent-a".to_string()),
         revision: 3,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1362,6 +1370,7 @@ fn ts7_batch_apply_with_two_scopes_sharing_a_wire_pane_id_stays_independent() {
         name: Some("agent-b".to_string()),
         revision: 9,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         1,
@@ -1443,6 +1452,7 @@ fn ts8_two_connections_sharing_a_wire_pane_id_stay_independent_through_close() {
         name: Some("agent-a".to_string()),
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1455,6 +1465,7 @@ fn ts8_two_connections_sharing_a_wire_pane_id_stay_independent_through_close() {
         name: Some("agent-b".to_string()),
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         1,
@@ -1601,6 +1612,7 @@ fn ac3_detach_releases_model_entry_public_id_and_rate_limit_identity() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1666,6 +1678,7 @@ fn ac4_reattach_on_same_tab_reusing_wire_pane_id_starts_with_a_clean_slate() {
         name: Some("claude".to_string()),
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1788,6 +1801,7 @@ fn ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouche
         name: Some("agent-a".to_string()),
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1800,6 +1814,7 @@ fn ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouche
         name: Some("agent-b".to_string()),
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         1,
@@ -1835,4 +1850,317 @@ fn ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouche
         rate_key1_before, rate_key1_after,
         "tab 1's derived rate-limit key is unchanged"
     );
+}
+
+// ── osc7501-program-status task0002: wire summary -> composite ───────
+
+/// Apply one daemon `AgentStatusUpdate` (tab 0 hosts the mux pane) and run
+/// `pump_all`. The window is unfocused so the pane is never "visible" and
+/// the notification gates other than the ones under test pass.
+fn apply_wire_update(app: &mut App, update: &mux_ipc::protocol::AgentStatusUpdateMsg) {
+    app.on_mux_message(
+        0,
+        MuxMessage::control(MessageType::AgentStatusUpdate, update.pane_id, update),
+    );
+    app.pump_all();
+}
+
+fn wire_update(
+    pane_id: u32,
+    state: Option<mux_ipc::protocol::AgentState>,
+    name: Option<&str>,
+    revision: u64,
+    replay_derived: bool,
+    program_status: Option<mux_ipc::protocol::ProgramStatusSummary>,
+) -> mux_ipc::protocol::AgentStatusUpdateMsg {
+    mux_ipc::protocol::AgentStatusUpdateMsg {
+        pane_id,
+        public_pane_id: format!("abc-{pane_id}"),
+        state,
+        name: name.map(str::to_string),
+        revision,
+        replay_derived,
+        program_status,
+    }
+}
+
+fn wire_summary(
+    state: mux_ipc::protocol::AgentState,
+    title: Option<&str>,
+    app: Option<&str>,
+) -> mux_ipc::protocol::ProgramStatusSummary {
+    mux_ipc::protocol::ProgramStatusSummary {
+        state,
+        title: title.map(str::to_string),
+        app: app.map(str::to_string),
+    }
+}
+
+/// An `App` with one tab, an unfocused window, the capturing sink and the
+/// English locale, plus the mux pane key the updates below target.
+fn app_for_wire_summary() -> (App, Arc<TestNotifySink>, crate::agent_status_model::PaneKey) {
+    let (mut app, sink) = app_with_test_sink();
+    app.locale = crate::i18n::Locale::En;
+    app.spawn_initial_tab();
+    app.window_focused = false;
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
+    (
+        app,
+        sink,
+        crate::agent_status_model::PaneKey::MuxPane(scope, 42),
+    )
+}
+
+// AC-5: the GUI applies a daemon update's summary, so the pane's composite
+// follows it.
+#[test]
+fn pump_all_applies_the_wire_summary_to_the_pane_composite() {
+    use mux_ipc::protocol::AgentState as Wire;
+    let (mut app, _sink, key) = app_for_wire_summary();
+
+    apply_wire_update(
+        &mut app,
+        &wire_update(
+            42,
+            Some(Wire::Idle),
+            Some("claude"),
+            4,
+            false,
+            Some(wire_summary(Wire::Error, Some("build"), Some("cargo"))),
+        ),
+    );
+
+    let status = app.agent_status.status(&key).expect("entry applied");
+    assert_eq!(status.state, Some(crate::agent_status::AgentState::Error));
+    assert_eq!(status.name.as_deref(), Some("build"));
+    assert_eq!(status.revision, 4, "daemon revision stored verbatim");
+    assert_eq!(
+        status.osc777_state,
+        Some(crate::agent_status::AgentState::Idle)
+    );
+    assert_eq!(
+        status.summary,
+        Some(crate::agent_status_model::ProgramStatusSummary {
+            state: crate::agent_status::AgentState::Error,
+            title: Some("build".to_string()),
+            app: Some("cargo".to_string()),
+        })
+    );
+    assert_eq!(
+        app.agent_status_pane_badge(
+            crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id),
+            42
+        ),
+        Some(crate::agent_status_model::Aggregated {
+            state: crate::agent_status::AgentState::Error,
+            unseen: true
+        })
+    );
+}
+
+// AC-5: a summary-only update (the pane has no OSC 777 state).
+#[test]
+fn pump_all_applies_a_summary_only_update() {
+    use mux_ipc::protocol::AgentState as Wire;
+    let (mut app, _sink, key) = app_for_wire_summary();
+
+    apply_wire_update(
+        &mut app,
+        &wire_update(
+            42,
+            None,
+            None,
+            1,
+            false,
+            Some(wire_summary(Wire::Working, None, Some("cargo"))),
+        ),
+    );
+
+    let status = app.agent_status.status(&key).expect("entry applied");
+    assert_eq!(status.state, Some(crate::agent_status::AgentState::Working));
+    assert_eq!(status.name.as_deref(), Some("cargo"));
+}
+
+// AC-5: an update without the summary item means "no summary" — a later
+// update drops an earlier summary.
+#[test]
+fn pump_all_update_without_a_summary_drops_the_earlier_summary() {
+    use mux_ipc::protocol::AgentState as Wire;
+    let (mut app, _sink, key) = app_for_wire_summary();
+    apply_wire_update(
+        &mut app,
+        &wire_update(
+            42,
+            Some(Wire::Idle),
+            None,
+            1,
+            false,
+            Some(wire_summary(Wire::Error, None, None)),
+        ),
+    );
+    assert_eq!(
+        app.agent_status.status(&key).unwrap().state,
+        Some(crate::agent_status::AgentState::Error)
+    );
+
+    apply_wire_update(
+        &mut app,
+        &wire_update(42, Some(Wire::Idle), None, 2, false, None),
+    );
+
+    let status = app.agent_status.status(&key).unwrap();
+    assert_eq!(status.state, Some(crate::agent_status::AgentState::Idle));
+    assert_eq!(status.summary, None);
+}
+
+// AC-5: a replay-derived update with a summary applies silently.
+#[test]
+fn pump_all_replay_derived_update_with_a_summary_applies_silently() {
+    use mux_ipc::protocol::AgentState as Wire;
+    let (mut app, sink, key) = app_for_wire_summary();
+
+    apply_wire_update(
+        &mut app,
+        &wire_update(
+            42,
+            None,
+            None,
+            9,
+            true,
+            Some(wire_summary(Wire::Error, Some("build"), None)),
+        ),
+    );
+
+    let status = app.agent_status.status(&key).expect("state applied");
+    assert_eq!(status.state, Some(crate::agent_status::AgentState::Error));
+    assert_eq!(status.name.as_deref(), Some("build"));
+    assert!(sink.calls().is_empty(), "no notification on replay");
+    assert!(app.agent_status.drain_transitions().is_empty());
+}
+
+// AC-3 / AC-7: the transition name (title, then app, then OSC 777 name,
+// then the default name) reaches the notification body, and the state word
+// is `error`.
+#[test]
+fn pump_all_error_transition_notifies_with_the_d5_name_and_the_error_word() {
+    use mux_ipc::protocol::AgentState as Wire;
+    // (OSC 777 name, summary title, summary app, expected name)
+    let cases: [(Option<&str>, Option<&str>, Option<&str>, &str); 4] = [
+        (Some("claude"), Some("build"), Some("cargo"), "build"),
+        (Some("claude"), None, Some("cargo"), "cargo"),
+        (Some("claude"), None, None, "claude"),
+        (None, None, None, "Agent"),
+    ];
+    for (osc777_name, title, app_name, expected) in cases {
+        let (mut app, sink, _key) = app_for_wire_summary();
+        apply_wire_update(
+            &mut app,
+            &wire_update(
+                42,
+                Some(Wire::Idle),
+                osc777_name,
+                1,
+                false,
+                Some(wire_summary(Wire::Error, title, app_name)),
+            ),
+        );
+        let calls = sink.calls();
+        assert_eq!(calls.len(), 1, "{expected}: one notification");
+        assert_eq!(calls[0].0, crate::notifications::NOTIFICATION_TITLE);
+        let tab_title = crate::notifications::sanitize_title(&app.tabs[0].title);
+        assert_eq!(
+            calls[0].1,
+            format!("{expected}: {tab_title} (error)"),
+            "{expected}"
+        );
+    }
+}
+
+// AC-7: the body carries the name as plain text — markup is neither
+// interpreted nor rewritten before the send path (which escapes it).
+#[test]
+fn pump_all_error_notification_carries_markup_in_the_name_as_plain_text() {
+    use mux_ipc::protocol::AgentState as Wire;
+    let (mut app, sink, _key) = app_for_wire_summary();
+    apply_wire_update(
+        &mut app,
+        &wire_update(
+            42,
+            None,
+            None,
+            1,
+            false,
+            Some(wire_summary(Wire::Error, Some("<b>x</b> & <i>y</i>"), None)),
+        ),
+    );
+    let calls = sink.calls();
+    assert_eq!(calls.len(), 1);
+    assert!(
+        calls[0].1.starts_with("<b>x</b> & <i>y</i>: "),
+        "name must reach the body verbatim, got {:?}",
+        calls[0].1
+    );
+}
+
+// AC-7: error is gated by `agent_notify_on_done`, independent of
+// `agent_notify_on_blocked`.
+#[test]
+fn pump_all_error_notification_follows_the_done_toggle_not_the_blocked_toggle() {
+    use mux_ipc::protocol::AgentState as Wire;
+    let update = wire_update(
+        42,
+        Some(Wire::Idle),
+        None,
+        1,
+        false,
+        Some(wire_summary(Wire::Error, Some("build"), None)),
+    );
+
+    // done ON, blocked OFF -> fires.
+    let (mut app, sink, _key) = app_for_wire_summary();
+    with_setting(&mut app, |s| {
+        s.agent_notify_on_done = true;
+        s.agent_notify_on_blocked = false;
+    });
+    apply_wire_update(&mut app, &update);
+    assert_eq!(sink.calls().len(), 1);
+
+    // done OFF, blocked ON -> suppressed.
+    let (mut app, sink, _key) = app_for_wire_summary();
+    with_setting(&mut app, |s| {
+        s.agent_notify_on_done = false;
+        s.agent_notify_on_blocked = true;
+    });
+    apply_wire_update(&mut app, &update);
+    assert!(sink.calls().is_empty());
+}
+
+// AC-3: a summary that ranks below the pane's OSC 777 state leaves the
+// composite (and so the notification decision) unchanged.
+#[test]
+fn pump_all_summary_below_the_osc777_state_causes_no_transition() {
+    use mux_ipc::protocol::AgentState as Wire;
+    let (mut app, sink, key) = app_for_wire_summary();
+    apply_wire_update(
+        &mut app,
+        &wire_update(42, Some(Wire::Working), Some("claude"), 1, false, None),
+    );
+    assert!(sink.calls().is_empty());
+
+    apply_wire_update(
+        &mut app,
+        &wire_update(
+            42,
+            Some(Wire::Working),
+            Some("claude"),
+            2,
+            false,
+            Some(wire_summary(Wire::Done, Some("child"), None)),
+        ),
+    );
+
+    let status = app.agent_status.status(&key).unwrap();
+    assert_eq!(status.state, Some(crate::agent_status::AgentState::Working));
+    assert_eq!(status.name.as_deref(), Some("claude"));
+    assert!(sink.calls().is_empty(), "working -> working: no transition");
 }

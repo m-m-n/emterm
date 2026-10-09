@@ -925,8 +925,11 @@ impl std::error::Error for ApcDecodeError {}
 /// Local mirror of the core agent-status module's state enum
 /// (`src-tauri/src/agent_status.rs`). `mux_ipc` must not depend on the
 /// binary crate, so this type owns its own serde representation; the
-/// lowercase string values (`idle`/`working`/`blocked`/`done`) are the
-/// wire contract shared between the two modules.
+/// lowercase string values (`idle`/`working`/`blocked`/`done`/`error`) are
+/// the wire contract shared between the two modules.
+///
+/// `Error` is appended after the original four values: the positional
+/// (bincode) encoding of `Idle`/`Working`/`Blocked`/`Done` never changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
@@ -934,11 +937,32 @@ pub enum AgentState {
     Working,
     Blocked,
     Done,
+    Error,
+}
+
+/// The OSC 7501 (Program Status Protocol) summary of one mux pane, carried
+/// as the trailing optional item of [`AgentStatusUpdateMsg`].
+///
+/// - `state`: the pane's OSC 7501 aggregate state.
+/// - `title`: the deciding record's title, already sanitized by the sender
+///   (the receiver uses it as received).
+/// - `app`: the deciding record's effective app (own app, else the nearest
+///   ancestor's), already validated by the sender.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramStatusSummary {
+    pub state: AgentState,
+    pub title: Option<String>,
+    pub app: Option<String>,
 }
 
 /// Daemon → GUI unsolicited push: a mux pane's agent status changed, or is
 /// being restated after a snapshot/reattach (`replay_derived: true`, in
 /// which case the receiver must apply it silently — no transition event).
+///
+/// `program_status` is the TRAILING item (appended last so the positional
+/// encoding of the leading fields never changes): the pane's OSC 7501
+/// summary, absent when the pane has no OSC 7501 records. A reader that
+/// predates the item ignores the trailing bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentStatusUpdateMsg {
     pub pane_id: u32,
@@ -947,6 +971,7 @@ pub struct AgentStatusUpdateMsg {
     pub name: Option<String>,
     pub revision: u64,
     pub replay_derived: bool,
+    pub program_status: Option<ProgramStatusSummary>,
 }
 
 /// Request: read the last `lines` lines of a mux pane's visible content.
