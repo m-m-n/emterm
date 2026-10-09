@@ -17,9 +17,13 @@
 
 use std::fmt;
 
-/// The agent states (SPEC FR1). An OSC 777 report may carry only `Idle`,
-/// `Working`, `Blocked` and `Done`; `Error` is reachable through OSC 7501
-/// (osc7501-program-status FR11) and never through [`parse`].
+/// The semantic agent states a pane can show.
+///
+/// An OSC 777 agent-status report may carry only `Idle` / `Working` /
+/// `Blocked` / `Done` (SPEC FR1; [`parse`] rejects `state=error`). `Error`
+/// comes only from the OSC 7501 (Program Status Protocol) side, through
+/// [`AgentState::from_program_status_word`], and reaches consumers through
+/// [`compose`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentState {
     Idle,
@@ -30,13 +34,23 @@ pub enum AgentState {
 }
 
 impl AgentState {
-    /// The four states an OSC 777 report may carry, for exhaustive test
-    /// iteration. `Error` is deliberately not a member.
+    /// The four states OSC 777 accepts, for exhaustive test iteration.
+    /// Deliberately excludes [`AgentState::Error`]: OSC 777 never carries it.
     pub const ALL: [AgentState; 4] = [
         AgentState::Idle,
         AgentState::Working,
         AgentState::Blocked,
         AgentState::Done,
+    ];
+
+    /// All five states (the four of [`AgentState::ALL`] plus `Error`), for
+    /// exhaustive iteration over everything a consumer can see.
+    pub const ALL_WITH_ERROR: [AgentState; 5] = [
+        AgentState::Idle,
+        AgentState::Working,
+        AgentState::Blocked,
+        AgentState::Done,
+        AgentState::Error,
     ];
 
     fn as_wire(self) -> &'static str {
@@ -49,7 +63,8 @@ impl AgentState {
         }
     }
 
-    /// OSC 777 state words: exactly the four of [`AgentState::ALL`].
+    /// The OSC 777 state grammar: exactly `idle` / `working` / `blocked` /
+    /// `done`. `error` is NOT accepted here.
     fn parse_wire(s: &str) -> Option<Self> {
         match s {
             "idle" => Some(AgentState::Idle),
@@ -60,9 +75,11 @@ impl AgentState {
         }
     }
 
-    /// Five-word conversion: the Program Status (OSC 7501) state words
-    /// `idle`, `working`, `blocked`, `done` and `error` map to the core
-    /// state; every other input maps to nothing.
+    /// The five-word conversion from a Program Status Protocol (OSC 7501)
+    /// state word to the core state: `idle` / `working` / `blocked` / `done`
+    /// / `error`. Every other input (including different case or
+    /// surrounding whitespace) maps to nothing. Distinct from the OSC 777
+    /// grammar, which still rejects `error`.
     pub fn from_program_status_word(word: &str) -> Option<Self> {
         match word {
             "error" => Some(AgentState::Error),
@@ -70,25 +87,28 @@ impl AgentState {
         }
     }
 
-    /// In-pane composition rank: blocked > working > error > done > idle.
-    /// The single place the order is defined.
-    fn composition_rank(self) -> u8 {
+    /// Rank of the in-pane composition order
+    /// `blocked > working > error > done > idle` (higher is stronger). The
+    /// daemon has no read flag, so this order is read-flag free; the GUI's
+    /// cross-pane aggregation adds the unseen distinction on top of it in
+    /// `agent_status_model`. The single place the in-pane order is defined.
+    pub fn compose_rank(self) -> u8 {
         match self {
-            AgentState::Idle => 0,
-            AgentState::Done => 1,
-            AgentState::Error => 2,
-            AgentState::Working => 3,
             AgentState::Blocked => 4,
+            AgentState::Working => 3,
+            AgentState::Error => 2,
+            AgentState::Done => 1,
+            AgentState::Idle => 0,
         }
     }
 }
 
-/// Compose a pane's OSC 777 state with its OSC 7501 aggregate: the higher of
-/// the two by [`AgentState::composition_rank`]; one side absent yields the
-/// other side; both absent yields no state.
+/// Compose a pane's OSC 777 state with its OSC 7501 aggregate state: the
+/// higher of the two by [`AgentState::compose_rank`]. A missing side yields
+/// the other side; both missing yields no state.
 pub fn compose(osc777: Option<AgentState>, osc7501: Option<AgentState>) -> Option<AgentState> {
     match (osc777, osc7501) {
-        (Some(a), Some(b)) => Some(if b.composition_rank() > a.composition_rank() {
+        (Some(a), Some(b)) => Some(if b.compose_rank() >= a.compose_rank() {
             b
         } else {
             a
@@ -515,5 +535,121 @@ mod tests {
     fn percent_encode_escapes_delimiter_and_control_chars() {
         let payload = build_set_payload(AgentState::Idle, Some("a;b\x1bc"));
         assert!(payload.contains("name=a%3Bb%1Bc"));
+    }
+
+    // ── osc7501-program-status task0002 AC-1: error state ────────────
+
+    #[test]
+    fn error_state_has_the_word_error() {
+        assert_eq!(AgentState::Error.to_string(), "error");
+    }
+
+    #[test]
+    fn osc777_parse_still_rejects_state_error() {
+        assert_eq!(parse("emterm;agent-status;v=1;state=error"), None);
+        assert_eq!(
+            parse("emterm;agent-status;v=1;state=error;name=x"),
+            None,
+            "a named error report is rejected as a whole"
+        );
+    }
+
+    #[test]
+    fn osc777_state_collection_keeps_exactly_the_four_original_members() {
+        assert_eq!(
+            AgentState::ALL,
+            [
+                AgentState::Idle,
+                AgentState::Working,
+                AgentState::Blocked,
+                AgentState::Done,
+            ]
+        );
+    }
+
+    #[test]
+    fn five_word_conversion_maps_every_program_status_word() {
+        for (word, expected) in [
+            ("idle", AgentState::Idle),
+            ("working", AgentState::Working),
+            ("blocked", AgentState::Blocked),
+            ("done", AgentState::Done),
+            ("error", AgentState::Error),
+        ] {
+            assert_eq!(
+                AgentState::from_program_status_word(word),
+                Some(expected),
+                "{word}"
+            );
+        }
+    }
+
+    #[test]
+    fn five_word_conversion_rejects_every_other_input() {
+        for word in [
+            "", "clear", "Error", "ERROR", " error", "error ", "err", "sleeping", "done;",
+            "idle=1", "\u{0}",
+        ] {
+            assert_eq!(AgentState::from_program_status_word(word), None, "{word:?}");
+        }
+    }
+
+    #[test]
+    fn five_word_conversion_round_trips_the_display_word() {
+        for state in AgentState::ALL_WITH_ERROR {
+            assert_eq!(
+                AgentState::from_program_status_word(&state.to_string()),
+                Some(state),
+                "{state:?}"
+            );
+        }
+    }
+
+    // ── osc7501-program-status task0002 AC-2: composition ────────────
+
+    #[test]
+    fn compose_returns_the_higher_input_by_blocked_working_error_done_idle() {
+        let order = [
+            AgentState::Blocked,
+            AgentState::Working,
+            AgentState::Error,
+            AgentState::Done,
+            AgentState::Idle,
+        ];
+        for (i, a) in order.iter().enumerate() {
+            for (j, b) in order.iter().enumerate() {
+                let expected = order[i.min(j)];
+                assert_eq!(
+                    compose(Some(*a), Some(*b)),
+                    Some(expected),
+                    "osc777={a:?} osc7501={b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compose_working_outranks_a_child_done_or_error() {
+        assert_eq!(
+            compose(Some(AgentState::Working), Some(AgentState::Done)),
+            Some(AgentState::Working)
+        );
+        assert_eq!(
+            compose(Some(AgentState::Error), Some(AgentState::Working)),
+            Some(AgentState::Working)
+        );
+    }
+
+    #[test]
+    fn compose_returns_the_present_side_when_one_side_is_absent() {
+        for state in AgentState::ALL_WITH_ERROR {
+            assert_eq!(compose(Some(state), None), Some(state), "{state:?}");
+            assert_eq!(compose(None, Some(state)), Some(state), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn compose_returns_no_state_when_both_are_absent() {
+        assert_eq!(compose(None, None), None);
     }
 }

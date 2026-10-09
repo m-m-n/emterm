@@ -926,8 +926,10 @@ impl std::error::Error for ApcDecodeError {}
 /// (`src-tauri/src/agent_status.rs`). `mux_ipc` must not depend on the
 /// binary crate, so this type owns its own serde representation; the
 /// lowercase string values (`idle`/`working`/`blocked`/`done`/`error`) are
-/// the wire contract shared between the two modules. `Error` is appended
-/// after the original four so their encoding is unchanged.
+/// the wire contract shared between the two modules.
+///
+/// `Error` is appended after the original four values: the positional
+/// (bincode) encoding of `Idle`/`Working`/`Blocked`/`Done` never changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
@@ -938,10 +940,14 @@ pub enum AgentState {
     Error,
 }
 
-/// A mux pane's OSC 7501 (Program Status) summary carried by
-/// [`AgentStatusUpdateMsg`]: the aggregate state of the pane's record table,
-/// the deciding record's title (already sanitized for names by the daemon)
-/// and the deciding record's effective app.
+/// The OSC 7501 (Program Status Protocol) summary of one mux pane, carried
+/// as the trailing optional item of [`AgentStatusUpdateMsg`].
+///
+/// - `state`: the pane's OSC 7501 aggregate state.
+/// - `title`: the deciding record's title, already sanitized by the sender
+///   (the receiver uses it as received).
+/// - `app`: the deciding record's effective app (own app, else the nearest
+///   ancestor's), already validated by the sender.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProgramStatusSummary {
     pub state: AgentState,
@@ -952,6 +958,11 @@ pub struct ProgramStatusSummary {
 /// Daemon → GUI unsolicited push: a mux pane's agent status changed, or is
 /// being restated after a snapshot/reattach (`replay_derived: true`, in
 /// which case the receiver must apply it silently — no transition event).
+///
+/// `program_status` is the TRAILING item (appended last so the positional
+/// encoding of the leading fields never changes): the pane's OSC 7501
+/// summary, absent when the pane has no OSC 7501 records. A reader that
+/// predates the item ignores the trailing bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentStatusUpdateMsg {
     pub pane_id: u32,
@@ -960,9 +971,6 @@ pub struct AgentStatusUpdateMsg {
     pub name: Option<String>,
     pub revision: u64,
     pub replay_derived: bool,
-    /// The pane's OSC 7501 summary; `None` when the pane has no records.
-    /// Appended last: the positional encoding lets an older reader ignore
-    /// the trailing item.
     pub program_status: Option<ProgramStatusSummary>,
 }
 

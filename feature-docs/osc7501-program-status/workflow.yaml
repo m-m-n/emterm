@@ -162,7 +162,7 @@ tasks:
     - FR16
     - FR18
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-program-status/task0002
   task0003:
     title: Plain-tab OSC 7501 ingestion and query response
