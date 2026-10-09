@@ -270,7 +270,7 @@ tasks:
     requirements:
     - FR8
     - FR15
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-program-status/task0006
   task0007:
     title: Hot-upgrade handoff of OSC 7501 records
