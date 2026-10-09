@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use tokio::sync::mpsc;
 
-use crate::agent_status::AgentState;
+use crate::agent_status::{AgentState, compose};
 use crate::agent_status_exit_latch::AgentStatusExitLatch;
+use crate::program_status::{Table as ProgramStatusTable, Terminator as ProgramStatusTerminator};
 use crate::prompts::PromptMarkKind;
 
 use super::output_capture::OutputCapture;
@@ -58,15 +59,15 @@ pub type PaneExitSender = mpsc::Sender<PaneId>;
 pub type SharedPaneExitSender = Arc<StdMutex<Option<PaneExitSender>>>;
 
 /// One item flowing through the daemon-lifetime per-pane agent-status
-/// channel (task0003, SPEC FR4): either a raw agent-status OSC 777 report
-/// body, or a live OSC 133 prompt mark. Both travel through the SAME
-/// channel (not two independently-scheduled ones) so the daemon's single
-/// consuming task (`mux::daemon::run_agent_status_task`) applies both in
-/// the exact relative order the reader thread observed them on the PTY
-/// stream — two separate channels/tasks could race and reorder a `Set`
-/// relative to a `D`/`A` pair from the same PTY read, which SPEC FR4
-/// explicitly forbids.
-#[derive(Debug, Clone)]
+/// channel (task0003, SPEC FR4): a raw agent-status OSC 777 report body, a
+/// live OSC 133 prompt mark, a complete OSC 7501 sequence or a terminal
+/// reset (RIS). All of them travel through the SAME channel (not
+/// independently-scheduled ones) so the daemon's single consuming task
+/// (`mux::daemon::run_agent_status_task`) applies them in the exact relative
+/// order the reader thread observed them on the PTY stream — separate
+/// channels/tasks could race and reorder a `Set` relative to a `D`/`A` pair
+/// from the same PTY read, which SPEC FR4 explicitly forbids.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentStatusFeedItem {
     /// A raw `agent-status` OSC 777 report body (the full
     /// `emterm;agent-status;…` payload, `agent_status::parse`'s input
@@ -78,6 +79,17 @@ pub enum AgentStatusFeedItem {
     /// main screen — never marks reconstructed for snapshot/replay/
     /// reattach purposes, and never alt-screen-suppressed marks (SPEC FR5).
     Osc133Mark(PromptMarkKind),
+    /// A complete OSC 7501 sequence (osc7501-program-status FR1): the text
+    /// after `7501;` and the terminator kind, exactly the input of
+    /// `program_status::parse`. Reports are unconditional like OSC 777
+    /// reports — they do not depend on live spans.
+    ProgramStatus {
+        body: String,
+        terminator: ProgramStatusTerminator,
+    },
+    /// A terminal reset (RIS, `ESC c`) the terminal would execute
+    /// (osc7501-program-status FR7 / FR14). Unconditional like a report.
+    Reset,
 }
 
 /// Channel carrying agent-status-relevant events for a pane (raw OSC 777
@@ -98,9 +110,11 @@ pub type AgentStatusReportSender = mpsc::Sender<(PaneId, AgentStatusFeedItem)>;
 pub type SharedAgentStatusReportSender = Arc<StdMutex<Option<AgentStatusReportSender>>>;
 
 /// A pane's agent-status state (SPEC FR3): the most recently accepted
-/// report (or none), plus a monotonically increasing revision. Every
-/// ACCEPTED report — set, clear, or a same-state re-report — increments
-/// `revision`; a rejected report is never applied (see
+/// OSC 777 report (or none), the pane's OSC 7501 record table, plus a
+/// monotonically increasing revision. Every ACCEPTED report — set, clear, or
+/// a same-state re-report — increments `revision`, and so does every change
+/// of the OSC 7501 table (an accepted OSC 7501 report, or a prompt start /
+/// reset that removed records); a rejected report is never applied (see
 /// `MuxPane::apply_agent_status_event`, which is only ever called with an
 /// `AgentStatusEvent` a caller already validated via `agent_status::parse`).
 /// State is in-memory only and is discarded when the owning `MuxPane` is
@@ -110,6 +124,22 @@ pub struct AgentStatus {
     pub state: Option<AgentState>,
     pub name: Option<String>,
     pub revision: u64,
+    /// The pane's OSC 7501 records (empty by default), under the same lock
+    /// as the OSC 777 state and the revision.
+    pub program_status: ProgramStatusTable,
+}
+
+impl AgentStatus {
+    /// The pane's composite state: the OSC 777 state composed with the
+    /// OSC 7501 table's aggregate state (SC-2 compose over the five-word
+    /// conversion). A pane with an empty table yields exactly `state`.
+    pub fn composite_state(&self) -> Option<AgentState> {
+        let osc7501 = self
+            .program_status
+            .summary()
+            .and_then(|summary| AgentState::from_program_status_word(summary.state.word()));
+        compose(self.state, osc7501)
+    }
 }
 
 /// Thread-safe shared reference to a pane's agent-status state.
@@ -129,10 +159,10 @@ pub type SharedAgentStatusExitLatch = Arc<StdMutex<AgentStatusExitLatch>>;
 
 /// A registered `WaitAgentState` request awaiting a qualifying state change
 /// (task0004, IMPLEMENTATION.md "Wait implementation"). Level-triggered:
-/// fires when `states` contains the pane's current
-/// [`AgentStatus::state`] AND (if set) the current revision exceeds
+/// fires when `states` contains the pane's current composite state
+/// ([`AgentStatus::composite_state`]) AND (if set) the current revision exceeds
 /// `after_revision`. `states` is stored in the CORE `AgentState` type (this
-/// module's `AgentStatus::state` type) so matching needs no per-check wire
+/// module's composite state type) so matching needs no per-check wire
 /// conversion; the wire `mux_ipc::protocol::AgentState` only appears at the
 /// request/response boundary in `mux::ipc::handlers`.
 ///

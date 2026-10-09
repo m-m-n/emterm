@@ -230,7 +230,7 @@ tasks:
     - FR14
     - FR16
     - NFR3
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-program-status/task0004
   task0005:
     title: Status bar template variable {agent_status}

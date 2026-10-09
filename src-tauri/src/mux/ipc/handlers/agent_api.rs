@@ -272,36 +272,58 @@ pub(in crate::mux::ipc) async fn handle_send_text(
     })
 }
 
-/// Pure check: does `status` already satisfy `states` (and, when set,
-/// `after_revision`)? Used both for the immediate "wait succeeds now" path
-/// and shared with [`reevaluate_agent_waiters`]'s matching logic (AC-3,
-/// AC-4).
-fn check_wait_immediate(
-    status: &AgentStatus,
+/// Pure check: does the pane's `state` at `revision` satisfy `states` (and,
+/// when set, `after_revision`)? Shared by the immediate "wait succeeds now"
+/// path and [`reevaluate_agent_waiters`] (AC-3, AC-4).
+fn check_wait(
+    state: Option<CoreAgentState>,
+    revision: u64,
     states: &[CoreAgentState],
     after_revision: Option<u64>,
 ) -> Option<(CoreAgentState, u64)> {
-    let state = status.state?;
-    let revision_ok = after_revision.map(|a| status.revision > a).unwrap_or(true);
+    let state = state?;
+    let revision_ok = after_revision.map(|a| revision > a).unwrap_or(true);
     if revision_ok && states.contains(&state) {
-        Some((state, status.revision))
+        Some((state, revision))
     } else {
         None
     }
 }
 
-/// Re-evaluate every registered waiter on `pane` against its current agent
-/// status (IMPLEMENTATION.md "Wait implementation": level-triggered,
-/// re-evaluated on every accepted report). Called by the daemon's
-/// agent-status ingestion path (`mux::daemon::apply_agent_status_report`)
-/// after every accepted report (set/clear/same-state re-report).
+/// Does `status` already satisfy `states` (and, when set, `after_revision`)?
+/// The state matched is the pane's COMPOSITE state — the OSC 777 state
+/// composed with the OSC 7501 aggregate (osc7501-program-status FR9 / FR16);
+/// a pane that only saw OSC 777 matches exactly as before.
+fn check_wait_immediate(
+    status: &AgentStatus,
+    states: &[CoreAgentState],
+    after_revision: Option<u64>,
+) -> Option<(CoreAgentState, u64)> {
+    check_wait(
+        status.composite_state(),
+        status.revision,
+        states,
+        after_revision,
+    )
+}
+
+/// Re-evaluate every registered waiter on `pane` against its current
+/// composite agent state (IMPLEMENTATION.md "Wait implementation":
+/// level-triggered, re-evaluated on every revision change). Called by the
+/// daemon's agent-status ingestion path
+/// (`mux::daemon::build_agent_status_update_message`) after every accepted
+/// OSC 777 report (set/clear/same-state re-report), every accepted OSC 7501
+/// report and every prompt start or reset that changed the OSC 7501 records.
 ///
 /// A waiter is removed from the registry when it fires (states+revision
 /// match — its outcome is sent) OR when its receiver is already gone
 /// (disconnected client, or a `wait` request that already timed out) —
 /// this is the (non-polling) discard mechanism for AC-5.
 pub(in crate::mux) fn reevaluate_agent_waiters(pane: &MuxPane) {
-    let status = pane.agent_status.lock().unwrap().clone();
+    let (state, revision) = {
+        let status = pane.agent_status.lock().unwrap();
+        (status.composite_state(), status.revision)
+    };
     let mut waiters = pane.agent_waiters.lock().unwrap();
     waiters.retain_mut(|w| {
         let is_closed = match w.responder.as_ref() {
@@ -311,7 +333,7 @@ pub(in crate::mux) fn reevaluate_agent_waiters(pane: &MuxPane) {
         if is_closed {
             return false;
         }
-        match check_wait_immediate(&status, &w.states, w.after_revision) {
+        match check_wait(state, revision, &w.states, w.after_revision) {
             Some((state, revision)) => {
                 if let Some(responder) = w.responder.take() {
                     let _ = responder.send(AgentWaitOutcome::Matched { state, revision });
@@ -336,8 +358,9 @@ pub(in crate::mux) fn fail_agent_waiters_pane_gone(pane: &MuxPane) {
     }
 }
 
-/// Handle `WaitAgentState`: block until the pane's agent state enters
-/// `states` (optionally requiring `revision > after_revision`), or until
+/// Handle `WaitAgentState`: block until the pane's composite agent state
+/// (OSC 777 composed with OSC 7501) enters `states` (optionally requiring
+/// `revision > after_revision`), or until
 /// `timeout_ms` elapses (AC-3, AC-4, AC-5, FR12).
 ///
 /// Level-triggered and race-free with respect to concurrent state updates:

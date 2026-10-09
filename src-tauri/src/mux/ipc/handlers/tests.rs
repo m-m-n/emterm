@@ -3872,3 +3872,159 @@ async fn on_demand_snapshot_decides_the_construct_outside_both_exclusions() {
         "the decider must run with neither the capture exclusion nor the boundary exclusion held"
     );
 }
+
+// ── WaitAgentState follows the composite state
+//    (osc7501-program-status task0004, AC-6) ──────────────────────────────
+
+mod wait_composite {
+    use super::*;
+    use crate::program_status::{Parsed, Report, Terminator, parse};
+
+    fn report(body: &str) -> Report {
+        match parse(body, Terminator::Bel) {
+            Parsed::Report(report) => report,
+            other => panic!("{body}: expected a report, got {other:?}"),
+        }
+    }
+
+    fn wait_request(
+        public_pane_id: String,
+        states: Vec<AgentState>,
+        timeout_ms: u64,
+    ) -> MuxMessage {
+        let req = WaitAgentStateMsg {
+            public_pane_id,
+            states,
+            timeout_ms,
+            after_revision: None,
+        };
+        MuxMessage::control(MessageType::WaitAgentState, 0, &req)
+    }
+
+    /// AC-6: a wait for `error` is satisfied at once by an OSC 7501 `error`
+    /// record, and the result carries the composite state and the revision.
+    #[tokio::test]
+    async fn ac6_a_wait_for_error_is_satisfied_by_an_osc7501_error_record() {
+        let pane_id = 410;
+        let (mgr, sid, wid) = setup_session_with_pane(pane_id).await;
+        let public_pane_id = {
+            let m = mgr.lock().await;
+            get_pane(&m, sid, wid, pane_id).apply_program_status_report(report("state=error"));
+            m.public_pane_id(pane_id)
+        };
+
+        let msg = wait_request(public_pane_id, vec![AgentState::Error], 1000);
+        let result = handle_wait_agent_state(&msg, &mgr)
+            .await
+            .expect("an OSC 7501 error record satisfies the wait");
+        assert_eq!(result.state, AgentState::Error);
+        assert_eq!(result.revision, 1);
+    }
+
+    /// AC-6: a wait for `working` is satisfied while OSC 777 says `done` and
+    /// an OSC 7501 record says `working`; the returned state is the
+    /// composite.
+    #[tokio::test]
+    async fn ac6_a_wait_for_working_is_satisfied_while_osc777_says_done() {
+        let pane_id = 411;
+        let (mgr, sid, wid) = setup_session_with_pane(pane_id).await;
+        let public_pane_id = {
+            let m = mgr.lock().await;
+            let pane = get_pane(&m, sid, wid, pane_id);
+            pane.apply_agent_status_event(crate::agent_status::AgentStatusEvent::Set {
+                state: CoreAgentState::Done,
+                name: None,
+            });
+            pane.apply_program_status_report(report("state=working"));
+            m.public_pane_id(pane_id)
+        };
+
+        let msg = wait_request(public_pane_id.clone(), vec![AgentState::Working], 1000);
+        let result = handle_wait_agent_state(&msg, &mgr)
+            .await
+            .expect("the composite is working");
+        assert_eq!(result.state, AgentState::Working);
+        assert_eq!(result.revision, 2);
+
+        // The composite is `working`, so a wait for the lower `done` is not
+        // satisfied by the OSC 777 part alone.
+        let msg = wait_request(public_pane_id, vec![AgentState::Done], 20);
+        let err = handle_wait_agent_state(&msg, &mgr).await.unwrap_err();
+        assert_eq!(err.kind, AgentApiErrorKind::Timeout);
+    }
+
+    /// AC-6: a registered waiter is re-evaluated against the composite when
+    /// the OSC 7501 table changes.
+    #[tokio::test]
+    async fn ac6_a_registered_waiter_is_resolved_by_an_osc7501_report() {
+        let pane_id = 412;
+        let (mgr, sid, wid) = setup_session_with_pane(pane_id).await;
+        let public_pane_id = mgr.lock().await.public_pane_id(pane_id);
+
+        let mgr_clone = mgr.clone();
+        let handle = tokio::spawn(async move {
+            let msg = wait_request(public_pane_id, vec![AgentState::Error], 5000);
+            handle_wait_agent_state(&msg, &mgr_clone).await
+        });
+        wait_until(|| {
+            mgr.try_lock()
+                .ok()
+                .map(|m| {
+                    !get_pane(&m, sid, wid, pane_id)
+                        .agent_waiters
+                        .lock()
+                        .unwrap()
+                        .is_empty()
+                })
+                .unwrap_or(false)
+        })
+        .await;
+
+        {
+            let m = mgr.lock().await;
+            let pane = get_pane(&m, sid, wid, pane_id);
+            pane.apply_program_status_report(report("state=done"));
+            reevaluate_agent_waiters(pane);
+            assert!(
+                !pane.agent_waiters.lock().unwrap().is_empty(),
+                "a done composite does not satisfy a wait for error"
+            );
+            pane.apply_program_status_report(report("state=error:id=child"));
+            reevaluate_agent_waiters(pane);
+        }
+
+        let result = handle.await.unwrap().expect("the wait resolves");
+        assert_eq!(result.state, AgentState::Error);
+        assert_eq!(result.revision, 2);
+    }
+
+    /// AC-6: a pane that only ever saw OSC 777 behaves as before: an empty
+    /// table adds nothing to the composite.
+    #[tokio::test]
+    async fn ac6_an_osc777_only_pane_waits_exactly_as_before() {
+        let pane_id = 413;
+        let (mgr, sid, wid) = setup_session_with_pane(pane_id).await;
+        let public_pane_id = {
+            let m = mgr.lock().await;
+            let pane = get_pane(&m, sid, wid, pane_id);
+            pane.apply_agent_status_event(crate::agent_status::AgentStatusEvent::Set {
+                state: CoreAgentState::Blocked,
+                name: None,
+            });
+            m.public_pane_id(pane_id)
+        };
+
+        let msg = wait_request(
+            public_pane_id.clone(),
+            vec![AgentState::Blocked, AgentState::Done],
+            1000,
+        );
+        let result = handle_wait_agent_state(&msg, &mgr).await.unwrap();
+        assert_eq!(result.state, AgentState::Blocked);
+        assert_eq!(result.revision, 1);
+
+        let msg = wait_request(public_pane_id, vec![AgentState::Error], 20);
+        let err = handle_wait_agent_state(&msg, &mgr).await.unwrap_err();
+        assert_eq!(err.kind, AgentApiErrorKind::Timeout);
+    }
+}

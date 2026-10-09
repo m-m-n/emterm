@@ -13,6 +13,7 @@ pub(in crate::mux) use crate::mux::scrollback_filter::CsiPhase;
 pub(in crate::mux) use crate::mux::scrollback_filter::WrittenState;
 use crate::mux::scrollback_filter::strip_pty_output_for_scrollback_write_with_written_state;
 use crate::mux::session::pane::AgentStatusFeedItem;
+use crate::program_status::Terminator;
 
 /// Read PTY output in a blocking loop and forward to the output target.
 /// Runs in a dedicated std::thread since PTY reads are blocking I/O.
@@ -1392,15 +1393,37 @@ enum AgentStatusFeedScanState {
     InsideOscPendingSt,
 }
 
+/// Where the terminal's escape handling stands with respect to RIS (`ESC c`),
+/// tracked next to the OSC decode state by [`AgentStatusFeedScanner`].
+///
+/// `term_core` runs every escape sequence through the same entry: an `ESC`
+/// seen in the ground state, inside a CSI, or inside an OSC / APC / DCS body
+/// (which that `ESC` ends) starts an escape sequence, and `ESC ESC` restarts
+/// it. `ESC c` then executes RIS, `ESC (` / `ESC )` make the next byte a
+/// charset designator whatever it is (an `ESC` included), and any other byte
+/// ends the sequence. Those are the only transitions that decide whether an
+/// `ESC c` executes, so three states cover them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RisState {
+    /// Not inside an escape sequence, or inside one RIS cannot start.
+    Other,
+    /// Just consumed an `ESC` that begins an escape sequence.
+    Escape,
+    /// Just consumed `ESC (` / `ESC )`: the next byte is the designator.
+    Designator,
+}
+
 /// Cap on the carry-over held by [`AgentStatusFeedScanner`] for an in-flight
 /// (not-yet-terminated) OSC body — mirrors the caps
 /// `AGENT_STATUS_SCANNER_CARRY_OVER_CAP` / `OSC133_SCANNER_CARRY_OVER_CAP`
 /// in `scrollback_filter.rs` had on the two scanners this type replaces.
-const AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP: usize = 8 * 1024;
+pub(super) const AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP: usize = 8 * 1024;
 
-/// Per-pane stateful scanner producing [`AgentStatusFeedItem`]s — both OSC
-/// 777 `agent-status` reports (SPEC FR1/FR3) and live OSC 133 marks (SPEC
-/// FR1/FR4/FR5) — from PTY chunks in TRUE byte order within each chunk
+/// Per-pane stateful scanner producing [`AgentStatusFeedItem`]s — OSC 777
+/// `agent-status` reports (SPEC FR1/FR3), live OSC 133 marks (SPEC
+/// FR1/FR4/FR5), complete OSC 7501 sequences and RIS resets
+/// (osc7501-program-status FR1/FR14) — from PTY chunks in TRUE byte order
+/// within each chunk
 /// (finding: FR4's "single ordered feed" contract; the previous
 /// implementation ran an `AgentStatusOscScanner` over the full chunk and an
 /// `Osc133MarkScanner` over the chunk's live main-buffer subset
@@ -1418,7 +1441,12 @@ const AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP: usize = 8 * 1024;
 /// main-buffer content (the same spans [`extract_main_buffer_bytes`]
 /// computes for the scrollback-write path) — a mark is only emitted when
 /// its completing byte falls inside one of those spans. Reports remain
-/// unconditional (their validity never depended on screen content).
+/// unconditional (their validity never depended on screen content), and so
+/// do OSC 7501 sequences and RIS.
+///
+/// An OSC 7501 body shares the bounded carry of every other body: one longer
+/// than [`AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP`], or one that never
+/// terminates, yields no item and the retained bytes never exceed the bound.
 pub(super) struct AgentStatusFeedScanner {
     state: AgentStatusFeedScanState,
     /// Body bytes accumulated for the in-flight OSC (introducer and
@@ -1426,6 +1454,9 @@ pub(super) struct AgentStatusFeedScanner {
     body: Vec<u8>,
     /// True once a single carry-over-overflow warning has fired.
     overflow_warned: bool,
+    /// RIS tracking, independent of the OSC decode state: it holds no bytes,
+    /// so it adds nothing to the retained carry.
+    ris: RisState,
 }
 
 impl AgentStatusFeedScanner {
@@ -1434,6 +1465,7 @@ impl AgentStatusFeedScanner {
             state: AgentStatusFeedScanState::Idle,
             body: Vec::new(),
             overflow_warned: false,
+            ris: RisState::Other,
         }
     }
 
@@ -1472,6 +1504,7 @@ impl AgentStatusFeedScanner {
         live_spans: &[std::ops::Range<usize>],
         out: &mut Vec<AgentStatusFeedItem>,
     ) {
+        self.step_ris(b, out);
         match self.state {
             AgentStatusFeedScanState::Idle => {
                 if b == 0x1b {
@@ -1493,7 +1526,7 @@ impl AgentStatusFeedScanner {
             },
             AgentStatusFeedScanState::InsideOsc => {
                 if b == 0x07 {
-                    self.commit(idx, live_spans, out);
+                    self.commit(idx, live_spans, Terminator::Bel, out);
                 } else if b == 0x1b {
                     self.state = AgentStatusFeedScanState::InsideOscPendingSt;
                 } else {
@@ -1502,7 +1535,7 @@ impl AgentStatusFeedScanner {
             }
             AgentStatusFeedScanState::InsideOscPendingSt => match b {
                 b'\\' => {
-                    self.commit(idx, live_spans, out);
+                    self.commit(idx, live_spans, Terminator::St, out);
                 }
                 b']' => {
                     self.body.clear();
@@ -1516,20 +1549,47 @@ impl AgentStatusFeedScanner {
         }
     }
 
+    /// Advance the RIS tracking by one byte, emitting a reset item at the
+    /// `c` of an `ESC c` the terminal executes (see [`RisState`]). Reports
+    /// are unconditional, so the item does not depend on live spans.
+    fn step_ris(&mut self, b: u8, out: &mut Vec<AgentStatusFeedItem>) {
+        self.ris = match (self.ris, b) {
+            (RisState::Designator, _) => RisState::Other,
+            (_, 0x1b) => RisState::Escape,
+            (RisState::Escape, b'c') => {
+                out.push(AgentStatusFeedItem::Reset);
+                RisState::Other
+            }
+            (RisState::Escape, b'(' | b')') => RisState::Designator,
+            _ => RisState::Other,
+        };
+    }
+
     /// Complete the in-flight OSC at chunk position `idx` (the index of the
-    /// terminator's final byte): emit a report unconditionally, or a mark
-    /// only when `idx` falls inside `live_spans` (FR5), then reset to
-    /// `Idle` either way.
+    /// terminator's final byte): emit a report (OSC 777 or OSC 7501)
+    /// unconditionally, or a mark only when `idx` falls inside `live_spans`
+    /// (FR5), then reset to `Idle` either way.
     fn commit(
         &mut self,
         idx: usize,
         live_spans: &[std::ops::Range<usize>],
+        terminator: Terminator,
         out: &mut Vec<AgentStatusFeedItem>,
     ) {
         if let Some(rest) = self.body.strip_prefix(b"777;emterm;agent-status;") {
             let mut payload = String::from("emterm;agent-status;");
             payload.push_str(&String::from_utf8_lossy(rest));
             out.push(AgentStatusFeedItem::Report(payload));
+        } else if let Some(rest) = self.body.strip_prefix(b"7501;") {
+            // A byte outside ASCII becomes DEL: it keeps its one-byte width,
+            // so the sequence-length rule counts what arrived, and DEL lies
+            // outside every key and value alphabet, so the pair is skipped
+            // exactly as the original byte would have been.
+            let body = rest
+                .iter()
+                .map(|&b| if b.is_ascii() { b as char } else { '\u{7f}' })
+                .collect();
+            out.push(AgentStatusFeedItem::ProgramStatus { body, terminator });
         } else if live_spans.iter().any(|r| r.contains(&idx)) {
             if let Some(rest) = self.body.strip_prefix(b"133;") {
                 let head = rest.split(|&b| b == b';').next().unwrap_or(rest);
@@ -1546,5 +1606,11 @@ impl AgentStatusFeedScanner {
     fn reset(&mut self) {
         self.body.clear();
         self.state = AgentStatusFeedScanState::Idle;
+    }
+
+    /// Bytes of the in-flight OSC body the scanner currently retains.
+    #[cfg(test)]
+    pub(super) fn retained_len(&self) -> usize {
+        self.body.len()
     }
 }

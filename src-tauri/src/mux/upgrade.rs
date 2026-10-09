@@ -744,6 +744,8 @@ fn restore_pane(
         state: doc.agent_state.map(from_wire_state),
         name: doc.agent_name.clone(),
         revision: doc.agent_revision,
+        // The OSC 7501 table is carried by the handoff task.
+        ..AgentStatus::default()
     };
     let scrollback = ScrollbackRingBuffer::load_snapshot(&ScrollbackSnapshot {
         capacity: DEFAULT_SCROLLBACK_CAPACITY,
