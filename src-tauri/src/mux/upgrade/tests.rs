@@ -1,7 +1,9 @@
 use super::*;
 use crate::agent_status::{AgentState, AgentStatusEvent};
 use crate::mux::session::pane::PaneOutputTarget;
+use crate::program_status::{Kind, MAX_RECORDS, ProgramState, Record, Report, Table};
 use crate::prompts::PromptMarkKind;
+use mux_ipc::handoff::HandoffProgramRecord;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
@@ -553,6 +555,7 @@ fn restore_handles_exited_and_unadoptable_panes_while_the_rest_of_the_tree_still
                         // which never reads these fields.
                         alt_screen: false,
                         alt_screen_dump: Vec::new(),
+                        program_records: Vec::new(),
                     },
                     // AC-6: recorded exited — adopts no descriptor.
                     HandoffPane {
@@ -573,6 +576,7 @@ fn restore_handles_exited_and_unadoptable_panes_while_the_rest_of_the_tree_still
                         latch_generation: 0,
                         alt_screen: false,
                         alt_screen_dump: Vec::new(),
+                        program_records: Vec::new(),
                     },
                 ],
             }],
@@ -1477,6 +1481,7 @@ fn refresh_live_agent_state_leaves_a_pane_no_longer_present_in_the_manager_untou
                     latch_generation: 7,
                     alt_screen: true,
                     alt_screen_dump: b"stale-alt-dump".to_vec(),
+                    program_records: Vec::new(),
                 }],
             }],
         }],
@@ -1567,4 +1572,553 @@ fn rewrite_handoff_file_leaves_the_previous_document_intact_when_the_write_fails
         decoded.next_session_id, document.next_session_id,
         "surviving document must be the ORIGINAL content, not the failed rewrite's"
     );
+}
+
+// ── osc7501-program-status task0007 (SPEC FR17): the pane's OSC 7501
+// record table crosses the hot-upgrade boundary in update order ─────────
+
+fn program_record(state: ProgramState) -> Record {
+    Record {
+        state,
+        kind: None,
+        progress: None,
+        app: None,
+        title: None,
+        msg: None,
+    }
+}
+
+fn set_program_record(table: &mut Table, id: &str, record: Record) {
+    table.apply(Report::Set {
+        id: id.to_string(),
+        record,
+    });
+}
+
+/// A table whose records exercise every field and whose update order
+/// (`build/lint`, root, `test`, `build`) differs from the order the ids were
+/// first inserted in, because `build` is set a second time.
+fn populated_program_table() -> Table {
+    let mut table = Table::default();
+    set_program_record(
+        &mut table,
+        "build",
+        Record {
+            progress: Some(40),
+            app: Some("make".to_string()),
+            title: Some("ビルド中".to_string()),
+            ..program_record(ProgramState::Working)
+        },
+    );
+    set_program_record(
+        &mut table,
+        "build/lint",
+        Record {
+            kind: Some(Kind::Permission),
+            progress: Some(10),
+            msg: Some("allow write to /tmp/out?".to_string()),
+            ..program_record(ProgramState::Blocked)
+        },
+    );
+    set_program_record(&mut table, "", program_record(ProgramState::Done));
+    set_program_record(
+        &mut table,
+        "test",
+        Record {
+            app: Some("cargo".to_string()),
+            ..program_record(ProgramState::Error)
+        },
+    );
+    set_program_record(
+        &mut table,
+        "build",
+        Record {
+            progress: Some(80),
+            title: Some("ビルド中".to_string()),
+            ..program_record(ProgramState::Working)
+        },
+    );
+    table
+}
+
+fn table_ids(table: &Table) -> Vec<String> {
+    table.iter().map(|(id, _)| id.to_string()).collect()
+}
+
+/// The document form of a table's export: the independent expectation the
+/// capture tests compare against.
+fn expected_program_records(table: &Table) -> Vec<HandoffProgramRecord> {
+    table
+        .export()
+        .into_iter()
+        .map(|record| HandoffProgramRecord {
+            id: record.id,
+            state: record.state,
+            kind: record.kind,
+            progress: record.progress,
+            app: record.app,
+            title: record.title,
+            msg: record.msg,
+        })
+        .collect()
+}
+
+fn pane_in<'a>(mgr: &'a SessionManager, sid: u32, wid: u32, pid: u32) -> &'a MuxPane {
+    mgr.get_session(sid)
+        .unwrap()
+        .windows
+        .get(&wid)
+        .unwrap()
+        .panes
+        .get(&pid)
+        .unwrap()
+}
+
+fn pane_table(pane: &MuxPane) -> Table {
+    pane.agent_status.lock().unwrap().program_status.clone()
+}
+
+fn install_program_table(pane: &MuxPane, table: Table) {
+    pane.agent_status.lock().unwrap().program_status = table;
+}
+
+/// A manager with one already-exited pane (no descriptor), registered in a
+/// fresh session/window.
+fn single_exited_pane_manager() -> (SessionManager, u32, u32, u32) {
+    let mut mgr = SessionManager::new();
+    let sid = mgr.create_session("s".to_string());
+    let wid = mgr.create_window(sid, "w".to_string()).unwrap();
+    let pid = mgr.alloc_pane_id();
+    let mut pane = MuxPane::new_test(pid, 80, 24, test_output_target());
+    pane.mark_exited();
+    mgr.get_session_mut(sid)
+        .unwrap()
+        .windows
+        .get_mut(&wid)
+        .unwrap()
+        .add_pane(pane);
+    (mgr, sid, wid, pid)
+}
+
+fn snapshot_document(mgr: &SessionManager) -> HandoffDocument {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket_path = dir.path().join("mux-default.sock");
+    let listen_file = tempfile::NamedTempFile::new_in(dir.path()).expect("listen fd stand-in");
+    let listen_fd = listen_file.as_raw_fd();
+    snapshot(mgr, listen_fd, &socket_path).expect("snapshot must succeed")
+}
+
+fn restore_document(document: &HandoffDocument) -> SessionManager {
+    let (title_tx, notification_tx, agent_status_tx, pane_exit_sender) = test_restore_channels();
+    restore(
+        document,
+        &title_tx,
+        &notification_tx,
+        &agent_status_tx,
+        &pane_exit_sender,
+    )
+}
+
+/// AC-3: the pane snapshot records a live pane's records in update order,
+/// every field intact.
+#[test]
+fn ac3_snapshot_records_a_live_panes_program_records_in_update_order() {
+    let (mgr, sid, wid, pid) = single_live_pane_manager();
+    let table = populated_program_table();
+    install_program_table(pane_in(&mgr, sid, wid, pid), table.clone());
+
+    let document = snapshot_document(&mgr);
+
+    let pane_doc = &document.sessions[0].windows[0].panes[0];
+    assert!(!pane_doc.exited);
+    let ids: Vec<&str> = pane_doc
+        .program_records
+        .iter()
+        .map(|r| r.id.as_str())
+        .collect();
+    assert_eq!(ids, ["build/lint", "", "test", "build"]);
+    assert_eq!(pane_doc.program_records, expected_program_records(&table));
+    let blocked = &pane_doc.program_records[0];
+    assert_eq!(blocked.state, "blocked");
+    assert_eq!(blocked.kind.as_deref(), Some("permission"));
+    assert_eq!(blocked.progress, Some(10));
+    assert_eq!(blocked.msg.as_deref(), Some("allow write to /tmp/out?"));
+    let build = &pane_doc.program_records[3];
+    assert_eq!(build.app.as_deref(), None);
+    assert_eq!(build.progress, Some(80));
+    assert_eq!(build.title.as_deref(), Some("ビルド中"));
+}
+
+/// AC-3: an exited pane's records are captured as well.
+#[test]
+fn ac3_snapshot_records_an_exited_panes_program_records() {
+    let (mgr, sid, wid, pid) = single_exited_pane_manager();
+    let table = populated_program_table();
+    install_program_table(pane_in(&mgr, sid, wid, pid), table.clone());
+
+    let document = snapshot_document(&mgr);
+
+    let pane_doc = &document.sessions[0].windows[0].panes[0];
+    assert!(pane_doc.exited);
+    assert_eq!(pane_doc.program_records, expected_program_records(&table));
+}
+
+/// AC-3: a pane with no records is recorded with an empty list.
+#[test]
+fn ac3_snapshot_records_an_empty_list_for_a_pane_without_program_records() {
+    let (mgr, _sid, _wid, _pid) = single_live_pane_manager();
+
+    let document = snapshot_document(&mgr);
+
+    assert!(
+        document.sessions[0].windows[0].panes[0]
+            .program_records
+            .is_empty()
+    );
+}
+
+/// AC-3: a record added after the snapshot appears after the refresh, and
+/// an id updated again moves to the end of the order.
+#[test]
+fn ac3_refresh_pulls_in_a_program_record_added_after_snapshot() {
+    let (mgr, sid, wid, pid) = single_live_pane_manager();
+    install_program_table(pane_in(&mgr, sid, wid, pid), populated_program_table());
+    let mut document = snapshot_document(&mgr);
+    assert_eq!(
+        document.sessions[0].windows[0].panes[0]
+            .program_records
+            .len(),
+        4
+    );
+
+    {
+        let pane = pane_in(&mgr, sid, wid, pid);
+        let mut status = pane.agent_status.lock().unwrap();
+        set_program_record(
+            &mut status.program_status,
+            "deploy",
+            Record {
+                progress: Some(5),
+                ..program_record(ProgramState::Working)
+            },
+        );
+        set_program_record(
+            &mut status.program_status,
+            "test",
+            program_record(ProgramState::Done),
+        );
+    }
+
+    refresh_live_agent_state(&mut document, &mgr);
+
+    let refreshed = pane_table(pane_in(&mgr, sid, wid, pid));
+    assert_eq!(
+        table_ids(&refreshed),
+        ["build/lint", "", "build", "deploy", "test"]
+    );
+    assert_eq!(
+        document.sessions[0].windows[0].panes[0].program_records,
+        expected_program_records(&refreshed)
+    );
+}
+
+/// AC-3: records removed after the snapshot are gone after the refresh.
+#[test]
+fn ac3_refresh_drops_program_records_cleared_after_snapshot() {
+    let (mgr, sid, wid, pid) = single_live_pane_manager();
+    install_program_table(pane_in(&mgr, sid, wid, pid), populated_program_table());
+    let mut document = snapshot_document(&mgr);
+    assert_eq!(
+        document.sessions[0].windows[0].panes[0]
+            .program_records
+            .len(),
+        4,
+        "the snapshot must carry the records the reset then removes"
+    );
+
+    assert!(
+        pane_in(&mgr, sid, wid, pid)
+            .agent_status
+            .lock()
+            .unwrap()
+            .program_status
+            .reset()
+    );
+
+    refresh_live_agent_state(&mut document, &mgr);
+
+    assert!(
+        document.sessions[0].windows[0].panes[0]
+            .program_records
+            .is_empty()
+    );
+}
+
+/// AC-3: the refresh reads the records of an exited pane too, and leaves
+/// the exited pane's other fields as recorded.
+#[test]
+fn ac3_refresh_pulls_in_a_program_record_added_to_an_exited_pane_after_snapshot() {
+    let (mgr, sid, wid, pid) = single_exited_pane_manager();
+    install_program_table(pane_in(&mgr, sid, wid, pid), populated_program_table());
+    let mut document = snapshot_document(&mgr);
+    let before = document.sessions[0].windows[0].panes[0].clone();
+
+    {
+        let pane = pane_in(&mgr, sid, wid, pid);
+        let mut status = pane.agent_status.lock().unwrap();
+        set_program_record(
+            &mut status.program_status,
+            "late",
+            program_record(ProgramState::Idle),
+        );
+    }
+
+    refresh_live_agent_state(&mut document, &mgr);
+
+    let after = &document.sessions[0].windows[0].panes[0];
+    assert_eq!(after.program_records.len(), 5);
+    assert_eq!(after.program_records[4].id, "late");
+    assert_eq!(
+        after.program_records,
+        expected_program_records(&pane_table(pane_in(&mgr, sid, wid, pid)))
+    );
+    let mut expected = before;
+    expected.program_records = after.program_records.clone();
+    assert_eq!(
+        *after, expected,
+        "only the records may change for an exited pane"
+    );
+}
+
+/// AC-4: after restore a live pane's table equals the captured one and its
+/// OSC 777 state, name and revision are unchanged.
+#[test]
+fn ac4_restore_gives_a_live_pane_the_captured_program_table_and_keeps_osc_777_state() {
+    let (mgr, sid, wid, pid) = single_live_pane_manager();
+    let original = pane_in(&mgr, sid, wid, pid);
+    original.apply_agent_status_event(AgentStatusEvent::Set {
+        state: AgentState::Blocked,
+        name: Some("claude".to_string()),
+    });
+    original.apply_agent_status_event(AgentStatusEvent::Set {
+        state: AgentState::Working,
+        name: Some("claude".to_string()),
+    });
+    install_program_table(original, populated_program_table());
+
+    let restored_mgr = snapshot_then_restore_live_pane(&mgr);
+
+    let restored = pane_in(&restored_mgr, sid, wid, pid);
+    assert_eq!(pane_table(restored), populated_program_table());
+    assert_eq!(
+        table_ids(&pane_table(restored)),
+        ["build/lint", "", "test", "build"]
+    );
+    let status = restored.agent_status.lock().unwrap();
+    assert_eq!(status.state, Some(AgentState::Working));
+    assert_eq!(status.name.as_deref(), Some("claude"));
+    assert_eq!(status.revision, 2);
+}
+
+/// AC-4: an exited pane's table is restored as well.
+#[test]
+fn ac4_restore_gives_an_exited_pane_the_captured_program_table() {
+    let (mgr, sid, wid, pid) = single_exited_pane_manager();
+    install_program_table(pane_in(&mgr, sid, wid, pid), populated_program_table());
+    let document = snapshot_document(&mgr);
+
+    let restored_mgr = restore_document(&document);
+
+    let restored = pane_in(&restored_mgr, sid, wid, pid);
+    assert!(restored.exited);
+    assert_eq!(pane_table(restored), populated_program_table());
+}
+
+/// AC-4: a pane without records restores with an empty table.
+#[test]
+fn ac4_restore_gives_a_pane_without_program_records_an_empty_table() {
+    let (mgr, sid, wid, pid) = single_exited_pane_manager();
+    let document = snapshot_document(&mgr);
+
+    let restored_mgr = restore_document(&document);
+
+    assert_eq!(
+        pane_table(pane_in(&restored_mgr, sid, wid, pid)),
+        Table::default()
+    );
+}
+
+/// AC-4 (TM-7): the restored table evicts the same record next as the
+/// original: a full table is carried across, one more id is inserted on
+/// both sides, and both end up identical with the same record gone.
+#[test]
+fn ac4_restored_program_table_evicts_the_same_record_next() {
+    let (mgr, sid, wid, pid) = single_live_pane_manager();
+    let mut table = Table::default();
+    for n in 0..MAX_RECORDS {
+        set_program_record(
+            &mut table,
+            &format!("r{n:03}"),
+            program_record(ProgramState::Idle),
+        );
+    }
+    // r000 becomes the most recently updated; r001 is now the oldest.
+    set_program_record(&mut table, "r000", program_record(ProgramState::Done));
+    assert_eq!(table.len(), MAX_RECORDS);
+    install_program_table(pane_in(&mgr, sid, wid, pid), table);
+
+    let restored_mgr = snapshot_then_restore_live_pane(&mgr);
+
+    let original = pane_in(&mgr, sid, wid, pid);
+    let restored = pane_in(&restored_mgr, sid, wid, pid);
+    assert_eq!(pane_table(restored), pane_table(original));
+    for pane in [original, restored] {
+        set_program_record(
+            &mut pane.agent_status.lock().unwrap().program_status,
+            "extra",
+            program_record(ProgramState::Working),
+        );
+    }
+    let (after_original, after_restored) = (pane_table(original), pane_table(restored));
+    assert_eq!(after_restored, after_original);
+    for table in [&after_original, &after_restored] {
+        assert_eq!(table.len(), MAX_RECORDS);
+        assert!(
+            table.get("r001").is_none(),
+            "r001 was the oldest and must go"
+        );
+        assert!(table.get("r000").is_some(), "the refreshed r000 must stay");
+        assert!(table.get("r002").is_some());
+        assert!(table.get("extra").is_some());
+    }
+}
+
+fn exported_pane_with_records(id: u32, records: Vec<HandoffProgramRecord>) -> HandoffDocument {
+    HandoffDocument {
+        schema_version: HANDOFF_SCHEMA_VERSION,
+        incarnation: "abc123".to_string(),
+        listen_fd: 3,
+        next_session_id: 2,
+        next_pane_id: id + 1,
+        sessions: vec![HandoffSession {
+            id: 1,
+            name: "s".to_string(),
+            window_order: vec![1],
+            active_window_id: Some(1),
+            next_window_id: 2,
+            windows: vec![HandoffWindow {
+                id: 1,
+                name: "w".to_string(),
+                active_pane_id: Some(id),
+                next_pane_id: id + 1,
+                panes: vec![HandoffPane {
+                    id,
+                    cols: 80,
+                    rows: 24,
+                    cwd: None,
+                    title: None,
+                    agent_state: None,
+                    agent_name: None,
+                    agent_revision: 0,
+                    exited: true,
+                    child_pid: None,
+                    master_fd: None,
+                    scrollback: Vec::new(),
+                    latch_armed: false,
+                    latch_command_ended: false,
+                    latch_generation: 0,
+                    alt_screen: false,
+                    alt_screen_dump: Vec::new(),
+                    program_records: records,
+                }],
+            }],
+        }],
+    }
+}
+
+fn document_record(id: &str, state: &str) -> HandoffProgramRecord {
+    HandoffProgramRecord {
+        id: id.to_string(),
+        state: state.to_string(),
+        kind: None,
+        progress: None,
+        app: None,
+        title: None,
+        msg: None,
+    }
+}
+
+/// AC-4: a document carrying invalid records (bad id, oversized title,
+/// control-character title, out-of-range progress, unknown state) restores
+/// only the valid ones, in order.
+#[test]
+fn ac4_restore_drops_invalid_program_records_and_keeps_the_valid_ones_in_order() {
+    let records = vec![
+        document_record("first", "working"),
+        document_record("bad id", "idle"),
+        HandoffProgramRecord {
+            title: Some("t".repeat(193)),
+            ..document_record("oversized-title", "idle")
+        },
+        document_record("second", "done"),
+        HandoffProgramRecord {
+            title: Some("bell\u{7}title".to_string()),
+            ..document_record("control-title", "idle")
+        },
+        HandoffProgramRecord {
+            progress: Some(101),
+            ..document_record("progress-out-of-range", "working")
+        },
+        document_record("unknown-state", "bogus"),
+        document_record("third", "error"),
+    ];
+    let document = exported_pane_with_records(1, records);
+
+    let mgr = restore_document(&document);
+
+    let table = pane_table(pane_in(&mgr, 1, 1, 1));
+    assert_eq!(table_ids(&table), ["first", "second", "third"]);
+    assert_eq!(
+        table.get("first").map(|r| r.state),
+        Some(ProgramState::Working)
+    );
+    assert_eq!(
+        table.get("second").map(|r| r.state),
+        Some(ProgramState::Done)
+    );
+    assert_eq!(
+        table.get("third").map(|r| r.state),
+        Some(ProgramState::Error)
+    );
+}
+
+/// AC-4: more than 256 records restore as the most recent 256 valid ones;
+/// invalid records interleaved in the list do not count toward the cap.
+#[test]
+fn ac4_restore_keeps_only_the_most_recent_256_valid_program_records() {
+    let mut records = vec![document_record("bad id", "idle")];
+    for n in 0..150 {
+        records.push(document_record(&format!("v{n:03}"), "idle"));
+    }
+    records.push(HandoffProgramRecord {
+        title: Some("t".repeat(193)),
+        ..document_record("oversized-title", "idle")
+    });
+    for n in 150..300 {
+        records.push(document_record(&format!("v{n:03}"), "idle"));
+    }
+    records.push(HandoffProgramRecord {
+        progress: Some(101),
+        ..document_record("progress-out-of-range", "working")
+    });
+    let document = exported_pane_with_records(1, records);
+
+    let mgr = restore_document(&document);
+
+    let table = pane_table(pane_in(&mgr, 1, 1, 1));
+    let expected: Vec<String> = (300 - MAX_RECORDS..300)
+        .map(|n| format!("v{n:03}"))
+        .collect();
+    assert_eq!(table.len(), MAX_RECORDS);
+    assert_eq!(table_ids(&table), expected);
 }

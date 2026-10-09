@@ -1,0 +1,95 @@
+task_id: task0007
+# Refreshed after the parent-side adoption (merge-task.sh exit 1, cycle 1).
+# First inheritance (before any change): the full `--lib` run on the unmodified worktree
+# gave 4420 passed, 1 failed, 3 ignored; the failure was
+# mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# (a thread-CPU-time budget test that is load sensitive; other implementers were building
+# in parallel).
+# Second inheritance (parent adopted): the adoption commit alone does not compile, because
+# this task's `HandoffPane::program_records` (mux_ipc, auto-merged) is required by the
+# adopted parent `upgrade.rs`, which has no such field. So the inherited-state suite could
+# not be run before the re-implementation; the full `--lib` run right after the
+# re-implementation had no failing test, which also means no failure was inherited.
+baseline_failures: []
+# Re-executed full `--lib` run after the re-implementation on the adopted parent:
+# 4554 passed, 0 failed, 3 ignored.
+final_failures: []
+# Notes on where the tests live:
+# - `handoff::tests::*` are unit tests of the `mux_ipc` crate. The project's test command
+#   (`cargo test --manifest-path src-tauri/Cargo.toml --lib`) runs only the `emterm` package
+#   and does not include them; they are selected with
+#   `cargo test --manifest-path crates/mux_ipc/Cargo.toml --lib` (131 passed, 0 failed
+#   after the implementation on the adopted parent).
+# - `mux::upgrade::tests::*` are `--lib` tests of the `emterm` package.
+# - D10: SC-1 (task0001) was already present in this worktree; SC-5 (task0004) was not, so
+#   a minimal `table` field of `AgentStatus` was first added here and no test was written
+#   for SC-1 or SC-5 behavior. The parent-side adoption replaced it with the owner's SC-5
+#   (field `program_status`); the re-implementation reads and installs that field.
+acceptance_tests:
+  AC-1:
+    tests:
+      - handoff::tests::test_handoff_schema_version_is_4_with_supported_range_1_to_4
+      - handoff::tests::test_program_records_round_trip_with_every_field_and_order_intact
+      - handoff::tests::test_handoff_document_round_trips_with_full_tree
+    red_confirmed: true
+    red_reason: >-
+      With the record type, the new `HandoffPane::program_records` field and the version-3
+      decode shape in place but the schema version still 3,
+      `test_handoff_schema_version_is_4_with_supported_range_1_to_4` failed with
+      "assertion `left == right` failed  left: 3  right: 4". The two round-trip tests passed
+      in that state (the field already encoded and decoded generically through bincode), so
+      they guard the field-and-order contract and are not themselves reds.
+  AC-2:
+    tests:
+      - handoff::tests::test_decode_handoff_document_upgrades_v3_document_with_no_program_records
+      - handoff::tests::test_decode_handoff_document_upgrades_v2_document_with_no_alt_screen_state
+      - handoff::tests::test_decode_handoff_document_upgrades_v1_document_with_disarmed_latch
+      - handoff::tests::test_decode_handoff_document_rejects_the_version_above_the_current_one
+      - handoff::tests::test_decode_handoff_document_rejects_version_outside_supported_range
+    red_confirmed: true
+    red_reason: >-
+      `test_decode_handoff_document_upgrades_v3_document_with_no_program_records` failed with
+      "v3 document should decode: Malformed" (a version-3 document has no trailing record
+      list, so decoding it against the current shape failed before the version-3 shape was
+      wired into the decode dispatch). The v1/v2 upgrade tests (extended with an
+      empty-record-list assertion) and the two rejection tests passed in that state: the
+      previous-version decode and the rejection of an out-of-range version pre-existed this
+      task, so they guard behavior that must not regress and are not themselves reds.
+  AC-3:
+    tests:
+      - mux::upgrade::tests::ac3_snapshot_records_a_live_panes_program_records_in_update_order
+      - mux::upgrade::tests::ac3_snapshot_records_an_exited_panes_program_records
+      - mux::upgrade::tests::ac3_snapshot_records_an_empty_list_for_a_pane_without_program_records
+      - mux::upgrade::tests::ac3_refresh_pulls_in_a_program_record_added_after_snapshot
+      - mux::upgrade::tests::ac3_refresh_drops_program_records_cleared_after_snapshot
+      - mux::upgrade::tests::ac3_refresh_pulls_in_a_program_record_added_to_an_exited_pane_after_snapshot
+      - mux::upgrade::tests::refresh_live_agent_state_leaves_a_pane_that_since_exited_untouched
+    red_confirmed: true
+    red_reason: >-
+      With the document's record list stubbed to empty in the snapshot and the refresh not
+      reading records, five of the new tests failed on assertions: the live-pane snapshot test
+      with "left: []  right: [\"build/lint\", \"\", \"test\", \"build\"]", the exited-pane
+      snapshot test on the record-list equality, and the three refresh tests with record
+      counts "left: 0  right: 4" / "left: 0  right: 5".
+      `ac3_snapshot_records_an_empty_list_for_a_pane_without_program_records` passed in that
+      state (an empty table stays an empty list) and is a boundary guard, not a red. The
+      existing `refresh_live_agent_state_leaves_a_pane_that_since_exited_untouched` passed
+      before and after: it detects that nothing but the records changes for a pane that
+      has since exited; no red state occurred for that test.
+  AC-4:
+    tests:
+      - mux::upgrade::tests::ac4_restore_gives_a_live_pane_the_captured_program_table_and_keeps_osc_777_state
+      - mux::upgrade::tests::ac4_restore_gives_an_exited_pane_the_captured_program_table
+      - mux::upgrade::tests::ac4_restore_gives_a_pane_without_program_records_an_empty_table
+      - mux::upgrade::tests::ac4_restored_program_table_evicts_the_same_record_next
+      - mux::upgrade::tests::ac4_restore_drops_invalid_program_records_and_keeps_the_valid_ones_in_order
+      - mux::upgrade::tests::ac4_restore_keeps_only_the_most_recent_256_valid_program_records
+    red_confirmed: true
+    red_reason: >-
+      With restore installing an empty table, five of the new tests failed on assertions:
+      the live-pane and exited-pane restore tests with "left: Table { entries: [] }" against
+      the captured table, the eviction test (a full 256-record table restored empty), the
+      invalid-record test with "left: []  right: [\"first\", \"second\", \"third\"]" and the
+      cap test with "left: 0  right: 256".
+      `ac4_restore_gives_a_pane_without_program_records_an_empty_table` passed in that state
+      (an empty list restores to an empty table) and is a boundary guard, not a red.
