@@ -1082,16 +1082,19 @@ fn capture_passthrough(
     }
 }
 
-/// Forward each decoded agent-status-relevant item (an OSC 777 report body
-/// OR a live OSC 133 mark, task0003 SPEC FR4 — see [`AgentStatusFeedItem`])
-/// to the daemon-level agent-status task via `agent_status_report_sender`,
-/// IN THE ORDER GIVEN. Callers build `items` by appending this chunk's
-/// reports and marks in their own already-correct relative scan order
-/// (reports scanned from the full chunk, marks scanned from the live
-/// main-buffer span of it) so a single sequential forward here — one
+/// Forward each decoded agent-status-relevant item (an OSC 777 report body,
+/// a live OSC 133 mark, a complete OSC 7501 sequence or a terminal reset
+/// (RIS) — task0003 SPEC FR4, osc7501-program-status FR1; see
+/// [`AgentStatusFeedItem`]) to the daemon-level agent-status task via
+/// `agent_status_report_sender`, IN THE ORDER GIVEN. The scanner builds
+/// `items` in one pass in the exact byte order of the chunk (reports,
+/// OSC 7501 sequences and RIS from the full chunk, marks from the live
+/// main-buffer span of it), so a single sequential forward here — one
 /// channel, one send per item, in order — is what gives FR4 its ordering
 /// guarantee: no separate queue/task exists that could reorder a `Set`
-/// relative to a `D`/`A` pair from the same PTY read.
+/// relative to a `D`/`A` pair, an OSC 7501 report or a reset from the same
+/// PTY read. A new kind of item needs no change here: it travels the same
+/// channel.
 ///
 /// Unlike the best-effort PTY-output passthrough, an accepted report MUST
 /// reach the daemon — SPEC FR3 requires every accepted report to advance the

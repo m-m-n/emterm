@@ -390,7 +390,9 @@ impl AgentStatusModel {
                 Some(AgentState::Idle) => counts.idle += 1,
                 Some(AgentState::Working) => counts.working += 1,
                 Some(AgentState::Blocked) => counts.blocked += 1,
-                Some(AgentState::Done) => counts.done += 1,
+                // Seam (osc7501-program-status D10): `error` has no bucket of
+                // its own until the owning task adds one; it counts as done.
+                Some(AgentState::Done | AgentState::Error) => counts.done += 1,
                 None => {}
             }
         }
@@ -408,9 +410,11 @@ impl AgentStatusModel {
 fn priority_rank(state: AgentState, unseen: bool) -> u8 {
     match (state, unseen) {
         (AgentState::Blocked, _) => 4,
-        (AgentState::Done, true) => 3,
+        // Seam (osc7501-program-status D10): `error` ranks as done until the
+        // owning task adds the FR11 order.
+        (AgentState::Done | AgentState::Error, true) => 3,
         (AgentState::Working, _) => 2,
-        (AgentState::Done, false) => 1,
+        (AgentState::Done | AgentState::Error, false) => 1,
         (AgentState::Idle, _) => 0,
     }
 }
@@ -425,6 +429,7 @@ pub fn state_from_wire(state: mux_ipc::protocol::AgentState) -> AgentState {
         mux_ipc::protocol::AgentState::Working => AgentState::Working,
         mux_ipc::protocol::AgentState::Blocked => AgentState::Blocked,
         mux_ipc::protocol::AgentState::Done => AgentState::Done,
+        mux_ipc::protocol::AgentState::Error => AgentState::Error,
     }
 }
 
@@ -440,6 +445,7 @@ pub fn state_to_wire(state: AgentState) -> mux_ipc::protocol::AgentState {
         AgentState::Working => mux_ipc::protocol::AgentState::Working,
         AgentState::Blocked => mux_ipc::protocol::AgentState::Blocked,
         AgentState::Done => mux_ipc::protocol::AgentState::Done,
+        AgentState::Error => mux_ipc::protocol::AgentState::Error,
     }
 }
 

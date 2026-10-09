@@ -830,6 +830,7 @@ fn test_agent_status_update_msg_round_trip_set() {
         name: Some("build".to_string()),
         revision: 3,
         replay_derived: false,
+        program_status: None,
     };
     let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update);
     let parsed = MuxMessage::from_frame_body(&msg.to_frame_body()).unwrap();
@@ -855,6 +856,7 @@ fn test_agent_status_update_msg_round_trip_clear_replay_derived() {
         name: None,
         revision: 9,
         replay_derived: true,
+        program_status: None,
     };
     let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 12, &update);
     let decoded: AgentStatusUpdateMsg = MuxMessage::from_frame_body(&msg.to_frame_body())

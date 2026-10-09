@@ -536,6 +536,7 @@ fn pump_all_closed_mux_pane_discards_agent_notification_rate_limit_state() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -589,6 +590,7 @@ fn pump_all_ac5_replay_derived_update_does_not_notify() {
         name: None,
         revision: 1,
         replay_derived: true,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -905,6 +907,7 @@ fn pump_all_applies_daemon_agent_status_update_to_model() {
         name: Some("agent".to_string()),
         revision: 7,
         replay_derived: false,
+        program_status: None,
     };
     let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 42, &update);
     app.on_mux_message(0, msg);
@@ -994,6 +997,7 @@ fn pump_all_learns_public_pane_id_from_daemon_agent_status_update() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 42, &update);
     app.on_mux_message(0, msg);
@@ -1043,6 +1047,7 @@ fn closing_a_mux_pane_forgets_its_public_pane_id() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     let update_msg = MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update);
     app.on_mux_message(0, update_msg);
@@ -1229,6 +1234,7 @@ fn ts5_public_pane_id_map_and_rate_limit_key_are_scoped() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1241,6 +1247,7 @@ fn ts5_public_pane_id_map_and_rate_limit_key_are_scoped() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         1,
@@ -1350,6 +1357,7 @@ fn ts7_batch_apply_with_two_scopes_sharing_a_wire_pane_id_stays_independent() {
         name: Some("agent-a".to_string()),
         revision: 3,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1362,6 +1370,7 @@ fn ts7_batch_apply_with_two_scopes_sharing_a_wire_pane_id_stays_independent() {
         name: Some("agent-b".to_string()),
         revision: 9,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         1,
@@ -1443,6 +1452,7 @@ fn ts8_two_connections_sharing_a_wire_pane_id_stay_independent_through_close() {
         name: Some("agent-a".to_string()),
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1455,6 +1465,7 @@ fn ts8_two_connections_sharing_a_wire_pane_id_stay_independent_through_close() {
         name: Some("agent-b".to_string()),
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         1,
@@ -1601,6 +1612,7 @@ fn ac3_detach_releases_model_entry_public_id_and_rate_limit_identity() {
         name: None,
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1666,6 +1678,7 @@ fn ac4_reattach_on_same_tab_reusing_wire_pane_id_starts_with_a_clean_slate() {
         name: Some("claude".to_string()),
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1788,6 +1801,7 @@ fn ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouche
         name: Some("agent-a".to_string()),
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -1800,6 +1814,7 @@ fn ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouche
         name: Some("agent-b".to_string()),
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         1,

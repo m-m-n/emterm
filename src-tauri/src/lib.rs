@@ -172,6 +172,7 @@ pub mod logging;
 // module is always built rather than gated behind `gui`. `PromptTracker`
 // (the retained-mark storage the GUI path uses) is unaffected — it lives
 // in this same file but is only ever constructed from GUI-only code.
+pub mod program_status;
 pub mod prompts;
 pub mod settings_core;
 pub mod viewer_kinds;

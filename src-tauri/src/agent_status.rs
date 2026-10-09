@@ -17,17 +17,21 @@
 
 use std::fmt;
 
-/// The states an agent-status report may carry (SPEC FR1).
+/// The agent states (SPEC FR1). An OSC 777 report may carry only `Idle`,
+/// `Working`, `Blocked` and `Done`; `Error` is reachable through OSC 7501
+/// (osc7501-program-status FR11) and never through [`parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentState {
     Idle,
     Working,
     Blocked,
     Done,
+    Error,
 }
 
 impl AgentState {
-    /// All four states, for exhaustive test iteration.
+    /// The four states an OSC 777 report may carry, for exhaustive test
+    /// iteration. `Error` is deliberately not a member.
     pub const ALL: [AgentState; 4] = [
         AgentState::Idle,
         AgentState::Working,
@@ -41,9 +45,11 @@ impl AgentState {
             AgentState::Working => "working",
             AgentState::Blocked => "blocked",
             AgentState::Done => "done",
+            AgentState::Error => "error",
         }
     }
 
+    /// OSC 777 state words: exactly the four of [`AgentState::ALL`].
     fn parse_wire(s: &str) -> Option<Self> {
         match s {
             "idle" => Some(AgentState::Idle),
@@ -52,6 +58,42 @@ impl AgentState {
             "done" => Some(AgentState::Done),
             _ => None,
         }
+    }
+
+    /// Five-word conversion: the Program Status (OSC 7501) state words
+    /// `idle`, `working`, `blocked`, `done` and `error` map to the core
+    /// state; every other input maps to nothing.
+    pub fn from_program_status_word(word: &str) -> Option<Self> {
+        match word {
+            "error" => Some(AgentState::Error),
+            other => Self::parse_wire(other),
+        }
+    }
+
+    /// In-pane composition rank: blocked > working > error > done > idle.
+    /// The single place the order is defined.
+    fn composition_rank(self) -> u8 {
+        match self {
+            AgentState::Idle => 0,
+            AgentState::Done => 1,
+            AgentState::Error => 2,
+            AgentState::Working => 3,
+            AgentState::Blocked => 4,
+        }
+    }
+}
+
+/// Compose a pane's OSC 777 state with its OSC 7501 aggregate: the higher of
+/// the two by [`AgentState::composition_rank`]; one side absent yields the
+/// other side; both absent yields no state.
+pub fn compose(osc777: Option<AgentState>, osc7501: Option<AgentState>) -> Option<AgentState> {
+    match (osc777, osc7501) {
+        (Some(a), Some(b)) => Some(if b.composition_rank() > a.composition_rank() {
+            b
+        } else {
+            a
+        }),
+        (a, b) => a.or(b),
     }
 }
 

@@ -63,7 +63,9 @@ pub fn agent_state_color(state: AgentState) -> Color32 {
     match state {
         AgentState::Blocked => md3::on_error_container(),
         AgentState::Working => md3::primary(),
-        AgentState::Done => md3::on_secondary_container(),
+        // Seam (osc7501-program-status D10): `error` shares the done
+        // presentation until the owning task adds its own.
+        AgentState::Done | AgentState::Error => md3::on_secondary_container(),
         AgentState::Idle => md3::on_surface_variant(),
     }
 }
@@ -76,7 +78,7 @@ pub fn agent_state_color(state: AgentState) -> Color32 {
 /// idle always render filled).
 pub fn agent_badge_filled(agg: Aggregated) -> bool {
     match agg.state {
-        AgentState::Blocked | AgentState::Done => agg.unseen,
+        AgentState::Blocked | AgentState::Done | AgentState::Error => agg.unseen,
         AgentState::Working | AgentState::Idle => true,
     }
 }
@@ -117,7 +119,7 @@ pub fn badge_presentation(agg: Aggregated) -> BadgePresentation {
                 BLOCKED_BADGE_EMOJI_SEEN
             }
         }
-        AgentState::Done => {
+        AgentState::Done | AgentState::Error => {
             if agg.unseen {
                 DONE_BADGE_EMOJI_UNSEEN
             } else {
