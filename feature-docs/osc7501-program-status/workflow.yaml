@@ -196,7 +196,7 @@ tasks:
     - FR14
     - NFR3
     - NFR4
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-program-status/task0003
   task0004:
     title: mux daemon OSC 7501 delivery and composite wait
