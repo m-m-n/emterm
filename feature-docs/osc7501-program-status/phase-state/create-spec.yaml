@@ -1,12 +1,38 @@
 schema_version: 1
 feature: osc7501-program-status
 phase: create-spec
-status: initialized
+status: awaiting_answers
 generation: 1
 base_revision: 8af873317a5c5dc527fa1bb7943cd0e1e399653a
-last_input_digest: null
+last_input_digest: sha256:7a9af9213836a29e267390ed4babf2f97028904a3ea40d3014ca73fcf00b1b03
 active_request_id: null
-packets: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-10T01:14:20+09:00'
+    questions:
+    - question_id: requirement.store-integration
+      status: answered
+    - question_id: requirement.error-state
+      status: answered
+    - question_id: requirement.optional-keys-display
+      status: answered
+    - question_id: requirement.hierarchical-id
+      status: answered
+    - question_id: requirement.status-bar
+      status: answered
+    - question_id: requirement.prompt-lifecycle
+      status: answered
+    - question_id: requirement.mux-api-scope
+      status: answered
+    - question_id: requirement.hot-upgrade-handoff
+      status: answered
+    - question_id: requirement.osc94-mapping
+      status: answered
+    - question_id: requirement.terminfo-pst
+      status: answered
+    - question_id: design-step.recommendation
+      status: answered
 answers:
   create-spec.feature-identity:
     packet_id: null
@@ -18,7 +44,134 @@ answers:
     freeform: null
     normalized_answer: osc7501-program-status
     resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option_id derive_from_task_description (Notion タスクタイトル『OSC 7501（Program Status Protocol）に対応する』から導出)'
-worker_runs: []
+  requirement.store-integration:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T01:14:20+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - separate_store_merged_view
+    freeform: null
+    normalized_answer: OSC 777 のエントリーは残し、ペインごとに OSC 7501 のレコード表（階層 id・上限・追い出し・寿命）を別に持つ。バッジ・サイドバー・通知・mux API は両ソースを優先順位で集約した結果を使う。mux wire に 7501 用の項目またはメッセージを追加する。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 2 turns, converged) consulted; Opus
+      escalation: not run; options: separate_store_merged_view [chosen] / unify_single_slot / separate_store_7501_wins [not chosen]; key points: 現行は 1 ペイン 1 状態(agent_status_model.rs:175)で 7501 の階層レコード・完全置換・個別消去を表せない。保持と寿命管理を分け表示時に集約すれば
+      777 の挙動を変えない'
+  requirement.error-state:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T01:14:20+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - distinct_state_done_toggle
+    freeform: null
+    normalized_answer: AgentState に Error を追加し専用の絵文字と md3 error 系の色を割り当てる。既読・未読は done と同じ。集約順位は blocked > 未読 error > 未読 done > working > 既読 error > 既読 done > idle。error への遷移は agent_notify_on_done のトグルで通知し、設定は追加しない。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 2 turns, converged) consulted; Opus
+      escalation: not run; options: distinct_state_done_toggle [chosen] / distinct_state_new_toggle / map_to_done [not chosen]; key points: 仕様は error を失敗として区別し寿命は done と同じ。既存の完了通知設定(notifications.rs:282)を共有し表示と集約順位では独立させる。wire/handoff
+      の変更は既存の版管理(mux_ipc protocol.rs:33, handoff.rs:28)に従う'
+  requirement.optional-keys-display:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T01:14:20+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - minimal_title_only
+    freeform: null
+    normalized_answer: 無害化済みの title を OSC 777 の name 相当として通知本文の名前に使い、title が無ければ祖先から継承した app を使う。kind・progress・msg は解析と保持だけで表示しない。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 2 turns, converged) consulted; Opus
+      escalation: not run; options: minimal_title_only [chosen] / medium_notify_detail / full_with_progress [not chosen]; key points: 現行の通知本文は名前・タブ名・状態で構成(notifications.rs:405)。表示方法は仕様が端末に委ねている'
+  requirement.hierarchical-id:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T01:14:20+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - aggregate_all_records
+    freeform: null
+    normalized_answer: ルートと子孫を含む全レコードを既存の優先順位で集約してペインの状態 1 つにする。通知は集約後のペイン状態の遷移で出す。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 2 turns, converged) consulted; Opus
+      escalation: not run; options: aggregate_all_records [chosen] / root_only / root_then_children [not chosen]; key points: 仕様上、親が idle でも子が blocked になり得る。既存の aggregate(agent_status_model.rs:370)を拡張する'
+  requirement.status-bar:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T01:14:20+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - new_template_variable
+    freeform: null
+    normalized_answer: ステータスバーのテンプレート変数 {agent_status} を新設し、アクティブタブの集約状態（OSC 777 と OSC 7501 の合成）を返す。既定のテンプレートには追加しない。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 2 turns, converged) consulted; Opus
+      escalation: not run; options: new_template_variable [chosen] / existing_path_or_drop / drop_from_ac [not chosen]; key points: turn1 で Codex は描画経路が無い(ui/status_bar.rs:97, runtime.rs:200)ため drop_from_ac
+      を提案。turn2 で受け入れ条件がステータスバーへの反映を明記し、要求範囲を既存コードの欠落を理由に狭めない方針を伝えたところ new_template_variable に収束。既定テンプレートは app_settings/settings.rs:689 と settings/types.rs:484 で 1 行目 {time}/{cwd}・2 行目空のため、追加は利用者設定に委ねる'
+  requirement.prompt-lifecycle:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T01:14:20+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - drop_idle_keep_done_error
+    freeform: null
+    normalized_answer: live・main screen の OSC 133 A で working・blocked・idle のレコードを消す。done・error は明示的な clear・RIS・タブまたはペインの終了まで残す。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 2 turns, converged) consulted; Opus
+      escalation: not run; options: drop_idle_keep_done_error [chosen] / spec_minimum / drop_seen_done_error [not chosen]; key points: turn1 で Codex は spec_minimum を提案。turn2 で idle がバッジに 💤 として描画される(badge.rs:109)ため、シェル復帰後に
+      idle が残り続ける問題を確認し drop_idle_keep_done_error に変更。仕様上 idle の破棄は任意'
+  requirement.mux-api-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T01:14:20+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - api_aggregated_cli_unchanged
+    freeform: null
+    normalized_answer: mux の WaitAgentState などは OSC 7501 を含むペインの集約状態を対象にし、wait の状態指定に error を加える。emterm agent-status CLI は従来どおり OSC 777 を送り変更しない。OSC 経由のレコード照会は追加しない。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 2 turns, converged) consulted; Opus
+      escalation: not run; options: api_aggregated_cli_unchanged [chosen] / display_only / api_and_cli_emit [not chosen]; key points: 状態更新時に待機条件も再評価する(tasks.rs:164)ため集約状態と error に対応させる。CLI(cli/agent_status.rs:54)は維持'
+  requirement.hot-upgrade-handoff:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T01:14:20+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - carry_over
+    freeform: null
+    normalized_answer: mux daemon の hot-upgrade で OSC 7501 の全レコードと追い出し用の更新順を handoff に含めて引き継ぐ。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 2 turns, converged) consulted; Opus
+      escalation: not run; options: carry_over [chosen] / drop_on_upgrade [not chosen]; key points: 現行も状態・名前・revision を引き継ぐ(upgrade.rs:603)。仕様は保持のための再送を要求してはならないとしている'
+  requirement.osc94-mapping:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T01:14:20+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - out_of_scope
+    freeform: null
+    normalized_answer: OSC 9;4 の対応付けは今回スコープ外。既存の OSC 9 通知処理は変更しない。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 2 turns, converged) consulted; Opus
+      escalation: not run; options: out_of_scope [chosen] / map_to_root [not chosen]; key points: 仕様上 MAY。7501 受信後の停止管理も必要になる(callbacks.rs:1080)'
+  requirement.terminfo-pst:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T01:14:20+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - out_of_scope
+    freeform: null
+    normalized_answer: terminfo の Pst は今回スコープ外。機能検出は OSC 7501 ; ? への応答で行う。
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation, record_as_assumption); Codex (run_codex_exec.sh readonly, codex harness, 2 turns, converged) consulted; Opus
+      escalation: not run; options: out_of_scope [chosen] / add_capability [not chosen]; key points: 現行は TERM=xterm-256color(pty/mod.rs:213)で独自 terminfo を配布していない'
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T01:14:20+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step は推奨どおり skip（既存バッジの仕組みに error の絵文字と色を 1 組足し、ステータスバーはテキストのテンプレート変数を足すだけで、新しい視覚要素を作らない）
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously (analyst の推奨 skip_design を受け入れる)'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:7a9af9213836a29e267390ed4babf2f97028904a3ea40d3014ca73fcf00b1b03
 artifacts: []
 patches: []
 progress_fingerprint: null
