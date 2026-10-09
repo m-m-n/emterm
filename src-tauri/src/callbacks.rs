@@ -1415,7 +1415,10 @@ impl ThemeColorResponder {
         match parse(payload, terminator) {
             Parsed::Query => {
                 let mut answer = format!("\x1b]{OSC_PROGRAM_STATUS_PARAM};?").into_bytes();
-                answer.extend_from_slice(terminator.as_bytes());
+                answer.extend_from_slice(match terminator {
+                    Terminator::Bel => b"\x07".as_slice(),
+                    Terminator::St => b"\x1b\\".as_slice(),
+                });
                 vec![answer]
             }
             Parsed::Report(report) => {

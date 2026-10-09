@@ -1440,6 +1440,7 @@ fn ac5_agent_status_variable_refreshes_after_a_daemon_pane_update() {
         name: Some("agent".to_string()),
         revision: 1,
         replay_derived: false,
+        program_status: None,
     };
     app.on_mux_message(
         0,
@@ -2550,4 +2551,277 @@ fn pump_all_summary_below_the_osc777_state_causes_no_transition() {
     assert_eq!(status.state, Some(crate::agent_status::AgentState::Working));
     assert_eq!(status.name.as_deref(), Some("claude"));
     assert!(sink.calls().is_empty(), "working -> working: no transition");
+}
+
+// ── osc7501-program-status task0003: plain-tab OSC 7501 → model ──────
+//
+// Bytes are driven through a shell-less tab's live output path and read
+// back from the model / badge aggregate after `pump_all`, so a real
+// shell's own output (prompt marks) cannot disturb the records.
+
+/// `ESC ] 7501 ; <body>` with the BEL (`st == false`) or ST terminator.
+fn osc7501_bytes(body: &str, st: bool) -> Vec<u8> {
+    let mut out = format!("\x1b]7501;{body}").into_bytes();
+    out.extend_from_slice(if st { b"\x1b\\" } else { b"\x07" });
+    out
+}
+
+fn osc777_state_bytes(state: &str) -> Vec<u8> {
+    format!("\x1b]777;emterm;agent-status;v=1;state={state}\x1b\\").into_bytes()
+}
+
+fn push_shell_less_tab(app: &mut App) -> u64 {
+    let dims = app.cell_size;
+    let tab = crate::tabs::Tab::test_shell_less(
+        "shell",
+        dims.cols,
+        dims.rows,
+        app.settings.scrollback_lines,
+        app.settings.clone(),
+        app.notification_sink.clone(),
+    );
+    let id = tab.stable_id;
+    app.tabs.push(tab);
+    id
+}
+
+fn core_state_of(app: &App, tab_stable_id: u64) -> Option<crate::agent_status::AgentState> {
+    app.agent_status
+        .status(&crate::agent_status_model::PaneKey::Tab(tab_stable_id))
+        .and_then(|s| s.state)
+}
+
+/// AC-3: reports terminated by BEL and by ST reach the model, and the
+/// tab's badge aggregate shows the same state.
+#[test]
+fn pump_all_osc7501_reports_with_either_terminator_reach_the_model_and_badge() {
+    use crate::agent_status::AgentState::{Blocked, Working};
+
+    let mut app = app_with_shell_less_tab();
+    let id = app.tabs[0].stable_id;
+
+    app.tabs[0].test_process_combined(osc7501_bytes("state=working", false));
+    app.pump_all();
+    assert_eq!(core_state_of(&app, id), Some(Working));
+    assert_eq!(
+        app.agent_status_badge_for(&app.tabs[0]).map(|a| a.state),
+        Some(Working)
+    );
+
+    app.tabs[0].test_process_combined(osc7501_bytes("state=blocked", true));
+    app.pump_all();
+    assert_eq!(core_state_of(&app, id), Some(Blocked));
+    assert_eq!(
+        app.agent_status_badge_for(&app.tabs[0]).map(|a| a.state),
+        Some(Blocked)
+    );
+}
+
+/// AC-3: the model's status and the badge show the composite of the tab's
+/// OSC 777 state and its OSC 7501 summary (blocked > working > done > idle).
+#[test]
+fn pump_all_osc7501_composes_with_the_osc777_state() {
+    use crate::agent_status::AgentState::{Blocked, Done, Working};
+
+    let mut app = app_with_shell_less_tab();
+    let id = app.tabs[0].stable_id;
+
+    // OSC 777 blocked outranks OSC 7501 working.
+    app.tabs[0].test_process_combined(osc777_state_bytes("blocked"));
+    app.tabs[0].test_process_combined(osc7501_bytes("state=working", false));
+    app.pump_all();
+    assert_eq!(core_state_of(&app, id), Some(Blocked));
+
+    // OSC 777 done is outranked by OSC 7501 working; the report that
+    // replaces the OSC 777 part does not drop the OSC 7501 part.
+    app.tabs[0].test_process_combined(osc777_state_bytes("done"));
+    app.pump_all();
+    assert_eq!(core_state_of(&app, id), Some(Working));
+    assert_eq!(
+        app.agent_status_badge_for(&app.tabs[0]).map(|a| a.state),
+        Some(Working)
+    );
+
+    // Clearing the OSC 7501 records leaves the OSC 777 state.
+    app.tabs[0].test_process_combined(osc7501_bytes("state=clear", true));
+    app.pump_all();
+    assert_eq!(core_state_of(&app, id), Some(Done));
+
+    // Clearing the OSC 777 state too leaves nothing.
+    app.tabs[0].test_process_combined(b"\x1b]777;emterm;agent-status;clear\x1b\\".to_vec());
+    app.pump_all();
+    assert_eq!(core_state_of(&app, id), None);
+}
+
+/// AC-3: both protocols reporting in the SAME pump still end on the
+/// composite.
+#[test]
+fn pump_all_osc7501_composes_with_the_osc777_state_within_one_pump() {
+    use crate::agent_status::AgentState::{Blocked, Working};
+
+    let mut app = app_with_shell_less_tab();
+    let id = app.tabs[0].stable_id;
+    let mut bytes = osc7501_bytes("state=working", false);
+    bytes.extend_from_slice(&osc777_state_bytes("blocked"));
+    app.tabs[0].test_process_combined(bytes);
+    app.pump_all();
+    assert_eq!(core_state_of(&app, id), Some(Blocked));
+
+    let mut bytes = osc777_state_bytes("idle");
+    bytes.extend_from_slice(&osc7501_bytes("state=working", true));
+    app.tabs[0].test_process_combined(bytes);
+    app.pump_all();
+    assert_eq!(core_state_of(&app, id), Some(Working));
+}
+
+/// AC-3: a tab that receives only OSC 777 shows exactly what it showed
+/// before OSC 7501 existed.
+#[test]
+fn pump_all_osc7501_leaves_an_osc777_only_tab_unchanged() {
+    let mut app = app_with_shell_less_tab();
+    let id = app.tabs[0].stable_id;
+    app.tabs[0].test_process_combined(
+        b"\x1b]777;emterm;agent-status;v=1;state=done;name=claude\x1b\\".to_vec(),
+    );
+    app.pump_all();
+
+    let status = app
+        .agent_status
+        .status(&crate::agent_status_model::PaneKey::Tab(id))
+        .expect("OSC 777 applied");
+    assert_eq!(status.state, Some(crate::agent_status::AgentState::Done));
+    assert_eq!(status.name, Some("claude".to_string()));
+    assert_eq!(status.revision, 1, "one accepted report, one revision");
+}
+
+/// AC-3: a summary change drives the same transition and notification
+/// path an OSC 777 report does: working is silent, done notifies.
+#[test]
+fn pump_all_osc7501_summary_transitions_drive_notifications() {
+    let (mut app, sink) = app_with_test_sink();
+    push_shell_less_tab(&mut app);
+    app.active = 0;
+
+    app.tabs[0].test_process_combined(osc7501_bytes("state=working", false));
+    app.pump_all();
+    assert!(sink.calls().is_empty(), "a transition to working is silent");
+
+    app.tabs[0].test_process_combined(osc7501_bytes("state=done", true));
+    app.pump_all();
+    assert_eq!(sink.calls().len(), 1, "a transition to done notifies once");
+}
+
+/// AC-3: an OSC 7501 report that leaves the composite unchanged is not a
+/// transition (the OSC 777 `blocked` already decides the pane's state).
+#[test]
+fn pump_all_osc7501_report_behind_a_higher_osc777_state_is_not_a_transition() {
+    let (mut app, sink) = app_with_test_sink();
+    push_shell_less_tab(&mut app);
+    app.active = 0;
+
+    app.tabs[0].test_process_combined(osc777_state_bytes("blocked"));
+    app.pump_all();
+    assert_eq!(sink.calls().len(), 1, "blocked notifies");
+
+    app.tabs[0].test_process_combined(osc7501_bytes("state=done", false));
+    app.pump_all();
+    assert_eq!(sink.calls().len(), 1, "the composite stayed blocked");
+}
+
+/// AC-2: a query leaves the model unchanged — no entry is created for a
+/// tab that never reported, and an existing entry keeps its revision.
+#[test]
+fn pump_all_osc7501_query_leaves_the_model_unchanged() {
+    let mut app = app_with_shell_less_tab();
+    let id = app.tabs[0].stable_id;
+    let key = crate::agent_status_model::PaneKey::Tab(id);
+
+    app.tabs[0].test_process_combined(osc7501_bytes("?", false));
+    app.pump_all();
+    assert!(app.agent_status.status(&key).is_none());
+
+    app.tabs[0].test_process_combined(osc7501_bytes("state=working", false));
+    app.pump_all();
+    let before = app.agent_status.status(&key).cloned().expect("reported");
+
+    app.tabs[0].test_process_combined(osc7501_bytes("?", true));
+    app.pump_all();
+    assert_eq!(app.agent_status.status(&key), Some(&before));
+}
+
+/// AC-5: closing a tab drops its records together with its model entry,
+/// and a tab created afterwards never inherits them.
+#[test]
+fn close_tab_discards_osc7501_records_and_a_later_tab_never_inherits_them() {
+    let mut app = app_with_shell_less_tab();
+    let closed_id = app.tabs[0].stable_id;
+    app.tabs[0].test_process_combined(osc7501_bytes("id=a:state=working", false));
+    app.tabs[0].test_process_combined(osc7501_bytes("id=b:state=blocked", true));
+    app.pump_all();
+    assert!(core_state_of(&app, closed_id).is_some());
+
+    app.close_tab(0);
+    assert!(
+        app.agent_status
+            .status(&crate::agent_status_model::PaneKey::Tab(closed_id))
+            .is_none(),
+        "the model entry goes with the tab"
+    );
+
+    let new_id = push_shell_less_tab(&mut app);
+    app.active = 0;
+    assert_ne!(new_id, closed_id);
+    app.pump_all();
+    assert!(
+        app.agent_status
+            .status(&crate::agent_status_model::PaneKey::Tab(new_id))
+            .is_none(),
+        "the new tab starts without the closed tab's records"
+    );
+    assert!(app.agent_status_badge_for(&app.tabs[0]).is_none());
+    assert!(app.tabs[0].take_pending_program_status_changes().is_empty());
+}
+
+/// AC-6: a tab that is mux-attached at pump start never applies the 7501
+/// reports parsed from the mux inner content to the model.
+#[test]
+fn pump_all_osc7501_mux_inner_content_does_not_reach_the_model() {
+    let mut app = app_with_shell_less_tab();
+    let id = app.tabs[0].stable_id;
+    let welcome = MuxMessage::control(
+        MessageType::Welcome,
+        0,
+        &WelcomeMsg::Accepted {
+            server_version: 1,
+            sessions: vec![SessionInfo {
+                id: 1,
+                name: "main".to_string(),
+                window_count: 1,
+                pane_count: 1,
+                active_window_index: 0,
+                windows: vec![WindowInfo {
+                    id: 1,
+                    name: "win".to_string(),
+                    active_pane_id: 10,
+                }],
+            }],
+        },
+    );
+    app.tabs[0].apply_mux_message(welcome);
+    assert!(app.tabs[0].mux_session_name.is_some(), "mux established");
+
+    let inner = crate::mux::apc::encode_emterm_mux(&MuxMessage {
+        msg_type: MessageType::PtyOutput,
+        pane_id: 10,
+        payload: osc7501_bytes("state=blocked", false),
+    });
+    app.tabs[0].test_process_combined(inner);
+    app.pump_all();
+
+    assert!(
+        app.agent_status
+            .status(&crate::agent_status_model::PaneKey::Tab(id))
+            .is_none(),
+        "mux inner 7501 state never reaches the plain-tab model entry"
+    );
 }
