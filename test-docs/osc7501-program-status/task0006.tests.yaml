@@ -1,0 +1,116 @@
+task_id: task0006
+baseline_failures:             # full `--lib` run on the unmodified worktree before any change: 4306 passed, 3 failed, 3 ignored
+  - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal
+final_failures:                # full `--lib` re-run after implementation and after this record was written: 4332 passed, 1 failed, 3 ignored
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::osc_identify::tests::osc7501_ac1_program_status_is_identified_in_all_forms
+      - mux::osc_identify::tests::osc7501_ac1_numbers_next_to_7501_keep_their_identity
+      - mux::osc_identify::tests::osc7501_ac1_the_other_identities_are_unchanged
+      - mux::osc_identify::tests::round3_ac1_osc_body_identity_matches_the_reference_over_the_corpus
+      - mux::osc_identify::tests::round3_ac1_the_corpus_reaches_every_identity
+      - mux::osc_identify::tests::round3_b3e644c5_osc_identification_is_allocation_free_and_matches_the_reference
+      - mux::osc_identify::tests::round3_ac4_one_mebibyte_bodies_finish_within_two_seconds_and_match_the_reference
+      - mux::osc_identify::tests::round3_ac4_a_number_of_one_million_digits_finishes_within_two_seconds_and_matches_the_reference
+    red_confirmed: true
+    red_reason: >-
+      The `OscIdentity::ProgramStatus` variant did not exist, so a variant that
+      neither identification path produced was put in to let the tests compile.
+      Against it `osc7501_ac1_program_status_is_identified_in_all_forms` failed
+      with `reference identity of "7501;?" left: NotIdentified` (right:
+      ProgramStatus) and `round3_ac1_the_corpus_reaches_every_identity` failed
+      with `no corpus body identifies as ProgramStatus`. The two neighbour
+      tests (`numbers_next_to_7501_keep_their_identity`,
+      `the_other_identities_are_unchanged`) and the corpus-equality,
+      allocation-free and one-mebibyte tests passed against that variant (both
+      identification paths agreed on NotIdentified); they guard the unchanged
+      identities and the zero-allocation equality over the corpus extended with
+      7501 cases and are not themselves reds.
+  AC-2:
+    tests:
+      - mux::scrollback_filter::tests::osc7501_ring_write_strip_removes_reports_and_queries
+      - mux::scrollback_filter::tests::osc7501_snapshot_strip_removes_reports_and_queries
+      - mux::scrollback_filter::tests::osc7501_strip_and_remap_removes_reports_and_queries_and_remaps_offsets
+      - mux::scrollback_filter::tests::osc7501_strip_leaves_every_previously_kept_sequence_unchanged
+      - mux::scrollback_filter::tests::osc7501_replay_bytes_built_from_a_ring_that_saw_the_traffic_carry_no_osc_7501
+      - mux::snapshot_bytes::tests::build_snapshot_bytes_strips_program_status_sequences_from_scrollback
+      - mux::scrollback_filter::tests::strip_concat_every_entry_point_closes_an_open_csi_at_every_removed_construct
+      - mux::scrollback_filter::tests::strip_concat_a_construct_removed_in_ground_adds_no_closing
+      - mux::scrollback_filter::tests::open_body_closure_every_entry_point_closes_an_open_body_at_every_removed_construct
+      - mux::scrollback_filter::tests::post_strip_state_form_reports_the_csi_state_of_the_written_bytes
+      - mux::snapshot_bytes::tests::build_snapshot_bytes_segments_follow_a_construct_removed_inside_an_open_body
+      - mux::scrollback_filter::tests::every_strip_entry_point_keeps_non_launch_and_overflowed_osc_bodies
+      - mux::scrollback_filter::tests::every_strip_entry_point_keeps_a_designator_esc_and_what_follows_it
+    red_confirmed: true
+    red_reason: >-
+      With the compile-only `ProgramStatus` variant in place (the strip treated
+      it as not replayable), the new strip tests failed:
+      `osc7501_ring_write_strip_removes_reports_and_queries` with `body "7501;?"
+      must be stripped on ring write` (the output still held `ESC ] 7501 ; ?
+      BEL`), the snapshot and strip-and-remap tests the same,
+      `osc7501_strip_leaves_every_previously_kept_sequence_unchanged` with the
+      7501 sequences still between the kept ones,
+      `osc7501_replay_bytes_built_from_a_ring_that_saw_the_traffic_carry_no_osc_7501`
+      with `the ring write path keeps no OSC 7501`, and
+      `build_snapshot_bytes_strips_program_status_sequences_from_scrollback`
+      with `snapshot must carry no OSC 7501 and keep every other byte`. The
+      shared removal tables `CONCAT_TARGETS` and `POST_STRIP_REMOVED` were
+      extended with an OSC 7501 query and report, which turned
+      `strip_concat_every_entry_point_closes_an_open_csi_at_every_removed_construct`,
+      `strip_concat_a_construct_removed_in_ground_adds_no_closing`,
+      `open_body_closure_every_entry_point_closes_an_open_body_at_every_removed_construct`,
+      `post_strip_state_form_reports_the_csi_state_of_the_written_bytes` and
+      `build_snapshot_bytes_segments_follow_a_construct_removed_inside_an_open_body`
+      red as well. `every_strip_entry_point_keeps_non_launch_and_overflowed_osc_bodies`
+      (kept bodies 7500, 7502, 750, 17501, 75010) and
+      `every_strip_entry_point_keeps_a_designator_esc_and_what_follows_it`
+      (7501 after a designator ESC) passed before the change and guard that
+      every sequence kept before stays kept; they are not reds.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::client_parity_scan::tests::osc7501_query_predicate_selects_exactly_the_question_mark_query
+      - mux::ipc::pty_spawn::client_parity_scan::tests::osc7501_is_neither_a_viewer_launch_nor_a_color_query
+      - mux::ipc::pty_spawn::client_parity_scan::tests::osc7501_scan_reports_a_complete_query_as_one_item_with_its_own_terminator
+      - mux::ipc::pty_spawn::client_parity_scan::tests::osc7501_scan_reports_no_item_for_a_report_and_a_tail_for_an_incomplete_query
+      - mux::ipc::pty_spawn::client_parity_scan::tests::osc7501_scan_reports_a_query_split_across_window_and_chunk_once
+      - mux::ipc::pty_spawn::client_parity_scan::tests::osc7501_scan_keeps_stream_order_with_the_other_item_kinds
+      - mux::ipc::pty_spawn::client_parity_scan::tests::round2_task0001_viewer_launch_predicate_selects_deliverable_launches_in_all_forms
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc7501_query_outside_ring_written_ranges_is_redelivered_with_its_own_terminator
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc7501_query_inside_ring_written_ranges_is_redelivered_once
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc7501_report_in_a_suppressed_chunk_is_not_carried
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc7501_near_misses_of_the_query_are_not_carried
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc7501_query_among_reports_and_text_is_carried_exactly_once
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc7501_query_keeps_stream_order_with_the_other_deliverable_items
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc7501_query_split_across_window_and_chunk_is_delivered_once
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc7501_carried_over_query_is_delivered_with_either_terminator_and_a_report_is_dropped
+      - mux::ipc::pty_spawn::suppressed_output::tests::osc7501_is_deliverable_only_as_a_complete_query
+      - mux::ipc::pty_spawn::suppressed_output::tests::viewer_launch_markdown_is_redelivered
+      - mux::ipc::pty_spawn::suppressed_output::tests::viewer_launch_json_yaml_html_are_redelivered
+      - mux::ipc::pty_spawn::suppressed_output::tests::viewer_launch_osc_9999_emterm_md_is_redelivered
+      - mux::ipc::pty_spawn::suppressed_output::tests::viewer_launch_image_kind_is_not_redelivered_d3
+      - mux::ipc::pty_spawn::suppressed_output::tests::agent_status_kind_is_not_a_viewer_launch
+    red_confirmed: true
+    red_reason: >-
+      With a `ScanItemKind::ProgramStatusQuery` kind and an
+      `is_program_status_query` that always answered false (nothing produced the
+      item), the new delivery tests failed:
+      `osc7501_query_predicate_selects_exactly_the_question_mark_query` with
+      `body "7501;?"`, `osc7501_scan_reports_a_complete_query_as_one_item_with_its_own_terminator`
+      with `left: []` (no item), `osc7501_scan_reports_a_query_split_across_window_and_chunk_once`
+      with `left: 0` items, `osc7501_scan_keeps_stream_order_with_the_other_item_kinds`
+      with the 7501 query missing between the CSI and color items, and in the
+      replacement builder
+      `osc7501_query_outside_ring_written_ranges_is_redelivered_with_its_own_terminator`
+      with an empty replacement (`left: []`), plus the inside-ring, split,
+      stream-order, carried-over and `is_deliverable_osc` tests. The report and
+      near-miss tests (`osc7501_report_in_a_suppressed_chunk_is_not_carried`,
+      `osc7501_near_misses_of_the_query_are_not_carried`,
+      `osc7501_scan_reports_no_item_for_a_report_and_a_tail_for_an_incomplete_query`,
+      `osc7501_is_neither_a_viewer_launch_nor_a_color_query`) and the existing
+      viewer-launch and agent-status cases listed above passed before the
+      change; they guard that a 7501 report is never carried and that the
+      viewer-launch selection is unchanged, and are not reds.

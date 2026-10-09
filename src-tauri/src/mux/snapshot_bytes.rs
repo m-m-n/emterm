@@ -579,6 +579,30 @@ mod tests {
         assert!(contains(&out, b"SCREEN"), "screen contents preserved");
     }
 
+    /// osc7501-program-status task0006 (FR15, TM-5): a scrollback that holds
+    /// OSC 7501 reports and queries - either terminator, either spelling of
+    /// the number - must not carry them into the assembled snapshot (a replay
+    /// would re-apply a stale record or have the GUI answer the query again),
+    /// and every other byte stays as it was.
+    #[test]
+    fn build_snapshot_bytes_strips_program_status_sequences_from_scrollback() {
+        let scrollback = b"prompt$ \x1b]7501;state=working;id=a\x07mid\x1b]7501;?\x1b\\\
+                           \x1b]07501;state=done;id=a\x07done";
+        let (out, _segments) = build_snapshot_bytes(scrollback, &[], b"SCREEN", true, (80, 24));
+        assert_eq!(
+            out,
+            b"\x1b[3J\x1b[H\x1b[2Jprompt$ middoneSCREEN\x1b[?1049h".as_slice(),
+            "snapshot must carry no OSC 7501 and keep every other byte"
+        );
+        let (resume, _segments) =
+            build_resume_snapshot_bytes(scrollback, &[], b"SCREEN", true, (80, 24));
+        assert_eq!(
+            resume,
+            b"\x1b[H\x1b[2Jprompt$ middone\x1b[?1049hSCREEN".as_slice(),
+            "resume snapshot must carry no OSC 7501 and keep every other byte"
+        );
+    }
+
     /// The shared layout helper composes the snapshot byte stream and
     /// branches on `alt_screen`:
     ///
