@@ -250,7 +250,7 @@ tasks:
     requirements:
     - FR13
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-program-status/task0005
   task0006:
     title: mux replay stripping and suppressed-output parity for OSC 7501
