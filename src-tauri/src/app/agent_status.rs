@@ -126,6 +126,23 @@ impl App {
         self.agent_status.aggregate(keys.iter())
     }
 
+    /// The value of the status bar's `{agent_status}` template variable
+    /// (osc7501-program-status FR13): the state word of the active tab's
+    /// composite aggregate over the same key set the tab badge aggregates
+    /// ([`Self::agent_status_badge_for`]), or the empty string when there
+    /// is no active tab or no key carries a state.
+    ///
+    /// The word comes from the state vocabulary alone
+    /// ([`crate::agent_status::AgentState`]'s display form): agent names,
+    /// tab titles and any other terminal-supplied text never reach it
+    /// (NFR5).
+    pub(super) fn active_agent_status_word(&self) -> String {
+        self.active_tab()
+            .and_then(|tab| self.agent_status_badge_for(tab))
+            .map(|aggregated| aggregated.state.to_string())
+            .unwrap_or_default()
+    }
+
     /// A single mux pane's aggregated badge, by (connection scope, wire
     /// `pane_id`) (task0006: `ui::mux_sidebar` window-entry badge — one
     /// pane per window entry; scoped per mux-agent-status-pane-key-

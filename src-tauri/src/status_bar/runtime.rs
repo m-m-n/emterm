@@ -1,6 +1,6 @@
 //! Status-bar runtime.
 //!
-//! Owns the [`TemplateEngine`], all four built-in providers, and the
+//! Owns the [`TemplateEngine`], all five built-in providers, and the
 //! OSC `777;statusbar` dispatcher. Per-frame
 //! [`StatusBarRuntime::build_view_model`] projects current settings
 //! into a [`StatusBarViewModel`].
@@ -16,7 +16,7 @@ use crate::settings::StatusBarSettings;
 use crate::status_bar::osc_dispatcher::{OscLayerState, StatusBarOscDispatcher};
 use crate::status_bar::providers::time::RefreshConfig;
 use crate::status_bar::providers::{
-    CommandProvider, CwdProvider, CwdSource, GitBranchProvider, TimeProvider,
+    AgentStatusProvider, CommandProvider, CwdProvider, CwdSource, GitBranchProvider, TimeProvider,
 };
 use crate::status_bar::template_engine::TemplateEngine;
 use crate::status_bar::view_model::{AppRow, OscRow, StatusBarViewModel};
@@ -74,6 +74,9 @@ pub struct StatusBarRuntime {
     git_provider: Arc<GitBranchProvider>,
     #[allow(dead_code)]
     command_provider: Arc<CommandProvider>,
+    /// `{agent_status}`: the state word of the active tab's composite
+    /// aggregate. `App` sets it each time it builds the view model.
+    agent_status_provider: Arc<AgentStatusProvider>,
 }
 
 impl StatusBarRuntime {
@@ -153,11 +156,17 @@ impl StatusBarRuntime {
         ));
         engine.register(git.clone() as Arc<_>);
 
-        let cmd = Arc::new(CommandProvider::with_wake(wake));
+        let cmd = Arc::new(CommandProvider::with_wake(wake.clone()));
         for (name, command) in &settings.custom_commands {
             cmd.spawn_worker(name, command);
         }
         engine.register(cmd.clone() as Arc<_>);
+
+        // AgentStatusProvider has no thread; `App` calls `set_value()` each
+        // time it builds the view model, which fires `wake` event-driven
+        // when the value changes.
+        let agent_status = Arc::new(AgentStatusProvider::with_wake(wake));
+        engine.register(agent_status.clone() as Arc<_>);
 
         let dispatcher = Arc::new(StatusBarOscDispatcher::new());
 
@@ -169,6 +178,7 @@ impl StatusBarRuntime {
             cwd_provider: cwd,
             git_provider: git,
             command_provider: cmd,
+            agent_status_provider: agent_status,
         }
     }
 
@@ -178,6 +188,15 @@ impl StatusBarRuntime {
     /// schedules the next frame without polling.
     pub fn cwd_provider(&self) -> Arc<CwdProvider> {
         self.cwd_provider.clone()
+    }
+
+    /// Shared handle to the runtime's AgentStatusProvider so `App` can
+    /// call [`AgentStatusProvider::set_value`] with the active tab's
+    /// aggregate word before the view model is built. The provider's wake
+    /// handle (from `new`) then schedules the next frame when the value
+    /// changes.
+    pub fn agent_status_provider(&self) -> Arc<AgentStatusProvider> {
+        self.agent_status_provider.clone()
     }
 
     /// Snapshot the OSC dispatcher (shared reference). Callbacks
@@ -528,6 +547,106 @@ mod tests {
             count.load(Ordering::Relaxed) >= 1,
             "runtime must wire the wake handle into CwdProvider::set_cwd"
         );
+    }
+
+    // ── {agent_status} provider wiring (osc7501-program-status task0005) ──
+
+    /// Concatenated text of a resolved run list.
+    fn runs_text(runs: &[html::RichTextRun]) -> String {
+        runs.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    /// AC-1 (FR13): a template containing `{agent_status}` resolves
+    /// through the runtime's engine to the provider's current value -- the
+    /// empty string before any value is set, then each value the provider
+    /// is given (the run cache is keyed by the provider's version, so a
+    /// changed value is never served from a stale entry).
+    #[test]
+    fn ac1_agent_status_template_resolves_to_the_providers_current_value() {
+        let s = settings_with("{agent_status}", "");
+        let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
+        assert_eq!(runs_text(&rt.build_view_model(&s).app_line1.left), "");
+
+        rt.agent_status_provider().set_value("working");
+        assert_eq!(
+            runs_text(&rt.build_view_model(&s).app_line1.left),
+            "working"
+        );
+
+        rt.agent_status_provider().set_value("blocked");
+        assert_eq!(
+            runs_text(&rt.build_view_model(&s).app_line1.left),
+            "blocked"
+        );
+
+        rt.agent_status_provider().set_value("");
+        assert_eq!(runs_text(&rt.build_view_model(&s).app_line1.left), "");
+    }
+
+    /// AC-1: the variable composes with surrounding template text on the
+    /// other app-row sides too.
+    #[test]
+    fn ac1_agent_status_variable_resolves_inside_surrounding_text_on_any_side() {
+        let s = settings_with("", "agent={agent_status}.");
+        let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
+        rt.agent_status_provider().set_value("done");
+        assert_eq!(
+            runs_text(&rt.build_view_model(&s).app_line1.right),
+            "agent=done."
+        );
+    }
+
+    /// AC-1: the default templates do not contain the variable.
+    #[test]
+    fn ac1_default_templates_do_not_contain_the_agent_status_variable() {
+        for settings in [
+            StatusBarSettings::default(),
+            crate::settings::Settings::new().statusbar,
+        ] {
+            for template in [
+                &settings.app_line1_left,
+                &settings.app_line1_right,
+                &settings.app_line2_left,
+                &settings.app_line2_right,
+            ] {
+                assert!(
+                    !template.contains("{agent_status}"),
+                    "default template {template:?} must not contain {{agent_status}}"
+                );
+            }
+        }
+    }
+
+    /// AC-3 (at the runtime level, mirrors
+    /// `runtime_injects_wake_into_cwd_provider`): the runtime hands its
+    /// `WakeFn` to the AgentStatusProvider, so setting a different value
+    /// through the runtime's handle fires the wake callback supplied to
+    /// `new`. (The exact once-per-change count is pinned by the provider's
+    /// own unit tests; other providers' threads share this wake, so this
+    /// runtime-level check does not assert an exact total.)
+    #[test]
+    fn runtime_injects_wake_into_agent_status_provider() {
+        use crate::status_bar::template_engine::VariableProvider;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let count = Arc::new(AtomicUsize::new(0));
+        let c2 = count.clone();
+        let wake: WakeFn = Arc::new(move || {
+            c2.fetch_add(1, Ordering::Relaxed);
+        });
+        let s = settings_with("{agent_status}", "");
+        let rt = StatusBarRuntime::new(&s, Arc::new(|| None), wake);
+        let provider = rt.agent_status_provider();
+        let v0 = provider.version(None);
+        provider.set_value("blocked");
+        assert!(
+            count.load(Ordering::Relaxed) >= 1,
+            "runtime must wire the wake handle into AgentStatusProvider::set_value"
+        );
+        assert!(provider.version(None) > v0);
+        // The same value again leaves the version untouched.
+        let v1 = provider.version(None);
+        provider.set_value("blocked");
+        assert_eq!(provider.version(None), v1);
     }
 
     /// TS-29 (at the runtime level, task0001 rewrite, FR7): TimeProvider's

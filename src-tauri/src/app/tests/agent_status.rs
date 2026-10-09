@@ -1138,6 +1138,393 @@ fn agent_status_badge_for_is_none_when_nothing_reported() {
     assert_eq!(app.agent_status_badge_for(tab), None);
 }
 
+// ── osc7501-program-status task0005: the `{agent_status}` status bar
+// variable (FR13, NFR5). The value is read through the real status bar
+// path -- `App::status_bar_view_model` -- so every test also covers the
+// refresh point (App sets the provider each time it builds the view
+// model). ─────────────────────────────────────────────────────────────
+
+/// An `App` whose first app row is `{agent_status}` alone.
+fn app_with_agent_status_variable() -> App {
+    let mut app = App::new();
+    with_setting(&mut app, |s| {
+        s.statusbar.enabled = true;
+        s.statusbar.app_line1_left = "{agent_status}".to_string();
+        s.statusbar.app_line1_right = String::new();
+        s.statusbar.app_line2_left = String::new();
+        s.statusbar.app_line2_right = String::new();
+    });
+    app
+}
+
+/// The text the `{agent_status}` row currently renders.
+fn agent_status_variable_text(app: &App) -> String {
+    app.status_bar_view_model()
+        .app_line1
+        .left
+        .iter()
+        .map(|run| run.text.as_str())
+        .collect()
+}
+
+fn set_plain_tab_state(
+    app: &mut App,
+    tab_idx: usize,
+    state: crate::agent_status::AgentState,
+    name: Option<&str>,
+) {
+    let id = app.tabs[tab_idx].stable_id;
+    app.agent_status.apply_plain_tab_event(
+        id,
+        crate::agent_status::AgentStatusEvent::Set {
+            state,
+            name: name.map(str::to_string),
+        },
+    );
+}
+
+fn clear_plain_tab_state(app: &mut App, tab_idx: usize) {
+    let id = app.tabs[tab_idx].stable_id;
+    app.agent_status
+        .apply_plain_tab_event(id, crate::agent_status::AgentStatusEvent::Clear);
+}
+
+/// Attach a mux window group holding `pane_ids` (one window per pane) to
+/// tab `tab_idx`.
+fn seed_mux_group_panes(app: &mut App, tab_idx: usize, pane_ids: Vec<u32>) {
+    let windows = (0..pane_ids.len() as u32)
+        .map(|id| crate::mux::window_group::MuxWindow {
+            id,
+            name: format!("w{id}"),
+        })
+        .collect();
+    let mut group = crate::mux::window_group::MuxWindowGroup::new();
+    group.seed(windows, pane_ids, 0);
+    app.tabs[tab_idx].mux_group = Some(group);
+}
+
+fn set_mux_pane_state(
+    app: &mut App,
+    tab_idx: usize,
+    pane_id: u32,
+    state: Option<crate::agent_status::AgentState>,
+    name: Option<&str>,
+    revision: u64,
+) {
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[tab_idx].stable_id);
+    app.agent_status.apply_daemon_update(
+        scope,
+        pane_id,
+        state,
+        name.map(str::to_string),
+        revision,
+        false,
+    );
+}
+
+/// The five state words (A11). `error` is produced by the OSC 7501 side
+/// of the composite, which lands through SC-2/SC-4 (verified end to end
+/// by TS5 after integration); this list is the closed vocabulary the
+/// value may ever take.
+const AGENT_STATUS_WORDS: [&str; 5] = ["idle", "working", "blocked", "done", "error"];
+
+/// AC-2: no key carries a state -> the empty string, before any report,
+/// and again after a clear.
+#[test]
+fn ac2_agent_status_variable_is_empty_when_no_key_carries_a_state() {
+    let mut app = app_with_agent_status_variable();
+    app.spawn_initial_tab();
+    assert_eq!(agent_status_variable_text(&app), "");
+
+    set_plain_tab_state(&mut app, 0, crate::agent_status::AgentState::Working, None);
+    assert_eq!(agent_status_variable_text(&app), "working");
+    clear_plain_tab_state(&mut app, 0);
+    assert_eq!(agent_status_variable_text(&app), "");
+}
+
+/// AC-2: with no tab at all there is no active tab and the value is empty.
+#[test]
+fn ac2_agent_status_variable_is_empty_without_any_tab() {
+    let app = app_with_agent_status_variable();
+    assert!(app.active_tab().is_none());
+    assert_eq!(agent_status_variable_text(&app), "");
+}
+
+/// AC-2 (A11): on a plain tab the value is the state's word, for every
+/// state a report can carry.
+#[test]
+fn ac2_agent_status_variable_is_the_state_word_on_a_plain_tab() {
+    let mut app = app_with_agent_status_variable();
+    app.spawn_initial_tab();
+    for state in crate::agent_status::AgentState::ALL {
+        set_plain_tab_state(&mut app, 0, state, None);
+        assert_eq!(agent_status_variable_text(&app), state.to_string());
+    }
+}
+
+/// AC-2: for a mux-attached tab the value aggregates the tab's own key
+/// AND every pane of its window group -- the same key set the tab badge
+/// aggregates, so the value is always the badge state's word.
+#[test]
+fn ac2_agent_status_variable_aggregates_the_window_groups_panes_like_the_badge() {
+    use crate::agent_status::AgentState;
+
+    let mut app = app_with_agent_status_variable();
+    app.spawn_initial_tab();
+    seed_mux_group_panes(&mut app, 0, vec![10, 11]);
+
+    // Only a group pane reports: the value is that pane's word.
+    set_mux_pane_state(&mut app, 0, 11, Some(AgentState::Working), None, 1);
+    assert_eq!(agent_status_variable_text(&app), "working");
+
+    // The tab's own key reports a lower-priority state: the pane's wins.
+    set_plain_tab_state(&mut app, 0, AgentState::Idle, None);
+    assert_eq!(agent_status_variable_text(&app), "working");
+
+    // Another pane of the group escalates to blocked.
+    set_mux_pane_state(&mut app, 0, 10, Some(AgentState::Blocked), None, 1);
+    assert_eq!(agent_status_variable_text(&app), "blocked");
+
+    // The value is the badge state's word at every step.
+    let badge = app
+        .agent_status_badge_for(app.active_tab().unwrap())
+        .expect("group panes report");
+    assert_eq!(agent_status_variable_text(&app), badge.state.to_string());
+
+    // Clearing every reporting key empties the value.
+    set_mux_pane_state(&mut app, 0, 10, None, None, 2);
+    set_mux_pane_state(&mut app, 0, 11, None, None, 2);
+    clear_plain_tab_state(&mut app, 0);
+    assert_eq!(agent_status_variable_text(&app), "");
+    assert!(
+        app.agent_status_badge_for(app.active_tab().unwrap())
+            .is_none()
+    );
+}
+
+/// AC-2: only the ACTIVE tab's keys count -- another tab's state, and a
+/// pane id outside the active tab's window group, never reach the value.
+#[test]
+fn ac2_agent_status_variable_ignores_other_tabs_and_panes_outside_the_group() {
+    use crate::agent_status::AgentState;
+
+    let mut app = app_with_agent_status_variable();
+    app.spawn_initial_tab(); // tab 0 (active)
+    app.spawn_new_tab(); // tab 1
+    app.switch_to_tab(0);
+    seed_mux_group_panes(&mut app, 0, vec![10]);
+
+    set_plain_tab_state(&mut app, 1, AgentState::Blocked, None);
+    // Same scope as tab 0, but pane 99 is not in tab 0's window group.
+    set_mux_pane_state(&mut app, 0, 99, Some(AgentState::Blocked), None, 1);
+
+    assert_eq!(agent_status_variable_text(&app), "");
+}
+
+/// AC-4 (NFR5, TM-4): for every reachable input the value is exactly one
+/// of the state words (or empty). Agent names, the tab title, the learned
+/// public pane id -- all terminal-supplied text -- never appear in it, and
+/// markup in them is never rendered.
+#[test]
+fn ac4_agent_status_variable_never_carries_names_titles_or_markup() {
+    use crate::agent_status::AgentState;
+
+    const HOSTILE: &str = "<font color=\"red\">pwned</font>&amp;{cwd}";
+
+    let mut app = app_with_agent_status_variable();
+    app.spawn_initial_tab();
+    app.tabs[0].title = HOSTILE.to_string();
+    seed_mux_group_panes(&mut app, 0, vec![10]);
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
+    app.mux_public_pane_ids
+        .insert((scope, 10), HOSTILE.to_string());
+
+    for (revision, state) in (1u64..).zip(AgentState::ALL) {
+        // Plain-tab key and group-pane key both carry the hostile name.
+        set_plain_tab_state(&mut app, 0, state, Some(HOSTILE));
+        set_mux_pane_state(&mut app, 0, 10, Some(state), Some(HOSTILE), revision);
+
+        let vm = app.status_bar_view_model();
+        let runs = &vm.app_line1.left;
+        assert_eq!(runs.len(), 1, "state {state}: one plain text run");
+        let run = &runs[0];
+        assert_eq!(run.text, state.to_string());
+        assert!(AGENT_STATUS_WORDS.contains(&run.text.as_str()));
+        assert!(run.color.is_none() && !run.bold && !run.italic && !run.underline);
+        assert!(!run.text.contains("pwned") && !run.text.contains('<'));
+    }
+
+    // Cleared again: empty, still free of the hostile text.
+    clear_plain_tab_state(&mut app, 0);
+    set_mux_pane_state(&mut app, 0, 10, None, None, 99);
+    assert_eq!(agent_status_variable_text(&app), "");
+}
+
+/// AC-5: after an agent-status change in the active tab -- a plain-tab
+/// OSC 777 event applied by `pump_all` -- the next status bar build shows
+/// the new value.
+#[test]
+fn ac5_agent_status_variable_refreshes_after_a_plain_tab_status_change() {
+    let mut app = app_with_agent_status_variable();
+    app.spawn_initial_tab();
+    assert_eq!(agent_status_variable_text(&app), "");
+
+    for (event, expected) in [
+        (
+            crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Working,
+                name: Some("claude".to_string()),
+            },
+            "working",
+        ),
+        (
+            crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Blocked,
+                name: None,
+            },
+            "blocked",
+        ),
+        (crate::agent_status::AgentStatusEvent::Clear, ""),
+    ] {
+        app.active_tab()
+            .unwrap()
+            .cb_state
+            .lock()
+            .pending_agent_status
+            .push(event);
+        app.pump_all();
+        assert_eq!(agent_status_variable_text(&app), expected);
+    }
+}
+
+/// AC-5: after a daemon `AgentStatusUpdate` for a pane of the active
+/// tab's window group (applied by `pump_all`), the next build shows the
+/// new value.
+#[test]
+fn ac5_agent_status_variable_refreshes_after_a_daemon_pane_update() {
+    use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+    let mut app = app_with_agent_status_variable();
+    app.spawn_initial_tab();
+    let welcome = MuxMessage::control(
+        MessageType::Welcome,
+        0,
+        &WelcomeMsg::Accepted {
+            server_version: 1,
+            sessions: vec![SessionInfo {
+                id: 1,
+                name: "main".to_string(),
+                window_count: 1,
+                pane_count: 1,
+                active_window_index: 0,
+                windows: vec![WindowInfo {
+                    id: 0,
+                    name: "w0".to_string(),
+                    active_pane_id: 7,
+                }],
+            }],
+        },
+    );
+    app.on_mux_message(0, welcome);
+    assert_eq!(agent_status_variable_text(&app), "");
+
+    let update = AgentStatusUpdateMsg {
+        pane_id: 7,
+        public_pane_id: "xyz-7".to_string(),
+        state: Some(WireState::Blocked),
+        name: Some("agent".to_string()),
+        revision: 1,
+        replay_derived: false,
+    };
+    app.on_mux_message(
+        0,
+        MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update),
+    );
+    app.pump_all();
+
+    assert_eq!(agent_status_variable_text(&app), "blocked");
+}
+
+/// AC-5: after switching the active tab the next build shows the newly
+/// active tab's value.
+#[test]
+fn ac5_agent_status_variable_follows_the_active_tab_on_switch() {
+    use crate::agent_status::AgentState;
+
+    let mut app = app_with_agent_status_variable();
+    app.spawn_initial_tab(); // tab 0
+    app.spawn_new_tab(); // tab 1 (active)
+    set_plain_tab_state(&mut app, 0, AgentState::Working, None);
+    set_plain_tab_state(&mut app, 1, AgentState::Blocked, None);
+
+    assert_eq!(app.active, 1);
+    assert_eq!(agent_status_variable_text(&app), "blocked");
+    app.switch_to_tab(0);
+    assert_eq!(agent_status_variable_text(&app), "working");
+    app.switch_to_tab(1);
+    assert_eq!(agent_status_variable_text(&app), "blocked");
+}
+
+/// AC-5: after closing the active tab the next build shows the value of
+/// the tab that becomes active -- and the empty string once no tab is
+/// left.
+#[test]
+fn ac5_agent_status_variable_follows_the_new_active_tab_after_closing_the_active_one() {
+    use crate::agent_status::AgentState;
+
+    let mut app = app_with_agent_status_variable();
+    app.spawn_initial_tab(); // tab 0
+    app.spawn_new_tab(); // tab 1 (active)
+    set_plain_tab_state(&mut app, 0, AgentState::Working, None);
+    set_plain_tab_state(&mut app, 1, AgentState::Blocked, None);
+    assert_eq!(agent_status_variable_text(&app), "blocked");
+
+    app.close_tab(1);
+    assert_eq!(app.active, 0);
+    assert_eq!(agent_status_variable_text(&app), "working");
+
+    app.close_tab(0);
+    assert!(app.tabs.is_empty());
+    assert_eq!(agent_status_variable_text(&app), "");
+}
+
+/// AC-3 / AC-5 at the App level: building the view model repeatedly with
+/// no change leaves the provider's version alone; one real change advances
+/// it once; and the change makes `status_bar_view_model_changed` report a
+/// redraw-worthy difference.
+#[test]
+fn ac3_agent_status_provider_version_advances_only_on_a_real_change() {
+    use crate::status_bar::template_engine::VariableProvider;
+
+    let mut app = app_with_agent_status_variable();
+    app.spawn_initial_tab();
+    let provider = app.status_bar_runtime.agent_status_provider();
+
+    let v0 = provider.version(None);
+    for _ in 0..3 {
+        let _ = app.status_bar_view_model();
+    }
+    assert_eq!(provider.version(None), v0, "no change -> no version bump");
+
+    app.record_render_state_no_tab();
+    assert!(
+        !app.status_bar_view_model_changed(),
+        "an unchanged value leaves the view model unchanged"
+    );
+
+    set_plain_tab_state(&mut app, 0, crate::agent_status::AgentState::Done, None);
+    assert!(
+        app.status_bar_view_model_changed(),
+        "a changed value changes the view model"
+    );
+    let v1 = provider.version(None);
+    assert!(v1 > v0);
+    for _ in 0..3 {
+        let _ = app.status_bar_view_model();
+    }
+    assert_eq!(provider.version(None), v1, "re-building does not re-bump");
+}
+
 // ── mux-agent-status-pane-key-collision TS-4..TS-9: application-level
 // scoping (SPEC FR1..FR6). Two mux-attached tabs simulate two different
 // mux daemons; both hold the SAME wire `pane_id`, which pre-fix would
