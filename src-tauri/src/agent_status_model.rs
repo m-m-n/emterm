@@ -87,6 +87,38 @@ pub struct AgentStatus {
     pub unseen: bool,
 }
 
+/// A plain tab's OSC 7501 summary as the model stores it (IMPLEMENTATION.md
+/// SC-4): the table's aggregate state converted to the core state, the
+/// sanitized title and the effective app.
+///
+/// This worktree carries only the part of SC-4 that plain-tab ingestion
+/// (task0003) uses (D10); the SC-4 owner (task0002) supersedes it, including
+/// name selection from `title` and `app`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramStatusSummary {
+    pub state: AgentState,
+    pub title: Option<String>,
+    pub app: Option<String>,
+}
+
+/// The inputs one entry's reported status is composed from: the OSC 777
+/// part and the OSC 7501 summary, kept separately (SC-4).
+#[derive(Debug, Default)]
+struct EntryInputs {
+    osc777_state: Option<AgentState>,
+    osc777_name: Option<String>,
+    summary: Option<ProgramStatusSummary>,
+}
+
+impl EntryInputs {
+    /// The composite state (SC-2) and the name that goes with it.
+    fn composite(&self) -> (Option<AgentState>, Option<String>) {
+        let state =
+            crate::agent_status::compose(self.osc777_state, self.summary.as_ref().map(|s| s.state));
+        (state, self.osc777_name.clone())
+    }
+}
+
 /// A real (non-replay, state-changing) transition, queued for the
 /// notification layer (task0007) to drain and act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +205,9 @@ pub fn reconcile_latch_feed(
 #[derive(Debug, Default)]
 pub struct AgentStatusModel {
     entries: HashMap<PaneKey, AgentStatus>,
+    /// The OSC 777 part and the OSC 7501 summary each entry's composite is
+    /// computed from. Keyed like `entries`; discarded together with it.
+    inputs: HashMap<PaneKey, EntryInputs>,
     transitions: VecDeque<Transition>,
     /// Per-plain-tab inferred-clear latches (agent-exit-after-icon FR2),
     /// keyed by the same `u64` `PaneKey::Tab` uses. Lazily created on
@@ -200,6 +235,27 @@ impl AgentStatusModel {
         self.apply_report(key, new_state, name, next_revision, false);
     }
 
+    /// Set (or, with `None`, remove) a plain tab's OSC 7501 summary
+    /// (SC-4's plain-tab summary operation). The model mints the revision,
+    /// recomputes the composite with the tab's stored OSC 777 part and
+    /// applies the usual unseen / transition rules, so a summary that
+    /// leaves the composite unchanged advances the revision only.
+    pub fn apply_plain_tab_summary(
+        &mut self,
+        tab_stable_id: u64,
+        summary: Option<ProgramStatusSummary>,
+    ) {
+        let key = PaneKey::Tab(tab_stable_id);
+        if summary.is_none() && !self.entries.contains_key(&key) {
+            return;
+        }
+        let inputs = self.inputs.entry(key.clone()).or_default();
+        inputs.summary = summary;
+        let (state, name) = inputs.composite();
+        let next_revision = self.entries.get(&key).map_or(1, |e| e.revision + 1);
+        self.apply_composite(key, state, name, next_revision, false);
+    }
+
     /// Apply a daemon-pushed `AgentStatusUpdate` for a mux pane. `scope`
     /// identifies the connection that delivered the update (the tab whose
     /// mux attach carried it); `revision` is the daemon-authoritative
@@ -223,14 +279,33 @@ impl AgentStatusModel {
         );
     }
 
-    /// Shared apply path for both ingestion sources.
+    /// Shared apply path for both OSC 777 ingestion sources: store the OSC
+    /// 777 part, then apply the composite of it and the entry's OSC 7501
+    /// summary (none for a mux pane here, so its composite is the OSC 777
+    /// state exactly as before).
+    fn apply_report(
+        &mut self,
+        key: PaneKey,
+        new_state: Option<AgentState>,
+        name: Option<String>,
+        revision: u64,
+        replay_derived: bool,
+    ) {
+        let inputs = self.inputs.entry(key.clone()).or_default();
+        inputs.osc777_state = new_state;
+        inputs.osc777_name = name;
+        let (state, name) = inputs.composite();
+        self.apply_composite(key, state, name, revision, replay_derived);
+    }
+
+    /// Store an entry's composite status.
     ///
     /// - The "unseen" flag is reset to `true` on any real state change
     ///   (including the pane's very first report) and otherwise left
     ///   untouched — regardless of `replay_derived`.
     /// - A transition is enqueued only for a real state change AND
     ///   `!replay_derived`.
-    fn apply_report(
+    fn apply_composite(
         &mut self,
         key: PaneKey,
         new_state: Option<AgentState>,
@@ -275,6 +350,7 @@ impl AgentStatusModel {
     /// tab never leaves a stale latch behind.
     pub fn discard(&mut self, pane: &PaneKey) {
         self.entries.remove(pane);
+        self.inputs.remove(pane);
         if let PaneKey::Tab(tab_stable_id) = pane {
             self.latches.remove(tab_stable_id);
         }

@@ -241,7 +241,8 @@ pub(super) fn payload_has_device_query(payload: &[u8]) -> bool {
 /// Outcome of scanning one OSC string (starting at `ESC ]`) for a color-query
 /// token. See [`osc_scan_for_color_query`].
 enum OscScan {
-    /// The OSC string is a complete OSC 4 / 10 / 11 / 12 color query.
+    /// The OSC string is a complete OSC 4 / 10 / 11 / 12 color query or a
+    /// complete OSC 7501 (Program Status) `?` query.
     Query,
     /// The OSC string runs to the end of the payload with no terminator.
     Incomplete,
@@ -269,6 +270,14 @@ enum OscScan {
 /// `ESC` byte (mirroring the CSI scan's own malformed-sequence resync)
 /// rather than skipping past it.
 ///
+/// An OSC 7501 (Program Status) query is stricter than a color query
+/// (osc7501-program-status FR8, A3): the parameter must be exactly `7501`
+/// and the body — everything after the first `;` — exactly `?`, ended by a
+/// real terminator. BEL and ST answer; a premature ESC ends the string
+/// unterminated, which the responder never answers, so it is not a query
+/// here. A lone ESC at the very end of the payload may still become ST in
+/// the next frame, so it is `Incomplete`. A 7501 report is never a query.
+///
 /// An OSC that runs to the end of the payload with no terminator is
 /// `Incomplete`, not a complete query — like an incomplete CSI, it would
 /// complete (and still answer) once joined with a later frame by the
@@ -278,16 +287,22 @@ fn osc_scan_for_color_query(payload: &[u8], start: usize) -> OscScan {
     let mut j = start + 2; // past `ESC ]`
     let mut param: u32 = 0;
     let mut param_done = false;
+    // Only digits before the first `;` make a clean OSC 7501 parameter.
+    let mut param_clean = true;
+    let mut body_start = 0;
     let mut has_query = false;
     loop {
         if j >= n {
             return OscScan::Incomplete;
         }
         let is_color_query = || matches!(param, 4 | 10 | 11 | 12) && has_query;
+        let is_program_status_query = |body_end: usize| {
+            param == 7501 && param_done && param_clean && &payload[body_start..body_end] == b"?"
+        };
         match payload[j] {
             0x07 => {
                 // BEL terminator.
-                return if is_color_query() {
+                return if is_color_query() || is_program_status_query(j) {
                     OscScan::Query
                 } else {
                     OscScan::Resume(j + 1)
@@ -299,7 +314,16 @@ fn osc_scan_for_color_query(payload: &[u8], start: usize) -> OscScan {
                 if is_color_query() {
                     return OscScan::Query;
                 }
-                return if j + 1 < n && payload[j + 1] == b'\\' {
+                let is_st = j + 1 < n && payload[j + 1] == b'\\';
+                if is_program_status_query(j) {
+                    if is_st {
+                        return OscScan::Query;
+                    }
+                    if j + 1 >= n {
+                        return OscScan::Incomplete;
+                    }
+                }
+                return if is_st {
                     OscScan::Resume(j + 2) // ST: consume both bytes
                 } else {
                     OscScan::Resume(j) // premature ESC: re-examine it
@@ -311,13 +335,16 @@ fn osc_scan_for_color_query(payload: &[u8], start: usize) -> OscScan {
             }
             b';' if !param_done => {
                 param_done = true;
+                body_start = j + 1;
                 j += 1;
             }
             b'?' => {
                 has_query = true;
+                param_clean &= param_done;
                 j += 1;
             }
             _ => {
+                param_clean &= param_done;
                 j += 1;
             }
         }

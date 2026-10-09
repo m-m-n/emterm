@@ -61,6 +61,52 @@ impl fmt::Display for AgentState {
     }
 }
 
+/// Program Status (OSC 7501) five-word conversion (IMPLEMENTATION.md SC-2):
+/// map a Program Status state word to the core state; every other input
+/// maps to nothing.
+///
+/// This worktree carries only the part of SC-2 that plain-tab ingestion
+/// (task0003) uses (D10). The core state has no `error` yet, so the word
+/// `error` maps to nothing here until the SC-2 owner (task0002) adds the
+/// state and extends this conversion.
+pub fn state_from_five_word(word: &str) -> Option<AgentState> {
+    match word {
+        "idle" => Some(AgentState::Idle),
+        "working" => Some(AgentState::Working),
+        "blocked" => Some(AgentState::Blocked),
+        "done" => Some(AgentState::Done),
+        _ => None,
+    }
+}
+
+/// In-pane composition rank (IMPLEMENTATION.md D2): blocked > working >
+/// done > idle (`error` ranks between working and done once the SC-2 owner
+/// adds the state).
+fn in_pane_rank(state: AgentState) -> u8 {
+    match state {
+        AgentState::Blocked => 3,
+        AgentState::Working => 2,
+        AgentState::Done => 1,
+        AgentState::Idle => 0,
+    }
+}
+
+/// Compose the OSC 777 state with the OSC 7501 aggregate (SC-2): the higher
+/// of the two by the in-pane rank; one side absent yields the other side;
+/// both absent yields no state. Ties yield the same state, so the choice is
+/// immaterial.
+pub fn compose(osc777: Option<AgentState>, osc7501: Option<AgentState>) -> Option<AgentState> {
+    match (osc777, osc7501) {
+        (Some(a), Some(b)) => Some(if in_pane_rank(b) > in_pane_rank(a) {
+            b
+        } else {
+            a
+        }),
+        (a, None) => a,
+        (None, b) => b,
+    }
+}
+
 /// A decoded agent-status report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentStatusEvent {
