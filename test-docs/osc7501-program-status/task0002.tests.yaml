@@ -1,0 +1,165 @@
+task_id: task0002
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - agent_status::tests::error_state_has_the_word_error
+      - agent_status::tests::osc777_parse_still_rejects_state_error
+      - agent_status::tests::osc777_state_collection_keeps_exactly_the_four_original_members
+      - agent_status::tests::five_word_conversion_maps_every_program_status_word
+      - agent_status::tests::five_word_conversion_rejects_every_other_input
+      - agent_status::tests::five_word_conversion_round_trips_the_display_word
+      - protocol::tests::test_agent_state_error_wire_string
+      - protocol::tests::test_agent_state_existing_four_encode_exactly_as_before
+      - protocol::tests::test_agent_state_wire_strings
+      - agent_status_model::tests::ac1_state_wire_conversions_round_trip_all_five_states
+      - mux::daemon::tasks::tests::state_conversions_round_trip_all_five_states
+      - mux::daemon::tasks::tests::state_conversions_keep_the_existing_four_mappings
+    red_confirmed: true
+    red_reason: >-
+      Observed compile-level red, in two staged runs. (1) crates/mux_ipc, `cargo test
+      --manifest-path crates/mux_ipc/Cargo.toml --lib` with the new protocol tests and no
+      protocol.rs change: E0599 "no variant, associated function, or constant named `Error`
+      found for enum `protocol::AgentState`". (2) src-tauri, the project test command with all
+      new tests and no implementation: "could not compile `emterm` (lib test) due to 109
+      previous errors", including 48x E0599 "no variant ... named `Error` found for enum
+      `agent_status::AgentState`", E0599 no associated item `from_program_status_word` and
+      `ALL_WITH_ERROR` for `agent_status::AgentState`. The pre-existing
+      protocol::tests::test_agent_state_wire_strings stays green and is listed as the
+      existing-four check.
+  AC-2:
+    tests:
+      - agent_status::tests::compose_returns_the_higher_input_by_blocked_working_error_done_idle
+      - agent_status::tests::compose_working_outranks_a_child_done_or_error
+      - agent_status::tests::compose_returns_the_present_side_when_one_side_is_absent
+      - agent_status::tests::compose_returns_no_state_when_both_are_absent
+    red_confirmed: true
+    red_reason: >-
+      Observed compile-level red in the src-tauri run described under AC-1: E0425 "cannot find
+      function `compose` in this scope" (6 sites) and the missing `AgentState::Error` variant
+      these tests iterate.
+  AC-3:
+    tests:
+      - agent_status_model::tests::ac3_plain_tab_summary_alone_reports_the_summary_state
+      - agent_status_model::tests::ac3_composite_is_the_higher_of_osc777_and_summary_by_the_d2_rank
+      - agent_status_model::tests::ac3_plain_tab_summary_update_advances_the_tab_revision
+      - agent_status_model::tests::ac3_plain_tab_osc777_operation_recomputes_with_the_stored_summary
+      - agent_status_model::tests::ac3_removing_the_summary_falls_back_to_the_osc777_state
+      - agent_status_model::tests::ac3_daemon_update_with_summary_stores_summary_with_the_daemon_revision
+      - agent_status_model::tests::ac3_existing_daemon_update_means_no_summary
+      - agent_status_model::tests::ac3_transition_fires_only_when_the_composite_changes
+      - agent_status_model::tests::ac3_summary_change_that_keeps_the_composite_does_not_reset_seen
+      - agent_status_model::tests::ac3_replay_derived_update_with_summary_applies_silently
+      - agent_status_model::tests::ac3_aggregate_counts_and_any_reported_use_the_composite
+      - agent_status_model::tests::ac3_name_follows_d5_title_then_app_then_osc777_name_then_none
+      - agent_status_model::tests::ac3_without_a_summary_the_name_is_the_osc777_name
+      - app::tests::agent_status::pump_all_error_transition_notifies_with_the_d5_name_and_the_error_word
+      - app::tests::agent_status::pump_all_summary_below_the_osc777_state_causes_no_transition
+    red_confirmed: true
+    red_reason: >-
+      Observed compile-level red in the src-tauri run described under AC-1: E0599 "no method
+      named `apply_plain_tab_summary`" (11 sites) and "no method named
+      `apply_daemon_update_with_summary`" (6 sites) found for `AgentStatusModel`, E0609 no
+      field `summary` / `osc777_state` / `osc777_name` on `&AgentStatus`, E0422/E0425
+      `ProgramStatusSummary` not found. The pre-existing agent_status_model and app agent-
+      status tests (not re-listed) keep passing in the final run with only fixture-literal
+      additions (`Counts.error: 0`, `program_status: None`).
+  AC-4:
+    tests:
+      - agent_status_model::tests::ac4_aggregate_order_is_blocked_unseen_error_unseen_done_working_seen_error_seen_done_idle
+      - agent_status_model::tests::ac4_unseen_error_outranks_unseen_done_and_working
+      - agent_status_model::tests::ac4_seen_error_ranks_below_working_and_above_seen_done
+      - agent_status_model::tests::ac4_marking_seen_flips_error_from_unseen_to_seen_like_done
+      - agent_status_model::tests::ac4_error_same_state_re_report_preserves_seen_and_real_change_resets_it
+      - agent_status_model::tests::ac4_counts_report_error_separately
+    red_confirmed: true
+    red_reason: >-
+      Observed compile-level red in the src-tauri run described under AC-1: E0599 no variant
+      `Error` for `agent_status::AgentState`, E0609 "no field `error` on type
+      `agent_status_model::Counts`" and E0560 "struct `Counts` has no field named `error`".
+  AC-5:
+    tests:
+      - protocol::tests::test_agent_status_update_msg_round_trip_with_program_status_summary
+      - protocol::tests::test_agent_status_update_msg_round_trip_summary_without_title_or_app
+      - protocol::tests::test_agent_status_update_msg_round_trip_summary_absent
+      - protocol::tests::test_agent_status_update_msg_summary_is_a_trailing_optional_item
+      - app::tests::agent_status::pump_all_applies_the_wire_summary_to_the_pane_composite
+      - app::tests::agent_status::pump_all_applies_a_summary_only_update
+      - app::tests::agent_status::pump_all_update_without_a_summary_drops_the_earlier_summary
+      - app::tests::agent_status::pump_all_replay_derived_update_with_a_summary_applies_silently
+    red_confirmed: true
+    red_reason: >-
+      Observed compile-level red in two runs. crates/mux_ipc run (see AC-1): E0425/E0422
+      "cannot find type/struct `ProgramStatusSummary`", E0560 "struct
+      `protocol::AgentStatusUpdateMsg` has no field named `program_status`". src-tauri run
+      (see AC-1, mux_ipc already carrying the item): E0422 "cannot find struct ...
+      `ProgramStatusSummary` in module `crate::agent_status_model`", E0609 no field `summary`
+      on `&AgentStatus`, and E0063 "missing field `program_status` in initializer of
+      `AgentStatusUpdateMsg`" for the daemon message constructions.
+  AC-6:
+    tests:
+      - ui::tab_bar::tests::error_badge_unseen_renders_cross_mark_with_a_filled_fallback_circle
+      - ui::tab_bar::tests::error_badge_seen_renders_the_idle_emoji_with_a_ring_fallback
+      - ui::tab_bar::tests::error_badge_emoji_constant_is_a_single_codepoint_without_vs16
+      - ui::tab_bar::tests::error_badge_color_is_the_md3_error_role
+      - ui::tab_bar::tests::error_badge_fallback_circle_follows_unseen_like_done
+      - ui::tab_bar::tests::error_badge_reserves_the_unified_slot_so_the_title_does_not_shift
+      - ui::mux_sidebar::tests::error_aggregate_paints_the_shared_presentation_cluster
+      - ui::mux_sidebar::tests::error_aggregate_keeps_the_name_column_where_other_badges_put_it
+      - ui::md3::tests::webview_error_token_reader_reads_the_known_defaults
+      - ui::md3::tests::error_role_equals_the_webview_error_token_for_every_preset_and_brightness
+      - ui::md3::tests::error_role_is_distinct_from_the_error_container_roles
+    red_confirmed: true
+    red_reason: >-
+      Observed compile-level red in the src-tauri run described under AC-1: E0425 "cannot find
+      value `ERROR_BADGE_EMOJI_UNSEEN` in this scope", E0425 "cannot find function `error` in
+      module `md3`", E0609 "no field `error` on type `Palette`" (3 sites), and the missing
+      `AgentState::Error` variant the badge tests use.
+  AC-7:
+    tests:
+      - notifications::tests::error_is_a_qualifying_agent_state
+      - notifications::tests::error_transition_is_gated_by_the_done_toggle_only
+      - notifications::tests::event_type_notifications_enabled_maps_error_to_the_done_toggle
+      - notifications::tests::error_transition_keeps_every_existing_gate
+      - notifications::tests::agent_notification_body_uses_the_error_state_word
+      - notifications::tests::agent_notification_body_carries_the_name_as_plain_text
+      - app::tests::agent_status::pump_all_error_transition_notifies_with_the_d5_name_and_the_error_word
+      - app::tests::agent_status::pump_all_error_notification_carries_markup_in_the_name_as_plain_text
+      - app::tests::agent_status::pump_all_error_notification_follows_the_done_toggle_not_the_blocked_toggle
+    red_confirmed: true
+    red_reason: >-
+      Observed runtime red: with the notifications.rs implementation temporarily reverted
+      (error not qualifying, error mapped to no toggle, error body word falling to the
+      working/idle arm) and everything else implemented, the project test command failed 9
+      tests: notifications::tests::error_is_a_qualifying_agent_state ("assertion failed:
+      is_qualifying_agent_state(AgentState::Error)"),
+      notifications::tests::agent_notification_body_uses_the_error_state_word (left "claude:
+      my-tab (active)", right "claude: my-tab (error)"),
+      notifications::tests::error_transition_is_gated_by_the_done_toggle_only,
+      notifications::tests::error_transition_keeps_every_existing_gate,
+      notifications::tests::event_type_notifications_enabled_maps_error_to_the_done_toggle,
+      notifications::tests::agent_notification_body_carries_the_name_as_plain_text, app::tests
+      ::agent_status::pump_all_error_notification_follows_the_done_toggle_not_the_blocked_togg
+      le (left 0, right 1), app::tests::agent_status::pump_all_error_notification_carries_mark
+      up_in_the_name_as_plain_text, app::tests::agent_status::pump_all_error_transition_notifi
+      es_with_the_d5_name_and_the_error_word. The implementation was restored afterwards (file
+      checksum identical). The first full run without any implementation also failed to
+      compile (E0004 non-exhaustive `(Locale::En, AgentState::Error)` in
+      agent_notification_body).
+  AC-8:
+    tests:
+      - mux::cli::tests::parse_agent_states_accepts_error
+      - mux::cli::tests::parse_agent_states_accepts_lists_including_error
+      - mux::cli::tests::parse_agent_states_unknown_state_error_names_all_five_states
+      - mux::cli::tests::agent_status_subcommand_still_rejects_error_as_a_usage_error
+    red_confirmed: true
+    red_reason: >-
+      Observed compile-level red in the src-tauri run described under AC-1: the new
+      mux::cli::tests parse tests reference `AgentState::Error`, which did not exist (E0599).
+      One listed test,
+      mux::cli::tests::agent_status_subcommand_still_rejects_error_as_a_usage_error, asserts
+      the pre-existing behavior that `emterm agent-status error` is a usage error (exit 2); it
+      failed only as part of the non-compiling target and has no behavior red of its own.
