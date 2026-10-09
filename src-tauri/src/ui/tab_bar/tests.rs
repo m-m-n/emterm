@@ -915,3 +915,90 @@ fn ac5_working_to_done_transition_causes_no_title_shift() {
         "a working -> done badge transition must cause no title x-shift"
     );
 }
+
+// ── osc7501-program-status task0002 AC-6: error badge ────────────────
+
+#[test]
+fn error_badge_unseen_renders_cross_mark_with_a_filled_fallback_circle() {
+    assert_eq!(
+        badge_presentation(Aggregated {
+            state: AgentState::Error,
+            unseen: true,
+        }),
+        BadgePresentation::Emoji {
+            cluster: "\u{274C}",
+            fallback_filled: true,
+        }
+    );
+}
+
+#[test]
+fn error_badge_seen_renders_the_idle_emoji_with_a_ring_fallback() {
+    let presentation = badge_presentation(Aggregated {
+        state: AgentState::Error,
+        unseen: false,
+    });
+    assert_eq!(
+        presentation,
+        BadgePresentation::Emoji {
+            cluster: IDLE_BADGE_EMOJI,
+            fallback_filled: false,
+        }
+    );
+    let BadgePresentation::Emoji { cluster, .. } = presentation;
+    assert!(
+        std::ptr::eq(cluster, IDLE_BADGE_EMOJI),
+        "error+seen must reuse the IDLE_BADGE_EMOJI constant itself, as done+seen does"
+    );
+}
+
+#[test]
+fn error_badge_emoji_constant_is_a_single_codepoint_without_vs16() {
+    let chars: Vec<char> = ERROR_BADGE_EMOJI_UNSEEN.chars().collect();
+    assert_eq!(chars, vec!['\u{274C}']);
+}
+
+#[test]
+fn error_badge_color_is_the_md3_error_role() {
+    assert_eq!(agent_state_color(AgentState::Error), md3::error());
+    assert_ne!(
+        agent_state_color(AgentState::Error),
+        agent_state_color(AgentState::Blocked),
+        "error has its own color role, distinct from blocked"
+    );
+}
+
+#[test]
+fn error_badge_fallback_circle_follows_unseen_like_done() {
+    for unseen in [true, false] {
+        let agg = Aggregated {
+            state: AgentState::Error,
+            unseen,
+        };
+        assert_eq!(agent_badge_filled(agg), unseen);
+        let presentation = badge_presentation(agg);
+        assert_eq!(
+            resolve_badge_render_mode(presentation, false),
+            BadgeRenderMode::Circle { filled: unseen },
+            "unseen={unseen}"
+        );
+        assert_eq!(
+            resolve_badge_render_mode(presentation, true),
+            BadgeRenderMode::EmojiTexture,
+            "unseen={unseen}"
+        );
+    }
+}
+
+#[test]
+fn error_badge_reserves_the_unified_slot_so_the_title_does_not_shift() {
+    let working = title_text_x(&[item("shell").with_agent_badge(Some(Aggregated {
+        state: AgentState::Working,
+        unseen: true,
+    }))]);
+    let error = title_text_x(&[item("shell").with_agent_badge(Some(Aggregated {
+        state: AgentState::Error,
+        unseen: true,
+    }))]);
+    assert_eq!(working, error);
+}

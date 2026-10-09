@@ -386,6 +386,7 @@ fn counts_reflect_semantic_state_regardless_of_seen() {
             working: 1,
             blocked: 2,
             done: 1,
+            error: 0,
         }
     );
 }
@@ -813,5 +814,512 @@ fn apply_resolved(model: &mut AgentStatusModel, tab_stable_id: u64, input: Resol
         ResolvedLatchInput::Set => model.record_latch_set(tab_stable_id),
         ResolvedLatchInput::Clear => model.record_latch_clear(tab_stable_id),
         ResolvedLatchInput::Mark(kind) => model.record_live_prompt_mark(tab_stable_id, kind),
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// osc7501-program-status task0002: error state, composite, summary
+// ══════════════════════════════════════════════════════════════════════
+
+fn summary(state: AgentState, title: Option<&str>, app: Option<&str>) -> ProgramStatusSummary {
+    ProgramStatusSummary {
+        state,
+        title: title.map(str::to_string),
+        app: app.map(str::to_string),
+    }
+}
+
+fn plain_set(model: &mut AgentStatusModel, tab_id: u64, state: AgentState, name: Option<&str>) {
+    model.apply_plain_tab_event(
+        tab_id,
+        AgentStatusEvent::Set {
+            state,
+            name: name.map(str::to_string),
+        },
+    );
+}
+
+// ── AC-3: composite storage and reporting (FR9, FR12) ─────────────────
+
+#[test]
+fn ac3_plain_tab_summary_alone_reports_the_summary_state() {
+    let mut model = AgentStatusModel::new();
+    model.apply_plain_tab_summary(1, Some(summary(AgentState::Done, None, None)));
+
+    let status = model.status(&tab(1)).expect("entry created");
+    assert_eq!(status.state, Some(AgentState::Done));
+    assert!(status.unseen);
+}
+
+#[test]
+fn ac3_composite_is_the_higher_of_osc777_and_summary_by_the_d2_rank() {
+    // D2 in-pane rank: blocked > working > error > done > idle.
+    let order = [
+        AgentState::Blocked,
+        AgentState::Working,
+        AgentState::Error,
+        AgentState::Done,
+        AgentState::Idle,
+    ];
+    for (i, osc777) in order.iter().enumerate() {
+        for (j, osc7501) in order.iter().enumerate() {
+            let mut model = AgentStatusModel::new();
+            plain_set(&mut model, 1, *osc777, None);
+            model.apply_plain_tab_summary(1, Some(summary(*osc7501, None, None)));
+            assert_eq!(
+                model.status(&tab(1)).unwrap().state,
+                Some(order[i.min(j)]),
+                "osc777={osc777:?} osc7501={osc7501:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ac3_plain_tab_summary_update_advances_the_tab_revision() {
+    let mut model = AgentStatusModel::new();
+    plain_set(&mut model, 1, AgentState::Idle, None);
+    assert_eq!(model.status(&tab(1)).unwrap().revision, 1);
+
+    model.apply_plain_tab_summary(1, Some(summary(AgentState::Working, None, None)));
+    assert_eq!(model.status(&tab(1)).unwrap().revision, 2);
+
+    model.apply_plain_tab_summary(1, None);
+    assert_eq!(model.status(&tab(1)).unwrap().revision, 3);
+
+    plain_set(&mut model, 1, AgentState::Idle, None);
+    assert_eq!(model.status(&tab(1)).unwrap().revision, 4);
+}
+
+#[test]
+fn ac3_plain_tab_osc777_operation_recomputes_with_the_stored_summary() {
+    let mut model = AgentStatusModel::new();
+    model.apply_plain_tab_summary(1, Some(summary(AgentState::Error, None, None)));
+    model.drain_transitions();
+
+    plain_set(&mut model, 1, AgentState::Idle, None);
+    assert_eq!(
+        model.status(&tab(1)).unwrap().state,
+        Some(AgentState::Error),
+        "idle OSC 777 under an error summary reports error"
+    );
+
+    plain_set(&mut model, 1, AgentState::Blocked, None);
+    assert_eq!(
+        model.status(&tab(1)).unwrap().state,
+        Some(AgentState::Blocked)
+    );
+
+    model.apply_plain_tab_event(1, AgentStatusEvent::Clear);
+    assert_eq!(
+        model.status(&tab(1)).unwrap().state,
+        Some(AgentState::Error),
+        "clearing OSC 777 leaves the summary state"
+    );
+}
+
+#[test]
+fn ac3_removing_the_summary_falls_back_to_the_osc777_state() {
+    let mut model = AgentStatusModel::new();
+    plain_set(&mut model, 1, AgentState::Idle, Some("claude"));
+    model.apply_plain_tab_summary(1, Some(summary(AgentState::Error, Some("t"), None)));
+    assert_eq!(
+        model.status(&tab(1)).unwrap().state,
+        Some(AgentState::Error)
+    );
+
+    model.apply_plain_tab_summary(1, None);
+    let status = model.status(&tab(1)).unwrap();
+    assert_eq!(status.state, Some(AgentState::Idle));
+    assert_eq!(status.name, Some("claude".to_string()));
+}
+
+#[test]
+fn ac3_daemon_update_with_summary_stores_summary_with_the_daemon_revision() {
+    let mut model = AgentStatusModel::new();
+    model.apply_daemon_update_with_summary(
+        SCOPE_A,
+        10,
+        Some(AgentState::Idle),
+        Some("claude".to_string()),
+        42,
+        Some(summary(AgentState::Error, Some("build"), Some("cargo"))),
+        false,
+    );
+
+    let status = model.status(&pane(10)).expect("entry created");
+    assert_eq!(status.state, Some(AgentState::Error));
+    assert_eq!(status.revision, 42, "daemon revision stored verbatim");
+    assert_eq!(
+        status.summary,
+        Some(summary(AgentState::Error, Some("build"), Some("cargo")))
+    );
+    assert_eq!(status.osc777_state, Some(AgentState::Idle));
+    assert_eq!(status.osc777_name, Some("claude".to_string()));
+}
+
+#[test]
+fn ac3_existing_daemon_update_means_no_summary() {
+    let mut model = AgentStatusModel::new();
+    model.apply_daemon_update_with_summary(
+        SCOPE_A,
+        10,
+        Some(AgentState::Idle),
+        None,
+        1,
+        Some(summary(AgentState::Error, None, None)),
+        false,
+    );
+    assert_eq!(
+        model.status(&pane(10)).unwrap().state,
+        Some(AgentState::Error)
+    );
+
+    model.apply_daemon_update(SCOPE_A, 10, Some(AgentState::Idle), None, 2, false);
+    let status = model.status(&pane(10)).unwrap();
+    assert_eq!(status.state, Some(AgentState::Idle));
+    assert_eq!(status.summary, None);
+    assert_eq!(status.revision, 2);
+}
+
+#[test]
+fn ac3_transition_fires_only_when_the_composite_changes() {
+    let mut model = AgentStatusModel::new();
+    plain_set(&mut model, 1, AgentState::Working, Some("claude"));
+    model.drain_transitions();
+
+    // A summary that ranks below OSC 777 leaves the composite at working.
+    model.apply_plain_tab_summary(1, Some(summary(AgentState::Done, Some("t"), None)));
+    assert!(
+        model.drain_transitions().is_empty(),
+        "composite unchanged (working) -> no transition"
+    );
+
+    // A summary that outranks OSC 777 changes the composite.
+    model.apply_plain_tab_summary(1, Some(summary(AgentState::Blocked, Some("t"), None)));
+    assert_eq!(
+        model.drain_transitions(),
+        vec![Transition {
+            pane: tab(1),
+            old_state: Some(AgentState::Working),
+            new_state: Some(AgentState::Blocked),
+            name: Some("t".to_string()),
+        }]
+    );
+}
+
+#[test]
+fn ac3_summary_change_that_keeps_the_composite_does_not_reset_seen() {
+    let mut model = AgentStatusModel::new();
+    model.apply_plain_tab_summary(1, Some(summary(AgentState::Error, Some("a"), None)));
+    model.mark_seen([&tab(1)]);
+    assert!(!model.status(&tab(1)).unwrap().unseen);
+    model.drain_transitions();
+
+    model.apply_plain_tab_summary(1, Some(summary(AgentState::Error, Some("b"), None)));
+
+    let status = model.status(&tab(1)).unwrap();
+    assert!(!status.unseen, "same composite state preserves seen");
+    assert_eq!(status.name, Some("b".to_string()), "name still follows");
+    assert!(model.drain_transitions().is_empty());
+}
+
+#[test]
+fn ac3_replay_derived_update_with_summary_applies_silently() {
+    let mut model = AgentStatusModel::new();
+    model.apply_daemon_update_with_summary(
+        SCOPE_A,
+        10,
+        None,
+        None,
+        5,
+        Some(summary(AgentState::Error, Some("build"), None)),
+        true,
+    );
+
+    let status = model.status(&pane(10)).expect("entry created");
+    assert_eq!(status.state, Some(AgentState::Error));
+    assert_eq!(status.name, Some("build".to_string()));
+    assert_eq!(status.revision, 5);
+    assert!(status.unseen, "a real composite change still marks unseen");
+    assert!(
+        model.drain_transitions().is_empty(),
+        "replay-derived updates never enqueue a transition"
+    );
+}
+
+#[test]
+fn ac3_aggregate_counts_and_any_reported_use_the_composite() {
+    let mut model = AgentStatusModel::new();
+    // Pane 1: summary only.
+    model.apply_daemon_update_with_summary(
+        SCOPE_A,
+        1,
+        None,
+        None,
+        1,
+        Some(summary(AgentState::Error, None, None)),
+        false,
+    );
+    // Pane 2: OSC 777 idle under an error summary -> error.
+    model.apply_daemon_update_with_summary(
+        SCOPE_A,
+        2,
+        Some(AgentState::Idle),
+        None,
+        1,
+        Some(summary(AgentState::Error, None, None)),
+        false,
+    );
+    // Pane 3: OSC 777 only.
+    model.apply_daemon_update(SCOPE_A, 3, Some(AgentState::Idle), None, 1, false);
+
+    assert!(model.any_pane_has_reported_state(SCOPE_A, &[1]));
+    assert!(model.any_pane_has_reported_state(SCOPE_A, &[2]));
+    let counts = model.counts();
+    assert_eq!(counts.error, 2);
+    assert_eq!(counts.idle, 1);
+    assert_eq!(
+        model.aggregate([&pane(1), &pane(3)]),
+        Some(Aggregated {
+            state: AgentState::Error,
+            unseen: true
+        })
+    );
+}
+
+// ── AC-3: name selection (D5) ─────────────────────────────────────────
+
+#[test]
+fn ac3_name_follows_d5_title_then_app_then_osc777_name_then_none() {
+    use AgentState::*;
+    // (osc777 state, osc777 name, summary, expected composite name)
+    let cases: Vec<(
+        Option<AgentState>,
+        Option<&str>,
+        ProgramStatusSummary,
+        Option<&str>,
+    )> = vec![
+        // Summary outranks OSC 777: title, else app, else OSC 777 name, else none.
+        (
+            Some(Idle),
+            Some("n"),
+            summary(Error, Some("t"), Some("a")),
+            Some("t"),
+        ),
+        (
+            Some(Idle),
+            Some("n"),
+            summary(Error, None, Some("a")),
+            Some("a"),
+        ),
+        (Some(Idle), Some("n"), summary(Error, None, None), Some("n")),
+        (Some(Idle), None, summary(Error, None, None), None),
+        // OSC 777 absent: the summary decides.
+        (None, None, summary(Done, Some("t"), None), Some("t")),
+        (None, Some("n"), summary(Done, None, None), Some("n")),
+        // Tie: OSC 7501 wins.
+        (
+            Some(Working),
+            Some("n"),
+            summary(Working, Some("t"), None),
+            Some("t"),
+        ),
+        // OSC 777 outranks the summary: its name, else none.
+        (
+            Some(Blocked),
+            Some("n"),
+            summary(Error, Some("t"), Some("a")),
+            Some("n"),
+        ),
+        (
+            Some(Working),
+            None,
+            summary(Done, Some("t"), Some("a")),
+            None,
+        ),
+    ];
+    for (i, (osc777_state, osc777_name, sum, expected)) in cases.into_iter().enumerate() {
+        let mut model = AgentStatusModel::new();
+        model.apply_daemon_update_with_summary(
+            SCOPE_A,
+            1,
+            osc777_state,
+            osc777_name.map(str::to_string),
+            1,
+            Some(sum),
+            false,
+        );
+        assert_eq!(
+            model.status(&pane(1)).unwrap().name.as_deref(),
+            expected,
+            "case {i}"
+        );
+        let transitions = model.drain_transitions();
+        assert_eq!(transitions.len(), 1, "case {i}");
+        assert_eq!(
+            transitions[0].name.as_deref(),
+            expected,
+            "case {i}: transition name follows D5"
+        );
+    }
+}
+
+#[test]
+fn ac3_without_a_summary_the_name_is_the_osc777_name() {
+    let mut model = AgentStatusModel::new();
+    plain_set(&mut model, 1, AgentState::Blocked, Some("claude"));
+    assert_eq!(
+        model.status(&tab(1)).unwrap().name,
+        Some("claude".to_string())
+    );
+}
+
+// ── AC-4: seven-level aggregation, error counts (FR11) ────────────────
+
+#[test]
+fn ac4_aggregate_order_is_blocked_unseen_error_unseen_done_working_seen_error_seen_done_idle() {
+    use AgentState::*;
+    // (pane id, OSC 777 state, marked seen), from the LOWEST level up.
+    let ladder: [(u32, AgentState, bool); 7] = [
+        (1, Idle, false),
+        (2, Done, true),
+        (3, Error, true),
+        (4, Working, false),
+        (5, Done, false),
+        (6, Error, false),
+        (7, Blocked, false),
+    ];
+    let mut model = AgentStatusModel::new();
+    for (id, state, _) in ladder {
+        model.apply_daemon_update(SCOPE_A, id, Some(state), None, 1, false);
+    }
+    let seen_keys: Vec<PaneKey> = ladder
+        .iter()
+        .filter(|(_, _, seen)| *seen)
+        .map(|(id, _, _)| pane(*id))
+        .collect();
+    model.mark_seen(seen_keys.iter());
+
+    // Each prefix adds the next-higher level, so that level must win —
+    // whichever order the keys are queried in.
+    for n in 1..=ladder.len() {
+        let (_, state, seen) = ladder[n - 1];
+        let want = Some(Aggregated {
+            state,
+            unseen: !seen,
+        });
+        let mut keys: Vec<PaneKey> = ladder[..n].iter().map(|(id, _, _)| pane(*id)).collect();
+        assert_eq!(model.aggregate(keys.iter()), want, "ascending, prefix {n}");
+        keys.reverse();
+        assert_eq!(model.aggregate(keys.iter()), want, "descending, prefix {n}");
+    }
+}
+
+#[test]
+fn ac4_unseen_error_outranks_unseen_done_and_working() {
+    let mut model = AgentStatusModel::new();
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Done), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 2, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 3, Some(AgentState::Error), None, 1, false);
+    assert_eq!(
+        model.aggregate([&pane(1), &pane(2), &pane(3)]),
+        Some(Aggregated {
+            state: AgentState::Error,
+            unseen: true
+        })
+    );
+}
+
+#[test]
+fn ac4_seen_error_ranks_below_working_and_above_seen_done() {
+    let mut model = AgentStatusModel::new();
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Done), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 2, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 3, Some(AgentState::Error), None, 1, false);
+    model.mark_seen([&pane(1), &pane(3)]);
+
+    // seen error < working
+    assert_eq!(
+        model.aggregate([&pane(1), &pane(2), &pane(3)]),
+        Some(Aggregated {
+            state: AgentState::Working,
+            unseen: true
+        })
+    );
+    // seen error > seen done
+    assert_eq!(
+        model.aggregate([&pane(1), &pane(3)]),
+        Some(Aggregated {
+            state: AgentState::Error,
+            unseen: false
+        })
+    );
+}
+
+#[test]
+fn ac4_marking_seen_flips_error_from_unseen_to_seen_like_done() {
+    let mut model = AgentStatusModel::new();
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Error), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 2, Some(AgentState::Done), None, 1, false);
+    assert!(model.status(&pane(1)).unwrap().unseen);
+    assert!(model.status(&pane(2)).unwrap().unseen);
+
+    model.mark_seen([&pane(1), &pane(2)]);
+
+    assert!(!model.status(&pane(1)).unwrap().unseen);
+    assert!(!model.status(&pane(2)).unwrap().unseen);
+    assert_eq!(
+        model.aggregate([&pane(1)]),
+        Some(Aggregated {
+            state: AgentState::Error,
+            unseen: false
+        })
+    );
+}
+
+#[test]
+fn ac4_error_same_state_re_report_preserves_seen_and_real_change_resets_it() {
+    let mut model = AgentStatusModel::new();
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Error), None, 1, false);
+    model.mark_seen([&pane(1)]);
+
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Error), None, 2, false);
+    assert!(!model.status(&pane(1)).unwrap().unseen);
+
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Working), None, 3, false);
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Error), None, 4, false);
+    assert!(model.status(&pane(1)).unwrap().unseen);
+}
+
+#[test]
+fn ac4_counts_report_error_separately() {
+    let mut model = AgentStatusModel::new();
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Error), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 2, Some(AgentState::Error), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 3, Some(AgentState::Done), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 4, Some(AgentState::Blocked), None, 1, false);
+
+    assert_eq!(
+        model.counts(),
+        Counts {
+            idle: 0,
+            working: 0,
+            blocked: 1,
+            done: 1,
+            error: 2,
+        }
+    );
+}
+
+// ── AC-1: core <-> wire conversions are total over error ─────────────
+
+#[test]
+fn ac1_state_wire_conversions_round_trip_all_five_states() {
+    use mux_ipc::protocol::AgentState as Wire;
+    assert_eq!(state_to_wire(AgentState::Error), Wire::Error);
+    assert_eq!(state_from_wire(Wire::Error), AgentState::Error);
+    for state in AgentState::ALL_WITH_ERROR {
+        assert_eq!(state_from_wire(state_to_wire(state)), state, "{state:?}");
     }
 }

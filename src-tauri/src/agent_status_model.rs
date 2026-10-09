@@ -19,8 +19,16 @@
 //!   semantic state (e.g. a same-state re-report or a replay restating the
 //!   state the GUI already had) and reset to unseen on any real state
 //!   change — independently of `replay_derived`.
-//! - `aggregate` ranks by `blocked > unseen done > working > seen done >
-//!   idle` (`doc/tasks/mux-agent-status-api/IMPLEMENTATION.md` Conventions).
+//! - `aggregate` ranks by `blocked > unseen error > unseen done > working >
+//!   seen error > seen done > idle` (osc7501-program-status D2; `error` has
+//!   the same unseen semantics as `done`).
+//! - Composite state (osc7501-program-status SC-4): each entry stores the
+//!   OSC 777 part (state, name) and the OSC 7501 summary (state, sanitized
+//!   title, effective app) separately. Everything the model reports for an
+//!   entry — status, aggregate, counts, any-reported-state, unseen
+//!   tracking, transitions — uses the SC-2 composite
+//!   ([`crate::agent_status::compose`]) of the two. An entry whose only
+//!   input is OSC 777 behaves exactly as before.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -73,18 +81,42 @@ pub enum PaneKey {
     MuxPane(ConnectionScope, u32),
 }
 
+/// A pane's OSC 7501 (Program Status Protocol) summary as the model stores
+/// it: the aggregate state, the deciding record's title (already sanitized
+/// by the sender, used as received) and its effective app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramStatusSummary {
+    pub state: AgentState,
+    pub title: Option<String>,
+    pub app: Option<String>,
+}
+
 /// One pane's tracked agent status.
 ///
+/// `state` and `name` are the COMPOSITE the rest of the app reads: `state`
+/// is [`crate::agent_status::compose`] of the OSC 777 part and the OSC 7501
+/// summary, and `name` follows the D5 name selection (see
+/// [`composite_name`]). `osc777_state` / `osc777_name` / `summary` are the
+/// stored inputs they were derived from.
+///
 /// `state: None` means the pane has no current status (never reported, or
-/// most recently cleared) — such entries are excluded from [`aggregate`]
-/// and [`counts`] but still occupy a slot (revision keeps advancing) until
-/// [`AgentStatusModel::discard`] removes them on tab/pane close.
+/// most recently cleared on every source) — such entries are excluded from
+/// [`aggregate`] and [`counts`] but still occupy a slot (revision keeps
+/// advancing) until [`AgentStatusModel::discard`] removes them on tab/pane
+/// close.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentStatus {
     pub state: Option<AgentState>,
     pub name: Option<String>,
     pub revision: u64,
     pub unseen: bool,
+    /// The OSC 777 part: state as last reported (`None` when never
+    /// reported or cleared).
+    pub osc777_state: Option<AgentState>,
+    /// The OSC 777 part: the sanitized name that came with that report.
+    pub osc777_name: Option<String>,
+    /// The OSC 7501 part (`None` when the pane has no records).
+    pub summary: Option<ProgramStatusSummary>,
 }
 
 /// A real (non-replay, state-changing) transition, queued for the
@@ -113,6 +145,7 @@ pub struct Counts {
     pub working: u32,
     pub blocked: u32,
     pub done: u32,
+    pub error: u32,
 }
 
 /// A true-order, live-only input to a plain tab's inferred-clear latch
@@ -186,23 +219,60 @@ impl AgentStatusModel {
         Self::default()
     }
 
-    /// Apply a plain-tab OSC event (already parsed by
+    /// Apply a plain-tab OSC 777 event (already parsed by
     /// `crate::agent_status::parse`). The model mints the revision — plain
     /// tabs are never targeted by the mux agent API, so nothing else needs
-    /// revision continuity with a daemon-side counter.
+    /// revision continuity with a daemon-side counter. The composite is
+    /// recomputed with the tab's stored OSC 7501 summary.
     pub fn apply_plain_tab_event(&mut self, tab_stable_id: u64, event: AgentStatusEvent) {
         let (new_state, name) = match event {
             AgentStatusEvent::Set { state, name } => (Some(state), name),
             AgentStatusEvent::Clear => (None, None),
         };
         let key = PaneKey::Tab(tab_stable_id);
-        let next_revision = self.entries.get(&key).map_or(1, |e| e.revision + 1);
-        self.apply_report(key, new_state, name, next_revision, false);
+        let (next_revision, summary) = self.minted_revision_and_summary(&key);
+        self.apply_report(key, new_state, name, summary, next_revision, false);
     }
 
-    /// Apply a daemon-pushed `AgentStatusUpdate` for a mux pane. `scope`
-    /// identifies the connection that delivered the update (the tab whose
-    /// mux attach carried it); `revision` is the daemon-authoritative
+    /// Set (or, with `None`, remove) a plain tab's OSC 7501 summary.
+    /// Stores the summary, advances the model-minted revision, recomputes
+    /// the composite with the tab's stored OSC 777 part and applies the
+    /// same unseen / transition rules as every other update.
+    pub fn apply_plain_tab_summary(
+        &mut self,
+        tab_stable_id: u64,
+        summary: Option<ProgramStatusSummary>,
+    ) {
+        let key = PaneKey::Tab(tab_stable_id);
+        let next_revision = self.entries.get(&key).map_or(1, |e| e.revision + 1);
+        let (osc777_state, osc777_name) = self
+            .entries
+            .get(&key)
+            .map_or((None, None), |e| (e.osc777_state, e.osc777_name.clone()));
+        self.apply_report(
+            key,
+            osc777_state,
+            osc777_name,
+            summary,
+            next_revision,
+            false,
+        );
+    }
+
+    /// The next model-minted revision for `key` and the entry's stored
+    /// OSC 7501 summary (both are what an OSC 777 report must keep).
+    fn minted_revision_and_summary(&self, key: &PaneKey) -> (u64, Option<ProgramStatusSummary>) {
+        match self.entries.get(key) {
+            Some(e) => (e.revision + 1, e.summary.clone()),
+            None => (1, None),
+        }
+    }
+
+    /// Apply a daemon-pushed `AgentStatusUpdate` for a mux pane that
+    /// carries NO OSC 7501 summary (the existing signature keeps meaning
+    /// "no summary"; see [`Self::apply_daemon_update_with_summary`]).
+    /// `scope` identifies the connection that delivered the update (the tab
+    /// whose mux attach carried it); `revision` is the daemon-authoritative
     /// value and is stored verbatim (the model never increments it itself
     /// for mux panes).
     pub fn apply_daemon_update(
@@ -214,32 +284,70 @@ impl AgentStatusModel {
         revision: u64,
         replay_derived: bool,
     ) {
+        self.apply_daemon_update_with_summary(
+            scope,
+            pane_id,
+            state,
+            name,
+            revision,
+            None,
+            replay_derived,
+        );
+    }
+
+    /// Apply a daemon-pushed `AgentStatusUpdate` for a mux pane together
+    /// with the pane's OSC 7501 `summary` (`None` when the pane has no
+    /// records). Both parts are stored verbatim with the daemon `revision`
+    /// and the composite is recomputed from them.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_daemon_update_with_summary(
+        &mut self,
+        scope: ConnectionScope,
+        pane_id: u32,
+        state: Option<AgentState>,
+        name: Option<String>,
+        revision: u64,
+        summary: Option<ProgramStatusSummary>,
+        replay_derived: bool,
+    ) {
         self.apply_report(
             PaneKey::MuxPane(scope, pane_id),
             state,
             name,
+            summary,
             revision,
             replay_derived,
         );
     }
 
-    /// Shared apply path for both ingestion sources.
+    /// Shared apply path for every ingestion source. `osc777_state` /
+    /// `osc777_name` / `summary` are the entry's complete new inputs; the
+    /// reported composite is derived from them here.
     ///
-    /// - The "unseen" flag is reset to `true` on any real state change
-    ///   (including the pane's very first report) and otherwise left
-    ///   untouched — regardless of `replay_derived`.
-    /// - A transition is enqueued only for a real state change AND
-    ///   `!replay_derived`.
+    /// - The "unseen" flag is reset to `true` on any real change of the
+    ///   COMPOSITE state (including the pane's very first report) and
+    ///   otherwise left untouched — regardless of `replay_derived`.
+    /// - A transition is enqueued only for a real composite change AND
+    ///   `!replay_derived`; its name follows D5 ([`composite_name`]).
     fn apply_report(
         &mut self,
         key: PaneKey,
-        new_state: Option<AgentState>,
-        name: Option<String>,
+        osc777_state: Option<AgentState>,
+        osc777_name: Option<String>,
+        summary: Option<ProgramStatusSummary>,
         revision: u64,
         replay_derived: bool,
     ) {
         let entry_existed = self.entries.contains_key(&key);
         let prev_state = self.entries.get(&key).and_then(|e| e.state);
+        let new_state =
+            crate::agent_status::compose(osc777_state, summary.as_ref().map(|s| s.state));
+        let name = composite_name(
+            new_state,
+            osc777_state,
+            osc777_name.as_deref(),
+            summary.as_ref(),
+        );
         let state_changed = !entry_existed || prev_state != new_state;
 
         let entry = self
@@ -250,10 +358,16 @@ impl AgentStatusModel {
                 name: None,
                 revision: 0,
                 unseen: false,
+                osc777_state: None,
+                osc777_name: None,
+                summary: None,
             });
         entry.state = new_state;
         entry.name = name.clone();
         entry.revision = revision;
+        entry.osc777_state = osc777_state;
+        entry.osc777_name = osc777_name;
+        entry.summary = summary;
         if state_changed {
             entry.unseen = true;
         }
@@ -343,9 +457,9 @@ impl AgentStatusModel {
 
     /// Whether any of the given mux pane ids, within `scope`, currently
     /// carries a reported (uncleared) agent status — one of Idle / Working
-    /// / Blocked / Done. Cleared (`state: None`) and never-reported (no
-    /// tracked entry) panes do not count; a same-numbered pane in a
-    /// DIFFERENT scope never qualifies (SPEC
+    /// / Blocked / Done / Error (the composite). Cleared (`state: None`)
+    /// and never-reported (no tracked entry) panes do not count; a
+    /// same-numbered pane in a DIFFERENT scope never qualifies (SPEC
     /// mux-agent-status-pane-key-collision FR2). Used by the
     /// `next-agent-window` mux action (SPEC mux-agent-tab-cycle FR6) to
     /// decide whether a mux window qualifies for the cycle: a window
@@ -363,7 +477,9 @@ impl AgentStatusModel {
     }
 
     /// Highest-priority state + that state's actual unseen flag among
-    /// `panes`, ranked `blocked > unseen-done > working > seen-done > idle`.
+    /// `panes`, ranked `blocked > unseen-error > unseen-done > working >
+    /// seen-error > seen-done > idle` (each pane contributes its composite
+    /// state).
     /// Panes with no tracked entry, or a cleared (`state: None`) entry, do
     /// not participate. Returns `None` when no queried pane currently
     /// carries a status.
@@ -390,9 +506,8 @@ impl AgentStatusModel {
                 Some(AgentState::Idle) => counts.idle += 1,
                 Some(AgentState::Working) => counts.working += 1,
                 Some(AgentState::Blocked) => counts.blocked += 1,
-                // Seam (osc7501-program-status D10): `error` has no bucket of
-                // its own until the owning task adds one; it counts as done.
-                Some(AgentState::Done | AgentState::Error) => counts.done += 1,
+                Some(AgentState::Done) => counts.done += 1,
+                Some(AgentState::Error) => counts.error += 1,
                 None => {}
             }
         }
@@ -406,23 +521,58 @@ impl AgentStatusModel {
 }
 
 /// Priority bucket for [`AgentStatusModel::aggregate`]'s ranking:
-/// `blocked(4) > unseen-done(3) > working(2) > seen-done(1) > idle(0)`.
+/// `blocked(6) > unseen-error(5) > unseen-done(4) > working(3) >
+/// seen-error(2) > seen-done(1) > idle(0)`. `error` shares `done`'s unseen
+/// semantics (FR11).
 fn priority_rank(state: AgentState, unseen: bool) -> u8 {
     match (state, unseen) {
-        (AgentState::Blocked, _) => 4,
-        // Seam (osc7501-program-status D10): `error` ranks as done until the
-        // owning task adds the FR11 order.
-        (AgentState::Done | AgentState::Error, true) => 3,
-        (AgentState::Working, _) => 2,
-        (AgentState::Done | AgentState::Error, false) => 1,
+        (AgentState::Blocked, _) => 6,
+        (AgentState::Error, true) => 5,
+        (AgentState::Done, true) => 4,
+        (AgentState::Working, _) => 3,
+        (AgentState::Error, false) => 2,
+        (AgentState::Done, false) => 1,
         (AgentState::Idle, _) => 0,
+    }
+}
+
+/// The name of an entry's composite (osc7501-program-status D5).
+///
+/// When the OSC 7501 summary's state ranks at or above the OSC 777 state by
+/// [`AgentState::compose_rank`] (ties go to OSC 7501; an absent OSC 777
+/// state ranks below everything), the name is the summary's title, else its
+/// app, else the OSC 777 name, else none. Otherwise — or without a summary —
+/// the name is the OSC 777 name, else none. A pane with no composite state
+/// (`composite` is `None`) has no name. "None" falls back to the existing
+/// default name at the notification layer.
+fn composite_name(
+    composite: Option<AgentState>,
+    osc777_state: Option<AgentState>,
+    osc777_name: Option<&str>,
+    summary: Option<&ProgramStatusSummary>,
+) -> Option<String> {
+    composite?;
+    let osc777_name = osc777_name.map(str::to_string);
+    let Some(summary) = summary else {
+        return osc777_name;
+    };
+    let summary_wins =
+        osc777_state.is_none_or(|s| summary.state.compose_rank() >= s.compose_rank());
+    if summary_wins {
+        summary
+            .title
+            .clone()
+            .or_else(|| summary.app.clone())
+            .or(osc777_name)
+    } else {
+        osc777_name
     }
 }
 
 /// Convert the wire-level `mux_ipc::protocol::AgentState` mirror into the
 /// core `crate::agent_status::AgentState` the model stores. Both enums
-/// share the same four variants by contract (SPEC FR1 / `mux_ipc`'s "local
-/// mirror" doc comment); this is a straight, total mapping.
+/// share the same five variants by contract (SPEC FR1 / FR11 / `mux_ipc`'s
+/// "local mirror" doc comment); this is a straight, total mapping.
 pub fn state_from_wire(state: mux_ipc::protocol::AgentState) -> AgentState {
     match state {
         mux_ipc::protocol::AgentState::Idle => AgentState::Idle,

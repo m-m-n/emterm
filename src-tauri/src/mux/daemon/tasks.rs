@@ -541,3 +541,33 @@ pub(super) async fn graceful_shutdown(session_manager: &Arc<Mutex<SessionManager
     }
     log::info!("Graceful shutdown: closed {} PTY(s)", pane_count);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// osc7501-program-status task0002 AC-1: the daemon's core <-> wire
+    /// state conversions are total over `error` and round-trip all five
+    /// states.
+    #[test]
+    fn state_conversions_round_trip_all_five_states() {
+        use crate::agent_status::AgentState as Core;
+        use mux_ipc::protocol::AgentState as Wire;
+        assert_eq!(to_wire_state(Core::Error), Wire::Error);
+        assert_eq!(from_wire_state(Wire::Error), Core::Error);
+        for state in Core::ALL_WITH_ERROR {
+            assert_eq!(from_wire_state(to_wire_state(state)), state, "{state:?}");
+        }
+    }
+
+    /// The existing four states keep their pre-feature wire mapping.
+    #[test]
+    fn state_conversions_keep_the_existing_four_mappings() {
+        use crate::agent_status::AgentState as Core;
+        use mux_ipc::protocol::AgentState as Wire;
+        assert_eq!(to_wire_state(Core::Idle), Wire::Idle);
+        assert_eq!(to_wire_state(Core::Working), Wire::Working);
+        assert_eq!(to_wire_state(Core::Blocked), Wire::Blocked);
+        assert_eq!(to_wire_state(Core::Done), Wire::Done);
+    }
+}
