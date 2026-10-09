@@ -1,0 +1,19 @@
+schema_version: 1
+feature: osc7501-program-status
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 474305b7cda1697e964d08570e821b10974d40be
+last_input_digest: sha256:857e27d978ecb3009a4dc074f97c44022981b3fe7f993a4f81662ff02ad16629
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:857e27d978ecb3009a4dc074f97c44022981b3fe7f993a4f81662ff02ad16629
+artifacts: []
+patches: []
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
