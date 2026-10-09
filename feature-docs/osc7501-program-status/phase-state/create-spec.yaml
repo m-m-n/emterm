@@ -1,7 +1,7 @@
 schema_version: 1
 feature: osc7501-program-status
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 8af873317a5c5dc527fa1bb7943cd0e1e399653a
 last_input_digest: sha256:a8ed14ed42f63e219c0b26f3ec6383c22ba6e3baea7d4abd15d3d1f68e392aac
@@ -168,6 +168,16 @@ answers:
     freeform: null
     normalized_answer: design step は推奨どおり skip（既存バッジの仕組みに error の絵文字と色を 1 組足し、ステータスバーはテキストのテンプレート変数を足すだけで、新しい視覚要素を作らない）
     resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id decide_autonomously (analyst の推奨 skip_design を受け入れる)'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-10-10T01:23:37+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: src-tauri/web-shared/settings/ui-theme-presets.ts'
+    resolution_note: 'gate: create-spec.design-system; batch-policies.yaml option_id top_candidate_or_none (analyst の候補先頭 ui-theme-presets.ts を project_native として採用)'
 worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input

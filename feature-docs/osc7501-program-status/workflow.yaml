@@ -1,0 +1,305 @@
+schema_version: 1
+feature: osc7501-program-status
+created: '2026-10-10'
+base_branch: main
+goal: "# OSC 7501（Program Status Protocol）に対応する\n\n種別: 機能\nNotion: https://www.notion.so/3f33509ec8ee8173a7e4cd84c1ab5c27\n\n## やりたいこと (必須)\nOSC 7501（Program Status Protocol）を受信し、既存のエージェント状態表示（タブバッジ・ステータスバー・mux\
+  \ サイドバー・通知）に反映する。\n## 背景・なぜ (必須)\nOSC 7501 は Ghostty の Mitchell Hashimoto 氏が提案した、プログラムの状態（idle / working / blocked / done / error）を端末へ報告するための端末非依存のプロトコル。Claude Code・Codex・Terraform・Homebrew で試作実装（プラグイン／フォーク）があり、libghostty\
+  \ は実装済み。\neMterm は現在 OSC 7501 を一切処理しておらず（`src-tauri/src` に該当コードなし）、未知の OSC として捨てている。eMterm 独自の OSC 777 `emterm;agent-status` で同等の状態表示を既に持っているため、OSC 7501 を受けられれば eMterm 専用フックなしで各種エージェントの状態を表示できる。\n###\
+  \ 仕様の要点（draft 0.3）\n- 仕様: https://www.superlogical.com/rex/docs/build/program-status\n- 解説記事: https://mitchellh.com/writing/program-status-osc7501\n- 形式: `OSC 7501 ; <body> ST`。ST は `ESC \\` または BEL\n\
+  - body は `key=value` を `:` で連結。key は `[a-z]+`、value は `[A-Za-z0-9_.,+/=-]*`\n- 不正なペアは読み飛ばし、未知の key は無視、重複 key は後勝ち\n- 上限超過・base64 不正・デコード後の制御文字を含む報告は丸ごと破棄\n- key 一覧\n\t- `state`（必須）: `idle` / `working`\
+  \ / `done` / `blocked` / `error` / `clear`。欠落・未知値なら報告ごと無視\n\t- `id`: 階層 ID。`[A-Za-z0-9_.+-]{1,32}` を `/` で連結（最大 8 階層・128 バイト）。無指定はルート。不正なら報告ごと無視\n\t- `kind`: `permission` / `question` / `auth`。`blocked`\
+  \ のときのみ意味を持つ\n\t- `progress`: 0〜100 の整数。`working` / `blocked` のときのみ\n\t- `app`: `[A-Za-z0-9_.+-]{1,32}`。子は最も近い祖先から継承\n\t- `title`: base64 の UTF-8 短いラベル（エンコード後 256 / デコード後 192 バイト）\n\t- `msg`: base64 の\
+  \ UTF-8 1 行（エンコード後 2732 / デコード後 2048 バイト）\n- 1 報告はその id のレコードを完全に置き換える（省略した key は消える）\n- `state=clear` は対象 id とその子孫を削除。id 無指定なら全削除\n- レコードは画面でなく端末に属する。alt screen 切替では消えない。RIS で全消去、DECSTR では消えない\n- 寿命:\
+  \ 接続プロセス終了時と新しいプロンプト開始時（OSC 133 `A`）に `working` / `blocked` は必ず破棄、`idle` は破棄してよい。`done` / `error` は残し、消すタイミングは端末が決める\n- 機能検出: `OSC 7501 ; ? ST` に対し、対応端末は body `?` で応答する\n- terminfo 拡張 capability `Pst`（`\\\
+  E]7501;%p1%s\\E\\\\`）を推奨\n- シーケンス全体 4096 バイト、レコードは端末あたり 256 件（最低 64 件）、超過時は最も古く更新されたものを追い出す\n- セキュリティ: `msg` / `title` をマークアップとして解釈しない。双方向制御文字などの不可視文字は無害化して表示する。外部通知はレート制限する\n- OSC 9;4（進捗）はルートレコードに対応付けてよいが、OSC\
+  \ 7501 を一度受けたら次の RIS まで対応付けをやめる\n### eMterm 側の関連箇所（事前調査）\n- 既存のエージェント状態\n\t- `src-tauri/src/agent_status.rs`: OSC 777 `emterm;agent-status;v=1;state=<s>[;name=...]` の解析。状態は `Idle` / `Working` / `Blocked`\
+  \ / `Done` の 4 つ（`error` は無い）。CLI 用ビルドでも使われる共通モジュール\n\t- `src-tauri/src/agent_status_model.rs`: GUI 側の状態ストア。通常タブは GUI が自前で解析、mux ペインは daemon の `AgentStatusUpdate` を適用。集約順位は `blocked > 未読 done > working\
+  \ > 既読 done > idle`\n\t- `src-tauri/src/agent_status_exit_latch.rs`: プロセス終了時の扱い\n\t- 表示: `src-tauri/src/ui/tab_bar/badge.rs`、`src-tauri/src/ui/mux_sidebar.rs`、通知は `src-tauri/src/notifications.rs`\n\t\
+  - mux: `src-tauri/src/mux/daemon/tasks.rs`、`src-tauri/src/mux/daemon/handoff.rs`、`src-tauri/src/tabs/mux_link.rs`\n- OSC の振り分け\n\t- `src-tauri/src/callbacks.rs` の `OSC_*` 定数（u8）と `on_osc` の match。3 桁を超える\
+  \ OSC 番号は u8 に収まらないため、OSC 777→100、1337→101、9999→102 のように内部番号へ写像している\n\t- OSC 9999 は `TerminalCore::register_osc_app_param` でタブ生成時に写像を注入している（`crates/term_core` には番号を埋め込まない方針）。OSC 7501 も同じ仕組みで内部番号を割り当てる形が候補\n\
+  - 照会応答: 端末からの応答は `term_core` の応答バッファを `take_response` で取り出して PTY に書き戻す経路がある（OSC 4/10/11/12 の照会応答と同じ経路）\n- OSC 133 `A` の検出は `src-tauri/src/tabs/marks_fold.rs` 周辺にある\n## 受け入れ条件 / 完了の定義 (必須)\n- [ ] `OSC\
+  \ 7501 ; state=... ST` を `ESC \\` 終端・BEL 終端の両方で受信し、タブバッジ・ステータスバーに状態が反映される\n- [ ] `state` の 6 値（`idle` / `working` / `done` / `blocked` / `error` / `clear`）を仕様どおり扱う\n- [ ] 仕様の解析規則（不正ペア読み飛ばし・未知 key 無視・後勝ち・破棄条件・上限）を満たす\n\
+  - [ ] `msg` / `title` の base64 デコードと制御文字の拒否を行う\n- [ ] `OSC 7501 ; ? ST` に body `?` で応答する\n- [ ] プロセス終了時と OSC 133 `A` で `working` / `blocked` のレコードが消える\n- [ ] mux ペインでも同様に動作する（daemon 経由で GUI に届く）\n- [\
+  \ ] 既存の OSC 777 `agent-status` の動作を壊さない\n## スコープ外 (任意)\n\\<今回やらないこと。あれば\\>\n## 制約・前提 (任意)\n- 仕様は draft 0.3。変更があり得る\n- 実装前に、OSC 7501 と既存 OSC 777 `agent-status` を同じ状態ストアに統合するか別管理にするか、`error` 状態・`kind`・`progress`・階層\
+  \ `id` をどこまで表示に使うかを決める\n- 外部実装のコード転用はしない。参照は仕様書・記事に限定する\n\n"
+parent_branch: em-workflow/osc7501-program-status/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.0
+      '2': 0.65
+      '3': 0.35
+    description_plus_code:
+      '0': 0.0
+      '1': 0.0
+      '2': 0.91
+      '3': 0.09
+  at: '2026-10-10T00:58:59+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - src-tauri/web-shared/settings/ui-theme-presets.ts
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    mux_ipc:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/mux_ipc/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/mux_ipc/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    term_core:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: e6054a8d25716eaaaa45454db1001a3623e0fa9e
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: '既存バッジの仕組みに error の絵文字と色を 1 組足し、ステータスバーはテキストのテンプレート変数を足すだけで新しい視覚要素を作らない。batch: decide_autonomously'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: 受信
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS4
+    - TS5
+  FR2:
+    title: 解析規則
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS2
+  FR3:
+    title: 破棄条件
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS2
+  FR4:
+    title: state とレコード置換
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS2
+    - TS5
+  FR5:
+    title: 任意 key の解析と保持
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  FR6:
+    title: レコード上限
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS2
+  FR7:
+    title: 寿命
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS3
+  FR8:
+    title: 照会応答
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS4
+  FR9:
+    title: ストア構成と合成
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS4
+    - TS5
+  FR10:
+    title: 階層 id の集約
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS2
+    - TS5
+  FR11:
+    title: error 状態
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS2
+    - TS5
+    - TS6
+  FR12:
+    title: 通知
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS6
+  FR13:
+    title: ステータスバーのテンプレート変数
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS4
+    - TS5
+  FR14:
+    title: mux 配信
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS7
+  FR15:
+    title: mux リプレイ除去
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS7
+  FR16:
+    title: mux エージェント API と CLI
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS7
+  FR17:
+    title: hot-upgrade の引き継ぎ
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS8
+  FR18:
+    title: OSC 777 互換
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS9
+  FR19:
+    title: 対象外
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: ビルド構成
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: コード転用禁止
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: 対応プラットフォーム
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: UI スレッド
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: セキュリティ
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
