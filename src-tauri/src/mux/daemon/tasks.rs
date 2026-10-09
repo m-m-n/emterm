@@ -123,6 +123,7 @@ pub(in crate::mux) fn to_wire_state(
         Core::Working => Wire::Working,
         Core::Blocked => Wire::Blocked,
         Core::Done => Wire::Done,
+        Core::Error => Wire::Error,
     }
 }
 
@@ -140,6 +141,7 @@ pub(in crate::mux) fn from_wire_state(
         Wire::Working => Core::Working,
         Wire::Blocked => Core::Blocked,
         Wire::Done => Core::Done,
+        Wire::Error => Core::Error,
     }
 }
 
@@ -174,6 +176,7 @@ fn build_agent_status_update_message(
         name,
         revision,
         replay_derived: false,
+        program_status: None,
     };
     MuxMessage::control(MessageType::AgentStatusUpdate, pane_id, &payload)
 }
@@ -329,6 +332,7 @@ pub(in crate::mux) async fn sync_agent_status_after_snapshot(
             name: status.name.clone(),
             revision: status.revision,
             replay_derived: true,
+            program_status: None,
         });
     }
     let notify_tx = mgr.notify_tx().clone();
@@ -378,6 +382,7 @@ pub(in crate::mux) async fn sync_agent_status_after_pane_snapshot(
         name: status.name.clone(),
         revision: status.revision,
         replay_derived: true,
+        program_status: None,
     };
     drop(status);
     let notify_tx = mgr.notify_tx().clone();
@@ -433,4 +438,34 @@ pub(super) async fn graceful_shutdown(session_manager: &Arc<Mutex<SessionManager
         }
     }
     log::info!("Graceful shutdown: closed {} PTY(s)", pane_count);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// osc7501-program-status task0002 AC-1: the daemon's core <-> wire
+    /// state conversions are total over `error` and round-trip all five
+    /// states.
+    #[test]
+    fn state_conversions_round_trip_all_five_states() {
+        use crate::agent_status::AgentState as Core;
+        use mux_ipc::protocol::AgentState as Wire;
+        assert_eq!(to_wire_state(Core::Error), Wire::Error);
+        assert_eq!(from_wire_state(Wire::Error), Core::Error);
+        for state in Core::ALL_WITH_ERROR {
+            assert_eq!(from_wire_state(to_wire_state(state)), state, "{state:?}");
+        }
+    }
+
+    /// The existing four states keep their pre-feature wire mapping.
+    #[test]
+    fn state_conversions_keep_the_existing_four_mappings() {
+        use crate::agent_status::AgentState as Core;
+        use mux_ipc::protocol::AgentState as Wire;
+        assert_eq!(to_wire_state(Core::Idle), Wire::Idle);
+        assert_eq!(to_wire_state(Core::Working), Wire::Working);
+        assert_eq!(to_wire_state(Core::Blocked), Wire::Blocked);
+        assert_eq!(to_wire_state(Core::Done), Wire::Done);
+    }
 }
