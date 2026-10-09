@@ -167,6 +167,7 @@ pub mod cli;
 pub mod i18n;
 pub mod localtime;
 pub mod logging;
+pub mod program_status;
 // `PromptMarkKind` (OSC 133 mark sub-type) has no GUI dependency and is
 // reused by `agent_status_exit_latch`'s build-agnostic latch, so this
 // module is always built rather than gated behind `gui`. `PromptTracker`
