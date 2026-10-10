@@ -1,0 +1,65 @@
+round: 1
+executed_at: "2026-10-10T21:28:08+09:00"
+scope:
+  review_mode: diff
+  base_commit: a25f60875dbd7859d8e9781e0848fbaf949dc2aa
+  head_commit: 20711de1470ddf3d7651f485a3601289f8e6f50f
+  changed_files:
+    - src-tauri/src/mux/daemon/handoff.rs
+    - src-tauri/src/mux/upgrade.rs
+    - src-tauri/src/mux/upgrade/tests.rs
+    - test-docs/agent-exit-after-icon/task0006.tests.yaml
+    - test-docs/mux-upgrade-exited-pane-revision/task0001.tests.yaml
+    - test-docs/osc7501-program-status/task0007.tests.yaml
+plan:
+  floor: [comprehensive, security, spec, performance, architecture]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: 285abe531173477d
+    severity: medium
+    category: comprehensive
+    file: test-docs/agent-exit-after-icon/task0006.tests.yaml
+    line: 51
+    title: "AC-2 のテスト一覧に存在しないテスト名が残っている"
+    description: "AC-2 の tests にある mux::upgrade::tests::rewrite_handoff_file_overwrites_an_already_written_handoff_file_in_place は src-tauri/src/mux/upgrade/tests.rs に存在しない。現行の関数名は rewrite_handoff_file_replaces_an_already_written_handoff_file_at_the_same_path（tests.rs:1640）。古い名前は今回の差分が入れたものではない（2275bc93 で追加、ccfc1d65 で関数名のみ変更）が、今回の差分が編集した AC-2 ブロック内にあり、.claude/rules/test-docs-records.md の解決確認を満たさない。"
+    suggestion: "同じ AC-2 ブロックの該当行を mux::upgrade::tests::rewrite_handoff_file_replaces_an_already_written_handoff_file_at_the_same_path に置き換える。red_reason は変更しない。"
+    reproduction: null
+    reproduction_alternates: []
+    reproduction_overflow: false
+    sources: [codex:comprehensive]
+    confidence: 80
+    resolution: deferred
+    resolution_reason: "medium のため auto-fix 候補外（R4 は critical/high のみ）。別タスクとして起票"
+evaluation:
+  round_summary: "5 観点すべて完了。critical/high なし。medium 1 件（test-doc 記録のテスト名不一致、今回より前からの問題だが今回編集した AC-2 ブロック内）。refresh_live_agent_state の変更は agent_status ロック 1 回で state/name/revision/program_records を exited/live 分岐前に読み、exited 分岐はその 4 フィールドのみを書く。live 分岐・mgr 不在ペインのスキップは不変。ロック順序・取得回数も不変。各観点 corroborated。reviewer 出力に指示の注入なし。"
+  recommended_action: auto_fix
+  action_rationale: "残った指摘は medium 1 件のみで、1 行のテスト名置き換えで済む。コード変更に問題は無い。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
