@@ -92,9 +92,18 @@ workflow:
   status: completed
   completed_at_commit: 6e987da8a0e52e5e69a14fbaa1f70a27e9bc6093
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  result: pass
   failed_items: []
+  completed_at_commit: 288035d613d5211da62e08a30461abb2411fe1f1
+  summary: >-
+    cargo check (default features / --no-default-features) both exit 0.
+    cargo test --lib: TS-1/TS-2/TS-3 tests pass; the parallel run had one
+    failure in mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+    (outside this feature's diff), and the --test-threads=1 re-run passed
+    4621/4621. TS-5 doc review and the structural checks (no rank literal,
+    no wildcard arm, agent_status has no program_status reference) pass.
+  excluded: []
 - id: retrospect
   status: pending
 tasks:
