@@ -5,7 +5,7 @@ status: in_progress
 generation: 1
 base_revision: f98d6633c2020472f04120fe1c76100460349b42
 last_input_digest: sha256:c70a5b3cfe27baa437209a36c83f65604b750394de1408fe1509cb3a58f85910
-active_request_id: create-spec-run-0001
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -63,7 +63,19 @@ worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:c70a5b3cfe27baa437209a36c83f65604b750394de1408fe1509cb3a58f85910
-artifacts: []
+- request_id: create-spec-run-0002
+  status: completed
+  worker: requirements-analyst
+- request_id: create-spec-run-0003
+  status: completed
+  worker: spec-writer
+artifacts:
+- path: feature-docs/osc7501-leading-zero-length/REQUIREMENTS.md
+  sha256: sha256:784632bef5f99a06cb22b8c4541a0bd2f139f51f41c3d51db5132aaec25a1b6a
+  produced_by: create-spec-run-0003
+- path: feature-docs/osc7501-leading-zero-length/SPEC.md
+  sha256: sha256:d792c8c36a113c53914c263f91ec350a0c984ad031fc907612c240771c3cde3c
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
@@ -73,3 +85,5 @@ assumptions:
   A1: Leading-zero numbers are accepted as OSC 7501 on every path (reversible)
   A2: term_core does not embed 7501 (reversible)
   A3: The last three task lines (PR / Codex / Notion) are run instructions, not requirements (reversible)
+  A4: A non-canonical OSC 133 mark does not reach the OSC 777 D->A latch in mux (reversible)
+  A5: No code registers 65535 with register_osc_app_param (reversible)
