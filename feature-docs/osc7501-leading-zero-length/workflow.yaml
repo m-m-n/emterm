@@ -1,0 +1,183 @@
+schema_version: 1
+feature: osc7501-leading-zero-length
+created: '2026-10-11'
+base_branch: main
+goal: |
+  # OSC 7501 の先頭ゼロ付き番号の扱いが経路ごとに食い違い、4096 バイト上限が効かず mux で報告が失われる
+
+  Notion: https://www.notion.so/3f53509ec8ee81ca9588d0f05948ae03
+
+  ## 現象 (必須)
+  OSC 7501 の番号に先頭ゼロを付けた列（`ESC ] 07501 ; ...`）の扱いが経路ごとに食い違う。
+  - GUI の通常タブ: term_core は番号の先頭ゼロを本文に残さず、`program_status::parse_bytes` は導入部を固定 7 バイトで数える。4096 個の 0 を前置した 4115 バイトの列も 19 バイトと判定され、脅威モデル TM-1 の「列全体 4096 バイト上限」が効かない。不正 UTF-8 を U+FFFD に置換して長く数える逆向きのずれもある
+  - mux ペイン: デーモンの取り込み（`AgentStatusFeedScanner::commit`）は文字列 `7501;` で始まる本文だけを取り込むが、`osc_identify::osc_body_identity` と履歴除去は `07501;` も OSC 7501 と判定して除去する。先頭ゼロ付きの報告や clear はデーモンにも GUI にも反映されず、通常タブと状態が分かれる
+  em-workflow osc7501-program-status の review round 1 で medium として残った指摘（stable_id 64d9b877882a6d3f / 1701bdc654823ecf）。コードは統合ブランチ `em-workflow/osc7501-program-status/integration` 上にある。
+  ## 再現手順 (必須)
+  1. 通常タブで `python3 -c 'import sys; sys.stdout.buffer.write(b"\x1b]" + b"0" * 4096 + b"7501;state=error\x07")'` を実行すると、上限超過の列が受理され error レコードが登録される
+  2. mux ペインで `\x1b]7501;state=working\x07` に続けて `\x1b]07501;state=clear\x07` を出力すると、clear が反映されず working が残る
+  ## 期待する挙動 (必須)
+  - 4096 バイト判定を、受信した列そのもののバイト数（導入部の実際の桁数と置換前の本文バイト数）で行う
+  - 取り込み・履歴除去・端末解析で OSC 番号と本文の認識規則を揃え、通常タブと mux で同じ結果になる
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  ## 該当箇所 (任意)
+  - `src-tauri/src/program_status.rs:208`
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1583`
+  - `src-tauri/src/mux/osc_identify.rs`
+  - `crates/term_core/src/parser/osc.rs:21`
+  ## 実害・発生条件 (任意)
+  資源消費や権限の上積みは無い。脅威モデルの制限が仕様どおりに効かない点と、先頭ゼロ付きの報告で通常タブと mux の表示が分かれる点が影響。
+
+
+
+  Once the implementation is finished, push the integration branch to the remote and create a Pull Request against base_branch with gh pr create. Keep the integration branch both locally and on the remote (do not auto-merge it into base_branch).
+  Consult Codex on any unclear points and adopt the option judged to be comparatively better.
+  Record the content of that discussion in Notion.
+parent_branch: em-workflow/osc7501-leading-zero-length/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.22
+      '2': 0.78
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.0
+      '2': 0.98
+      '3': 0.02
+  at: '2026-10-11T00:16:00+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    term_core:
+      language: rust
+      build_command: ''
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: ec4154178c1d7460de1421c31a5092f0d81ca658
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI 変更なし（requirements-analyst の推奨を batch 方針 decide_autonomously で採用）
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Sequence length is the received byte count
+    status: resolved
+    tasks: []
+    tests: []
+  FR2:
+    title: Terminal parser passes the received byte count
+    status: resolved
+    tasks: []
+    tests: []
+  FR3:
+    title: Mux ingestion recognizes OSC 7501 by the shared rule
+    status: resolved
+    tasks: []
+    tests: []
+  FR4:
+    title: The three paths agree
+    status: resolved
+    tasks: []
+    tests: []
+  FR5:
+    title: Canonical spelling is unchanged
+    status: resolved
+    tasks: []
+    tests: []
+  FR6:
+    title: OSC 133 recognition in mux ingestion
+    status: resolved
+    tasks: []
+    tests: []
+  FR7:
+    title: OSC number overflow saturates
+    status: resolved
+    tasks: []
+    tests: []
+  FR8:
+    title: Query answer does not depend on length
+    status: resolved
+    tasks: []
+    tests: []
+  FR9:
+    title: Updating existing tests and records
+    status: resolved
+    tasks: []
+    tests: []
+  NFR1:
+    title: 'Feature gate: program_status and osc_identify build without gui'
+    status: resolved
+    tasks: []
+    tests: []
+  NFR2:
+    title: 'Protocol independence: term_core embeds no application protocol number'
+    status: resolved
+    tasks: []
+    tests: []
+  NFR3:
+    title: 'Robustness: saturating arithmetic, bounded carry, allocation-free identity, existing time bounds'
+    status: resolved
+    tasks: []
+    tests: []
+  NFR4:
+    title: 'Logging: rejected input is not logged'
+    status: resolved
+    tasks: []
+    tests: []
+  NFR5:
+    title: 'Platform: Linux and Windows'
+    status: resolved
+    tasks: []
+    tests: []
