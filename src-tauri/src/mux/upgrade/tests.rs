@@ -2308,3 +2308,70 @@ fn ac4_restore_keeps_only_the_most_recent_256_valid_program_records() {
     assert_eq!(table.len(), MAX_RECORDS);
     assert_eq!(table_ids(&table), expected);
 }
+
+/// agent-exit-after-icon-tests-yaml-name-drift FR3: the `tests` list entries of
+/// `test-docs/agent-exit-after-icon/task0006.tests.yaml` resolve to tests that
+/// exist. The record follows current test names
+/// (`.claude/rules/test-docs-records.md`), so this fails when
+///
+/// - (a) AC-2's entries no longer contain the current name of the handoff
+///   rewrite test,
+/// - (b) any entry anywhere in the record is the retired name of that test, or
+/// - (c) any `mux::upgrade::tests::` entry anywhere in the record names a
+///   function this file does not define as `fn <name>(`.
+///
+/// Only the record's `tests` list entries (six spaces, `- `, the name) are
+/// looked at: `red_reason` text and comments may still mention a retired name.
+/// A string literal that merely contains a name (the retired name below) is not
+/// a definition, because (c) needs the `fn ` prefix and the `(` after the name.
+#[test]
+fn agent_exit_after_icon_task0006_record_lists_only_defined_upgrade_test_names() {
+    const RECORD: &str = "test-docs/agent-exit-after-icon/task0006.tests.yaml";
+    const MODULE_PREFIX: &str = "mux::upgrade::tests::";
+    const RETIRED: &str = "mux::upgrade::tests::rewrite_handoff_file_overwrites_an_already_written_handoff_file_in_place";
+    const CURRENT: &str = "mux::upgrade::tests::rewrite_handoff_file_replaces_an_already_written_handoff_file_at_the_same_path";
+    const AC2_START: &str = "\n  AC-2:\n";
+    const NEXT_AC: &str = "\n  AC-";
+
+    // `tests` list entries: six spaces, a hyphen, one space, then the name.
+    fn entries(text: &str) -> Vec<&str> {
+        text.lines()
+            .filter_map(|line| line.strip_prefix("      - "))
+            .collect()
+    }
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(RECORD);
+    let record = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {path:?}: {e}"));
+    let source = include_str!("tests.rs");
+
+    let ac2_from = record.find(AC2_START).unwrap_or_else(|| {
+        panic!("{RECORD}: the AC-2 block start marker {AC2_START:?} is missing")
+    }) + AC2_START.len();
+    let ac2_to = record[ac2_from..]
+        .find(NEXT_AC)
+        .map_or(record.len(), |offset| ac2_from + offset);
+    let ac2_block = &record[ac2_from..ac2_to];
+
+    let all_entries = entries(&record);
+    let mut failures: Vec<String> = Vec::new();
+
+    if !entries(ac2_block).contains(&CURRENT) {
+        failures.push(format!("(a) AC-2 does not list the current name {CURRENT}"));
+    }
+    for entry in all_entries.iter().filter(|entry| **entry == RETIRED) {
+        failures.push(format!("(b) the record lists the retired name {entry}"));
+    }
+    for entry in &all_entries {
+        if let Some(function) = entry.strip_prefix(MODULE_PREFIX)
+            && !source.contains(&format!("fn {function}("))
+        {
+            failures.push(format!(
+                "(c) the record lists {entry}, which src/mux/upgrade/tests.rs does not define"
+            ));
+        }
+    }
+
+    assert!(failures.is_empty(), "{RECORD}:\n{}", failures.join("\n"));
+}
