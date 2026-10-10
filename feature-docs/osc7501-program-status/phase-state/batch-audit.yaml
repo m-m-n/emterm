@@ -28,3 +28,12 @@ records:
     freeform: "decline auto-addition of test-docs/mux-hot-upgrade-alt-screen/task0002.tests.yaml to task0007 files"
     normalized_answer: "decline auto-addition of test-docs/mux-hot-upgrade-alt-screen/task0002.tests.yaml to task0007 files"
     resolution_note: "task_id: task0007; path: test-docs/mux-hot-upgrade-alt-screen/task0002.tests.yaml; declined: the acceptance-criterion / requirement identifier part is missing and no named test fails without the path (rationale: predecessor test record renamed per .claude/rules/test-docs-records.md)"
+  - question_id: review.spec-skip-non-retryable
+    packet_id: null
+    answered_at: "2026-10-10T20:24:42+09:00"
+    source: codex-consultation
+    answer_mode: single
+    selected_option_ids: ["A"]
+    freeform: null
+    normalized_answer: "keep the spec#0 skip (review_data_too_large) as non-retryable; no chain advance, no Claude fallback"
+    resolution_note: "gate: review spec perspective skipped with non-retryable skip_reason review_data_too_large (diff 513K chars); options: (A) keep the skip per review-phase.md R2b, (B) dispatch the Claude fallback, (C) advance the chain to codex as if retryable; chosen: A; not chosen: B (a well-formed skip is not a harness failure), C (not permitted by the current retryable table); Codex consulted: yes (judged A most faithful, noted C as a rule-improvement candidate); Opus escalation: not run. Effect: the spec perspective was not reviewed in round 1 (also skipped in the loop-1 re-review) and unreviewed_perspectives stays empty by definition."
