@@ -6,11 +6,62 @@ generation: 1
 base_revision: f98d6633c2020472f04120fe1c76100460349b42
 last_input_digest: sha256:c70a5b3cfe27baa437209a36c83f65604b750394de1408fe1509cb3a58f85910
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    question_ids:
+    - scope.daemon-other-osc
+    - scope.term-core-number-overflow
+    - edge.oversized-query
+    - design-step.decision
+answers:
+  scope.daemon-other-osc:
+    question_id: scope.daemon-other-osc
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T00:35:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: option
+    selected_option_ids:
+    - osc7501_and_133
+    freeform: null
+    normalized_answer: Align OSC 7501 and OSC 133 daemon ingestion with the shared number/body rule; OSC 777 agent-status keeps its canonical-only ingestion (predecessor FR18)
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); CHOICE osc7501_and_133; options not chosen: osc7501_only, all_three; key points: 7501-only leaves 0133;A record deletion split between plain tab and mux; 777 would change FR18-preserved behavior; mux 133 handling is shared with 777 D->A deletion so leading-zero 133 must not alter that path; Codex consulted (1 turn, codex entry); opus_escalation: false; discussion posted to Notion task page comment.'
+  scope.term-core-number-overflow:
+    question_id: scope.term-core-number-overflow
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T00:35:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: option
+    selected_option_ids:
+    - saturate_in_scope
+    freeform: null
+    normalized_answer: Make term_core OSC number accumulation fully saturating (multiply and add) so an out-of-range number stays at 65535 and matches no code
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); CHOICE saturate_in_scope; options not chosen: out_of_scope; key points: out_of_scope leaves release-build 655367501 -> 7501 aliasing and debug panic; saturating add aligns with osc_identify overflow handling; boundary tests 65535/65536/655367501; Codex consulted (1 turn, codex entry); opus_escalation: false; discussion posted to Notion task page comment.'
+  edge.oversized-query:
+    question_id: edge.oversized-query
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T00:35:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: option
+    selected_option_ids:
+    - keep_answering
+    freeform: null
+    normalized_answer: A query (body exactly ?) is answered regardless of the received byte count, as today
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); CHOICE keep_answering; options not chosen: apply_limit; key points: FR3 limit targets reports, queries are decided by body == ? before length check (FR8/TM-6 fixed response once per query); apply_limit would also change mux query recognition; Codex consulted (1 turn, codex entry); opus_escalation: false; discussion posted to Notion task page comment.'
+  design-step.decision:
+    question_id: design-step.decision
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T00:35:00+09:00'
+    source: batch-decision-table
+    answer_mode: option
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: design step skipped (no UI change)
+    resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously -> worker-recommended option skip'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:c70a5b3cfe27baa437209a36c83f65604b750394de1408fe1509cb3a58f85910
 artifacts: []
 patches: []
@@ -18,3 +69,7 @@ progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
 last_error: null
+assumptions:
+  A1: Leading-zero numbers are accepted as OSC 7501 on every path (reversible)
+  A2: term_core does not embed 7501 (reversible)
+  A3: The last three task lines (PR / Codex / Notion) are run instructions, not requirements (reversible)
