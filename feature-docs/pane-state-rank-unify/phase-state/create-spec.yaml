@@ -1,21 +1,36 @@
 schema_version: 1
 feature: pane-state-rank-unify
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: ebd66361c1ab3f9bc0adc905ee37f4781e8a14cd
 last_input_digest: sha256:34ffb9a49dcfefdce5a3ffa712e97b3ca28c970ef73f4b583909fcad1164bc60
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
-answers: {}
+answers:
+  design.ownership-choice:
+    packet_id: null
+    answered_at: '2026-10-11T01:30:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: 'Codex: unify + test (Q1a); single definition in AgentState::compose_rank,
+      program_status -> agent_status (Q2a); impl From<ProgramState> for AgentState
+      in program_status with exhaustive 5-variant match, rank() calls compose_rank
+      of the converted value (Q3)'
+    normalized_answer: 'Adopt A1/A2 as specified; correspondence form: pub impl From<ProgramState>
+      for AgentState in program_status.rs'
 worker_runs:
 - request_id: create-spec-run-0001
   status: completed
   input_digest: sha256:34ffb9a49dcfefdce5a3ffa712e97b3ca28c970ef73f4b583909fcad1164bc60
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:b8559a75558191858375410c63784086c6d72d32bc75e25b0a1fd8be5868da6d
-artifacts: []
+artifacts:
+- path: feature-docs/pane-state-rank-unify/SPEC.md
+  sha256: sha256:94c6d420cb9f16b0e8c7d6751748ac981346e9a115736f76a71fad084f9abba3
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
