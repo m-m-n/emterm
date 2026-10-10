@@ -1,0 +1,56 @@
+feature: osc7501-alt-screen-prompt-mark
+collected_at: "2026-10-11T00:02:30+09:00"
+session_ids: [01a12655-2238-76f0-acc6-920a790c151c.jsonl]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "変更が毎回の PTY 出力処理（output_pipeline / osc_handler）のホットパスに入り、NFR1 が処理コストを要求しているため"
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code の最終読みでバケット 2（新規ロジック・複数モジュールにまたがる変更）が 0.81 となり full を採用"
+    bases:
+      - basis: description_only
+        score:
+          type: score
+          score: 1.06
+          confidence: 0.94
+          probabilities: {'0': 0.0, '1': 0.94, '2': 0.06, '3': 0.0}
+        observed_at: "2026-10-10T23:05:49+09:00"
+      - basis: description_plus_code
+        score:
+          type: score
+          score: 1.81
+          confidence: 0.81
+          probabilities: {'0': 0.0, '1': 0.19, '2': 0.81, '3': 0.0}
+        observed_at: "2026-10-10T23:05:49+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/tabs/output_pipeline.rs
+        - src-tauri/src/callbacks.rs
+        - crates/term_core/src/callbacks.rs
+        - src-tauri/src/callbacks/tests.rs
+        - src-tauri/src/tabs/tests/output_pipeline.rs
+      changed_lines_approx: 90
+      new_functions_needed: 2
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules: [crate::callbacks, term_core::callbacks]
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 3
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 5
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+  - "事前調査の files_expected は 5 件、実際の変更は 6 件（crates/term_core/src/osc_handler.rs が追加）。task 計画は 6 件を宣言しており deviation は無し"
+  - "review 評価者の medium 未満の所見: handle_semantic_prompt（src-tauri/src/callbacks.rs）は先頭 1 バイトでマーク種別を判定し、term_core の parse_osc133_mark は先頭トークン完全一致で判定する。'133;Ax' のような不正トークンが 7501 フィードへ A 候補として入りうる（差分前からの挙動）"
+  - "MT-1（リリースビルドでの手動確認）は batch では未実施"
