@@ -1,0 +1,200 @@
+round: 1
+executed_at: "2026-10-10T20:24:42+09:00"
+scope:
+  review_mode: diff
+  base_commit: 3a260c6080d772e19473d4b96eac78d3a50d2caf
+  head_commit: 207f39e85105068c528b9676752945c77dcb5344
+  changed_files:
+    - crates/mux_ipc/src/handoff.rs
+    - crates/mux_ipc/src/protocol.rs
+    - crates/mux_ipc/src/protocol/tests.rs
+    - src-tauri/src/agent_status.rs
+    - src-tauri/src/agent_status_model.rs
+    - src-tauri/src/agent_status_model/tests.rs
+    - src-tauri/src/app/agent_status.rs
+    - src-tauri/src/app/mod.rs
+    - src-tauri/src/app/tests/agent_status.rs
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - src-tauri/src/lib.rs
+    - src-tauri/src/mux/cli/agent_api.rs
+    - src-tauri/src/mux/cli/tests.rs
+    - src-tauri/src/mux/daemon/tasks.rs
+    - src-tauri/src/mux/daemon/tests.rs
+    - src-tauri/src/mux/ipc/handlers/agent_api.rs
+    - src-tauri/src/mux/ipc/handlers/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+    - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/suppressed_output.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/osc_identify.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/scrollback_filter/tests.rs
+    - src-tauri/src/mux/session/pane/handles.rs
+    - src-tauri/src/mux/session/pane/mod.rs
+    - src-tauri/src/mux/session/pane/tests.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/mux/upgrade.rs
+    - src-tauri/src/mux/upgrade/tests.rs
+    - src-tauri/src/notifications.rs
+    - src-tauri/src/program_status.rs
+    - src-tauri/src/program_status/tests.rs
+    - src-tauri/src/status_bar/providers/agent_status.rs
+    - src-tauri/src/status_bar/providers/mod.rs
+    - src-tauri/src/status_bar/runtime.rs
+    - src-tauri/src/tabs/input.rs
+    - src-tauri/src/tabs/mod.rs
+    - src-tauri/src/tabs/output_pipeline.rs
+    - src-tauri/src/tabs/replay.rs
+    - src-tauri/src/tabs/tests/mux_link.rs
+    - src-tauri/src/tabs/tests/output_pipeline.rs
+    - src-tauri/src/tabs/tests/replay.rs
+    - src-tauri/src/ui/md3.rs
+    - src-tauri/src/ui/mux_sidebar/tests.rs
+    - src-tauri/src/ui/tab_bar/badge.rs
+    - src-tauri/src/ui/tab_bar/tests.rs
+    - test-docs/mux-hot-upgrade-alt-screen/task0002.tests.yaml
+    - test-docs/osc7501-program-status/task0001.tests.yaml
+    - test-docs/osc7501-program-status/task0002.tests.yaml
+    - test-docs/osc7501-program-status/task0003.tests.yaml
+    - test-docs/osc7501-program-status/task0004.tests.yaml
+    - test-docs/osc7501-program-status/task0005.tests.yaml
+    - test-docs/osc7501-program-status/task0006.tests.yaml
+    - test-docs/osc7501-program-status/task0007.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: skipped, skip_reason: "review_data_too_large"}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+  - {run_id: "comprehensive#loop1", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#loop1", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "performance#loop1", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#loop1", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#loop1", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: skipped, skip_reason: "review_data_too_large"}
+findings:
+  - stable_id: e1a7cef89259134b
+    severity: high
+    category: comprehensive
+    file: crates/mux_ipc/src/protocol.rs
+    line: 974
+    title: "新しいGUIが旧デーモンのAgentStatusUpdateを復号できず、状態通知がすべて捨てられる"
+    description: "AgentStatusUpdateMsg の末尾に program_status: Option<ProgramStatusSummary> を追加したが、PROTOCOL_VERSION は 3 のまま。旧デーモンが送る6項目の列を7項目の構造体として読むと Option の判別バイトが無く EOF で失敗し、mux_link.rs:411-419 でその更新が捨てられる。更新直後の新GUI×旧デーモンでは OSC 777 を含む全ペインの状態更新が届かなくなる。"
+    suggestion: "AgentStatusUpdate の復号で、新形式で失敗したら変更前の6項目の形で読み直して program_status を None で補う。旧送信側の列を新受信側で読む互換テストを追加する。"
+    reproduction: null
+    reproduction_alternates: []
+    reproduction_overflow: false
+    sources: ["codex:comprehensive", "litellm:muse-spark-contributor:architecture"]
+    confidence: 100
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (196ffd7f): hand-written Deserialize treats a missing trailing program_status as None; re-review loop 1 reported no residual at this site. Compat test not added (editor limited to the single target file)."
+  - stable_id: 64d9b877882a6d3f
+    severity: medium
+    category: security
+    file: src-tauri/src/program_status.rs
+    line: 208
+    title: "OSC番号の先頭ゼロで、列全体4096バイトの制限が効かない（TM-1）"
+    description: "term_core は OSC 番号の先頭ゼロをバッファに残さず、parse_bytes は導入部を INTRODUCER_BYTES=7 の固定値で数えるため、4096個の0を前置した4115バイトの列も19バイトと判定されて受理される。資源消費や権限の上積みは無く、影響は脅威モデルの制限が仕様どおりに効かない点にとどまる。不正UTF-8を U+FFFD に置換して長く数える逆向きのずれもあり、通常タブとmuxで判定が分かれる。"
+    suggestion: "受信した列そのもののバイト数（導入部の実際の桁数と置換前の本文バイト数）で4096バイト判定を行う。先頭ゼロと不正UTF-8を含む境界テストを GUI の解析経路で追加する。"
+    reproduction: "1. 状態レコードのない通常タブで、python3 -c 'import sys; sys.stdout.buffer.write(b\"\\x1b]\" + b\"0\" * 4096 + b\"7501;state=error\\x07\")' を実行する。2. 入力はTerminalCoreからThemeColorResponder::respond_program_status、program_status::parse_bytesへ進む。3. 実際の列は4115バイトあるが長さ判定は19バイトとなり、破棄されずerrorレコードが登録される。"
+    reproduction_alternates: []
+    reproduction_overflow: false
+    sources: ["codex:security"]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix candidate gate; filed as a follow-up task"
+  - stable_id: 1701bdc654823ecf
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    line: 1583
+    title: "mux側の取り込みだけが先頭ゼロ付きのOSC 7501を無視する"
+    description: "デーモンの AgentStatusFeedScanner::commit は本文が文字列 `7501;` で始まる場合だけを取り込むが、osc_identify::osc_body_identity と履歴除去は `07501;` も ProgramStatus と判定して除去する。mux ペインでは先頭ゼロ付きの報告や clear がデーモンにも GUI にも反映されず、通常タブと状態が分かれる。"
+    suggestion: "取り込み側も osc_body_identity と同じ番号の組み立てで7501を判定する。mux 経路で先頭ゼロ付きの報告と clear を確かめるテストを追加する。"
+    reproduction: null
+    reproduction_alternates: []
+    reproduction_overflow: false
+    sources: ["codex:comprehensive"]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix candidate gate; filed as a follow-up task"
+  - stable_id: c07288af79f66c3b
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/tabs/output_pipeline.rs
+    line: 200
+    title: "別画面のOSC 133候補が通常画面のプロンプト開始を先取りし、記録が消えない"
+    description: "apply_program_status_feed はプロンプト候補を種類だけで live_marks と前から突き合わせるため、同じ処理単位の別画面の A が通常画面の A を消費し、報告の後ろにある本当の通常画面の A が無視される。working などの記録が次のプロンプト開始まで残る。"
+    suggestion: "候補に発生時の画面を持たせ、別画面の候補を突き合わせ前に除外する。同じ処理単位で別画面のA、画面切り替え、報告、通常画面のAが続くテストを追加する。"
+    reproduction: null
+    reproduction_alternates: []
+    reproduction_overflow: false
+    sources: ["codex:comprehensive"]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix candidate gate; filed as a follow-up task"
+  - stable_id: 1eaacd07af1745fb
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/upgrade.rs
+    line: 466
+    title: "終了済みペインの引き継ぎで7501記録だけが更新され、更新番号が古いまま残る"
+    description: "refresh_live_agent_state は終了済みペインについて program_records だけを書き直し、agent_state・agent_name・agent_revision はスナップショット時点の値のまま残す。元の番号が0なら復元後の再同期で記録が GUI に届かない可能性がある。"
+    suggestion: "終了済みペインでも、記録と同じ agent_status ロックで state・name・revision を読み直して文書に書く。実際の報告の適用を挟んだ引き継ぎと再同期のテストを追加する。"
+    reproduction: null
+    reproduction_alternates: []
+    reproduction_overflow: false
+    sources: ["codex:comprehensive"]
+    confidence: 55
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix candidate gate; filed as a follow-up task"
+  - stable_id: cff07107c1ef5662
+    severity: medium
+    category: architecture
+    file: src-tauri/src/agent_status.rs
+    line: 95
+    title: "ペイン内の状態の強さの順序が複数のモジュールで別々に定義されている"
+    description: "AgentState::compose_rank と program_status::ProgramState::rank が同じ blocked>working>error>done>idle を独立に定義しており、両者を結ぶ参照もテストも無い。片方だけを変えるとデーモンの集約状態と合成の判断が食い違う。"
+    suggestion: "一方を他方から導くか、全5状態で両者の順序が一致することを確かめるテストを追加する。"
+    reproduction: null
+    reproduction_alternates: []
+    reproduction_overflow: false
+    sources: ["litellm:muse-spark-contributor:architecture"]
+    confidence: 55
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix candidate gate; filed as a follow-up task"
+evaluation:
+  round_summary: "第1ラウンド（diff、cross_validation=true）。高1件・中5件を採用した。高は protocol.rs:974 の新GUI×旧デーモン互換性の問題で、comprehensive#0 と architecture#0 が独立に指摘し、評価者も根拠を確認した。security#0 の再現手順は読解で reproduced と判定したが実害が無いため中で採用した。architecture#0 の「レコード構造の分散」（upgrade.rs:361）は具体的な不具合を示していないため不採用。注入の試みは見当たらなかった。観点ごとの確認状況: comprehensive: corroborated / security: corroborated（reproduced） / performance: corroborated（指摘0件） / architecture: corroborated / spec: not verified（spec#0 は review_data_too_large で skip、この観点は今回実質的に審査されていない）。performance#0 と architecture#0 はテストファイルを除いた差分で審査している。"
+  recommended_action: "auto_fix"
+  action_rationale: "採用した6件はどれも局所的な修正で済み、設計の作り直しは要らない。spec 観点は差分が大きすぎて審査されていない。"
+dismissed_sites:
+  - file: crates/mux_ipc/src/protocol.rs
+    line: 971
+    run_id: "architecture#0"
+    reason: "duplicate of another finding"
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 1
+  applied_total: 1
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: "/home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-osc7501-program-status-20261010T112436Z.md"
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
