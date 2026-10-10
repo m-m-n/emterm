@@ -152,7 +152,6 @@ tasks:
     - FR3
     - NFR1
     - NFR2
-    status: pending
 review:
   status: pending
   rounds_completed: 0
