@@ -117,7 +117,31 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Carry exited panes' full agent status through the hot-upgrade refresh
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/upgrade.rs
+    - src-tauri/src/mux/upgrade/tests.rs
+    - src-tauri/src/mux/daemon/handoff.rs
+    - test-docs/agent-exit-after-icon/task0006.tests.yaml
+    - test-docs/osc7501-program-status/task0007.tests.yaml
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    - data-persistence
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - NFR1
+    - NFR2
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -130,47 +154,66 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+    - TS-6
   FR2:
     title: 終了済みペインのその他のフィールドは記録時のまま
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
   FR3:
     title: 生存ペインと mgr に無いペインの挙動は変えない
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
   FR4:
     title: 復元後の再同期で最新の記録と更新番号が届く
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   FR5:
     title: 説明コメントの更新
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-7
   NFR1:
     title: 追加・変更するテストは --lib のユニットテストとして実行できる
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
   NFR2:
     title: --no-default-features の cargo check が通る
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
