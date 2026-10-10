@@ -108,7 +108,7 @@ tasks:
     domains:
     - api-contract
     complexity: low
-    status: in_progress
+    status: merged
     branch: em-workflow/pane-state-rank-unify/task0001
     requirements:
     - FR1
