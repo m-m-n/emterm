@@ -1,0 +1,92 @@
+task_id: task0001
+baseline_failures:
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::upgrade::tests::agent_exit_after_icon_task0006_record_lists_only_defined_upgrade_test_names
+    red_confirmed: true
+    red_reason: >-
+      With the guard written and the record still unfixed (old name on line
+      51), the full --lib run failed only this test, with the output naming
+      the old name: "(b) the record lists the retired name
+      mux::upgrade::tests::rewrite_handoff_file_overwrites_an_already_written_handoff_file_in_place"
+      and "(c) the record lists that same name, which src/mux/upgrade/tests.rs
+      does not define", plus "(a) AC-2 does not list the current name".
+  AC-2:
+    tests:
+      - mux::upgrade::tests::agent_exit_after_icon_task0006_record_lists_only_defined_upgrade_test_names
+    red_confirmed: true
+    red_reason: >-
+      Same unfixed run as AC-1 reported "(a) AC-2 does not list the current name
+      mux::upgrade::tests::rewrite_handoff_file_replaces_an_already_written_handoff_file_at_the_same_path".
+      After line 51 was replaced by that name (six spaces, "- ", the name) the
+      same test passed in the full --lib run.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Command check, not a test (git diff of the record against the base
+      revision). `git diff -U0` shows a single -/+ pair at line 51 and
+      `git diff --numstat` reports 1 added and 1 deleted line; the supersede
+      comment, the other entries, red_confirmed, red_reason and the top-level
+      keys are untouched. Searched the test sources by the path
+      test-docs/agent-exit-after-icon/task0006.tests.yaml and by the basename
+      task0006.tests.yaml: no existing test reads that record (the new guard
+      reads it, but only its tests list entries, so it cannot detect a change
+      to any other byte). No executable check can be made to fail before the
+      change exists, so no red state was observed.
+  AC-4:
+    tests:
+      - mux::upgrade::tests::agent_exit_after_icon_task0006_record_lists_only_defined_upgrade_test_names
+    red_confirmed: true
+    red_reason: >-
+      Checks (a), (b) and (c) all failed against the unfixed record (see
+      AC-1/AC-2) and all pass on the corrected record, whose red_reason still
+      mentions the old name. Check (c) on its own was observed by temporarily
+      changing the AC-4 entry command_ended_latch_fires_exactly_once_on_the_first_live_a_after_restore
+      to the same name plus the suffix _renamed_undefined in the working copy:
+      the test failed with only "(c) the record lists
+      mux::upgrade::tests::command_ended_latch_fires_exactly_once_on_the_first_live_a_after_restore_renamed_undefined,
+      which src/mux/upgrade/tests.rs does not define". The line was restored
+      before the commit.
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Command check (the libtest --list resolution check of
+      .claude/rules/test-docs-records.md), not a test. Searched the test
+      sources by path and by basename of the record: no existing test reads
+      libtest --list output. Against the record as it was before this task
+      (git show HEAD of task0006.tests.yaml) every mux::upgrade::tests:: entry
+      except the old name had a "<name>: test" line in the listing; the old
+      name had none (observed MISS). Against the corrected record all 8
+      mux::upgrade::tests:: entries (the AC-2 and AC-4 entries) have a
+      "<name>: test" line. The listing was produced on the finished tree.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Command check on the change set (git diff against the base revision), not
+      a test. `git diff --numstat` reports src-tauri/src/mux/upgrade/tests.rs
+      as 67 added and 0 deleted lines, no other file under src-tauri/src
+      changed, and the added lines hold exactly one #[test] function. Searched
+      the test sources by the path src-tauri/src/mux/upgrade/tests.rs and by the
+      basename tests.rs: the only hit that reads the file is the new guard
+      (include_str), which checks function definitions, not the diff shape. No
+      executable check can be made to fail before the change exists, so no red
+      state was observed.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Suite-level check, not a test: the full --lib run after the change
+      reported no failure outside baseline_failures (the final run had 0
+      failed). The baseline run (before any edit) failed exactly one test,
+      mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+      ("bytes written through the adopted master's writer must be readable back
+      through the adopted master"), which passed in all four later full runs, so
+      it is a flaky, not task-related, failure. The TDD-red run, the green run
+      and the AC-4 trial run were the other full runs. Nothing can be made to
+      fail before the change for this criterion, so no red state was observed.
