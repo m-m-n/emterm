@@ -89,7 +89,7 @@ workflow:
   completed_at_commit: 3e074fd51f6467629ecad5706890b3280beebc95
   base_commit: 36e0279d48e9a3c186e2a82d66b2b266ac9a1d14
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -121,7 +121,15 @@ tasks:
     - NFR2
     - NFR3
 review:
-  status: pending
+  status: in_progress
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: false
   rounds_completed: 0
   residual_critical_high: 0
   needs_rework: false
