@@ -325,9 +325,11 @@ pub(super) async fn prepare_upgrade(
     // this process's eventual `exec` -- pane reader threads and the
     // daemon's agent-status task (this function's own caller's sibling
     // task, still running on this runtime) keep applying live agent-status
-    // reports and OSC 133 marks in that window. Re-read each still-live
-    // pane's CURRENT state now, as late as possible before returning, and
-    // patch it into the ALREADY-WRITTEN handoff file -- see
+    // reports and OSC 133 marks in that window. Re-read each pane's CURRENT
+    // state now, as late as possible before returning -- for a live pane the
+    // agent status, latch and alt-screen state, for an exited pane the agent
+    // state, name, revision and OSC 7501 records -- and patch it into the
+    // ALREADY-WRITTEN handoff file -- see
     // `crate::mux::upgrade::refresh_live_agent_state`'s doc comment for
     // exactly what this narrows and what residual window remains.
     {

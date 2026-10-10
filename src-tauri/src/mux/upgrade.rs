@@ -392,10 +392,10 @@ fn import_program_records(records: &[HandoffProgramRecord]) -> Table {
     }))
 }
 
-/// task0006 (review rework, finding `2e6f18b4dc0a7593`): re-read each still
-/// live pane's CURRENT `agent_status` and inferred-clear latch state from
-/// `mgr` and patch those fields, in place, into the matching pane entries of
-/// `document`.
+/// task0006 (review rework, finding `2e6f18b4dc0a7593`): re-read each pane's
+/// CURRENT `agent_status` from `mgr` and, for a still-live pane, its
+/// inferred-clear latch state, and patch those fields, in place, into the
+/// matching pane entries of `document`.
 ///
 /// mux-hot-upgrade-alt-screen task0002 (SPEC FR7) extends this same re-read
 /// to the pane's alt-screen flag + dump (via
@@ -436,19 +436,24 @@ fn import_program_records(records: &[HandoffProgramRecord]) -> Table {
 /// portion of the window — has already elapsed) is what makes the residual
 /// gap small rather than eliminating it.
 ///
-/// osc7501-program-status task0007 (SPEC FR17): the pane's OSC 7501 record
-/// list is re-read for EVERY pane `mgr` still holds, live or exited, through
-/// the same SC-1 export the snapshot uses (a record added after the
-/// snapshot appears after the refresh, and an id updated again moves to the
-/// end of the order). For a live pane it is read under the same
-/// `agent_status` lock as the state, name and revision.
+/// osc7501-program-status task0007 (SPEC FR17) and
+/// mux-upgrade-exited-pane-revision (SPEC FR1/FR2): for EVERY pane `mgr` still
+/// holds, live or exited, the OSC 777 state, the agent name, the revision and
+/// the OSC 7501 record list are re-read together in ONE `agent_status` lock
+/// acquisition (the records through the same SC-1 export the snapshot uses: a
+/// record added after the snapshot appears after the refresh, and an id
+/// updated again moves to the end of the order) and written into the entry
+/// together. Reading them in one acquisition keeps the entry's revision
+/// consistent with its state, name and records, so a successor that resyncs
+/// the restored pane sends the latest record and revision.
 ///
-/// Apart from those records, panes recorded exited in `document`
-/// (`master_fd: None`), panes no longer found in `mgr`, and panes that have
-/// since exited in `mgr` are left untouched — refreshing the rest of
-/// exited-pane state is a separate, pre-existing concern (the
-/// descriptor/exited-flag mismatch that can also arise if a pane exits
-/// during this same window) that this function does not attempt to fix.
+/// For a pane exited in `document` (`master_fd: None`) or exited in `mgr`,
+/// ONLY those four fields are refreshed. Its latch, alt-screen and descriptor
+/// fields (and its id, size, cwd, title, exited flag, child pid and
+/// scrollback) keep their recorded values. Panes no longer found in `mgr` are
+/// left untouched. The descriptor/exited-flag mismatch that can arise if a
+/// pane exits during this same window (recorded live, exited in `mgr`) is a
+/// separate, pre-existing concern that this function does not attempt to fix.
 pub fn refresh_live_agent_state(document: &mut HandoffDocument, mgr: &SessionManager) {
     for session_doc in &mut document.sessions {
         for window_doc in &mut session_doc.windows {
@@ -463,16 +468,10 @@ pub fn refresh_live_agent_state(document: &mut HandoffDocument, mgr: &SessionMan
                 else {
                     continue;
                 };
-                if pane_doc.master_fd.is_none() || pane.exited {
-                    // Recorded exited (or already had no descriptor), or
-                    // exited since -- nothing live to refresh from, except
-                    // the OSC 7501 records (SPEC FR17: live and exited
-                    // panes alike).
-                    pane_doc.program_records =
-                        export_program_records(&pane.agent_status.lock().unwrap().program_status);
-                    continue;
-                }
-
+                // The state, name, revision and OSC 7501 records of a live
+                // and of an exited pane alike (SPEC FR1), read in ONE
+                // `agent_status` lock acquisition so they describe the same
+                // instant. Both branches below use this single read.
                 let (agent_state, agent_name, agent_revision, program_records) = {
                     let status = pane.agent_status.lock().unwrap();
                     (
@@ -482,6 +481,20 @@ pub fn refresh_live_agent_state(document: &mut HandoffDocument, mgr: &SessionMan
                         export_program_records(&status.program_status),
                     )
                 };
+                if pane_doc.master_fd.is_none() || pane.exited {
+                    // Recorded exited (or already had no descriptor), or
+                    // exited since: carry the four agent-status values read
+                    // above and nothing else (SPEC FR2) -- the latch,
+                    // alt-screen and descriptor fields keep their recorded
+                    // values, because an exited pane has no live latch or
+                    // alternate screen to re-read.
+                    pane_doc.agent_state = agent_state;
+                    pane_doc.agent_name = agent_name;
+                    pane_doc.agent_revision = agent_revision;
+                    pane_doc.program_records = program_records;
+                    continue;
+                }
+
                 let (latch_armed, latch_command_ended, latch_generation) =
                     pane.agent_status_exit_latch.lock().unwrap().state_parts();
                 // mux-hot-upgrade-alt-screen task0002 (SPEC FR7): re-capture

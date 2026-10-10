@@ -42,9 +42,11 @@ acceptance_tests:
       assessment -- that lock only covers snapshot's own tree walk, not the
       window between snapshot returning and exec.
   AC-2:
+    # Superseded: a pane that has since exited being left untouched by the refresh is replaced by
+    # feature-docs/mux-upgrade-exited-pane-revision/SPEC.md FR1/FR2.
     tests:
       - mux::upgrade::tests::refresh_live_agent_state_pulls_in_a_clear_that_completed_after_snapshot
-      - mux::upgrade::tests::refresh_live_agent_state_leaves_a_pane_that_since_exited_untouched
+      - mux::upgrade::tests::refresh_live_agent_state_carries_the_agent_status_of_a_pane_that_since_exited_and_was_cleared
       - mux::upgrade::tests::refresh_live_agent_state_leaves_a_pane_no_longer_present_in_the_manager_untouched
       - mux::upgrade::tests::rewrite_handoff_file_overwrites_an_already_written_handoff_file_in_place
     red_confirmed: true
