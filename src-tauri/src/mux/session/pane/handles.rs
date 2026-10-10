@@ -79,14 +79,28 @@ pub enum AgentStatusFeedItem {
     /// main screen — never marks reconstructed for snapshot/replay/
     /// reattach purposes, and never alt-screen-suppressed marks (SPEC FR5).
     Osc133Mark(PromptMarkKind),
-    /// A complete OSC 7501 sequence (osc7501-program-status FR1): the text
-    /// after `7501;` and the terminator kind, exactly the input of
-    /// `program_status::parse`. Reports are unconditional like OSC 777
-    /// reports — they do not depend on live spans.
+    /// A complete OSC 7501 sequence (osc7501-program-status FR1;
+    /// osc7501-leading-zero-length FR3 / FR4): the OSC string's data under
+    /// the shared recognition rule (the number and the first `;` removed,
+    /// decoded lossily), the received length of the OSC string and the
+    /// terminator kind — exactly the input of
+    /// `program_status::parse_received`. `received_len` is the number of
+    /// bytes between `ESC ]` and the terminator as they arrived, leading
+    /// zeros and bytes before U+FFFD replacement included. Reports are
+    /// unconditional like OSC 777 reports — they do not depend on live spans.
     ProgramStatus {
         body: String,
+        received_len: usize,
         terminator: ProgramStatusTerminator,
     },
+    /// A live, main-screen-observed OSC 133 prompt start written in a
+    /// non-canonical spelling (a leading-zero number, non-digit bytes before
+    /// the first `;`, no `;` at all), which the client's parser takes as a
+    /// prompt start all the same (osc7501-leading-zero-length FR6). It means
+    /// "apply the OSC 7501 prompt start only": it never reaches the OSC 777
+    /// inferred-clear latch, which only the canonical
+    /// [`AgentStatusFeedItem::Osc133Mark`] feeds.
+    NonCanonicalPromptStart,
     /// A terminal reset (RIS, `ESC c`) the terminal would execute
     /// (osc7501-program-status FR7 / FR14). Unconditional like a report.
     Reset,
