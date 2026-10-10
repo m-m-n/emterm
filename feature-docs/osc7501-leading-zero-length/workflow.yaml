@@ -142,7 +142,8 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc7501-leading-zero-length/task0001
   task0002:
     title: 'Mux path: shared-rule ingestion, received length and FR9 records'
     plan: tasks/task0002.md
@@ -179,7 +180,8 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc7501-leading-zero-length/task0002
 review:
   status: pending
   rounds_completed: 0
