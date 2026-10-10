@@ -134,7 +134,7 @@ tasks:
     - NFR1
     - NFR2
     - NFR3
-    status: in_progress
+    status: merged
     branch: em-workflow/agent-exit-after-icon-tests-yaml-name-drift/task0001
 review:
   status: pending
