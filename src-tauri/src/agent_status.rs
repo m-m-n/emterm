@@ -88,10 +88,18 @@ impl AgentState {
     }
 
     /// Rank of the in-pane composition order
-    /// `blocked > working > error > done > idle` (higher is stronger). The
-    /// daemon has no read flag, so this order is read-flag free; the GUI's
-    /// cross-pane aggregation adds the unseen distinction on top of it in
-    /// `agent_status_model`. The single place the in-pane order is defined.
+    /// `blocked > working > error > done > idle` (higher is stronger). This
+    /// is the single definition of that order. The daemon has no read flag,
+    /// so the order is read-flag free.
+    ///
+    /// `ProgramState::rank` takes its value from this function, and
+    /// `Table::summary` uses `ProgramState::rank` to pick the deciding
+    /// record. [`compose`] (and the GUI's composite-name decision in
+    /// `agent_status_model`) use this rank directly.
+    ///
+    /// `agent_status_model`'s `priority_rank` is a separately defined,
+    /// unseen-aware cross-pane order. It does not derive its values from
+    /// this function.
     pub fn compose_rank(self) -> u8 {
         match self {
             AgentState::Blocked => 4,

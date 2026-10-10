@@ -25,6 +25,8 @@ use base64::Engine as _;
 use base64::alphabet;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 
+use super::agent_status::AgentState;
+
 /// Longest accepted whole sequence, introducer and terminator included.
 pub const MAX_SEQUENCE_BYTES: usize = 4096;
 /// Records kept per terminal; the least recently updated one is evicted
@@ -99,16 +101,25 @@ impl ProgramState {
         }
     }
 
-    /// The composition rank: blocked > working > error > done > idle. A
-    /// larger value is a higher state. There is no read flag at this level.
-    pub fn rank(self) -> u8 {
+    /// The [`AgentState`] of the same name. Exhaustive over the five stored
+    /// states with no wildcard arm, so a new `ProgramState` variant does not
+    /// compile until it is mapped here.
+    fn agent_state(self) -> AgentState {
         match self {
-            ProgramState::Idle => 0,
-            ProgramState::Done => 1,
-            ProgramState::Error => 2,
-            ProgramState::Working => 3,
-            ProgramState::Blocked => 4,
+            ProgramState::Idle => AgentState::Idle,
+            ProgramState::Working => AgentState::Working,
+            ProgramState::Done => AgentState::Done,
+            ProgramState::Blocked => AgentState::Blocked,
+            ProgramState::Error => AgentState::Error,
         }
+    }
+
+    /// The composition rank. The value is [`AgentState::compose_rank`] of the
+    /// same-named [`AgentState`], which is where the order
+    /// blocked > working > error > done > idle is defined; a larger value is
+    /// a higher state. There is no read flag at this level.
+    pub fn rank(self) -> u8 {
+        self.agent_state().compose_rank()
     }
 }
 

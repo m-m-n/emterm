@@ -1,0 +1,81 @@
+task_id: task0001
+baseline_failures:
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+# Re-executed after the implementation and the doc-contract tests: no failures (4621 passed,
+# 0 failed). An earlier post-implementation run, at a load average near 9, additionally failed
+# pty::tests::reader_routes_to_ring_buffer_when_paused (a PTY timing test that reads nothing this
+# task changed); it passed in the next full run, as did the baseline entry.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - program_status::tests::rank_unify_ac1_rank_equals_the_compose_rank_of_the_mapped_agent_state
+    red_confirmed: true
+    red_reason: >-
+      Before ProgramState::agent_state existed the test module did not compile:
+      error[E0599]: no method named `agent_state` found for enum `program_status::ProgramState`.
+      The "no rank numeric literal in program_status.rs" part of the criterion is a structural
+      property checked by inspection of the diff, not by a runtime test.
+  AC-2:
+    tests:
+      - program_status::tests::rank_unify_ac2_each_program_state_maps_to_the_agent_state_of_the_same_name
+      - program_status::tests::rank_unify_ac2_the_mapped_agent_state_display_word_equals_the_protocol_word
+    red_confirmed: true
+    red_reason: >-
+      Same compile failure as AC-1 (E0599, no method `agent_state` found for enum
+      `program_status::ProgramState`). The five-arm exhaustive match with no wildcard arm and no
+      optional result is enforced by the compiler and checked by inspection of the diff.
+  AC-3:
+    tests:
+      - program_status::tests::rank_unify_ac3_all_25_ordered_pairs_order_the_same_under_both_rank_functions
+    red_confirmed: true
+    red_reason: >-
+      Same compile failure as AC-1 (E0599, no method `agent_state` found for enum
+      `program_status::ProgramState`).
+  AC-4:
+    tests:
+      - program_status::tests::rank_unify_ac4_compose_rank_doc_states_the_single_definition_and_its_derived_users
+    red_confirmed: true
+    red_reason: >-
+      Run against the original agent_status.rs doc comment (temporarily restored), the test failed:
+      "the compose_rank doc must contain `single definition`, got: Rank of the in-pane composition
+      order ... the GUI's cross-pane aggregation adds the unseen distinction on top of it in
+      `agent_status_model`. The single place the in-pane order is defined."
+  AC-5:
+    tests:
+      - program_status::tests::rank_unify_ac5_program_state_rank_doc_names_compose_rank_as_the_source
+    red_confirmed: true
+    red_reason: >-
+      Run against the original ProgramState::rank doc comment (temporarily restored), the test
+      failed: "the ProgramState::rank doc must name AgentState::compose_rank, got: The composition
+      rank: blocked > working > error > done > idle. A larger value is a higher state. There is no
+      read flag at this level."
+  AC-6:
+    tests:
+      - program_status::tests::ac5_rank_is_blocked_working_error_done_idle
+      - program_status::tests::ac5_a_higher_rank_beats_recency
+      - program_status::tests::ac5_ties_go_to_the_most_recently_updated_record
+      - program_status::tests::ac5_the_state_is_the_highest_by_blocked_working_error_done_idle
+      - program_status::tests::ac5_a_done_child_does_not_mask_a_working_root_and_error_ranks_above_done
+      - program_status::tests::ac5_ties_across_the_root_and_a_descendant_follow_recency_too
+      - agent_status::tests::compose_returns_the_higher_input_by_blocked_working_error_done_idle
+      - agent_status::tests::compose_returns_the_present_side_when_one_side_is_absent
+      - agent_status::tests::compose_returns_no_state_when_both_are_absent
+      - agent_status::tests::compose_working_outranks_a_child_done_or_error
+    red_confirmed: false
+    red_reason: >-
+      This is the no-behavior-change regression guard (NFR1 / NFR3). The listed existing tests
+      detect a changed rank order or a changed tie-break; they passed before the change and still
+      pass, so no red state occurred. The full --lib suite is the criterion's check and ended
+      with no failure.
+  AC-7:
+    tests:
+      - program_status::tests::ac8_the_module_uses_only_always_built_crates
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing
+      program_status::tests::ac8_the_module_uses_only_always_built_crates detects a use of a
+      dependency root other than std / base64 / self / super and any `crate::` path in
+      program_status.rs; no red state occurred for this change. The verifiable outcome is
+      `cargo check --no-default-features`, which passed before and after, so it has no observed
+      red either. agent_status.rs gained no use of program_status (checked by inspection).
