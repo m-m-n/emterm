@@ -102,7 +102,8 @@ workflow:
   completed_at_commit: 9c3732ea51275812ab883c57d643f7061bf99dd2
   base_commit: 5d4aaafbd5eef63f7f7b7752dea640d66d76a3d7
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 71431ad4746b6a351c24f3b6cf05c154a3b50e65
 - id: verify
   status: pending
 - id: retrospect
@@ -184,8 +185,14 @@ tasks:
     status: merged
     branch: em-workflow/osc7501-leading-zero-length/task0002
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - architecture
+  - performance
+  - spec
   plan:
     floor:
     - comprehensive
