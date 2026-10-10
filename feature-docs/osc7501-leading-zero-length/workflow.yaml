@@ -105,7 +105,16 @@ workflow:
   status: completed
   completed_at_commit: 71431ad4746b6a351c24f3b6cf05c154a3b50e65
 - id: verify
-  status: in_progress
+  status: completed
+  completed_at_commit: 61741ba2d7e8d16cae465ab04b6fa1f465b11d6d
+  result: pass
+  failed_items: []
+  summary:
+    build: pass (cargo check default features; cargo check --no-default-features)
+    tests: "src-tauri --lib 4666 passed / 0 failed with --test-threads=1 (parallel run had 2 timing failures in untouched files pty/mod.rs and strip_concat_query.rs, per VERIFICATION.md rerun rule); term_core --lib 895 passed / 0 failed"
+    format: pass (rustfmt --check on the 22 changed .rs files)
+    scenarios_automated: TS1-TS12 pass (TS8 renamed test listed; TS10 rg 7501 only feature-name comments; TS12 no log call added on reject paths)
+    manual_not_run: [M1, M2, M3, TS13-Windows]
 - id: retrospect
   status: pending
 tasks:
