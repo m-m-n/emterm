@@ -1,0 +1,135 @@
+schema_version: 1
+feature: osc7501-alt-screen-prompt-mark
+created: '2026-10-10'
+base_branch: main
+goal: |
+  # OSC 7501: 別画面の OSC 133 A が通常画面のプロンプト開始を消費し、working / blocked の記録が残る
+
+  種別: バグ
+  Notion: https://www.notion.so/3f53509ec8ee818ea882de67ab6b380c
+
+  ## 現象
+  `apply_program_status_feed` はプロンプト開始候補（OSC 133 `A`）を種類だけで live_marks と前から突き合わせる。同じ処理単位に「別画面の A → 別画面を出る → OSC 7501 報告 → 通常画面の A」が並ぶと、別画面の A が唯一の通常画面の A を消費し、報告より後ろの本当の通常画面の A が無視される。working / blocked の記録が次のプロンプト開始まで残る。
+  em-workflow osc7501-program-status の review round 1 で medium として残った指摘（stable_id c07288af79f66c3b）。コードは統合ブランチ `em-workflow/osc7501-program-status/integration` 上にある。
+
+  ## 再現手順
+  1. 通常タブに `\x1b[?1049h\x1b]133;A\x07\x1b[?1049l\x1b]7501;id=job:state=working\x07\x1b]133;A\x07` を一度に入力する
+  2. 最後の通常画面の A で消えるはずの job の記録が残る
+
+  ## 期待する挙動
+  別画面で発生した A を突き合わせから除外し、報告より後ろの通常画面の A で working / blocked の記録が破棄される。
+
+  ## 完了の定義
+  - 再現手順で現象が起きない
+  - 再発を検出するテストがある（同じ処理単位で別画面の A、画面切り替え、報告、通常画面の A が続くケース）
+
+  ## 該当箇所
+  - `src-tauri/src/tabs/output_pipeline.rs:200`
+
+  ## 実害・発生条件
+  別画面と通常画面の A と OSC 7501 報告が 1 回の出力処理単位にまとまったときだけ起きる。
+
+
+  Once the implementation is finished, push the integration branch to the remote and create a Pull Request against base_branch with gh pr create. Keep the integration branch both locally and on the remote (do not auto-merge it into base_branch).
+  Consult Codex on any unclear points and adopt the option judged to be comparatively better.
+  Record the content of that discussion in Notion.
+parent_branch: em-workflow/osc7501-alt-screen-prompt-mark/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.94
+      '2': 0.06
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.19
+      '2': 0.81
+      '3': 0.0
+  at: '2026-10-10T23:05:49+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    term_core:
+      language: rust
+      build_command: ''
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 33d2b09a6994460dc09731f2fd2ac5070806a81f
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI 変更なし（requirements-analyst の推奨を batch 方針 decide_autonomously で採用）
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: 別画面の候補を突き合わせから除外する
+    status: confirmed
+    tasks: []
+    tests: []
+  FR2:
+    title: 通常画面の A を並び順どおりに適用する
+    status: confirmed
+    tasks: []
+    tests: []
+  FR3:
+    title: 既存の挙動を維持する
+    status: confirmed
+    tasks: []
+    tests: []
+  NFR1:
+    title: 処理コスト
+    status: confirmed
+    tasks: []
+    tests: []
+  NFR2:
+    title: 他経路の挙動維持
+    status: confirmed
+    tasks: []
+    tests: []
