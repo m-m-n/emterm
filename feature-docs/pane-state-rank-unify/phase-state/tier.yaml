@@ -1,0 +1,62 @@
+schema_version: 2
+feature: pane-state-rank-unify
+tier: reduced
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.16
+    confidence: 0.84
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.84
+      '2': 0.16
+      '3': 0.0
+  observed_at: '2026-10-11T01:17:54+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.01
+    confidence: 0.99
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.99
+      '2': 0.01
+      '3': 0.0
+  observed_at: '2026-10-11T01:19:14+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/agent_status.rs
+  - src-tauri/src/program_status/tests.rs
+  changed_lines_approx: 12
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  test_change_kind: extend_existing_one_to_one
+  added_test_cases_approx: 5
+  body_change_kind: wording_or_rule_addition
+  change_containment: multiple_modules
+  caller_and_dependency_count: 3
+  changes_external_contract: false
+  changes_behavior: false
+  evidence: 変更のないmainで確認。両rankは独立したmatchで同じ順位を定義している。各順序の既存テストはあるが、両者を直接比較するテストはない。既存rankテストに全5状態の比較を追加し、compose_rankの「唯一の定義場所」という説明を修正する経路の概算。直接の本番呼び出し元はcompose、composite_name、Table::summaryの3関数。
+decided_at: '2026-10-11T01:19:30+09:00'
