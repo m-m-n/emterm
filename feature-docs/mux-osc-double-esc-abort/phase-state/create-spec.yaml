@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-osc-double-esc-abort
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 0c49fac5a303c76a72fe550e5c2ea6dcb29b5185
+last_input_digest: sha256:89e9abd466b24f5e65bcf1d9035756c355fd8510cfd8b17ab376b9e43126421b
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:89e9abd466b24f5e65bcf1d9035756c355fd8510cfd8b17ab376b9e43126421b
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
