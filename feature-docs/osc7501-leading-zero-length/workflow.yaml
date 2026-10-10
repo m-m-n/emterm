@@ -180,7 +180,7 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-leading-zero-length/task0002
 review:
   status: pending
