@@ -142,7 +142,7 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/osc7501-leading-zero-length/task0001
   task0002:
     title: 'Mux path: shared-rule ingestion, received length and FR9 records'
