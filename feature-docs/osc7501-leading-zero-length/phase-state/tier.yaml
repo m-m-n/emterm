@@ -1,0 +1,81 @@
+schema_version: 2
+feature: osc7501-leading-zero-length
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.78
+    confidence: 0.78
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.22
+      '2': 0.78
+      '3': 0.0
+  observed_at: '2026-10-11T00:11:28+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 2.01
+    confidence: 0.98
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.0
+      '2': 0.98
+      '3': 0.02
+  observed_at: '2026-10-11T00:15:43+09:00'
+pre_survey_estimate:
+  files_expected:
+  - crates/term_core/src/parser/mod.rs
+  - crates/term_core/src/parser/escape.rs
+  - crates/term_core/src/parser/osc.rs
+  - crates/term_core/src/parser/tests.rs
+  - crates/term_core/src/parser_types.rs
+  - crates/term_core/src/terminal_dispatch.rs
+  - crates/term_core/src/mux_apc_extractor.rs
+  - crates/term_core/src/osc_handler.rs
+  - src-tauri/src/program_status.rs
+  - src-tauri/src/program_status/tests.rs
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/session/pane/handles.rs
+  - src-tauri/src/mux/daemon/tasks.rs
+  - src-tauri/src/mux/daemon/tests.rs
+  changed_lines_approx: 300
+  new_functions_needed: true
+  new_files_needed: false
+  new_dependencies_needed: false
+  covering_tests_exist: true
+  spillover_modules:
+  - crates/term_core/src/parser/mod.rs
+  - crates/term_core/src/parser/escape.rs
+  - crates/term_core/src/parser_types.rs
+  - crates/term_core/src/terminal_dispatch.rs
+  - crates/term_core/src/mux_apc_extractor.rs
+  - crates/term_core/src/osc_handler.rs
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/mux/session/pane/handles.rs
+  - src-tauri/src/mux/daemon/tasks.rs
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 8
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 11
+  changes_external_contract: true
+  changes_behavior: true
+  evidence: HEAD 36e0279d48e9a3c186e2a82d66b2b266ac9a1d14 の静的確認で現象は残っている。番号の数字は本文に保存されず（crates/term_core/src/parser/osc.rs:21）、本文は UTF-8 置換後の文字列になる（同:64）。通常タブはその文字列を parse に渡し（src-tauri/src/callbacks.rs:1457）、導入部を固定7バイトで数える（src-tauri/src/program_status.rs:37、同:208）ため、再現列4115バイトは19バイトとして受理される。mux は固定接頭辞7501;だけを取り込む（src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1583）が、数字による識別は07501も認識し（src-tauri/src/mux/osc_identify.rs:179、同:194）、履歴から除去する（src-tauri/src/mux/scrollback_filter.rs:970）。GUI側のmux報告も破棄される（src-tauri/src/tabs/output_pipeline.rs:529）。関連テストは存在するが、取り込みテストは07501の拒否を期待している（src-tauri/src/mux/ipc/pty_spawn/tests.rs:8954）；長さの既存テストは固定7バイトを前提としている（src-tauri/src/program_status/tests.rs:362）。修正対象・行数・追加テスト数は、受信長を公開OscResponder境界（crates/term_core/src/osc_handler.rs:34）まで伝達し、muxで既存の番号復元を使う修正案の概算。接続先11モジュールは列挙した波及先9件と履歴除去・client_parity_scanを数えた。ファイル変更やRustテスト実行は行っていない。
+decided_at: '2026-10-11T00:16:00+09:00'
