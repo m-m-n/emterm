@@ -1,0 +1,67 @@
+schema_version: 2
+feature: mux-osc-double-esc-abort
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.02
+    confidence: 0.98
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.98
+      '2': 0.02
+      '3': 0.0
+  observed_at: '2026-10-11T08:58:25+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.17
+    confidence: 0.83
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.83
+      '2': 0.17
+      '3': 0.0
+  observed_at: '2026-10-11T08:58:25+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/daemon/tests.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  changed_lines_approx: 100
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules: []
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 4
+  body_change_kind: new_logic
+  change_containment: single_function
+  caller_and_dependency_count: 4
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1556 は連続 ESC で本文と状態を保持し、:1550
+    で後続の逆斜線を ST として確定する。crates/term_core/src/parser/osc.rs:68 は未終端として確定し、src-tauri/src/callbacks.rs:1462
+    は未終端の報告を無視する。既存の記録表テストは src-tauri/src/mux/daemon/tests.rs:3753 と src-tauri/src/tabs/tests/output_pipeline.rs:2028
+    にあるが、入力一覧に連続 ESC の再現例は含まれていない。本体の変更対象は step 内の既存分岐で、概算行数にはテスト追加を含む
+decided_at: '2026-10-11T08:58:25+09:00'
