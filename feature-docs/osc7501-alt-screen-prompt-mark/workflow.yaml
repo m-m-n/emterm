@@ -132,7 +132,7 @@ workflow:
   summary: 'Build 2/2 pass (cargo check default / --no-default-features). src-tauri --lib 4615 passed 0 failed; term_core --lib 868 passed 0 failed. TS-1..TS-6 pass, C-1..C-3 satisfied. NFR1 diff review: no added loop / allocation / lock / I/O on the OSC dispatch and 7501 feed paths. MT-1 (manual, release build) not executed in batch.'
   completed_at_commit: 7dd47487cd8912004b539050067b56795947de37
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Keep alternate-screen OSC 133 marks out of the OSC 7501 feed
