@@ -2,19 +2,29 @@ schema_version: 1
 feature: pane-state-rank-unify
 created: '2026-10-11'
 base_branch: main
-goal: |
-  https://www.notion.so/3f53509ec8ee8125a0f7dfc026a0aebe
+goal: 'https://www.notion.so/3f53509ec8ee8125a0f7dfc026a0aebe
+
 
   ペイン内の状態順序（compose_rank / ProgramState::rank）の定義を一元化する
 
+
   ## やりたいこと (必須)
+
   ペイン内の状態の強さの順序（blocked > working > error > done > idle）を 1 か所で定義し、他のモジュールはそこから導く。または全 5 状態で順序が一致することを確かめるテストを追加する。
+
   ## 背景・なぜ (必須)
+
   `AgentState::compose_rank`（`src-tauri/src/agent_status.rs:95`）の説明は「ペイン内の順序を定義する唯一の場所」としているが、`program_status::ProgramState::rank`（`src-tauri/src/program_status.rs:104`）が同じ順序を独立に定義しており、`Table::summary` の決定記録の選出はこちらを使う。現時点の値は一致しているが、両者を結ぶ参照もテストも無く、片方だけを変えるとデーモンの集約状態と合成の判断が食い違う。
+
   em-workflow osc7501-program-status の review round 1 で medium として残った指摘（stable_id cff07107c1ef5662）。コードは統合ブランチ `em-workflow/osc7501-program-status/integration` 上にある。
+
   ## 受け入れ条件 / 完了の定義 (必須)
+
   - [ ] 順序の定義が 1 か所にまとまっている、または全 5 状態で両者の順序が一致することを確かめるテストがある
+
   - [ ] `compose_rank` の説明が実態と一致している
+
+  '
 parent_branch: em-workflow/pane-state-rank-unify/integration
 tier: reduced
 tier_decision:
@@ -84,7 +94,29 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Derive ProgramState::rank from AgentState::compose_rank and pin their agreement
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/program_status.rs
+    - src-tauri/src/agent_status.rs
+    - src-tauri/src/program_status/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - api-contract
+    complexity: low
+    status: pending
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - NFR1
+    - NFR2
+    - NFR3
 review:
   status: pending
   rounds_completed: 0
@@ -96,54 +128,70 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
   FR2:
     title: Exhaustive ProgramState -> AgentState correspondence
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
   FR3:
     title: Agreement test across all five states
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
   FR4:
     title: compose_rank doc matches reality
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
   FR5:
     title: ProgramState::rank doc points to the single definition
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
   NFR1:
     title: No behavior change
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-3
   NFR2:
     title: Modules stay build-agnostic
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   NFR3:
     title: Existing tests unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-3
