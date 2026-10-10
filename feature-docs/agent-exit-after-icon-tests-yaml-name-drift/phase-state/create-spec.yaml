@@ -5,16 +5,31 @@ status: dispatching
 generation: 1
 base_revision: c556008584a189aefa902f45b6784323962a4d27
 last_input_digest: sha256:d13e7cf53ec32c66536804c25f81ad88dc5d32cad59afe20af59865e3e61b125
-active_request_id: create-spec-run-0001
+active_request_id: create-spec-run-0002
 packets: {}
 answers: {}
 worker_runs:
-  - request_id: create-spec-run-0001
-    status: dispatched
-    input_digest: sha256:d13e7cf53ec32c66536804c25f81ad88dc5d32cad59afe20af59865e3e61b125
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:d13e7cf53ec32c66536804c25f81ad88dc5d32cad59afe20af59865e3e61b125
+- request_id: create-spec-run-0002
+  status: dispatched
+  worker: spec-writer
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
 last_error: null
+assumptions:
+  A1: 'No supersede note is added: ccfc1d65 only renamed the function; AC-2 expectation
+    is not reversed (reversible)'
+  A2: red_reason mention of the old name (lines 57-58) stays unchanged; guard checks
+    only tests list entries (reversible)
+  A3: Guard test goes in src-tauri/src/mux/upgrade/tests.rs following the strip_open_string_body_closure.rs
+    repository_file precedent (reversible)
+  A4: Guard check (c) matches record names against fn definitions in upgrade/tests.rs
+    source, not the libtest listing (reversible)
+  A5: Only task0006.tests.yaml is in scope; other test-docs records are not scanned
+    (reversible)
+  A6: upgrade/tests.rs is Unix-only, so the guard runs only on Linux (reversible)
