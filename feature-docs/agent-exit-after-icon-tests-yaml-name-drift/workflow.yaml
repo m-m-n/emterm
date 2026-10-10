@@ -115,7 +115,11 @@ workflow:
   status: completed
   completed_at_commit: a9132c5069dd2a499212549afeb9b53500eac362
 - id: verify
-  status: in_progress
+  status: completed
+  result: pass
+  failed_items: []
+  summary: 'build check ok; --lib 4602 passed 0 failed 3 ignored; TS-1..TS-6 pass (every mux::upgrade::tests name in the record resolves in --lib -- --list; record diff is line 51 only; src-tauri/src diff adds one test only)'
+  completed_at_commit: 41c4fa30d450648f6b78de743165edeaadb8d849
 - id: retrospect
   status: pending
 tasks:
