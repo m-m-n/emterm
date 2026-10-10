@@ -10,8 +10,7 @@ records:
   - derive_from_task_description
   freeform: null
   normalized_answer: 'feature name derived from the task description: osc7501-alt-screen-prompt-mark'
-  resolution_note: 'gate: create-spec.feature-identity; option chosen: derive_from_task_description
-    (batch policy); codex_consulted: false; opus_escalation: false'
+  resolution_note: 'gate: create-spec.feature-identity; option chosen: derive_from_task_description (batch policy); codex_consulted: false; opus_escalation: false'
 - question_id: requirement.scope.latch-feed
   packet_id: create-spec-q0001
   answered_at: '2026-10-10T23:12:05+09:00'
@@ -20,14 +19,8 @@ records:
   selected_option_ids:
   - scope_7501_only
   freeform: null
-  normalized_answer: Fix only the OSC 7501 record-table matching; the latch-side same-shape
-    defect is out of scope and recorded in SPEC
-  resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation);
-    Codex consulted (1 turn, codex entry): CHOICE scope_7501_only; option not chosen:
-    scope_both; opus_escalation: false; key points: Codex noted the latch fix is small
-    at the shared push site but changes OSC 777 auto-clear timing and needs Set/Clear
-    ordering regression tests; DoD covers only OSC 7501. Discussion posted to Notion
-    task page comment.'
+  normalized_answer: Fix only the OSC 7501 record-table matching; the latch-side same-shape defect is out of scope and recorded in SPEC
+  resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); Codex consulted (1 turn, codex entry): CHOICE scope_7501_only; option not chosen: scope_both; opus_escalation: false; key points: Codex noted the latch fix is small at the shared push site but changes OSC 777 auto-clear timing and needs Set/Clear ordering regression tests; DoD covers only OSC 7501. Discussion posted to Notion task page comment.'
 - question_id: design-step.decision
   packet_id: create-spec-q0001
   answered_at: '2026-10-10T23:12:05+09:00'
@@ -38,3 +31,13 @@ records:
   freeform: null
   normalized_answer: design step skipped (no UI change)
   resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously'
+- question_id: create-plan.design-decision.d1
+  packet_id: null
+  answered_at: '2026-10-10T23:30:04+09:00'
+  source: batch-codex-consultation
+  answer_mode: option
+  selected_option_ids:
+  - A_screen_aware_osc_notification
+  freeform: null
+  normalized_answer: 'D1: term_core passes MODE_ALT_SCREEN with each OSC notification via a default-implemented callbacks method; NativeCallbacks keeps alt-screen OSC 133 out of the OSC 7501 feed only'
+  resolution_note: 'gate: create-plan design decision D1 (planner decided alone; orchestrator consulted Codex per task instruction); Codex consulted (1 turn): CHOICE A; options not chosen: B (per-candidate screen flag filtered in apply_program_status_feed), C (host mirrors mode via mode-change notification), D (host-inserted screen markers); key points: A reuses the exact mode bit term_core''s live-mark gate reads, parser notifies OSC before following commands so RIS/mode switch stay consistent, off-thread core swap moves callbacks so no stale state; risk = double handling if new method also forwards to on_osc (covered by task0001 AC-3); out-of-scope residual: host classifies by first payload byte so malformed 133;AB can consume a later valid A; opus_escalation: false. Discussion posted to Notion task page comment.'

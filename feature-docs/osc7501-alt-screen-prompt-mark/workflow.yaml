@@ -2,37 +2,58 @@ schema_version: 1
 feature: osc7501-alt-screen-prompt-mark
 created: '2026-10-10'
 base_branch: main
-goal: |
-  # OSC 7501: 別画面の OSC 133 A が通常画面のプロンプト開始を消費し、working / blocked の記録が残る
+goal: '# OSC 7501: 別画面の OSC 133 A が通常画面のプロンプト開始を消費し、working / blocked の記録が残る
+
 
   種別: バグ
+
   Notion: https://www.notion.so/3f53509ec8ee818ea882de67ab6b380c
 
+
   ## 現象
+
   `apply_program_status_feed` はプロンプト開始候補（OSC 133 `A`）を種類だけで live_marks と前から突き合わせる。同じ処理単位に「別画面の A → 別画面を出る → OSC 7501 報告 → 通常画面の A」が並ぶと、別画面の A が唯一の通常画面の A を消費し、報告より後ろの本当の通常画面の A が無視される。working / blocked の記録が次のプロンプト開始まで残る。
+
   em-workflow osc7501-program-status の review round 1 で medium として残った指摘（stable_id c07288af79f66c3b）。コードは統合ブランチ `em-workflow/osc7501-program-status/integration` 上にある。
 
+
   ## 再現手順
+
   1. 通常タブに `\x1b[?1049h\x1b]133;A\x07\x1b[?1049l\x1b]7501;id=job:state=working\x07\x1b]133;A\x07` を一度に入力する
+
   2. 最後の通常画面の A で消えるはずの job の記録が残る
 
+
   ## 期待する挙動
+
   別画面で発生した A を突き合わせから除外し、報告より後ろの通常画面の A で working / blocked の記録が破棄される。
 
+
   ## 完了の定義
+
   - 再現手順で現象が起きない
+
   - 再発を検出するテストがある（同じ処理単位で別画面の A、画面切り替え、報告、通常画面の A が続くケース）
 
+
   ## 該当箇所
+
   - `src-tauri/src/tabs/output_pipeline.rs:200`
 
+
   ## 実害・発生条件
+
   別画面と通常画面の A と OSC 7501 報告が 1 回の出力処理単位にまとまったときだけ起きる。
 
 
+
   Once the implementation is finished, push the integration branch to the remote and create a Pull Request against base_branch with gh pr create. Keep the integration branch both locally and on the remote (do not auto-merge it into base_branch).
+
   Consult Codex on any unclear points and adopt the option judged to be comparatively better.
+
   Record the content of that discussion in Notion.
+
+  '
 parent_branch: em-workflow/osc7501-alt-screen-prompt-mark/integration
 tier: full
 tier_decision:
@@ -103,7 +124,30 @@ workflow:
   status: pending
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Keep alternate-screen OSC 133 marks out of the OSC 7501 feed
+    plan: tasks/task0001.md
+    files:
+    - crates/term_core/src/callbacks.rs
+    - crates/term_core/src/osc_handler.rs
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - src-tauri/src/tabs/output_pipeline.rs
+    - src-tauri/src/tabs/tests/output_pipeline.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    - api-contract
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - NFR1
+    - NFR2
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -111,25 +155,41 @@ requirements:
   FR1:
     title: 別画面の候補を突き合わせから除外する
     status: confirmed
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+    - TS-4
+    - TS-6
   FR2:
     title: 通常画面の A を並び順どおりに適用する
     status: confirmed
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-3
   FR3:
     title: 既存の挙動を維持する
     status: confirmed
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
+    - TS-6
   NFR1:
     title: 処理コスト
     status: confirmed
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
   NFR2:
     title: 他経路の挙動維持
     status: confirmed
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
