@@ -1,20 +1,46 @@
 schema_version: 1
 feature: pane-state-rank-unify
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
 base_revision: 4894626b887983c296ea5d66b8dd5816340cb7c6
 last_input_digest: sha256:bad2a74fe882d5d67040f5de6f42e769c2e9eebcf4cbdcbd2d3203d58c0e1279
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
-answers: {}
+answers:
+  assumptions:
+  - id: A-P1
+    statement: ProgramState -> AgentState correspondence lives in program_status.rs
+      as a ProgramState-owned conversion; word-based conversions at other call sites
+      are left unchanged
+    reversible: true
+  - id: A-P2
+    statement: task0001 domains [api-contract], complexity low
+    reversible: true
+  - id: A-P3
+    statement: THREAT-MODEL verdict no-trust-boundary (only already-parsed closed
+      enums in-process; OSC parsers unchanged)
+    reversible: true
 worker_runs:
 - request_id: create-plan-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:bad2a74fe882d5d67040f5de6f42e769c2e9eebcf4cbdcbd2d3203d58c0e1279
-  output_digest: null
-artifacts: []
-patches: []
+  output_digest: sha256:a34fafdb1ed394652b39c77c5403bad7f65b40db340deb28deebfa60ce8dd919
+artifacts:
+- path: feature-docs/pane-state-rank-unify/VERIFICATION.md
+  sha256: sha256:a91e5262e8250f00c975597323a1e6890d6bca03cc24acd6f30508c6ad12e20d
+  produced_by: create-plan-run-0001
+- path: feature-docs/pane-state-rank-unify/THREAT-MODEL.md
+  sha256: sha256:bf6f39de52de5bda4e237127031cb9f67c64192b69482183979365545d0d3e87
+  produced_by: create-plan-run-0001
+- path: feature-docs/pane-state-rank-unify/tasks/task0001.md
+  sha256: sha256:efd6f1d8aa469e217d16fa1c46a4e60bf88086ae6ec2f41b992108493ce33e62
+  produced_by: create-plan-run-0001
+patches:
+- patch_id: pane-state-rank-unify-plan-p0001
+  status: applied
+  base_input_digest: sha256:bad2a74fe882d5d67040f5de6f42e769c2e9eebcf4cbdcbd2d3203d58c0e1279
+  base_workflow_blob: ba297fca5d6c6ce12403ffd04a13085c667e27e4
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
