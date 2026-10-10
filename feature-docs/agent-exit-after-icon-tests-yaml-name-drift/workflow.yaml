@@ -112,7 +112,7 @@ workflow:
   base_commit: 3be975d990cc0641a10f6019e701462d04d4f026
   completed_at_commit: 4942b0a9f349c65e1e965b01cd5334ed69286b9d
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -138,8 +138,15 @@ tasks:
     status: merged
     branch: em-workflow/agent-exit-after-icon-tests-yaml-name-drift/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
 requirements:
   FR1:
     title: Replace the stale AC-2 entry
