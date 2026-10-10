@@ -1,24 +1,23 @@
 task_id: task0001
-# Before any edit: the src-tauri --lib suite (project test command) ran 4614 passed, 1 failed,
-# 3 ignored; the one failure is a PTY echo test that depends on the sandbox. The term_core --lib
-# suite (CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml
-# --lib) ran 868 passed, 0 failed.
+# Refreshed after the merge conflict on src-tauri/src/program_status.rs was resolved by adopting
+# the parent's version (it carries the same parse_received contract): the src-tauri --lib suite
+# (project test command) ran 4665 passed, 1 failed, 3 ignored; the one failure is a PTY echo
+# test that depends on the sandbox. The term_core --lib suite (CARGO_TARGET_DIR=src-tauri/target
+# cargo test --manifest-path crates/term_core/Cargo.toml --lib) ran 895 passed, 0 failed.
+# Before any edit of this task the same PTY test was the only failure (src-tauri 4614 passed,
+# 1 failed; term_core 868 passed, 0 failed).
 baseline_failures:
   - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
-# Actually re-executed after the implementation, the record and the rustfmt pass. The last
-# src-tauri --lib run: 4638 passed, 1 failed (the baseline's PTY echo test, which is
-# sandbox-dependent and passed in two earlier runs of the same code); term_core --lib: 895
-# passed, 0 failed (868 + 27 new). The src-tauri suite has 24 new tests (4615 + 24 = 4639).
-# Both the default and the --no-default-features `cargo check` pass. Two other full runs on
-# the same code, while the machine load average was above 8, each failed one different
-# timing-dependent test (mux::ipc::pty_spawn::tests::
+# Actually re-executed on the adopted tree: src-tauri --lib 4666 passed, 0 failed (the PTY test
+# passed this time); term_core --lib 895 passed, 0 failed (868 + 27 new tests of this task).
+# Both the default and the --no-default-features `cargo check` pass. Before the merge, two other
+# full runs of this task's code, while the machine load average was above 8, each failed one
+# different timing-dependent test (mux::ipc::pty_spawn::tests::
 # visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once: reader Timeout;
 # mux::ipc::pty_spawn::tests::strip_concat_query::
 # strip_concat_alternations_and_chains_finish_within_the_budget: 10.05 s of thread CPU time
-# against a 10 s budget). The first passed in three isolated reruns and both passed in the
-# later full runs, so neither is recorded as a final failure.
-final_failures:
-  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+# against a 10 s budget); both passed in later full runs.
+final_failures: []
 acceptance_tests:
   AC-1:
     # The parser::tests::* tests are term_core tests: they are selected with the term_core
