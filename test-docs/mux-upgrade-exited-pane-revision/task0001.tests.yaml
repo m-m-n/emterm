@@ -1,0 +1,80 @@
+task_id: task0001
+baseline_failures: []          # --lib run before any edit: 4598 passed, 0 failed, 3 ignored
+# Three --lib runs were re-executed after the implementation. Two (one before this record was
+# written, one after) ended 4601 passed, 0 failed, 3 ignored. The run after this record was first
+# written ended 4600 passed, 1 failed:
+# mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+# (a single-read PTY echo test; test-docs/osc7501-program-status/task0001.tests.yaml records the
+# same test failing under load and passing in the next full run). It passed in the immediately
+# following full run, and this task changes nothing that test reads.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::upgrade::tests::refresh_live_agent_state_carries_the_revision_and_records_of_a_pane_that_reported_an_error_and_since_exited
+    red_confirmed: true
+    red_reason: >-
+      Against the unchanged refresh the test failed on the carried revision with
+      "AC-1: the report's revision bump must be carried" (left: 0, right: 1): the exited branch
+      refreshed only the records.
+  AC-2:
+    tests:
+      - mux::upgrade::tests::refresh_live_agent_state_carries_the_agent_status_of_a_pane_that_since_exited_and_was_cleared
+    red_confirmed: true
+    red_reason: >-
+      Against the unchanged refresh the test failed with "AC-2: the Clear must be carried"
+      (left: Some(Working), right: None): the entry kept the snapshot-time state. The test replaces
+      refresh_live_agent_state_leaves_a_pane_that_since_exited_untouched, which asserted the
+      inverse expectation and no longer exists.
+  AC-3:
+    tests:
+      - mux::upgrade::tests::refresh_live_agent_state_carries_an_osc_777_event_and_an_osc_7501_report_applied_to_a_pane_exited_at_snapshot
+    red_confirmed: true
+    red_reason: >-
+      Against the unchanged refresh the test failed on the OSC 777 part with an assertion on
+      agent_state (left: None, right: Some(Blocked)); the records were already refreshed by the
+      unchanged code, the state, name and revision were not.
+  AC-4:
+    tests:
+      - mux::upgrade::tests::ac4_resync_after_restoring_a_pane_that_reported_an_error_and_since_exited_sends_its_revision_and_error_summary
+    red_confirmed: true
+    red_reason: >-
+      Against the unchanged refresh the restored pane kept revision 0, the session-wide resync sent
+      nothing, and the test failed with "AC-4: the resync must send an AgentStatusUpdate for the
+      restored pane: Elapsed(())".
+  AC-5:
+    tests:
+      - mux::upgrade::tests::refresh_live_agent_state_pulls_in_a_clear_that_completed_after_snapshot
+      - mux::upgrade::tests::refresh_live_agent_state_pulls_in_alt_screen_entered_after_snapshot
+      - mux::upgrade::tests::refresh_live_agent_state_pulls_in_alt_screen_left_after_snapshot
+      - mux::upgrade::tests::ac3_refresh_pulls_in_a_program_record_added_after_snapshot
+      - mux::upgrade::tests::ac3_refresh_drops_program_records_cleared_after_snapshot
+      - mux::upgrade::tests::refresh_live_agent_state_leaves_a_pane_no_longer_present_in_the_manager_untouched
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing tests listed here detect a
+      regression of the live-pane refresh and of the not-in-the-manager skip; no red state occurred
+      for this change, and their bodies are unmodified. The --lib run ends with no failure (baseline
+      had none) and the --no-default-features cargo check passes; neither was observed failing
+      before the change.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by inspection: the exited path reads the four values under the single agent-status
+      lock acquisition that precedes the exited/live split and takes no second acquisition, and the
+      refresh doc comment, the exited-branch inline comment and the daemon call-site comment state
+      this behavior. No executable check can be made to fail for it: a search of the test sources by
+      the changed files' repository-relative paths and basenames (upgrade.rs, mux/upgrade,
+      handoff.rs) found no test that reads them, only comments. The AC-1 to AC-3 tests cover the
+      values the single read produces.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The criterion is the text of two predecessor records plus the resolution check of
+      .claude/rules/test-docs-records.md; no executable test reads those records (searched
+      test-docs and the test sources by path and basename; hits are comments only). The check was
+      run after the change: the --lib --list output has a test line for the replacement name
+      refresh_live_agent_state_carries_the_agent_status_of_a_pane_that_since_exited_and_was_cleared
+      and none for the old name. It was not observed failing before the change.
