@@ -1,0 +1,68 @@
+schema_version: 2
+feature: osc7501-alt-screen-prompt-mark
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.06
+    confidence: 0.94
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.94
+      '2': 0.06
+      '3': 0.0
+  observed_at: '2026-10-10T23:05:49+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.81
+    confidence: 0.81
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.19
+      '2': 0.81
+      '3': 0.0
+  observed_at: '2026-10-10T23:05:49+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/tabs/output_pipeline.rs
+  - src-tauri/src/callbacks.rs
+  - crates/term_core/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  changed_lines_approx: 90
+  new_functions_needed: 2
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules:
+  - crate::callbacks
+  - term_core::callbacks
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 3
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 5
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: main 3196a257を静的確認し、ファイル変更・テスト実行はしていない。src-tauri/src/callbacks.rs:234,1252では候補に画面情報を保存していない。crates/term_core/src/osc_handler.rs:208,246では別画面のmarkを除外してもcallbackを呼ぶ。src-tauri/src/tabs/output_pipeline.rs:200,205では種類だけで照合するため、再現列の最初のAが唯一のlive
+    Aを消費し、報告後のAが無視される。src-tauri/src/tabs/tests/output_pipeline.rs:1892の既存テストには通常画面のAも切替後の報告もない。概算はcrates/term_core/src/callbacks.rs:82から発生時のMODE_ALT_SCREENを既定実装付き通知で渡し、候補にboolを保存して照合前に除外する案に基づく。既存on_oscと通信形式は維持できる。直接の呼出元はoutput_pipeline.rs:157の1か所、記録表への依存は:196,206,209,212の4操作。追加テストはworking・blockedの再現2ケースと画面情報の記録1ケースを想定する
+decided_at: '2026-10-10T23:05:49+09:00'
