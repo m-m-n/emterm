@@ -1,12 +1,40 @@
 schema_version: 1
 feature: osc7501-alt-screen-prompt-mark
 records:
-  - question_id: create-spec.feature-identity
-    packet_id: null
-    answered_at: "2026-10-10T23:06:43+09:00"
-    source: batch-policy
-    answer_mode: option
-    selected_option_ids: [derive_from_task_description]
-    freeform: null
-    normalized_answer: "feature name derived from the task description: osc7501-alt-screen-prompt-mark"
-    resolution_note: "gate: create-spec.feature-identity; option chosen: derive_from_task_description (batch policy); codex_consulted: false; opus_escalation: false"
+- question_id: create-spec.feature-identity
+  packet_id: null
+  answered_at: '2026-10-10T23:06:43+09:00'
+  source: batch-policy
+  answer_mode: option
+  selected_option_ids:
+  - derive_from_task_description
+  freeform: null
+  normalized_answer: 'feature name derived from the task description: osc7501-alt-screen-prompt-mark'
+  resolution_note: 'gate: create-spec.feature-identity; option chosen: derive_from_task_description
+    (batch policy); codex_consulted: false; opus_escalation: false'
+- question_id: requirement.scope.latch-feed
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-10T23:12:05+09:00'
+  source: batch-codex-consultation
+  answer_mode: option
+  selected_option_ids:
+  - scope_7501_only
+  freeform: null
+  normalized_answer: Fix only the OSC 7501 record-table matching; the latch-side same-shape
+    defect is out of scope and recorded in SPEC
+  resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation);
+    Codex consulted (1 turn, codex entry): CHOICE scope_7501_only; option not chosen:
+    scope_both; opus_escalation: false; key points: Codex noted the latch fix is small
+    at the shared push site but changes OSC 777 auto-clear timing and needs Set/Clear
+    ordering regression tests; DoD covers only OSC 7501. Discussion posted to Notion
+    task page comment.'
+- question_id: design-step.decision
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-10T23:12:05+09:00'
+  source: batch-decision-table
+  answer_mode: option
+  selected_option_ids:
+  - decide_autonomously
+  freeform: null
+  normalized_answer: design step skipped (no UI change)
+  resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously'

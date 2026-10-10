@@ -5,13 +5,46 @@ status: in_progress
 generation: 1
 base_revision: 70e3d1e54e558c90413ef6456e767076351431ec
 last_input_digest: sha256:ee6c7da01a50f95fd02cb85c6d77463e8457327117e1f0a4a38df3d8e63d091c
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+active_request_id: create-spec-run-0002
+packets:
+  create-spec-q0001:
+    status: answered
+    question_ids:
+    - requirement.scope.latch-feed
+    - design-step.decision
+answers:
+  requirement.scope.latch-feed:
+    question_id: requirement.scope.latch-feed
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T23:12:05+09:00'
+    source: batch-codex-consultation
+    answer_mode: option
+    selected_option_ids:
+    - scope_7501_only
+    freeform: null
+    normalized_answer: Fix only the OSC 7501 record-table matching; the latch-side
+      same-shape defect is out of scope and recorded in SPEC
+    resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation);
+      Codex consulted (1 turn, codex entry): CHOICE scope_7501_only; option not chosen:
+      scope_both'
+  design-step.decision:
+    question_id: design-step.decision
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-10T23:12:05+09:00'
+    source: batch-decision-table
+    answer_mode: option
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step skipped (no UI change)
+    resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:ee6c7da01a50f95fd02cb85c6d77463e8457327117e1f0a4a38df3d8e63d091c
+- request_id: create-spec-run-0002
+  status: dispatched
+  worker: requirements-analyst
 artifacts: []
 patches: []
 progress_fingerprint: null
