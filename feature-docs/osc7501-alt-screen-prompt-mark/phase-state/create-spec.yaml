@@ -5,7 +5,7 @@ status: in_progress
 generation: 1
 base_revision: 70e3d1e54e558c90413ef6456e767076351431ec
 last_input_digest: sha256:ee6c7da01a50f95fd02cb85c6d77463e8457327117e1f0a4a38df3d8e63d091c
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -46,9 +46,15 @@ worker_runs:
   status: completed
   worker: requirements-analyst
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   worker: spec-writer
-artifacts: []
+artifacts:
+- path: feature-docs/osc7501-alt-screen-prompt-mark/REQUIREMENTS.md
+  sha256: sha256:e85de984a7c0762bdf39a95e865ce82fc056a31d340829f00bed781cf4094351
+  produced_by: create-spec-run-0003
+- path: feature-docs/osc7501-alt-screen-prompt-mark/SPEC.md
+  sha256: sha256:f9e001d6b0c7e7ddcae3b1684e673ef0511db5a7bea6ba423e28caadf8a3092a
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
