@@ -116,7 +116,8 @@ workflow:
     scenarios_automated: TS1-TS12 pass (TS8 renamed test listed; TS10 rg 7501 only feature-name comments; TS12 no log call added on reject paths)
     manual_not_run: [M1, M2, M3, TS13-Windows]
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: e17b35fc308f9f0ad4cac8129f683320a25e50d2
 tasks:
   task0001:
     title: 'Plain-tab path: received length and saturating OSC number'
