@@ -1,0 +1,20 @@
+schema_version: 1
+feature: pane-state-rank-unify
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: ebd66361c1ab3f9bc0adc905ee37f4781e8a14cd
+last_input_digest: sha256:34ffb9a49dcfefdce5a3ffa712e97b3ca28c970ef73f4b583909fcad1164bc60
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:34ffb9a49dcfefdce5a3ffa712e97b3ca28c970ef73f4b583909fcad1164bc60
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
