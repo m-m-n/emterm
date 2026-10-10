@@ -985,6 +985,120 @@ mod tests {
         assert!(core.take_fold_marks().is_empty());
     }
 
+    // ── SC-1: screen state observed by the callbacks at each dispatch
+    // (osc7501-alt-screen-prompt-mark task0001 AC-1) ──────────────────────
+
+    /// One shared, ordered log of what the responder and the callbacks saw.
+    type EventLog = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+    /// Callbacks overriding the screen-aware notification; each notification
+    /// is logged as `notify:<action>:<payload>:<alt>`.
+    struct ScreenLogCallbacks(EventLog);
+
+    impl crate::callbacks::TerminalCallbacks for ScreenLogCallbacks {
+        fn on_osc(&self, _action_type: u8, _data: &str) {}
+        fn on_osc_with_screen(&self, action_type: u8, data: &str, alt_screen_active: bool) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("notify:{action_type}:{data}:{alt_screen_active}"));
+        }
+        fn on_apc(&self, _data: &[u8]) {}
+        fn on_dcs(&self, _data: &[u8]) {}
+        fn on_bell(&self) {}
+    }
+
+    /// Responder that logs `respond:<code>:<payload>` into the same log and
+    /// never answers.
+    struct LogResponder(EventLog);
+
+    impl OscResponder for LogResponder {
+        fn respond(&self, code: u16, payload: &str, _terminator: OscTerminator) -> Vec<Vec<u8>> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("respond:{code}:{payload}"));
+            Vec::new()
+        }
+    }
+
+    fn core_with_screen_log() -> (TerminalCore, EventLog) {
+        let log = EventLog::default();
+        let mut core = TerminalCore::new(80, 24, 1000);
+        core.callbacks = Some(Box::new(ScreenLogCallbacks(log.clone())));
+        core.osc_responder = Some(Box::new(LogResponder(log.clone())));
+        (core, log)
+    }
+
+    #[test]
+    fn test_osc8_early_return_site_notifies_with_the_screen_state_current_at_dispatch() {
+        // The OSC 8 branch returns before the general path; it must still
+        // notify through the screen-aware method, and read the state there.
+        let (mut core, log) = core_with_screen_log();
+        core.process_pty_data_fully(
+            b"\x1b]8;;http://a\x07\x1b[?1047h\x1b]8;;\x07\x1b[?1047l\x1b]8;;http://b\x07",
+        );
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            &[
+                "respond:8:;http://a",
+                "notify:8:;http://a:false",
+                "respond:8:;",
+                "notify:8:;:true",
+                "respond:8:;http://b",
+                "notify:8:;http://b:false",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_general_site_notifies_after_the_responder_with_the_screen_state_at_dispatch() {
+        // Order per dispatched OSC: responder first, then exactly one
+        // notification (position unchanged from the pre-SC-1 `on_osc`).
+        let (mut core, log) = core_with_screen_log();
+        core.process_pty_data_fully(b"\x1b]2;a\x07\x1b[?47h\x1b]2;b\x07\x1bc\x1b]2;c\x07");
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            &[
+                "respond:2:a",
+                "notify:2:a:false",
+                "respond:2:b",
+                "notify:2:b:true",
+                "respond:2:c",
+                "notify:2:c:false",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_osc133_screen_flag_agrees_with_the_live_mark_gate() {
+        // SC-1's flag is the very bit the live-mark gate reads in the same
+        // dispatch: exactly the notifications reported with `false` are the
+        // marks `take_prompt_marks` returns.
+        let (mut core, log) = core_with_screen_log();
+        core.process_pty_data_fully(
+            b"\x1b]133;A\x07\x1b[?1049h\x1b]133;A\x07\x1b]133;B\x07\x1b[?1049l\x1b]133;C\x07",
+        );
+        let notified: Vec<String> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.starts_with("notify:133:"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            notified,
+            vec![
+                "notify:133:A:false",
+                "notify:133:A:true",
+                "notify:133:B:true",
+                "notify:133:C:false",
+            ]
+        );
+        let live: Vec<u8> = core.take_prompt_marks().iter().map(|m| m.kind).collect();
+        assert_eq!(live, vec![b'A', b'C']);
+    }
+
     // ── OSC 22 (CursorShape) shape override ───────────────────────────
 
     /// AC-6: OSC 22 "underline" sets the shape override with defaults intact

@@ -1,0 +1,122 @@
+task_id: task0001
+# Before any edit: the src-tauri --lib suite (project test command) ran 4602 passed, 0 failed;
+# the term_core --lib suite (CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+# crates/term_core/Cargo.toml --lib, the command VERIFICATION.md lists for term_core) ran
+# 858 passed, 0 failed.
+baseline_failures: []
+# Actually re-executed after the implementation and again after this record was written:
+# src-tauri --lib 4615 passed, 0 failed (4602 + 13 new tests); term_core --lib 868 passed,
+# 0 failed (858 + 10 new tests). Both --no-default-features and default `cargo check` pass.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    # The ac1_* and test_* tests below are term_core tests: they are selected with the term_core
+    # manifest command above, not with the src-tauri --lib command.
+    tests:
+      - callbacks::tests::ac1_an_osc_after_each_alt_screen_enable_is_reported_with_alt_true
+      - callbacks::tests::ac1_an_osc_after_the_matching_disable_in_the_same_parse_call_is_reported_with_alt_false
+      - callbacks::tests::ac1_an_osc_after_a_ris_issued_on_the_alt_screen_is_reported_with_alt_false
+      - callbacks::tests::ac1_each_dispatched_osc_yields_exactly_one_notification_in_byte_order
+      - callbacks::tests::ac1_no_installed_callbacks_means_no_notification_and_no_panic
+      - osc_handler::tests::test_osc8_early_return_site_notifies_with_the_screen_state_current_at_dispatch
+      - osc_handler::tests::test_general_site_notifies_after_the_responder_with_the_screen_state_at_dispatch
+      - osc_handler::tests::test_osc133_screen_flag_agrees_with_the_live_mark_gate
+    red_confirmed: true
+    red_reason: >-
+      Observed against a stub that already had the SC-1 provided method (forwarding default) but whose
+      fire path passed a constant false for the alternate-screen state. Seven of the eight tests failed
+      on the flag, for example ac1_an_osc_after_each_alt_screen_enable_is_reported_with_alt_true
+      (left: [(2, "main", false), (2, "alt", false)], right: [(2, "main", false), (2, "alt", true)]),
+      ac1_an_osc_after_a_ris_issued_on_the_alt_screen_is_reported_with_alt_false
+      (left: [(2, "alt", false), (2, "after-ris", false)], right: [(2, "alt", true), (2, "after-ris", false)]),
+      test_osc133_screen_flag_agrees_with_the_live_mark_gate
+      (left: ["notify:133:A:false", "notify:133:A:false", "notify:133:B:false", "notify:133:C:false"],
+      right: ["notify:133:A:false", "notify:133:A:true", "notify:133:B:true", "notify:133:C:false"]).
+      ac1_no_installed_callbacks_means_no_notification_and_no_panic passed against the stub (it pins that a
+      core without callbacks stays silent), so it has no red of its own. With the SC-1 method absent
+      entirely, the term_core lib test target did not compile (E0407 "method on_osc_with_screen is not a
+      member of trait TerminalCallbacks").
+  AC-2:
+    tests:
+      - callbacks::tests::ac2_callbacks_implementing_only_on_osc_see_the_unchanged_sequence
+      - callbacks::tests::ac2_the_default_screen_aware_notification_forwards_to_on_osc_regardless_of_the_flag
+    red_confirmed: true
+    red_reason: >-
+      With the SC-1 method absent, the term_core lib test target failed to build: E0599 "no method named
+      on_osc_with_screen found for struct callbacks::tests::Recorder" for
+      ac2_the_default_screen_aware_notification_forwards_to_on_osc_regardless_of_the_flag (the same build
+      failure covers every test in the target). ac2_callbacks_implementing_only_on_osc_see_the_unchanged_sequence
+      is a preservation guard: against the forwarding stub it passed, so it has no behavioral red of its
+      own. The existing tests of crates/term_core/src/callbacks.rs and crates/term_core/src/osc_handler.rs
+      kept their names and bodies and pass in the term_core suite.
+  AC-3:
+    tests:
+      - callbacks::tests::osc_133_a_on_the_alternate_screen_skips_the_7501_feed_and_keeps_the_latch_candidate
+      - callbacks::tests::osc_133_a_on_the_main_screen_adds_exactly_one_item_to_each_feed
+      - callbacks::tests::osc_133_a_through_the_existing_notification_counts_as_the_main_screen
+      - callbacks::tests::osc_133_every_recognized_kind_follows_the_screen_rule_and_an_unrecognized_one_pushes_nothing
+      - callbacks::tests::screen_aware_notifications_keep_true_order_in_both_feeds
+      - callbacks::tests::screen_aware_notification_of_other_actions_matches_the_existing_notification
+    red_confirmed: true
+    red_reason: >-
+      Observed before NativeCallbacks overrode SC-1 (the default forwards to on_osc, which pushed every
+      OSC 133 candidate to the 7501 feed). Three tests failed:
+      osc_133_a_on_the_alternate_screen_skips_the_7501_feed_and_keeps_the_latch_candidate
+      ("an alternate-screen mark never enters the 7501 feed"),
+      osc_133_every_recognized_kind_follows_the_screen_rule_and_an_unrecognized_one_pushes_nothing
+      ("A: alternate screen, 7501 feed"), and screen_aware_notifications_keep_true_order_in_both_feeds
+      (left held PromptMark(PromptStart) between the first Report and Reset; right did not).
+      The other three tests passed before the override because the forwarding default already produced the
+      main-screen result and the existing-notification result; they pin that the override keeps them
+      (exactly one item per feed, and unchanged state for every non-OSC-133 action on either screen).
+  AC-4:
+    tests:
+      - tabs::tests::output_pipeline::osc7501_alt_screen_a_then_report_then_main_a_discards_the_record
+    red_confirmed: true
+    red_reason: >-
+      assertion `left == right` failed: the main-screen A after the report discards its record
+      (left: 1, right: 0), before NativeCallbacks kept alternate-screen OSC 133 out of the 7501 feed.
+  AC-5:
+    tests:
+      - tabs::tests::output_pipeline::osc7501_alt_screen_a_via_1047_then_report_then_main_a_discards_the_record
+      - tabs::tests::output_pipeline::osc7501_alt_screen_a_via_47_then_report_then_main_a_discards_the_record
+    red_confirmed: true
+    red_reason: >-
+      Both failed with the AC-4 assertion before the change: the main-screen A after the report discards its
+      record (left: 1, right: 0).
+  AC-6:
+    tests:
+      - tabs::tests::output_pipeline::osc7501_main_a_then_alt_screen_a_then_report_then_main_a_discards_the_record
+      - tabs::tests::output_pipeline::osc7501_two_alt_screen_a_then_report_then_main_a_discards_the_record
+      - tabs::tests::output_pipeline::osc7501_ris_on_the_alt_screen_then_report_then_main_a_discards_the_record
+      - tabs::tests::output_pipeline::osc7501_main_a_after_an_alt_screen_a_keeps_done_and_error_records
+    red_confirmed: true
+    red_reason: >-
+      The first two tests (cases (a) and (b)) failed with the AC-4 assertion before the change (left: 1,
+      right: 0). Two further tests are listed with them: osc7501_main_a_after_an_alt_screen_a_keeps_done_and_error_records
+      (FR2) also failed before the change (the working record was not discarded: left: 3, right: 2), while
+      osc7501_ris_on_the_alt_screen_then_report_then_main_a_discards_the_record (the edge case from the task
+      plan's Test Notes) passed before the change, because the RIS already made the pipeline skip the candidates
+      ahead of it; it pins that behavior and has no red of its own.
+  AC-7:
+    tests:
+      - tabs::tests::output_pipeline::osc7501_prompt_start_on_the_main_screen_keeps_only_done_and_error
+      - tabs::tests::output_pipeline::osc7501_prompt_start_honors_byte_order_against_reports_in_the_same_pump
+      - tabs::tests::output_pipeline::osc7501_prompt_start_on_the_alternate_screen_removes_nothing
+      - tabs::tests::output_pipeline::osc7501_alternate_screen_prompt_start_does_not_count_when_a_main_one_follows_in_the_same_pump
+      - tabs::tests::output_pipeline::osc7501_ris_removes_every_record_and_honors_byte_order
+      - tabs::tests::output_pipeline::osc7501_prompt_start_behind_a_ris_in_the_same_pump_stays_live
+      - tabs::tests::output_pipeline::osc7501_mux_inner_content_changes_neither_the_table_nor_the_pending_changes
+      - callbacks::tests::program_status_feed_preserves_true_order_of_reports_marks_and_resets
+      - callbacks::tests::osc_133_unrecognized_kind_does_not_push_to_the_program_status_feed
+      - callbacks::tests::osc_133_a_and_d_push_prompt_mark_candidates_to_latch_feed
+      - callbacks::tests::set_and_live_133_marks_preserve_true_relative_order_in_latch_feed
+      - agent_status_model::tests::ac5_reconcile_latch_feed_drops_alt_screen_suppressed_candidates
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing osc7501_*, program_status_feed and latch tests
+      listed here detect any change to the pre-existing 7501 feed, latch feed and mux-discard behavior; no red
+      state occurred for this change because they kept their names and expectations and passed before and after
+      it. The remaining parts of the criterion are build and suite outcomes, all observed passing after the
+      change: the src-tauri --lib suite (4615 passed, 0 failed), the term_core --lib suite (868 passed, 0
+      failed), `cargo check` of src-tauri and `cargo check --no-default-features`.
