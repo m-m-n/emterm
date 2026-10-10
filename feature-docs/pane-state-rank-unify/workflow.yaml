@@ -105,7 +105,8 @@ workflow:
     no wildcard arm, agent_status has no program_status reference) pass.
   excluded: []
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: 7b566202010452aa3996f0dac75aeeef2bac0c84
 tasks:
   task0001:
     title: Derive ProgramState::rank from AgentState::compose_rank and pin their agreement
