@@ -116,9 +116,11 @@ workflow:
   status: completed
   completed_at_commit: 20711de1470ddf3d7651f485a3601289f8e6f50f
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  result: pass
   failed_items: []
+  completed_at_commit: f81cc5f514726420953c0fc02dfe6b323413d329
+  summary: 'cargo check (default / --no-default-features) ok; --lib 4601 passed 0 failed 3 ignored; TS-1..TS-4 pass; TS-6/TS-7 inspection ok; test-docs resolution check ok (old name absent from --list). excluded: none'
 - id: retrospect
   status: pending
 tasks:
