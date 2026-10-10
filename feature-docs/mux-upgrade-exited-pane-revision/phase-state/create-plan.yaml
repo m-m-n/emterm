@@ -1,0 +1,19 @@
+schema_version: 1
+feature: mux-upgrade-exited-pane-revision
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 794efe1b089dca9719e6643d4d96d15bc949ebda
+last_input_digest: sha256:6d8803d8fe6d79847a2c977d3f6f598696916dfff26e63ecaa5e89dcae90227f
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:6d8803d8fe6d79847a2c977d3f6f598696916dfff26e63ecaa5e89dcae90227f
+artifacts: []
+patches: []
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
