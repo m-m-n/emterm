@@ -1,0 +1,12 @@
+schema_version: 1
+feature: agent-exit-after-icon-tests-yaml-name-drift
+records:
+  - question_id: create-spec.open-points-codex-consultation
+    packet_id: null
+    answered_at: "2026-10-10T22:25:00+09:00"
+    source: codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "P1 keep existing supersede note only; P2 leave red_reason unchanged; P3 guard scope (b) AC-2 new name + old name absent + every mux::upgrade::tests entry resolves to a fn in upgrade/tests.rs; P4 place in src-tauri/src/mux/upgrade/tests.rs"
+    normalized_answer: "Matches requirements-analyst assumptions A1-A5; adopted as-is"
+    resolution_note: "gate: none (launch instruction: consult Codex on unclear points); codex_consulted: true; opus_escalation: false; options not chosen: P1 add note, P2 update red_reason, P3 (a) AC-2 only / (c) scan all test-docs records, P4 src-tauri/tests or new lib module; Codex side note: reading tests arrays with serde_yml (existing dependency) instead of string checks, left to implement. Discussion posted to Notion task page comment."
