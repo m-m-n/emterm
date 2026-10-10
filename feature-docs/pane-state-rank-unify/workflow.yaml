@@ -105,7 +105,7 @@ workflow:
     no wildcard arm, agent_status has no program_status reference) pass.
   excluded: []
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Derive ProgramState::rank from AgentState::compose_rank and pin their agreement
