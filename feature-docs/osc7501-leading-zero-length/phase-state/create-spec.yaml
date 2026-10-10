@@ -1,7 +1,7 @@
 schema_version: 1
 feature: osc7501-leading-zero-length
 phase: create-spec
-status: in_progress
+status: completed
 generation: 1
 base_revision: f98d6633c2020472f04120fe1c76100460349b42
 last_input_digest: sha256:c70a5b3cfe27baa437209a36c83f65604b750394de1408fe1509cb3a58f85910
