@@ -1,0 +1,12 @@
+schema_version: 1
+feature: osc7501-alt-screen-prompt-mark
+records:
+  - question_id: create-spec.feature-identity
+    packet_id: null
+    answered_at: "2026-10-10T23:06:43+09:00"
+    source: batch-policy
+    answer_mode: option
+    selected_option_ids: [derive_from_task_description]
+    freeform: null
+    normalized_answer: "feature name derived from the task description: osc7501-alt-screen-prompt-mark"
+    resolution_note: "gate: create-spec.feature-identity; option chosen: derive_from_task_description (batch policy); codex_consulted: false; opus_escalation: false"
