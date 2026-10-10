@@ -4585,4 +4585,72 @@ mod program_status_record {
             "nothing but the pane held the record"
         );
     }
+
+    // ---- osc7501-leading-zero-length task0002 AC-3 (FR6): the operation that
+    //      applies only the OSC 7501 prompt start ----
+
+    /// The operation removes `working`, `blocked` and `idle` records, keeps
+    /// `done` and `error`, and moves the revision once.
+    #[test]
+    fn leadzero_ac3_the_prompt_start_only_operation_removes_records_and_bumps_once() {
+        let pane = new_pane(9);
+        fill_every_state(&pane);
+        let before = revision(&pane);
+
+        assert_eq!(pane.apply_program_status_prompt_start(), Some(before + 1));
+        assert_eq!(revision(&pane), before + 1);
+        {
+            let status = pane.agent_status.lock().unwrap();
+            assert_eq!(status.program_status.len(), 2);
+            assert_eq!(status.composite_state(), Some(AgentState::Error));
+        }
+
+        // Only `done` and `error` remain: nothing is removed, so the
+        // revision does not move.
+        assert_eq!(pane.apply_program_status_prompt_start(), None);
+        assert_eq!(revision(&pane), before + 1);
+    }
+
+    /// With an empty table the operation changes nothing.
+    #[test]
+    fn leadzero_ac3_the_prompt_start_only_operation_with_an_empty_table_does_not_bump() {
+        let pane = new_pane(10);
+        assert_eq!(pane.apply_program_status_prompt_start(), None);
+        assert_eq!(revision(&pane), 0);
+    }
+
+    /// The operation never touches the OSC 777 inferred-clear latch or the
+    /// OSC 777 state: a `D` the latch recorded still pairs with the next
+    /// canonical prompt start, and the OSC 777 report stays set until then.
+    #[test]
+    fn leadzero_ac3_the_prompt_start_only_operation_does_not_touch_the_exit_latch() {
+        let pane = new_pane(11);
+        pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Working,
+            name: None,
+        });
+        pane.apply_program_status_report(report("state=working:id=a"));
+        assert_eq!(
+            pane.record_live_osc133_mark(PromptMarkKind::CommandEnd),
+            None
+        );
+        let before = revision(&pane);
+
+        // The records go; the OSC 777 report and the armed latch stay.
+        assert_eq!(pane.apply_program_status_prompt_start(), Some(before + 1));
+        {
+            let status = pane.agent_status.lock().unwrap();
+            assert_eq!(status.state, Some(AgentState::Working));
+            assert_eq!(status.program_status.len(), 0);
+        }
+        // A second use removes nothing and still does not consume the `D`.
+        assert_eq!(pane.apply_program_status_prompt_start(), None);
+
+        // The canonical `A` after the `D` still fires the inferred clear.
+        assert_eq!(
+            pane.record_live_osc133_mark(PromptMarkKind::PromptStart),
+            Some(before + 2)
+        );
+        assert_eq!(pane.agent_status.lock().unwrap().state, None);
+    }
 }

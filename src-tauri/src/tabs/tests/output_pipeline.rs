@@ -2274,3 +2274,55 @@ fn osc7501_query_frame_breaks_coalesce_run() {
     assert_eq!(split.test_row_text(0), "aaa");
     assert_eq!(split.test_row_text(1), "ccc");
 }
+
+// ── osc7501-leading-zero-length task0002 AC-5 (FR5): the coalesce gate and
+//    the shared number rule ───────────────────────────────────────────────────
+
+/// `ESC ] <5000 zeros> 7501;? BEL`: the number is 7501 under the shared rule
+/// however many leading zeros precede it.
+fn osc7501_query_with_five_thousand_leading_zeros() -> Vec<u8> {
+    let mut bytes = b"\x1b]".to_vec();
+    bytes.extend(std::iter::repeat_n(b'0', 5000));
+    bytes.extend_from_slice(b"7501;?\x07");
+    bytes
+}
+
+/// AC-5: a 7501 query with a leading-zero number, or with thousands of
+/// leading zeros, is a device query for the coalesce gate, with BEL and ST.
+#[test]
+fn payload_has_device_query_follows_the_shared_number_rule_for_osc7501_queries() {
+    assert!(
+        payload_has_device_query(b"\x1b]07501;?\x07"),
+        "leading zero, BEL"
+    );
+    assert!(
+        payload_has_device_query(b"\x1b]07501;?\x1b\\"),
+        "leading zero, ST"
+    );
+    assert!(
+        payload_has_device_query(&osc7501_query_with_five_thousand_leading_zeros()),
+        "Z(5000) 7501;? with BEL"
+    );
+    assert!(
+        payload_has_device_query(b"hello\x1b]0007501;?\x07world"),
+        "leading zeros inside other output"
+    );
+}
+
+/// AC-5: a number above the `u16` range is not a 7501 query, however its
+/// digits end.
+#[test]
+fn payload_has_device_query_rejects_out_of_range_numbers_ending_in_7501() {
+    assert!(
+        !payload_has_device_query(b"\x1b]65536;?\x07"),
+        "65536 is above the u16 range"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]655367501;?\x07"),
+        "655367501 is above the u16 range"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]655367501;?\x1b\\"),
+        "655367501 with ST"
+    );
+}
