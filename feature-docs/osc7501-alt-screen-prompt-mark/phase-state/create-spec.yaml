@@ -5,7 +5,7 @@ status: in_progress
 generation: 1
 base_revision: 70e3d1e54e558c90413ef6456e767076351431ec
 last_input_digest: sha256:ee6c7da01a50f95fd02cb85c6d77463e8457327117e1f0a4a38df3d8e63d091c
-active_request_id: create-spec-run-0002
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -43,11 +43,19 @@ worker_runs:
   status: needs_user_input
   input_digest: sha256:ee6c7da01a50f95fd02cb85c6d77463e8457327117e1f0a4a38df3d8e63d091c
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   worker: requirements-analyst
+- request_id: create-spec-run-0003
+  status: dispatched
+  worker: spec-writer
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
 last_error: null
+assumptions:
+  A1: 対象は plain タブの OSC 7501 経路に限る。mux 接続中のタブで内側の feed を捨てる挙動は変えない (reversible)
+  A2: 別画面判定は term_core の MODE_ALT_SCREEN（?47/?1047/?1049）と同じ基準 (reversible)
+  A3: 既存の osc7501_* テストは名前を変えずに通し、再発検出テストは新規追加 (reversible)
+  A4: reconcile_latch_feed の同型不具合は対象外（scope_7501_only, Codex 相談） (reversible)
