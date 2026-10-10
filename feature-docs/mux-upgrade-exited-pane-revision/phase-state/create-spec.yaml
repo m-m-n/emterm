@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-upgrade-exited-pane-revision
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 99535d3bf02b44ed67554d9cd4bd7ee6346a8c5e
 last_input_digest: sha256:29ba2508c52f0e37b990f157b9c253599d57eaa5ee0d9d1b98743b55742a09a3
