@@ -1,0 +1,56 @@
+round: 1
+executed_at: "2026-10-10T22:47:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 3be975d990cc0641a10f6019e701462d04d4f026
+  head_commit: a9132c5069dd2a499212549afeb9b53500eac362
+  changed_files:
+    - src-tauri/src/mux/upgrade/tests.rs
+    - test-docs/agent-exit-after-icon-tests-yaml-name-drift/task0001.tests.yaml
+    - test-docs/agent-exit-after-icon/task0006.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    Round 1 (diff mode, cross_validation false). All three reviewer runs
+    (comprehensive#0, security#0, spec#0) returned empty findings, with no
+    injection attempt. The evaluator independently confirmed: task0006.tests.yaml
+    changes only line 51 (retired name -> current name; supersede comment and
+    red_reason unchanged); all 8 mux::upgrade::tests:: names in the record are
+    defined in src-tauri/src/mux/upgrade/tests.rs; the guard test implements FR3
+    checks (a)/(b)/(c); under src-tauri/src only tests.rs changes (NFR2).
+    Known limitation chosen by SPEC A4: check (c) is a textual match. Coverage:
+    comprehensive, security, spec corroborated.
+  recommended_action: complete
+  action_rationale: >-
+    No reviewer run reported a finding, and the evaluator's own reading of every
+    changed file backs up all three empty results.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-agent-exit-after-icon-tests-yaml-name-drift-20261010T134633Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
