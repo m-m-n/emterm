@@ -44,7 +44,10 @@ const OSC_NUMBER_MARKDOWN: u16 = 9999;
 const MARKDOWN_LAUNCH_TOKEN: &str = "emterm-md";
 
 /// The OSC number of the Program Status Protocol (reports and the `?` query).
-const OSC_NUMBER_PROGRAM_STATUS: u16 = 7501;
+pub(in crate::mux) const OSC_NUMBER_PROGRAM_STATUS: u16 = 7501;
+
+/// The OSC number of the semantic prompt marks (`A` prompt start, `B`, `C`, `D`).
+pub(in crate::mux) const OSC_NUMBER_SEMANTIC_PROMPT: u16 = 133;
 
 /// An OSC body's number and data as term_core reconstructs them.
 ///
@@ -150,6 +153,58 @@ pub(in crate::mux) fn identify_osc(osc: &RecoveredOsc) -> OscIdentity {
     }
 }
 
+/// The number part of an OSC body under the shared recognition rule (SC-1).
+struct NumberScan {
+    /// The accumulated number; `None` above the `u16` range.
+    number: Option<u16>,
+    /// Where the number part ends: the index of the first `;`, or
+    /// `body.len()` when the body has none. Meaningful only with a number.
+    head_len: usize,
+}
+
+/// The one scan of the number part both [`osc_body_number`] and
+/// [`osc_body_identity`] take their number from.
+///
+/// Digits before the first `;` accumulate in base 10 with saturation, so
+/// leading zeros do not change the value; every other byte before the first
+/// `;` is data and is skipped here. Above the `u16` range `recover_osc`
+/// yields no number, and the accumulation only grows, so the scan stops at
+/// once. One forward pass, no allocation, no panicking arithmetic or
+/// indexing.
+fn scan_number(body: &[u8]) -> NumberScan {
+    let mut acc: u32 = 0;
+    let mut head_len = body.len();
+    for (i, &b) in body.iter().enumerate() {
+        if b.is_ascii_digit() {
+            acc = acc.saturating_mul(10).saturating_add(u32::from(b - b'0'));
+            if acc > u32::from(u16::MAX) {
+                return NumberScan {
+                    number: None,
+                    head_len: i,
+                };
+            }
+        } else if b == b';' {
+            head_len = i;
+            break;
+        }
+    }
+    NumberScan {
+        number: u16::try_from(acc).ok(),
+        head_len,
+    }
+}
+
+/// The OSC number of `body` under the shared recognition rule (SC-1): the
+/// bytes between `ESC ]` and the terminator, terminator excluded. Returns
+/// exactly `recover_osc(body).number` for every input (leading zeros do not
+/// change the value, non-digit bytes before the first `;` are skipped, a body
+/// without leading digits yields `Some(0)`, a value above the `u16` range
+/// yields `None`) without building the data and without any heap allocation.
+/// A single forward pass bounded by `body`; it cannot panic.
+pub(in crate::mux) fn osc_body_number(body: &[u8]) -> Option<u16> {
+    scan_number(body).number
+}
+
 /// Identify an OSC body without copying it and without validating it as
 /// UTF-8 (round3 FR8).
 ///
@@ -171,23 +226,11 @@ pub(in crate::mux) fn identify_osc(osc: &RecoveredOsc) -> OscIdentity {
 /// which is never ASCII, and never absorbs a valid ASCII byte, so an
 /// invalid byte inside a token matches nothing on either side.
 pub(in crate::mux) fn osc_body_identity(body: &[u8]) -> OscIdentity {
-    // The OSC number: base-10 digits before the first `;`. Non-digit bytes
-    // there belong to the data view. Above the u16 range `recover_osc`
-    // yields no number, and the accumulation only grows, so stop at once.
-    let mut acc: u32 = 0;
-    let mut head_len = body.len();
-    for (i, &b) in body.iter().enumerate() {
-        if b.is_ascii_digit() {
-            acc = acc.saturating_mul(10).saturating_add(u32::from(b - b'0'));
-            if acc > u32::from(u16::MAX) {
-                return OscIdentity::NotIdentified;
-            }
-        } else if b == b';' {
-            head_len = i;
-            break;
-        }
-    }
-    let Ok(number) = u16::try_from(acc) else {
+    // The OSC number: base-10 digits before the first `;`, from the one scan
+    // [`osc_body_number`] shares. Non-digit bytes there belong to the data
+    // view. Above the u16 range `recover_osc` yields no number.
+    let NumberScan { number, head_len } = scan_number(body);
+    let Some(number) = number else {
         return OscIdentity::NotIdentified;
     };
     // Program status is decided by the number alone: no data view is needed.
@@ -989,6 +1032,126 @@ mod tests {
         assert!(
             elapsed < std::time::Duration::from_secs(2),
             "identifying {} million-digit bodies took {elapsed:?}",
+            bodies.len()
+        );
+        assert_eq!(actual, expected);
+    }
+
+    // ---- osc7501-leading-zero-length task0002 AC-1 / AC-4 (FR3, FR4, NFR1,
+    //      NFR3): the allocation-free number entry ----
+
+    /// The number the shared rule (SC-1) gives for bodies of every spelling
+    /// the feature names: leading zeros, non-digit bytes before the first
+    /// `;`, no `;`, no digits, and the `u16` boundary.
+    #[test]
+    fn leadzero_ac4_the_number_entry_reports_the_shared_rule_number() {
+        let cases: &[(&[u8], Option<u16>)] = &[
+            (b"7501;state=idle", Some(7501)),
+            (b"07501;state=idle", Some(7501)),
+            (b"0000007501;state=idle", Some(7501)),
+            (b"x7501;:state=clear", Some(7501)),
+            (b"7501x;state=clear", Some(7501)),
+            (b"75x01;?", Some(7501)),
+            (b"7501", Some(7501)),
+            (b"7501;", Some(7501)),
+            (b"133;A", Some(133)),
+            (b"0133;A", Some(133)),
+            (b"133A", Some(133)),
+            (b"1A33", Some(133)),
+            (b"", Some(0)),
+            (b"hello", Some(0)),
+            (b";7501", Some(0)),
+            (b"0;7501;?", Some(0)),
+            (b"65535;x", Some(65535)),
+            (b"065535;x", Some(65535)),
+            (b"65536;x", None),
+            (b"655367501;state=error", None),
+            (b"999999999;?", None),
+            (b"99999999999999999999", None),
+        ];
+        for &(body, expected) in cases {
+            assert_eq!(
+                osc_body_number(body),
+                expected,
+                "number of {:?}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    /// The number entry returns exactly the number the reference recovery
+    /// reconstructs, over the whole identification corpus.
+    #[test]
+    fn leadzero_ac4_the_number_entry_agrees_with_the_reference_over_the_corpus() {
+        for body in identification_corpus() {
+            assert_eq!(
+                osc_body_number(&body),
+                recover_osc(&body).number,
+                "body {:?}",
+                String::from_utf8_lossy(&body[..body.len().min(64)])
+            );
+        }
+    }
+
+    /// The number entry makes no heap allocation over the corpus (the
+    /// control shows the counter sees the reference recovery's allocation).
+    #[test]
+    fn leadzero_ac4_the_number_entry_is_allocation_free() {
+        let corpus = identification_corpus();
+        let expected: Vec<Option<u16>> = corpus.iter().map(|b| recover_osc(b).number).collect();
+
+        let (recovered, control) = alloc_counter::measure(|| recover_osc(b"07501;state=idle"));
+        assert!(
+            control >= 1,
+            "the allocation counter recorded {control} requests around the reference recovery"
+        );
+        drop(recovered);
+
+        let mut total_requests = 0usize;
+        for (body, expected) in corpus.iter().zip(&expected) {
+            let (actual, requests) = alloc_counter::measure(|| osc_body_number(body));
+            total_requests += requests;
+            assert_eq!(
+                actual,
+                *expected,
+                "body {:?}",
+                String::from_utf8_lossy(&body[..body.len().min(64)])
+            );
+        }
+        assert_eq!(
+            total_requests,
+            0,
+            "the number entry allocated over a corpus of {} bodies",
+            corpus.len()
+        );
+    }
+
+    /// One-MiB and one-million-digit bodies finish within two seconds and
+    /// agree with the reference.
+    #[test]
+    fn leadzero_ac4_the_number_entry_finishes_large_bodies_within_two_seconds() {
+        const MIB: usize = 1024 * 1024;
+        let mut bodies: Vec<Vec<u8>> = vec![
+            vec![b'x'; MIB],
+            vec![b'0'; MIB],
+            vec![b';'; MIB],
+            vec![INVALID; MIB],
+            vec![b'1'; 1_000_000],
+        ];
+        let mut zeros_then_status = vec![b'0'; 1_000_000];
+        zeros_then_status.extend_from_slice(b"7501;?");
+        bodies.push(zeros_then_status);
+        let mut overflow_then_status = vec![b'9'; 1_000_000];
+        overflow_then_status.extend_from_slice(b";7501");
+        bodies.push(overflow_then_status);
+
+        let expected: Vec<Option<u16>> = bodies.iter().map(|b| recover_osc(b).number).collect();
+        let started = std::time::Instant::now();
+        let actual: Vec<Option<u16>> = bodies.iter().map(|b| osc_body_number(b)).collect();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "numbering {} large bodies took {elapsed:?}",
             bodies.len()
         );
         assert_eq!(actual, expected);
