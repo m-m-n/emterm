@@ -105,7 +105,8 @@ workflow:
   result: pass
   failed_items: []
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: 612d704d9b4e618d873cf7e9c37a9717d911804e
 tasks:
   task0001:
     title: Program Status core module (parser, record table, summary)

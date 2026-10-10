@@ -1,0 +1,158 @@
+feature: osc7501-program-status
+collected_at: '2026-10-10T20:33:04+09:00'
+session_ids:
+- 01a12594-b0b8-7286-902d-19f620bf93ef
+- 01a121a8-4ea6-77ca-9255-40b2fc7ae379
+signals:
+  review_critical_high:
+  - stable_id: e1a7cef89259134b
+    category: comprehensive
+    file: crates/mux_ipc/src/protocol.rs
+    title: 新しいGUIが旧デーモンのAgentStatusUpdateを復号できず、状態通知がすべて捨てられる
+    resolution: fixed
+  conflict_reworks:
+  - task: task0003
+    retries: 1
+  - task: task0004
+    retries: 1
+  - task: task0007
+    retries: 1
+  file_prediction_misses:
+  - task: task0004
+    files:
+    - src-tauri/src/app/tests/agent_status.rs
+    - src-tauri/src/mux/upgrade.rs
+    - test-docs/osc7501-program-status/task0004.tests.yaml
+  - task: task0007
+    files:
+    - test-docs/mux-hot-upgrade-alt-screen/task0002.tests.yaml
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: description_plus_code の最終読みがバケット 2（確度 0.91、スコア 2.08）で、閾値表により full を採用した
+    bases:
+    - basis: description_only
+      score:
+        type: score
+        score: 2.35
+        confidence: 0.65
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread across a few files
+            together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to
+            the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.0
+          '2': 0.65
+          '3': 0.35
+        expectation_clear: 0.94
+      observed_at: '2026-10-10T00:52:00+09:00'
+    - basis: description_plus_code
+      score:
+        type: score
+        score: 2.08
+        confidence: 0.91
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread across a few files
+            together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to
+            the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.0
+          '2': 0.91
+          '3': 0.09
+        expectation_clear: 0.89
+      observed_at: '2026-10-10T00:58:50+09:00'
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/callbacks.rs
+      - src-tauri/src/agent_status.rs
+      - src-tauri/src/agent_status_model.rs
+      - src-tauri/src/agent_status_exit_latch.rs
+      - src-tauri/src/tabs/mod.rs
+      - src-tauri/src/tabs/replay.rs
+      - src-tauri/src/tabs/output_pipeline.rs
+      - src-tauri/src/app/agent_status.rs
+      - src-tauri/src/status_bar/runtime.rs
+      - src-tauri/src/status_bar/view_model.rs
+      - src-tauri/src/ui/status_bar.rs
+      - src-tauri/src/ui/tab_bar/badge.rs
+      - src-tauri/src/notifications.rs
+      - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+      - src-tauri/src/mux/daemon/tasks.rs
+      - src-tauri/src/mux/session/pane/handles.rs
+      - crates/mux_ipc/src/protocol.rs
+      changed_lines_approx: 0
+      new_functions_needed: true
+      new_files_needed: false
+      new_dependencies_needed: false
+      covering_tests_exist: false
+      spillover_modules:
+      - crates/term_core
+      - crates/mux_ipc
+      - src-tauri/src/tabs
+      - src-tauri/src/app
+      - src-tauri/src/render
+      - src-tauri/src/status_bar
+      - src-tauri/src/ui
+      - src-tauri/src/mux
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 0
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 0
+      changes_external_contract: true
+      changes_behavior: true
+      evidence: '読み取りのみ実施し、ファイルの変更・作成・削除、テスト実行はしていない。変更行数と追加テスト数の0は今回の実績で、将来の実装規模の見積もりではない。files_expectedは確認した既存の関連箇所で、変更対象の確定ではない。新規ファイルは既存モジュールへの追加で対応可能だが、配置方針は未確定
+
+
+        OSC 7501の既存処理は見つからなかった。rg -n -i --hidden ''7501|7_501|0x1d4d|program.?status'' src-tauri crates
+        は一致なしで終了コード1。現在のOSC 7501固有の呼び出し元・依存先も確認できず、caller_and_dependency_countは0。crates/term_core/src/osc_handler.rs:156の振り分けに7501はなく、未知番号は:176で255になる。src-tauri/src/callbacks.rs:1276では未知OSCを警告ログへ送るだけで状態を更新しない
+
+
+        汎用OSC解析は既にBELとSTに対応する（crates/term_core/src/parser/osc.rs:11、:43）。番号は:22でu16として読み取る。アプリ側の通知番号はu8で、OSC
+        777は100、1337は101、9999は102へ写像している（src-tauri/src/callbacks.rs:76）。現在の追加登録は9999用で、生成時と再生用コア交換時に登録する（src-tauri/src/tabs/mod.rs:723、src-tauri/src/tabs/replay.rs:562）
+
+
+        既存AgentStateはIdle・Working・Blocked・Doneの4値で、Errorはない（src-tauri/src/agent_status.rs:22）。既存解析はOSC
+        777専用で、区切りはセミコロン、重複した既知キーは拒否、nameはパーセント復号する（:104、:117、:124、:135）。OSC 7501のコロン区切り、後勝ち、title/msgのbase64復号を処理する解析関数は確認できなかった
+
+
+        GUIの状態はタブまたはmuxペインごとに1件で、保持する情報はstate・name・revision・unseen（src-tauri/src/agent_status_model.rs:62、:83、:175）。階層id、kind、progress、app、title、msgの項目はない。汎用OSC本文上限は16
+        MiB（crates/term_core/src/parser/mod.rs:15）、muxの状態走査の保持上限は8 KiB（src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1399）。OSC
+        7501用の4096バイト制限や256件のレコード管理は確認できなかった
+
+
+        照会応答の既存経路はある。OscResponderが返したバイト列は応答キューに追加される（crates/term_core/src/osc_handler.rs:67）。登録済みThemeColorResponderはOSC
+        4・10・11・12だけを処理する（src-tauri/src/callbacks.rs:1349）。take_responseで取り出して書き戻す経路もある（src-tauri/src/tabs/output_pipeline.rs:190、:203）が、7501の機能検出応答はない
+
+
+        既存の状態消去はSet後のOSC 133 D→Aで発火し、Aだけでは発火しない（src-tauri/src/agent_status_exit_latch.rs:72）。発火時は状態全体をClearする（src-tauri/src/agent_status_model.rs:311）。RISのGUIコールバックは現在カーソル色を復元する処理だけを呼ぶ（src-tauri/src/callbacks.rs:1073、:1307）。終了したタブの回収時は状態全体を破棄する（src-tauri/src/app/mod.rs:1503、:1517）
+
+
+        muxの状態走査はOSC 777 agent-statusとOSC 133だけを認識する（src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1529、:1534）。daemonはOSC
+        777用解析関数を呼び、AgentStatusUpdateを送る（src-tauri/src/mux/daemon/tasks.rs:194、:212）。通信側AgentStateも4値で、更新メッセージはstate・name・revisionなどを保持する（crates/mux_ipc/src/protocol.rs:932、:943）。GUIはその更新を既存モデルへ適用する（src-tauri/src/app/agent_status.rs:312）。muxの生出力から生じたGUI側の状態イベントは破棄する（src-tauri/src/tabs/output_pipeline.rs:450）
+
+
+        タブバッジとmuxサイドバーは既存モデルから状態を受け取る（src-tauri/src/render/mod.rs:267、:316）。バッジの表示分岐は現在の4状態に対応する（src-tauri/src/ui/tab_bar/badge.rs:109）。一方、現在のStatusBarViewModelにはエージェント状態欄がなく（src-tauri/src/status_bar/view_model.rs:17）、生成処理はテンプレートとOSC
+        777 statusbarの内容を使う（src-tauri/src/status_bar/runtime.rs:200）。今回の受け入れ条件にあるステータスバーへの状態反映は、この経路に追加が必要
+
+
+        通知はBlockedとDoneへの遷移が対象で、ペインごとに30秒の制限がある（src-tauri/src/notifications.rs:258、:263、:353）。base64はsrc-tauriとmux_ipcの既存依存に含まれる（src-tauri/Cargo.toml:82、crates/mux_ipc/Cargo.toml:14）
+
+
+        汎用OSCのBEL/STテスト、番号登録テスト、既存OSC 777の解析・daemon・GUI連携テストは存在する（crates/term_core/src/osc_handler.rs:394、:403、crates/term_core/src/callbacks.rs:264、src-tauri/src/agent_status.rs:295、src-tauri/src/mux/daemon/tests.rs:1693、src-tauri/src/tabs/tests/mux_link.rs:283）。OSC
+        7501固有のテストは検索で見つからず、今回の受け入れ条件はまだ実装済みではない'
+follow_up_drafts: []
+lessons_candidates:
+- 並列タスク同士が同じ構造体（AgentStatusUpdateMsg / AgentStatus）にフィールドを足すと、各タスク単独ではビルドが通っても統合時に E0063 が出る。files 予測に構造体リテラルを持つテストファイルが漏れた（task0004）
+- 'review の medium 5 件は auto-fix 対象外で unresolved のまま残り、triage は report 分岐で起票されなかった（report_path: tmp/sca-triage-osc7501-program-status-20261010T112436Z.md）'
