@@ -747,6 +747,23 @@ impl MuxPane {
         }
     }
 
+    /// Apply only the OSC 7501 prompt start to this pane's record table
+    /// (osc7501-leading-zero-length FR6): `working`, `blocked` and `idle`
+    /// records are removed, `done` and `error` stay. It is the OSC 7501 part
+    /// of [`Self::record_live_osc133_mark`] under the same lock and revision
+    /// rule — the revision moves once, and only when a record was removed —
+    /// without the inferred-clear latch: it neither reads nor feeds it, and
+    /// the OSC 777 state is untouched. Returns the new revision when a record
+    /// was removed, `None` when nothing changed.
+    ///
+    /// The caller passes it for a live, main-screen-observed OSC 133 prompt
+    /// start written in a non-canonical spelling, which the OSC 777 latch
+    /// must not see; the same guarantee about liveness and arrival order as
+    /// for [`Self::record_live_osc133_mark`] is the caller's.
+    pub fn apply_program_status_prompt_start(&self) -> Option<u64> {
+        self.apply_agent_status_change(None, true)
+    }
+
     /// Record a live, main-screen-observed OSC 133 mark for this pane
     /// (task0001 `AgentStatusExitLatch`, SPEC FR1/FR2) and, if it completes
     /// an armed `D`→`A` transition, apply the resulting inferred clear

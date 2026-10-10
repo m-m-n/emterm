@@ -3,9 +3,10 @@ baseline_failures: []
 final_failures: []
 acceptance_tests:
   AC-1:
+    # Superseded: the canonical-only `7501;` prefix expectation is replaced by feature-docs/osc7501-leading-zero-length/SPEC.md FR3/FR4.
     tests:
       - mux::ipc::pty_spawn::tests::program_status_feed::ac1_a_complete_osc_7501_yields_one_item_with_its_body_and_terminator
-      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_only_the_canonical_prefix_is_an_osc_7501
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_the_shared_number_rule_decides_what_is_an_osc_7501
       - mux::ipc::pty_spawn::tests::program_status_feed::ac1_ris_yields_one_reset_item_regardless_of_live_spans
       - mux::ipc::pty_spawn::tests::program_status_feed::ac1_program_status_is_emitted_outside_live_spans_and_marks_are_not
       - mux::ipc::pty_spawn::tests::program_status_feed::ac1_items_keep_exact_byte_order_with_reports_and_live_marks

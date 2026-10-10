@@ -508,6 +508,161 @@ fn osc_7501_responder_leaves_other_codes_alone() {
     assert!(h.state.lock().pending_program_status_feed.is_empty());
 }
 
+// ── osc7501-leading-zero-length task0001: the received length ───────
+
+/// The received OSC-string length that makes the whole sequence (`ESC ]`,
+/// the string, the terminator) exactly `total` bytes.
+fn received_len_for_total(total: usize, terminator: OscTerminator) -> usize {
+    let terminator_len = match terminator {
+        OscTerminator::Bel => 1,
+        OscTerminator::St => 2,
+        OscTerminator::Unterminated => 0,
+    };
+    total - 2 - terminator_len
+}
+
+#[test]
+fn osc_7501_received_len_just_under_the_limit_is_accepted() {
+    let h = default_harness();
+    for terminator in [OscTerminator::Bel, OscTerminator::St] {
+        let received_len = received_len_for_total(4096, terminator);
+        assert!(
+            h.responder()
+                .respond_with_received_len(7501, "id=a:state=working", terminator, received_len)
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        h.state.lock().pending_program_status_feed,
+        vec![
+            ProgramStatusFeedItem::Report(working_report("a")),
+            ProgramStatusFeedItem::Report(working_report("a")),
+        ]
+    );
+}
+
+#[test]
+fn osc_7501_received_len_just_over_the_limit_is_ignored() {
+    let h = default_harness();
+    for terminator in [OscTerminator::Bel, OscTerminator::St] {
+        let received_len = received_len_for_total(4097, terminator);
+        assert!(
+            h.responder()
+                .respond_with_received_len(7501, "id=a:state=working", terminator, received_len)
+                .is_empty()
+        );
+    }
+    assert!(h.state.lock().pending_program_status_feed.is_empty());
+}
+
+#[test]
+fn osc_7501_received_len_decides_not_the_payload_length() {
+    // A short payload that arrived behind thousands of leading zeros is
+    // over the limit; a payload of replacement characters whose text is
+    // long but whose received length is small is within it.
+    let h = default_harness();
+    assert!(
+        h.responder()
+            .respond_with_received_len(7501, "state=error", OscTerminator::Bel, usize::MAX)
+            .is_empty()
+    );
+    assert!(h.state.lock().pending_program_status_feed.is_empty());
+
+    let long_text = format!("state=error:x={}", "\u{FFFD}".repeat(4074));
+    assert!(long_text.len() > crate::program_status::MAX_SEQUENCE_BYTES);
+    h.responder().respond_with_received_len(
+        7501,
+        &long_text,
+        OscTerminator::Bel,
+        received_len_for_total(4096, OscTerminator::Bel),
+    );
+    assert_eq!(h.state.lock().pending_program_status_feed.len(), 1);
+}
+
+#[test]
+fn osc_7501_query_with_a_huge_received_len_is_answered_with_its_own_terminator() {
+    let h = default_harness();
+    for received_len in [10, 5_010, 16 * 1024 * 1024 + 1, usize::MAX] {
+        assert_eq!(
+            h.responder()
+                .respond_with_received_len(7501, "?", OscTerminator::Bel, received_len),
+            vec![b"\x1b]7501;?\x07".to_vec()],
+            "received {received_len}"
+        );
+        assert_eq!(
+            h.responder()
+                .respond_with_received_len(7501, "?", OscTerminator::St, received_len),
+            vec![b"\x1b]7501;?\x1b\\".to_vec()],
+            "received {received_len}"
+        );
+    }
+    assert!(h.state.lock().pending_program_status_feed.is_empty());
+}
+
+#[test]
+fn osc_7501_unterminated_with_a_received_len_gets_no_answer_and_no_feed_item() {
+    let h = default_harness();
+    for (payload, received_len) in [("?", 10), ("?", 5_010), ("state=working", 18)] {
+        assert!(
+            h.responder()
+                .respond_with_received_len(7501, payload, OscTerminator::Unterminated, received_len)
+                .is_empty()
+        );
+    }
+    assert!(h.state.lock().pending_program_status_feed.is_empty());
+}
+
+#[test]
+fn osc_7501_existing_method_keeps_the_canonical_length() {
+    // Direct callers of the existing method still measure the canonical
+    // spelling (`7501;` + payload): 5 + 4088 + 2 + 1 = 4096.
+    let h = default_harness();
+    let at_limit = format!(
+        "state=error:x={}",
+        "a".repeat(4088 - "state=error:x=".len())
+    );
+    let over = format!("{at_limit}a");
+    assert!(
+        h.responder()
+            .respond(7501, &at_limit, OscTerminator::Bel)
+            .is_empty()
+    );
+    assert_eq!(h.state.lock().pending_program_status_feed.len(), 1);
+    assert!(
+        h.responder()
+            .respond(7501, &over, OscTerminator::Bel)
+            .is_empty()
+    );
+    assert_eq!(h.state.lock().pending_program_status_feed.len(), 1);
+}
+
+#[test]
+fn received_len_method_gives_other_codes_the_existing_behavior() {
+    let h = default_harness();
+    assert!(
+        h.responder()
+            .respond_with_received_len(
+                OSC_SET_FG as u16,
+                "rgb:11/22/33",
+                OscTerminator::Bel,
+                usize::MAX
+            )
+            .is_empty()
+    );
+    assert_eq!(h.theme.lock().fg, Rgb(0x11, 0x22, 0x33));
+    assert!(h.cb.take_theme_dirty());
+
+    for code in [7500, 7502, 65535] {
+        assert!(
+            h.responder()
+                .respond_with_received_len(code, "?", OscTerminator::Bel, 10)
+                .is_empty(),
+            "code {code}"
+        );
+    }
+    assert!(h.state.lock().pending_program_status_feed.is_empty());
+}
+
 #[test]
 fn osc_program_status_action_is_a_no_op_for_on_osc() {
     let h = default_harness();

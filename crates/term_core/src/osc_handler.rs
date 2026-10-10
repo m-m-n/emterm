@@ -32,6 +32,27 @@ pub trait OscResponder: Send {
     /// `Vec` means "no response for this code" — not an error, not a state
     /// change — and leaves any already-pending content untouched.
     fn respond(&self, code: u16, payload: &str, terminator: OscTerminator) -> Vec<Vec<u8>>;
+
+    /// The method `term_core` actually calls, exactly once per dispatched
+    /// OSC (osc7501-leading-zero-length SC-2): the same inputs as
+    /// [`Self::respond`] plus `received_len`, the number of bytes of the OSC
+    /// string as received (everything between `ESC ]` and the terminator,
+    /// leading zeros included, counted before lossy UTF-8 replacement and
+    /// including bytes dropped past the parser's size cap; saturating).
+    ///
+    /// The default forwards to [`Self::respond`] unchanged and ignores the
+    /// length, so a responder that only implements `respond` behaves exactly
+    /// as it did before this method existed.
+    fn respond_with_received_len(
+        &self,
+        code: u16,
+        payload: &str,
+        terminator: OscTerminator,
+        received_len: usize,
+    ) -> Vec<Vec<u8>> {
+        let _ = received_len;
+        self.respond(code, payload, terminator)
+    }
 }
 
 /// SC-8(b) (osc-color-query-response task0006, D11): the accumulation byte
@@ -64,11 +85,18 @@ impl TerminalCore {
     /// is dropped rather than appended, silently (AC-8). A no-op when
     /// nothing is registered (AC-3): no response is produced, no panic, and
     /// `term_core`'s existing behavior for every OSC code is unchanged.
-    fn consult_osc_responder(&mut self, code: u16, payload: &str, terminator: OscTerminator) {
+    fn consult_osc_responder(
+        &mut self,
+        code: u16,
+        payload: &str,
+        terminator: OscTerminator,
+        received_len: usize,
+    ) {
         let Some(responder) = self.osc_responder.as_deref() else {
             return;
         };
-        for response in responder.respond(code, payload, terminator) {
+        for response in responder.respond_with_received_len(code, payload, terminator, received_len)
+        {
             if self.response_queue.len() + response.len() > MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS {
                 continue;
             }
@@ -126,13 +154,14 @@ impl TerminalCore {
         param: u16,
         data: &str,
         terminator: OscTerminator,
+        received_len: usize,
     ) {
         // SC-2: consulted for EVERY dispatched OSC (AC-2) — including the
         // OSC 8 early-return branch just below. The responder must see
         // every code `term_core` dispatches, not only the ones it has no
         // native handling for; existing behavior for every code below is
         // otherwise unchanged (AC-3).
-        self.consult_osc_responder(param, data, terminator);
+        self.consult_osc_responder(param, data, terminator, received_len);
 
         // Special handling for OSC 8: process hyperlink inline
         if param == 8 {
@@ -1097,6 +1126,183 @@ mod tests {
         );
         let live: Vec<u8> = core.take_prompt_marks().iter().map(|m| m.kind).collect();
         assert_eq!(live, vec![b'A', b'C']);
+    }
+
+    // ── SC-2 / SC-1: received length and saturating number at the dispatch
+    // boundary (osc7501-leading-zero-length task0001) ──────────────────────
+
+    /// Responder implementing BOTH methods: the legacy `respond` logs
+    /// `legacy:<code>:<payload>`, the new method logs
+    /// `received:<code>:<payload>:<terminator>:<received_len>`. `term_core`
+    /// must call only the new one.
+    struct ReceivedLogResponder(EventLog);
+
+    impl OscResponder for ReceivedLogResponder {
+        fn respond(&self, code: u16, payload: &str, _terminator: OscTerminator) -> Vec<Vec<u8>> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("legacy:{code}:{payload}"));
+            Vec::new()
+        }
+
+        fn respond_with_received_len(
+            &self,
+            code: u16,
+            payload: &str,
+            terminator: OscTerminator,
+            received_len: usize,
+        ) -> Vec<Vec<u8>> {
+            self.0.lock().unwrap().push(format!(
+                "received:{code}:{payload}:{terminator:?}:{received_len}"
+            ));
+            Vec::new()
+        }
+    }
+
+    fn core_with_received_log() -> (TerminalCore, EventLog) {
+        let log = EventLog::default();
+        let mut core = TerminalCore::new(80, 24, 1000);
+        core.callbacks = Some(Box::new(ScreenLogCallbacks(log.clone())));
+        core.osc_responder = Some(Box::new(ReceivedLogResponder(log.clone())));
+        (core, log)
+    }
+
+    #[test]
+    fn ac3_new_method_receives_the_received_length_once_per_osc_before_the_notification() {
+        let (mut core, log) = core_with_received_log();
+        core.process_pty_data_fully(
+            b"\x1b]2;abc\x07\x1b]8;;http://a\x1b\\\x1b]0099;z\x07\x1b]3;q\x1b7",
+        );
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            &[
+                "received:2:abc:Bel:5",
+                "notify:2:abc:false",
+                // the OSC 8 early-return site is covered too
+                "received:8:;http://a:St:11",
+                "notify:8:;http://a:false",
+                // leading zeros: the count includes them, the code does not
+                "received:99:z:Bel:6",
+                "notify:255:z:false",
+                // unterminated: `ESC 7` is not counted
+                "received:3:q:Unterminated:3",
+                "notify:255:q:false",
+            ]
+        );
+    }
+
+    #[test]
+    fn ac3_default_new_method_forwards_to_the_existing_method_unchanged() {
+        let (core, recorder) = core_with_fixed_responder(4, vec![b"reply".to_vec()]);
+        let responder = core.osc_responder.as_deref().expect("registered");
+
+        // The length is ignored: a huge and a zero length give the same call.
+        for received_len in [0, 9, usize::MAX] {
+            assert_eq!(
+                responder.respond_with_received_len(4, "1;?", OscTerminator::St, received_len),
+                vec![b"reply".to_vec()]
+            );
+        }
+        assert_eq!(
+            *recorder.calls.lock().unwrap(),
+            vec![
+                (4, "1;?".to_string(), OscTerminator::St),
+                (4, "1;?".to_string(), OscTerminator::St),
+                (4, "1;?".to_string(), OscTerminator::St),
+            ]
+        );
+    }
+
+    #[test]
+    fn ac3_a_responder_implementing_only_the_existing_method_sees_unchanged_calls() {
+        // `FixedResponder` implements only `respond`; the dispatch must
+        // reach it through the default forwarding, once per OSC, in order.
+        let (mut core, recorder) = core_with_fixed_responder(4, vec![b"R".to_vec()]);
+        core.process_pty_data_fully(b"\x1b]0016;x\x07\x1b]4;1;?\x1b\\\x1b]4;2;?\x1b7");
+        assert_eq!(
+            *recorder.calls.lock().unwrap(),
+            vec![
+                (16, "x".to_string(), OscTerminator::Bel),
+                (4, "1;?".to_string(), OscTerminator::St),
+                (4, "2;?".to_string(), OscTerminator::Unterminated),
+            ]
+        );
+        assert_eq!(core.take_response(), b"RR".to_vec());
+    }
+
+    #[test]
+    fn ac2_a_saturated_number_is_not_handled_as_osc_52() {
+        // `6553652` used to wrap into the OSC 52 (clipboard) range; it is
+        // 65535 now and reaches the unknown action only.
+        let (mut core, log) = core_with_received_log();
+        core.process_pty_data_fully(b"\x1b]6553652;c;aGk=\x07\x1b]52;c;aGk=\x07");
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            &[
+                "received:65535:c;aGk=:Bel:14",
+                "notify:255:c;aGk=:false",
+                "received:52:c;aGk=:Bel:9",
+                "notify:52:c;aGk=:false",
+            ]
+        );
+    }
+
+    #[test]
+    fn ac2_a_saturated_number_does_not_reach_a_host_registered_app_param() {
+        let (mut core, log) = core_with_received_log();
+        core.register_osc_app_param(9999, 200);
+        core.process_pty_data_fully(b"\x1b]9999;a\x07\x1b]655369999;b\x07\x1b]65536;c\x07");
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            &[
+                "received:9999:a:Bel:6",
+                "notify:200:a:false",
+                "received:65535:b:Bel:11",
+                "notify:255:b:false",
+                "received:65535:c:Bel:7",
+                "notify:255:c:false",
+            ]
+        );
+    }
+
+    #[test]
+    fn ac3_term_core_sources_name_no_application_osc_code() {
+        // term_core knows no application protocol number (the host owns
+        // them). The code is spelled in pieces so this file does not name
+        // it; the only mentions allowed are feature-directory names such as
+        // `osc<code>-leading-zero-length`.
+        let code = ["75", "01"].concat();
+        let feature_prefix = format!("osc{code}-");
+
+        fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read the source directory") {
+                let path = entry.expect("directory entry").path();
+                if path.is_dir() {
+                    rust_files(&path, out);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        rust_files(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        assert!(files.len() > 10, "found the source files: {files:?}");
+        for file in files {
+            let text = std::fs::read_to_string(&file).expect("read a source file");
+            for (number, line) in text.lines().enumerate() {
+                assert!(
+                    !line.replace(&feature_prefix, "").contains(&code),
+                    "{}:{} names an application OSC code",
+                    file.display(),
+                    number + 1
+                );
+            }
+        }
     }
 
     // ── OSC 22 (CursorShape) shape override ───────────────────────────

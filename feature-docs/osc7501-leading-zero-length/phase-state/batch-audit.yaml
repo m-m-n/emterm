@@ -1,0 +1,53 @@
+schema_version: 1
+feature: osc7501-leading-zero-length
+records:
+- question_id: create-spec.feature-identity
+  packet_id: null
+  answered_at: '2026-10-11T00:17:00+09:00'
+  source: batch-policy
+  answer_mode: option
+  selected_option_ids:
+  - derive_from_task_description
+  freeform: null
+  normalized_answer: 'feature name derived from the task description: osc7501-leading-zero-length'
+  resolution_note: 'gate: create-spec.feature-identity; option chosen: derive_from_task_description (batch policy); codex_consulted: false; opus_escalation: false'
+- question_id: scope.daemon-other-osc
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-11T00:35:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: option
+  selected_option_ids:
+  - osc7501_and_133
+  freeform: null
+  normalized_answer: Align OSC 7501 and OSC 133 daemon ingestion with the shared number/body rule; OSC 777 agent-status keeps its canonical-only ingestion (predecessor FR18)
+  resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); CHOICE osc7501_and_133; options not chosen: osc7501_only, all_three; key points: 7501-only leaves 0133;A record deletion split between plain tab and mux; 777 would change FR18-preserved behavior; mux 133 handling is shared with 777 D->A deletion so leading-zero 133 must not alter that path; Codex consulted (1 turn, codex entry); opus_escalation: false; discussion posted to Notion task page comment.'
+- question_id: scope.term-core-number-overflow
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-11T00:35:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: option
+  selected_option_ids:
+  - saturate_in_scope
+  freeform: null
+  normalized_answer: Make term_core OSC number accumulation fully saturating (multiply and add) so an out-of-range number stays at 65535 and matches no code
+  resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); CHOICE saturate_in_scope; options not chosen: out_of_scope; key points: out_of_scope leaves release-build 655367501 -> 7501 aliasing and debug panic; saturating add aligns with osc_identify overflow handling; boundary tests 65535/65536/655367501; Codex consulted (1 turn, codex entry); opus_escalation: false; discussion posted to Notion task page comment.'
+- question_id: edge.oversized-query
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-11T00:35:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: option
+  selected_option_ids:
+  - keep_answering
+  freeform: null
+  normalized_answer: A query (body exactly ?) is answered regardless of the received byte count, as today
+  resolution_note: 'gate: create-spec.requirement-clarification (policy codex_consultation); CHOICE keep_answering; options not chosen: apply_limit; key points: FR3 limit targets reports, queries are decided by body == ? before length check (FR8/TM-6 fixed response once per query); apply_limit would also change mux query recognition; Codex consulted (1 turn, codex entry); opus_escalation: false; discussion posted to Notion task page comment.'
+- question_id: design-step.decision
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-11T00:35:00+09:00'
+  source: batch-decision-table
+  answer_mode: option
+  selected_option_ids:
+  - skip
+  freeform: null
+  normalized_answer: design step skipped (no UI change)
+  resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously -> worker-recommended option skip'

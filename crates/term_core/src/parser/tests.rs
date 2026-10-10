@@ -406,6 +406,7 @@ fn test_parse_osc_set_title() {
             param: 2,
             data: "My Title".to_string(),
             terminator: OscTerminator::Bel,
+            received_len: 10,
         }]
     );
 }
@@ -419,6 +420,7 @@ fn test_parse_osc_set_title_and_icon() {
             param: 0,
             data: "Terminal".to_string(),
             terminator: OscTerminator::Bel,
+            received_len: 10,
         }]
     );
 }
@@ -432,6 +434,7 @@ fn test_parse_osc_working_directory() {
             param: 7,
             data: "file:///home/user".to_string(),
             terminator: OscTerminator::Bel,
+            received_len: 19,
         }]
     );
 }
@@ -445,6 +448,7 @@ fn test_parse_osc_hyperlink() {
             param: 8,
             data: "id=1;https://example.com".to_string(),
             terminator: OscTerminator::Bel,
+            received_len: 26,
         }]
     );
 }
@@ -458,6 +462,7 @@ fn test_parse_osc_unknown() {
             param: 99,
             data: "data".to_string(),
             terminator: OscTerminator::Bel,
+            received_len: 7,
         }]
     );
 }
@@ -471,6 +476,7 @@ fn test_parse_osc_semantic_prompt_a() {
             param: 133,
             data: "A".to_string(),
             terminator: OscTerminator::St,
+            received_len: 5,
         }]
     );
 }
@@ -484,6 +490,7 @@ fn test_parse_osc_semantic_prompt_d_with_exit_code() {
             param: 133,
             data: "D;0".to_string(),
             terminator: OscTerminator::St,
+            received_len: 7,
         }]
     );
 }
@@ -497,6 +504,7 @@ fn test_parse_osc_emterm_extension() {
             param: 777,
             data: "markdown;title;body".to_string(),
             terminator: OscTerminator::Bel,
+            received_len: 23,
         }]
     );
 }
@@ -512,6 +520,7 @@ fn test_parse_osc_st_terminator() {
             param: 2,
             data: "My Title".to_string(),
             terminator: OscTerminator::St,
+            received_len: 10,
         }
     );
 }
@@ -529,6 +538,7 @@ fn test_parse_osc_esc_without_backslash() {
             param: 2,
             data: "Title".to_string(),
             terminator: OscTerminator::Unterminated,
+            received_len: 7,
         }
     );
     assert_eq!(
@@ -589,6 +599,7 @@ fn test_parse_split_osc_sequence() {
             param: 2,
             data: "My Title".to_string(),
             terminator: OscTerminator::Bel,
+            received_len: 10,
         }]
     );
 }
@@ -621,6 +632,7 @@ fn test_parse_split_osc_st_across_buffers() {
             param: 2,
             data: "Title".to_string(),
             terminator: OscTerminator::St,
+            received_len: 7,
         }
     );
 }
@@ -646,6 +658,7 @@ fn test_parse_osc_larger_than_4096_bytes() {
             param: 777,
             data: data.clone(),
             terminator: OscTerminator::Bel,
+            received_len: 4 + data.len(),
         }
     );
 }
@@ -667,6 +680,7 @@ fn test_parse_osc_at_128kb_chunk_size() {
             param: 777,
             data: data.clone(),
             terminator: OscTerminator::Bel,
+            received_len: 4 + data.len(),
         }
     );
 }
@@ -736,6 +750,325 @@ fn test_parse_osc_discards_bytes_beyond_16mb() {
     } else {
         panic!("Expected OscDispatch");
     }
+}
+
+// =========================================================================
+// OSC received length and saturating number
+// (osc7501-leading-zero-length SC-1 / SC-2)
+// =========================================================================
+
+/// Every dispatched OSC of `input` as `(param, data, terminator, received_len)`.
+fn osc_actions(input: &[u8]) -> Vec<(u16, String, OscTerminator, usize)> {
+    parse_all(input)
+        .into_iter()
+        .filter_map(|action| match action {
+            ParsedAction::OscDispatch {
+                param,
+                data,
+                terminator,
+                received_len,
+            } => Some((param, data, terminator, received_len)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The one dispatched OSC of `input`.
+fn only_osc(input: &[u8]) -> (u16, String, OscTerminator, usize) {
+    let mut found = osc_actions(input);
+    assert_eq!(found.len(), 1, "expected exactly one OscDispatch");
+    found.remove(0)
+}
+
+fn osc_with_bel(string: &[u8]) -> Vec<u8> {
+    let mut input = b"\x1B]".to_vec();
+    input.extend_from_slice(string);
+    input.push(0x07);
+    input
+}
+
+#[test]
+fn ac1_received_len_counts_digits_semicolon_and_data_once_for_bel() {
+    // `2;My Title` is 10 bytes; the BEL is not counted.
+    assert_eq!(
+        only_osc(b"\x1B]2;My Title\x07"),
+        (2, "My Title".to_string(), OscTerminator::Bel, 10)
+    );
+}
+
+#[test]
+fn ac1_received_len_counts_digits_semicolon_and_data_once_for_st() {
+    // The two terminator bytes `ESC \` are not counted.
+    assert_eq!(
+        only_osc(b"\x1B]2;My Title\x1B\\"),
+        (2, "My Title".to_string(), OscTerminator::St, 10)
+    );
+}
+
+#[test]
+fn ac1_received_len_counts_leading_zeros() {
+    assert_eq!(
+        only_osc(&osc_with_bel(b"0007;a")),
+        (7, "a".to_string(), OscTerminator::Bel, 6)
+    );
+    assert_eq!(
+        only_osc(&osc_with_bel(b"00000000000;x")),
+        (0, "x".to_string(), OscTerminator::Bel, 13)
+    );
+}
+
+#[test]
+fn ac1_received_len_counts_non_digit_bytes_before_the_first_semicolon() {
+    // Non-digit bytes before the first `;` are data in their original
+    // order; digits around them still accumulate into the number.
+    assert_eq!(
+        only_osc(&osc_with_bel(b"x2;abc")),
+        (2, "xabc".to_string(), OscTerminator::Bel, 6)
+    );
+    assert_eq!(
+        only_osc(&osc_with_bel(b"2x;abc")),
+        (2, "xabc".to_string(), OscTerminator::Bel, 6)
+    );
+}
+
+#[test]
+fn ac1_received_len_counts_later_semicolons_and_digits_as_data() {
+    assert_eq!(
+        only_osc(&osc_with_bel(b"2;1;2")),
+        (2, "1;2".to_string(), OscTerminator::Bel, 5)
+    );
+}
+
+#[test]
+fn ac1_received_len_of_strings_without_data() {
+    // No `;` at all.
+    assert_eq!(
+        only_osc(&osc_with_bel(b"7")),
+        (7, String::new(), OscTerminator::Bel, 1)
+    );
+    // Empty string.
+    assert_eq!(
+        only_osc(&osc_with_bel(b"")),
+        (0, String::new(), OscTerminator::Bel, 0)
+    );
+    // The first `;` alone.
+    assert_eq!(
+        only_osc(&osc_with_bel(b";")),
+        (0, String::new(), OscTerminator::Bel, 1)
+    );
+}
+
+#[test]
+fn ac1_received_len_counts_invalid_utf8_bytes_before_replacement() {
+    // Two invalid bytes: two replacement characters, two counted bytes.
+    assert_eq!(
+        only_osc(&osc_with_bel(b"2;\xFF\xFE")),
+        (2, "\u{FFFD}\u{FFFD}".to_string(), OscTerminator::Bel, 4)
+    );
+    // A truncated three-byte sequence is replaced by ONE character but
+    // received as two bytes.
+    assert_eq!(
+        only_osc(&osc_with_bel(b"2;\xE2\x82")),
+        (2, "\u{FFFD}".to_string(), OscTerminator::Bel, 4)
+    );
+    // An invalid byte before the first `;`.
+    assert_eq!(
+        only_osc(&osc_with_bel(b"\xFF2;a")),
+        (2, "\u{FFFD}a".to_string(), OscTerminator::Bel, 4)
+    );
+}
+
+#[test]
+fn ac1_received_len_of_an_unterminated_string_excludes_the_esc_and_the_next_byte() {
+    let actions = parse_all(b"\x1B]2;Title\x1B7");
+    assert_eq!(actions.len(), 2);
+    assert_eq!(
+        actions[0],
+        ParsedAction::OscDispatch {
+            param: 2,
+            data: "Title".to_string(),
+            terminator: OscTerminator::Unterminated,
+            received_len: 7,
+        }
+    );
+
+    // Cut short by a CSI: the `[` is not counted either.
+    assert_eq!(
+        osc_actions(b"\x1B]2;Title\x1B[0m"),
+        vec![(2, "Title".to_string(), OscTerminator::Unterminated, 7)]
+    );
+}
+
+#[test]
+fn ac1_received_len_restarts_from_zero_for_each_string() {
+    let found = osc_actions(b"\x1B]2;ab\x07\x1B]3;cde\x1B\\\x1B]4;f\x07");
+    assert_eq!(
+        found,
+        vec![
+            (2, "ab".to_string(), OscTerminator::Bel, 4),
+            (3, "cde".to_string(), OscTerminator::St, 5),
+            (4, "f".to_string(), OscTerminator::Bel, 3),
+        ]
+    );
+}
+
+#[test]
+fn ac1_received_len_restarts_when_a_new_osc_introducer_reopens_the_string() {
+    let found = osc_actions(b"\x1B]2;abc\x1B]3;de\x07");
+    assert_eq!(
+        found,
+        vec![
+            (2, "abc".to_string(), OscTerminator::Unterminated, 5),
+            (3, "de".to_string(), OscTerminator::Bel, 4),
+        ]
+    );
+}
+
+#[test]
+fn ac1_received_len_restarts_after_a_parser_reset() {
+    let mut parser = Parser::new();
+    let mut actions = Vec::new();
+    parser.parse(b"\x1B]2;abcdef", |action| actions.push(action));
+    assert!(actions.is_empty());
+    assert_eq!(
+        parser.osc_received_len, 8,
+        "counted while the string is open"
+    );
+
+    parser.reset();
+    assert_eq!(parser.osc_received_len, 0, "the reset clears the count");
+
+    parser.parse(b"\x1B]3;x\x07", |action| actions.push(action));
+    assert_eq!(
+        actions,
+        vec![ParsedAction::OscDispatch {
+            param: 3,
+            data: "x".to_string(),
+            terminator: OscTerminator::Bel,
+            received_len: 3,
+        }]
+    );
+}
+
+#[test]
+fn ac1_received_len_accumulates_across_buffers() {
+    let mut parser = Parser::new();
+    let mut actions = Vec::new();
+    parser.parse(b"\x1B]2;ab", |action| actions.push(action));
+    parser.parse(b"cd\x1B", |action| actions.push(action));
+    parser.parse(b"\\", |action| actions.push(action));
+    assert_eq!(
+        actions,
+        vec![ParsedAction::OscDispatch {
+            param: 2,
+            data: "abcd".to_string(),
+            terminator: OscTerminator::St,
+            received_len: 6,
+        }]
+    );
+}
+
+#[test]
+fn ac1_received_len_reports_the_full_count_while_data_stays_capped() {
+    let mut input = b"\x1B]777;".to_vec();
+    input.extend(std::iter::repeat_n(b'b', MAX_OSC_LEN + 100));
+    input.push(0x07);
+
+    let (param, data, terminator, received_len) = only_osc(&input);
+    assert_eq!(param, 777);
+    assert_eq!(terminator, OscTerminator::Bel);
+    assert_eq!(data.len(), MAX_OSC_LEN, "data is capped");
+    assert_eq!(received_len, 4 + MAX_OSC_LEN + 100, "count is not capped");
+}
+
+#[test]
+fn ac1_a_one_mebibyte_osc_string_is_dispatched_within_two_seconds() {
+    let mut input = b"\x1B]777;".to_vec();
+    input.extend(std::iter::repeat_n(b'a', 1024 * 1024));
+    input.push(0x07);
+
+    let started = std::time::Instant::now();
+    let (_, data, _, received_len) = only_osc(&input);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert_eq!(data.len(), 1024 * 1024);
+    assert_eq!(received_len, 4 + 1024 * 1024);
+}
+
+#[test]
+fn ac7_counting_and_saturating_in_the_osc_state_log_nothing() {
+    // Input that is cut short, oversized or out of range is untrusted and
+    // could flood the log: the OSC string state has no logging call.
+    let source = include_str!("osc.rs");
+    for needle in ["log::", "println!", "eprintln!", "dbg!"] {
+        assert!(!source.contains(needle), "found `{needle}`");
+    }
+}
+
+#[test]
+fn ac2_number_65535_is_dispatched_as_is() {
+    assert_eq!(
+        only_osc(&osc_with_bel(b"65535;x")),
+        (65535, "x".to_string(), OscTerminator::Bel, 7)
+    );
+}
+
+#[test]
+fn ac2_numbers_above_the_u16_range_saturate_at_65535() {
+    assert_eq!(
+        only_osc(&osc_with_bel(b"65536;x")),
+        (65535, "x".to_string(), OscTerminator::Bel, 7)
+    );
+    // An above-range prefix followed by the digits of a host application
+    // code (nine digits in all). The host code is spelled in pieces because
+    // term_core's sources name no application code.
+    let digits = ["65536", "75", "01"].concat();
+    assert_eq!(digits.len(), 9);
+    assert_eq!(
+        only_osc(&osc_with_bel(format!("{digits};state=error").as_bytes())),
+        (65535, "state=error".to_string(), OscTerminator::Bel, 21)
+    );
+    assert_eq!(
+        only_osc(&osc_with_bel(b"6553652;x")),
+        (65535, "x".to_string(), OscTerminator::Bel, 9)
+    );
+    assert_eq!(only_osc(&osc_with_bel(b"99999999999999999999;x")).0, 65535);
+}
+
+#[test]
+fn ac2_a_saturated_number_stays_saturated_for_the_rest_of_the_digits() {
+    // The trailing zeros (and the trailing 1) must not bring the value back
+    // into range.
+    assert_eq!(only_osc(&osc_with_bel(b"655360000000;x")).0, 65535);
+    assert_eq!(only_osc(&osc_with_bel(b"6553600000001;x")).0, 65535);
+}
+
+#[test]
+fn ac2_leading_zeros_do_not_change_the_number() {
+    assert_eq!(only_osc(&osc_with_bel(b"0065535;x")).0, 65535);
+    assert_eq!(only_osc(&osc_with_bel(b"000052;x")).0, 52);
+}
+
+#[test]
+fn ac2_digits_after_the_first_semicolon_never_reach_the_number() {
+    assert_eq!(
+        only_osc(&osc_with_bel(b"2;99999999999")),
+        (2, "99999999999".to_string(), OscTerminator::Bel, 13)
+    );
+}
+
+#[test]
+fn ac2_a_number_of_one_million_digits_is_dispatched_within_two_seconds() {
+    let mut input = b"\x1B]".to_vec();
+    input.extend(std::iter::repeat_n(b'9', 1_000_000));
+    input.extend_from_slice(b";x\x07");
+
+    let started = std::time::Instant::now();
+    let (param, data, terminator, received_len) = only_osc(&input);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert_eq!(param, 65535);
+    assert_eq!(data, "x");
+    assert_eq!(terminator, OscTerminator::Bel);
+    assert_eq!(received_len, 1_000_000 + 2);
 }
 
 // =========================================================================

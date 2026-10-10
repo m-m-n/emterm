@@ -56,6 +56,15 @@ pub(crate) enum ParsedAction {
         param: u16,
         data: String,
         terminator: OscTerminator,
+        /// SC-2 (osc7501-leading-zero-length): the number of bytes of the OSC
+        /// string as received, i.e. everything between `ESC ]` and the
+        /// terminator: every digit (leading zeros included), the bytes before
+        /// the first `;`, the first `;` and every data byte, counted BEFORE
+        /// lossy UTF-8 replacement and including data bytes dropped past
+        /// `MAX_OSC_LEN`. The terminator bytes (BEL, or the `ESC \` of ST) and
+        /// the `ESC` + byte that cut an unterminated string short are not
+        /// counted. Saturates instead of overflowing.
+        received_len: usize,
     },
     ApcDispatch(Vec<u8>),
     DcsDispatch(Vec<u8>),

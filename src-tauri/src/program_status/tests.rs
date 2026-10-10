@@ -1668,3 +1668,186 @@ fn rank_unify_ac5_program_state_rank_doc_names_compose_rank_as_the_source() {
         "the ProgramState::rank doc must not present itself as the definition: {doc}"
     );
 }
+
+// ── parse_received (osc7501-leading-zero-length task0001, AC-4) ───────
+//
+// The whole-sequence length is `ESC ]` (2) + the received OSC-string length
+// + the terminator. These tests build every boundary from the received
+// length, never from the canonical `7501;` introducer.
+
+/// The received length that makes the whole sequence `total` bytes.
+fn received_for_sequence_len(total: usize, terminator: Terminator) -> usize {
+    total - 2 - terminator.len()
+}
+
+fn is_root_set(parsed: &Parsed, state: ProgramState) -> bool {
+    matches!(
+        parsed,
+        Parsed::Report(Report::Set { id, record }) if id.is_empty() && record.state == state
+    )
+}
+
+#[test]
+fn parse_received_ac4_accepts_a_whole_sequence_of_4096_bytes_and_ignores_4097() {
+    for terminator in [Terminator::Bel, Terminator::St] {
+        let body = b"state=error";
+        let at_limit = parse_received(
+            body,
+            received_for_sequence_len(4096, terminator),
+            terminator,
+        );
+        assert!(
+            is_root_set(&at_limit, ProgramState::Error),
+            "{terminator:?}: 4096 bytes must be accepted, got {at_limit:?}"
+        );
+
+        let over = parse_received(
+            body,
+            received_for_sequence_len(4097, terminator),
+            terminator,
+        );
+        assert_eq!(over, Parsed::Ignored, "{terminator:?}: 4097 bytes");
+    }
+}
+
+#[test]
+fn parse_received_ac4_the_terminator_counts_toward_the_whole_sequence() {
+    // The same received length is accepted with BEL and over the limit
+    // with ST.
+    let received = received_for_sequence_len(4096, Terminator::Bel);
+    assert!(is_root_set(
+        &parse_received(b"state=error", received, Terminator::Bel),
+        ProgramState::Error
+    ));
+    assert_eq!(
+        parse_received(b"state=error", received, Terminator::St),
+        Parsed::Ignored
+    );
+}
+
+#[test]
+fn parse_received_ac4_a_short_received_length_does_not_ignore_the_body() {
+    for terminator in [Terminator::Bel, Terminator::St] {
+        for received in [0, 1, 11, 16] {
+            assert!(
+                is_root_set(
+                    &parse_received(b"state=error", received, terminator),
+                    ProgramState::Error
+                ),
+                "{terminator:?} received {received}"
+            );
+        }
+    }
+}
+
+#[test]
+fn parse_received_ac4_the_limit_follows_the_received_length_not_the_replaced_text() {
+    // 4074 bytes of 0xFF are received as 4074 bytes but their replacement
+    // text is 3 bytes each, far past 4096 bytes in all.
+    let mut body = b"state=error:x=".to_vec();
+    for _ in 0..4074 {
+        body.extend_from_slice("\u{FFFD}".as_bytes());
+    }
+    assert!(body.len() > MAX_SEQUENCE_BYTES);
+    let received = 5 + b"state=error:x=".len() + 4074;
+    assert_eq!(received, received_for_sequence_len(4096, Terminator::Bel));
+
+    assert!(is_root_set(
+        &parse_received(&body, received, Terminator::Bel),
+        ProgramState::Error
+    ));
+    assert_eq!(
+        parse_received(&body, received + 1, Terminator::Bel),
+        Parsed::Ignored
+    );
+}
+
+#[test]
+fn parse_received_ac4_a_query_is_a_query_for_every_received_length() {
+    let max_osc_len = 16 * 1024 * 1024;
+    for terminator in [Terminator::Bel, Terminator::St] {
+        for received in [
+            0,
+            received_for_sequence_len(4096, terminator),
+            received_for_sequence_len(4097, terminator),
+            5_000,
+            max_osc_len,
+            max_osc_len + 1,
+            usize::MAX,
+        ] {
+            assert_eq!(
+                parse_received(b"?", received, terminator),
+                Parsed::Query,
+                "{terminator:?} received {received}"
+            );
+        }
+    }
+}
+
+#[test]
+fn parse_received_ac4_only_a_body_of_exactly_a_question_mark_is_a_query() {
+    for body in [&b"??"[..], b"? ", b" ?", b"", b"?=", b"state=?"] {
+        assert_ne!(
+            parse_received(body, 0, Terminator::Bel),
+            Parsed::Query,
+            "{body:?}"
+        );
+        assert_eq!(
+            parse_received(body, usize::MAX, Terminator::Bel),
+            Parsed::Ignored,
+            "{body:?} with a huge received length"
+        );
+    }
+}
+
+#[test]
+fn parse_received_ac4_a_saturated_received_length_is_ignored_without_overflow() {
+    for terminator in [Terminator::Bel, Terminator::St] {
+        for received in [usize::MAX, usize::MAX - 1, usize::MAX - 2, usize::MAX - 3] {
+            assert_eq!(
+                parse_received(b"state=error", received, terminator),
+                Parsed::Ignored,
+                "{terminator:?} received {received}"
+            );
+        }
+    }
+}
+
+#[test]
+fn parse_received_ac4_the_canonical_entries_are_parse_received_with_the_canonical_length() {
+    let boundary_bel = body_of_sequence_len(4096, Terminator::Bel);
+    let boundary_st = body_of_sequence_len(4097, Terminator::St);
+    let bodies = [
+        "state=working",
+        "id=a:state=blocked:kind=question",
+        "state=clear",
+        "?",
+        "",
+        "state=sleeping",
+        boundary_bel.as_str(),
+        boundary_st.as_str(),
+    ];
+    for terminator in [Terminator::Bel, Terminator::St] {
+        for body in bodies {
+            // `7501;` introducer (5 bytes) + the body.
+            let canonical = 5 + body.len();
+            let expected = parse_received(body.as_bytes(), canonical, terminator);
+            assert_eq!(parse(body, terminator), expected, "{terminator:?} {body:?}");
+            assert_eq!(
+                parse_bytes(body.as_bytes(), terminator),
+                expected,
+                "{terminator:?} {body:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn parse_received_ac7_rejecting_or_ignoring_input_logs_nothing() {
+    // Rejected input is untrusted and could flood the log: the module has
+    // no logging call at all.
+    let source = include_str!("../program_status.rs");
+    for needle in ["log::", "println!", "eprintln!", "dbg!"] {
+        assert!(!source.contains(needle), "found `{needle}`");
+    }
+}

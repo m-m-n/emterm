@@ -340,12 +340,13 @@ impl TerminalCore {
                 param,
                 data,
                 terminator,
+                received_len,
             } => {
                 if !self.grapheme_buffer.is_empty() {
                     self.flush_grapheme_buffer();
                 }
                 self.last_write = None;
-                self.handle_osc_internal(param, &data, terminator);
+                self.handle_osc_internal(param, &data, terminator, received_len);
             }
             ParsedAction::ApcDispatch(payload) => {
                 if !self.grapheme_buffer.is_empty() {

@@ -1,0 +1,148 @@
+task_id: task0001
+# Refreshed after the merge conflict on src-tauri/src/program_status.rs was resolved by adopting
+# the parent's version (it carries the same parse_received contract): the src-tauri --lib suite
+# (project test command) ran 4665 passed, 1 failed, 3 ignored; the one failure is a PTY echo
+# test that depends on the sandbox. The term_core --lib suite (CARGO_TARGET_DIR=src-tauri/target
+# cargo test --manifest-path crates/term_core/Cargo.toml --lib) ran 895 passed, 0 failed.
+# Before any edit of this task the same PTY test was the only failure (src-tauri 4614 passed,
+# 1 failed; term_core 868 passed, 0 failed).
+baseline_failures:
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+# Actually re-executed on the adopted tree: src-tauri --lib 4666 passed, 0 failed (the PTY test
+# passed this time); term_core --lib 895 passed, 0 failed (868 + 27 new tests of this task).
+# Both the default and the --no-default-features `cargo check` pass. Before the merge, two other
+# full runs of this task's code, while the machine load average was above 8, each failed one
+# different timing-dependent test (mux::ipc::pty_spawn::tests::
+# visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once: reader Timeout;
+# mux::ipc::pty_spawn::tests::strip_concat_query::
+# strip_concat_alternations_and_chains_finish_within_the_budget: 10.05 s of thread CPU time
+# against a 10 s budget); both passed in later full runs.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    # The parser::tests::* tests are term_core tests: they are selected with the term_core
+    # manifest command above, not with the src-tauri --lib command.
+    tests:
+      - parser::tests::ac1_received_len_counts_digits_semicolon_and_data_once_for_bel
+      - parser::tests::ac1_received_len_counts_digits_semicolon_and_data_once_for_st
+      - parser::tests::ac1_received_len_counts_leading_zeros
+      - parser::tests::ac1_received_len_counts_non_digit_bytes_before_the_first_semicolon
+      - parser::tests::ac1_received_len_counts_later_semicolons_and_digits_as_data
+      - parser::tests::ac1_received_len_of_strings_without_data
+      - parser::tests::ac1_received_len_counts_invalid_utf8_bytes_before_replacement
+      - parser::tests::ac1_received_len_of_an_unterminated_string_excludes_the_esc_and_the_next_byte
+      - parser::tests::ac1_received_len_restarts_from_zero_for_each_string
+      - parser::tests::ac1_received_len_restarts_when_a_new_osc_introducer_reopens_the_string
+      - parser::tests::ac1_received_len_restarts_after_a_parser_reset
+      - parser::tests::ac1_received_len_accumulates_across_buffers
+      - parser::tests::ac1_received_len_reports_the_full_count_while_data_stays_capped
+      - parser::tests::ac1_a_one_mebibyte_osc_string_is_dispatched_within_two_seconds
+    red_confirmed: true
+    red_reason: >-
+      Observed against a stub that already carried the received_len field through the parser, the
+      dispatch boundary and the responder seam but never counted (the field stayed 0). All fourteen
+      tests failed, for example ac1_received_len_reports_the_full_count_while_data_stays_capped
+      (left: 0, right: 16777320) and ac1_a_one_mebibyte_osc_string_is_dispatched_within_two_seconds
+      (left: 0, right: 1048580). The existing whole-action parser tests (test_parse_osc_set_title and
+      the others) were updated in place with their received lengths and failed the same way against
+      the stub.
+  AC-2:
+    tests:
+      - parser::tests::ac2_number_65535_is_dispatched_as_is
+      - parser::tests::ac2_numbers_above_the_u16_range_saturate_at_65535
+      - parser::tests::ac2_a_saturated_number_stays_saturated_for_the_rest_of_the_digits
+      - parser::tests::ac2_leading_zeros_do_not_change_the_number
+      - parser::tests::ac2_digits_after_the_first_semicolon_never_reach_the_number
+      - parser::tests::ac2_a_number_of_one_million_digits_is_dispatched_within_two_seconds
+      - osc_handler::tests::ac2_a_saturated_number_is_not_handled_as_osc_52
+      - osc_handler::tests::ac2_a_saturated_number_does_not_reach_a_host_registered_app_param
+    red_confirmed: true
+    red_reason: >-
+      Observed in the debug test build before the number accumulated with saturation. The
+      one-million-digit test panicked with "attempt to add with overflow" at
+      crates/term_core/src/parser/osc.rs (the unsaturated add after saturating_mul); the
+      above-range cases failed the same way or on the received length, and the dispatch-level
+      OSC 52 and app-param tests failed against the stub. ac2_leading_zeros_do_not_change_the_number
+      passed before the change (leading zeros already did not change the value); it is a guard, not a red.
+  AC-3:
+    tests:
+      - osc_handler::tests::ac3_new_method_receives_the_received_length_once_per_osc_before_the_notification
+      - osc_handler::tests::ac3_default_new_method_forwards_to_the_existing_method_unchanged
+      - osc_handler::tests::ac3_a_responder_implementing_only_the_existing_method_sees_unchanged_calls
+      - osc_handler::tests::ac3_term_core_sources_name_no_application_osc_code
+      - callbacks::tests::osc_7501_existing_method_keeps_the_canonical_length
+    red_confirmed: true
+    red_reason: >-
+      ac3_new_method_receives_the_received_length_once_per_osc_before_the_notification failed against
+      the stub whose received length stayed 0 (the logged "received:2:abc:Bel:5" was
+      "received:2:abc:Bel:0"). The other four tests pin preserved behavior (the default forwarding,
+      a responder implementing only the existing method, term_core's sources naming no application
+      OSC code, and the plain-tab responder's existing method keeping the canonical length) and
+      passed before the change, so they have no red of their own. Every existing term_core and
+      src-tauri responder test passes unchanged in the suites above.
+  AC-4:
+    tests:
+      - program_status::tests::parse_received_ac4_accepts_a_whole_sequence_of_4096_bytes_and_ignores_4097
+      - program_status::tests::parse_received_ac4_the_terminator_counts_toward_the_whole_sequence
+      - program_status::tests::parse_received_ac4_a_short_received_length_does_not_ignore_the_body
+      - program_status::tests::parse_received_ac4_the_limit_follows_the_received_length_not_the_replaced_text
+      - program_status::tests::parse_received_ac4_a_query_is_a_query_for_every_received_length
+      - program_status::tests::parse_received_ac4_only_a_body_of_exactly_a_question_mark_is_a_query
+      - program_status::tests::parse_received_ac4_a_saturated_received_length_is_ignored_without_overflow
+      - program_status::tests::parse_received_ac4_the_canonical_entries_are_parse_received_with_the_canonical_length
+    red_confirmed: true
+    red_reason: >-
+      Observed against a stub parse_received that ignored the received length. Four tests failed:
+      accepts_a_whole_sequence_of_4096_bytes_and_ignores_4097 ("Bel: 4097 bytes", left: Report(Set {
+      id: "", .. state: Error ..}), right: Ignored), the_terminator_counts_toward_the_whole_sequence,
+      the_limit_follows_the_received_length_not_the_replaced_text and
+      a_saturated_received_length_is_ignored_without_overflow. The query tests and the canonical-entry
+      equivalence test passed against the stub (they pin FR8 and FR5 behavior); a temporary
+      reordering of the length check before the query check made the query tests fail, then it was
+      reverted.
+  AC-5:
+    tests:
+      - tabs::tests::output_pipeline::leading_zero_report_of_4115_bytes_leaves_the_table_unchanged
+      - tabs::tests::output_pipeline::leading_zero_reports_follow_the_received_length_at_the_limit
+      - tabs::tests::output_pipeline::invalid_utf8_report_is_measured_by_the_bytes_received
+      - tabs::tests::output_pipeline::report_longer_than_the_parser_cap_registers_no_record
+      - callbacks::tests::osc_7501_received_len_just_under_the_limit_is_accepted
+      - callbacks::tests::osc_7501_received_len_just_over_the_limit_is_ignored
+      - callbacks::tests::osc_7501_received_len_decides_not_the_payload_length
+    red_confirmed: true
+    red_reason: >-
+      Observed with term_core already counting the received length but the plain-tab responder not yet
+      using it (the default forwarding measured the canonical spelling). Failures:
+      leading_zero_report_of_4115_bytes_leaves_the_table_unchanged (left: Root(Error), right:
+      Root(Working)), leading_zero_reports_follow_the_received_length_at_the_limit (row P5),
+      invalid_utf8_report_is_measured_by_the_bytes_received (left: Root(Working), right: Root(Error)),
+      report_longer_than_the_parser_cap_registers_no_record, and the over-the-limit and
+      payload-length responder tests. The just-under-the-limit responder test passed in that state.
+  AC-6:
+    tests:
+      - tabs::tests::output_pipeline::leading_zero_queries_are_answered_once_with_their_own_terminator
+      - tabs::tests::output_pipeline::unterminated_leading_zero_query_gets_no_answer
+      - callbacks::tests::osc_7501_query_with_a_huge_received_len_is_answered_with_its_own_terminator
+      - callbacks::tests::osc_7501_unterminated_with_a_received_len_gets_no_answer_and_no_feed_item
+    red_confirmed: false
+    red_reason: >-
+      The behavior pre-existed: before this change a query behind leading zeros was already answered
+      with its own terminator and an unterminated one already got no answer (the query check comes
+      first in the existing parse, and term_core already dispatched the query), so all four tests passed
+      before the change. They guard FR8 against the new length check; a temporary reordering of the
+      length check before the query check made them fail, then it was reverted.
+  AC-7:
+    tests:
+      - tabs::tests::output_pipeline::parity_every_corpus_row_ends_in_its_final_table_and_answer
+      - tabs::tests::output_pipeline::parity_corpus_rows_have_the_lengths_the_corpus_lists
+      - callbacks::tests::received_len_method_gives_other_codes_the_existing_behavior
+      - program_status::tests::parse_received_ac7_rejecting_or_ignoring_input_logs_nothing
+      - parser::tests::ac7_counting_and_saturating_in_the_osc_state_log_nothing
+    red_confirmed: true
+    red_reason: >-
+      parity_every_corpus_row_ends_in_its_final_table_and_answer failed before the responder used the
+      received length (row P3: left Root(Error), right Root(Working)). The other four tests passed
+      before the change: the corpus-length test checks the test builders, the theme-code test pins
+      unchanged behavior, and the two logging tests scan the changed sources for logging calls (the
+      sources had none). The --no-default-features check and the unchanged state of every existing
+      test are verified by the cargo check and the full suites above, not by a dedicated test.
