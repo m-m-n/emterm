@@ -3019,7 +3019,16 @@ mod program_status_daemon {
     }
 
     async fn report(mgr: &Arc<Mutex<SessionManager>>, body: &str) {
-        apply_program_status_report(mgr, PANE_ID, body.to_string(), Terminator::Bel).await;
+        // The canonical `7501;` introducer: the received length is 5 + body.
+        let received_len = 5 + body.len();
+        apply_program_status_report(
+            mgr,
+            PANE_ID,
+            body.to_string(),
+            received_len,
+            Terminator::Bel,
+        )
+        .await;
     }
 
     /// AC-3: an accepted report bumps the revision once and broadcasts one
@@ -3114,7 +3123,7 @@ mod program_status_daemon {
             report(&mgr, body).await;
             assert_quiet(&mut rx, body).await;
         }
-        apply_program_status_report(&mgr, PANE_ID, "?".to_string(), Terminator::St).await;
+        apply_program_status_report(&mgr, PANE_ID, "?".to_string(), 6, Terminator::St).await;
         assert_quiet(&mut rx, "query with ST").await;
         assert_eq!(revision_and_records(&mgr).await, (0, 0));
 
@@ -3226,7 +3235,8 @@ mod program_status_daemon {
     #[tokio::test]
     async fn ac4_items_for_an_unknown_pane_are_dropped() {
         let (mgr, _sid, mut rx) = detached_pane_manager().await;
-        apply_program_status_report(&mgr, 9999, "state=working".to_string(), Terminator::Bel).await;
+        apply_program_status_report(&mgr, 9999, "state=working".to_string(), 18, Terminator::Bel)
+            .await;
         apply_program_status_reset(&mgr, 9999).await;
         assert_quiet(&mut rx, "an unknown pane").await;
 
@@ -3401,5 +3411,544 @@ mod program_status_daemon {
         let mut ordered = b"\x1b]7501;state=working\x07\x1b]133;A\x07".to_vec();
         ordered.extend_from_slice(b"\x1b]7501;state=error\x07");
         assert_eq!(run_through_reader_and_task(ordered).await, (1, 3));
+    }
+}
+
+// ── OSC 7501 / OSC 133 recognition and the received-length rule through the
+//    real reader and the daemon task (osc7501-leading-zero-length task0002,
+//    AC-2 / AC-3 / AC-4) ─────────────────────────────────────────────────────
+
+mod leading_zero_length {
+    use super::*;
+    use crate::agent_status::AgentState;
+    use crate::mux::osc_identify::{OscIdentity, osc_body_identity};
+    use crate::mux::session::pane::MuxPane;
+    use crate::program_status::{Parsed, ProgramState, Report, Terminator, parse};
+
+    const PANE_ID: u32 = 78;
+    const ESC: u8 = 0x1b;
+
+    /// What a stream left behind in a pane after it went through the real
+    /// reader loop, the feed scanner and the agent-status task.
+    struct Driven {
+        /// The pane's OSC 7501 table afterwards, as `(id, state)` sorted by id
+        /// (the root record has the empty id).
+        records: Vec<(String, ProgramState)>,
+        /// The pane's revision once the seed was applied, before the stream.
+        revision_before: u64,
+        revision: u64,
+        /// The pane's OSC 777 state afterwards.
+        osc777_state: Option<AgentState>,
+        /// Every `AgentStatusUpdate` broadcast while the stream ran.
+        updates: Vec<AgentStatusUpdateMsg>,
+    }
+
+    fn report_of(body: &str) -> Report {
+        match parse(body, Terminator::Bel) {
+            Parsed::Report(report) => report,
+            other => panic!("{body}: expected a report, got {other:?}"),
+        }
+    }
+
+    fn seed_root_working(pane: &MuxPane) {
+        pane.apply_program_status_report(report_of("state=working"));
+    }
+
+    fn seed_no_records(_pane: &MuxPane) {}
+
+    /// `ESC ] <osc string> <terminator>`.
+    fn osc_stream(osc_string: &[u8], terminator: Terminator) -> Vec<u8> {
+        let mut bytes = vec![ESC, b']'];
+        bytes.extend_from_slice(osc_string);
+        match terminator {
+            Terminator::Bel => bytes.push(0x07),
+            Terminator::St => bytes.extend_from_slice(b"\x1b\\"),
+        }
+        bytes
+    }
+
+    /// `Z(n)`: n ASCII `0` bytes.
+    fn z(n: usize) -> Vec<u8> {
+        vec![b'0'; n]
+    }
+
+    /// `FF(n)`: n bytes of value 0xFF.
+    fn ff(n: usize) -> Vec<u8> {
+        vec![0xff; n]
+    }
+
+    fn cat(parts: &[&[u8]]) -> Vec<u8> {
+        parts.concat()
+    }
+
+    /// Feed `bytes` through the real reader loop and the daemon's
+    /// agent-status task of a Detached pane whose table the `seed` filled.
+    async fn drive(seed: impl FnOnce(&MuxPane), bytes: Vec<u8>) -> Driven {
+        use crate::mux::session::pane::{
+            DetachReason, MuxPane, PaneOutputTarget, SharedOutputTarget,
+        };
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+        }));
+        let pane = MuxPane::new_test(PANE_ID, 80, 24, target);
+        seed(&pane);
+        let revision_before = pane.agent_status.lock().unwrap().revision;
+        let (tx, rx) = mpsc::channel(16);
+        *pane.agent_status_report_sender.lock().unwrap() = Some(tx);
+
+        let sender_slot = pane.agent_status_report_sender.clone();
+        let (output_target, shadow_parser, cwd, title, title_sender) = (
+            pane.output_target.clone(),
+            pane.shadow_parser.clone(),
+            pane.cwd.clone(),
+            pane.title.clone(),
+            pane.title_sender.clone(),
+        );
+        let (notification_sender, raw_passthrough, passthrough_scanner, scrollback, dims, capture) = (
+            pane.notification_sender.clone(),
+            pane.raw_passthrough.clone(),
+            pane.passthrough_scanner.clone(),
+            pane.scrollback.clone(),
+            pane.dims.clone(),
+            pane.output_capture.clone(),
+        );
+
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let mut notify_rx = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+            m.notify_tx().subscribe()
+        };
+        let task = tokio::spawn(run_agent_status_task(mgr.clone(), rx));
+
+        let reader: Box<dyn std::io::Read + Send> = Box::new(std::io::Cursor::new(bytes));
+        let slot = sender_slot.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::mux::ipc::pty_spawn::pty_reader_loop(
+                PANE_ID,
+                reader,
+                output_target,
+                shadow_parser,
+                cwd,
+                title,
+                title_sender,
+                notification_sender,
+                slot,
+                raw_passthrough,
+                passthrough_scanner,
+                scrollback,
+                dims,
+                Arc::new(StdMutex::new(None)),
+                capture,
+            );
+        })
+        .await
+        .unwrap();
+        // Close the channel so the task drains and exits.
+        *sender_slot.lock().unwrap() = None;
+        task.await.unwrap();
+
+        let mut updates = Vec::new();
+        while let Ok(msg) = notify_rx.try_recv() {
+            assert_eq!(msg.msg_type, MessageType::AgentStatusUpdate);
+            updates.push(msg.decode_payload().unwrap());
+        }
+        let m = mgr.lock().await;
+        let (sid, wid) = m.find_pane(PANE_ID).unwrap();
+        let pane = &m.get_session(sid).unwrap().windows[&wid].panes[&PANE_ID];
+        let status = pane.agent_status.lock().unwrap();
+        let mut records: Vec<(String, ProgramState)> = status
+            .program_status
+            .iter()
+            .map(|(id, record)| (id.to_string(), record.state))
+            .collect();
+        records.sort_by(|a, b| a.0.cmp(&b.0));
+        Driven {
+            records,
+            revision_before,
+            revision: status.revision,
+            osc777_state: status.state,
+            updates,
+        }
+    }
+
+    fn root(state: ProgramState) -> Vec<(String, ProgramState)> {
+        vec![(String::new(), state)]
+    }
+
+    // ---- the SC-4 parity corpus (IMPLEMENTATION.md), mux half ----
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Final {
+        Empty,
+        RootWorking,
+        RootError,
+    }
+
+    impl Final {
+        fn table(self) -> Vec<(String, ProgramState)> {
+            match self {
+                Final::Empty => Vec::new(),
+                Final::RootWorking => root(ProgramState::Working),
+                Final::RootError => root(ProgramState::Error),
+            }
+        }
+    }
+
+    struct Row {
+        name: &'static str,
+        osc_string: Vec<u8>,
+        terminator: Terminator,
+        /// The row's strip verdict: `osc_body_identity` says `ProgramStatus`.
+        strip: bool,
+        final_table: Final,
+    }
+
+    /// The rows of SC-4. Every row starts from the table seeded by
+    /// `ESC ] 7501;state=working BEL`.
+    fn sc4_rows() -> Vec<Row> {
+        use Final::{Empty, RootError, RootWorking};
+        use Terminator::{Bel, St};
+        let row = |name, osc_string: Vec<u8>, terminator, strip, final_table| Row {
+            name,
+            osc_string,
+            terminator,
+            strip,
+            final_table,
+        };
+        vec![
+            row("P1", b"07501;state=clear".to_vec(), Bel, true, Empty),
+            row("P2", b"07501;state=clear".to_vec(), St, true, Empty),
+            row(
+                "P3",
+                cat(&[&z(4096), b"7501;state=error"]),
+                Bel,
+                true,
+                RootWorking,
+            ),
+            row(
+                "P4",
+                cat(&[&z(4077), b"7501;state=error"]),
+                Bel,
+                true,
+                RootError,
+            ),
+            row(
+                "P5",
+                cat(&[&z(4078), b"7501;state=error"]),
+                Bel,
+                true,
+                RootWorking,
+            ),
+            row(
+                "P6",
+                cat(&[&z(4076), b"7501;state=error"]),
+                St,
+                true,
+                RootError,
+            ),
+            row(
+                "P7",
+                cat(&[&z(4077), b"7501;state=error"]),
+                St,
+                true,
+                RootWorking,
+            ),
+            row(
+                "P8",
+                cat(&[b"7501;state=error:x=", &ff(4074)]),
+                Bel,
+                true,
+                RootError,
+            ),
+            row(
+                "P9",
+                cat(&[b"7501;state=error:x=", &ff(4075)]),
+                Bel,
+                true,
+                RootWorking,
+            ),
+            row("P10", b"x7501;:state=clear".to_vec(), Bel, true, Empty),
+            row("P11", b"7501x;state=clear".to_vec(), Bel, true, RootWorking),
+            row("P12", b"7501".to_vec(), Bel, true, RootWorking),
+            row("P13", b"7500;state=clear".to_vec(), Bel, false, RootWorking),
+            row(
+                "P14",
+                b"17501;state=clear".to_vec(),
+                Bel,
+                false,
+                RootWorking,
+            ),
+            row(
+                "P15",
+                b"75010;state=clear".to_vec(),
+                Bel,
+                false,
+                RootWorking,
+            ),
+            row(
+                "P16",
+                b"65536;state=clear".to_vec(),
+                Bel,
+                false,
+                RootWorking,
+            ),
+            row(
+                "P17",
+                b"655367501;state=clear".to_vec(),
+                Bel,
+                false,
+                RootWorking,
+            ),
+            row("P18", b"07501;?".to_vec(), Bel, true, RootWorking),
+            row("P19", cat(&[&z(5000), b"7501;?"]), St, true, RootWorking),
+            row("P20", b"7501;state=clear".to_vec(), Bel, true, Empty),
+            row(
+                "P21",
+                cat(&[&z(9000), b"7501;state=clear"]),
+                Bel,
+                true,
+                RootWorking,
+            ),
+            row(
+                "P22",
+                cat(&[&ff(1), b"7501;:state=clear"]),
+                Bel,
+                true,
+                Empty,
+            ),
+            row("P23", b"0133;A".to_vec(), Bel, false, Empty),
+            row("P24", b"133;A".to_vec(), Bel, false, Empty),
+        ]
+    }
+
+    fn sc4_row(name: &str) -> Row {
+        sc4_rows()
+            .into_iter()
+            .find(|row| row.name == name)
+            .unwrap_or_else(|| panic!("no SC-4 row {name}"))
+    }
+
+    async fn drive_row(row: &Row) -> Driven {
+        drive(
+            seed_root_working,
+            osc_stream(&row.osc_string, row.terminator),
+        )
+        .await
+    }
+
+    /// AC-4 (FR4, TM-4): every SC-4 row fed through the real reader and
+    /// daemon task ends in the row's final table, and the zero-allocation
+    /// identity of the row's OSC string matches the row's strip verdict. A
+    /// row that changes the table is exactly one broadcast; the others none.
+    #[tokio::test]
+    async fn leadzero_ac4_every_sc4_row_ends_in_its_final_table_and_strip_verdict() {
+        for row in sc4_rows() {
+            let driven = drive_row(&row).await;
+            assert_eq!(
+                driven.records,
+                row.final_table.table(),
+                "{}: final table",
+                row.name
+            );
+            let changed = row.final_table != Final::RootWorking;
+            assert_eq!(
+                driven.updates.len(),
+                usize::from(changed),
+                "{}: broadcasts",
+                row.name
+            );
+            assert_eq!(
+                driven.revision,
+                driven.revision_before + u64::from(changed),
+                "{}: revision",
+                row.name
+            );
+            let expected_identity = if row.strip {
+                OscIdentity::ProgramStatus
+            } else {
+                OscIdentity::NotIdentified
+            };
+            assert_eq!(
+                osc_body_identity(&row.osc_string),
+                expected_identity,
+                "{}: strip verdict",
+                row.name
+            );
+        }
+    }
+
+    // ---- AC-2 (FR1, FR3, TM-3) ----
+
+    /// AC-2: after `OSC 7501;state=working BEL`, `OSC 07501;state=clear BEL`
+    /// leaves no record (repro 2).
+    #[tokio::test]
+    async fn leadzero_ac2_a_leading_zero_clear_removes_the_record_a_report_made() {
+        let mut stream = osc_stream(b"7501;state=working", Terminator::Bel);
+        stream.extend_from_slice(&osc_stream(b"07501;state=clear", Terminator::Bel));
+        let driven = drive(seed_no_records, stream).await;
+        assert_eq!(driven.records, Vec::new());
+        assert_eq!(driven.updates.len(), 2, "one broadcast per accepted report");
+        assert_eq!(driven.revision, 2);
+        assert_eq!(driven.updates[1].program_status, None);
+    }
+
+    /// AC-2: the whole sequence is measured as received: P4 and P6 sit at the
+    /// limit and are accepted, P5 and P7 are one byte over and rejected; P8
+    /// is accepted and P9 rejected although both decode to far more bytes
+    /// than they arrived as.
+    #[tokio::test]
+    async fn leadzero_ac2_the_limit_is_applied_to_the_received_length() {
+        for (name, accepted) in [
+            ("P4", true),
+            ("P5", false),
+            ("P6", true),
+            ("P7", false),
+            ("P8", true),
+            ("P9", false),
+        ] {
+            let row = sc4_row(name);
+            let driven = drive_row(&row).await;
+            if accepted {
+                assert_eq!(driven.records, root(ProgramState::Error), "{name}");
+                assert_eq!(driven.updates.len(), 1, "{name}");
+                assert_eq!(driven.revision, driven.revision_before + 1, "{name}");
+            } else {
+                assert_eq!(driven.records, root(ProgramState::Working), "{name}");
+                assert_eq!(driven.updates.len(), 0, "{name}");
+                assert_eq!(driven.revision, driven.revision_before, "{name}");
+            }
+        }
+    }
+
+    /// AC-2: a query of any spelling or length changes nothing and
+    /// broadcasts nothing (the attached GUI answers it).
+    #[tokio::test]
+    async fn leadzero_ac2_a_query_of_any_spelling_or_length_changes_nothing() {
+        let queries: Vec<(&str, Vec<u8>, Terminator)> = vec![
+            ("7501;?", b"7501;?".to_vec(), Terminator::Bel),
+            ("7501;? ST", b"7501;?".to_vec(), Terminator::St),
+            ("07501;?", b"07501;?".to_vec(), Terminator::Bel),
+            ("0007501;? ST", b"0007501;?".to_vec(), Terminator::St),
+            (
+                "Z(5000) 7501;?",
+                cat(&[&z(5000), b"7501;?"]),
+                Terminator::St,
+            ),
+            (
+                "Z(5000) 7501;? BEL",
+                cat(&[&z(5000), b"7501;?"]),
+                Terminator::Bel,
+            ),
+        ];
+        for (name, osc_string, terminator) in queries {
+            let driven = drive(seed_root_working, osc_stream(&osc_string, terminator)).await;
+            assert_eq!(driven.records, root(ProgramState::Working), "{name}");
+            assert_eq!(driven.updates.len(), 0, "{name}");
+            assert_eq!(driven.revision, driven.revision_before, "{name}");
+        }
+    }
+
+    // ---- AC-3 (FR6) ----
+
+    fn seed_every_state(pane: &MuxPane) {
+        for body in [
+            "state=working:id=w",
+            "state=blocked:id=b",
+            "state=idle:id=i",
+            "state=done:id=d",
+            "state=error:id=e",
+        ] {
+            pane.apply_program_status_report(report_of(body));
+        }
+    }
+
+    /// AC-3: a live main-screen `OSC 0133;A` removes `working`, `blocked`
+    /// and `idle`, keeps `done` and `error`, and moves the revision once.
+    #[tokio::test]
+    async fn leadzero_ac3_a_live_leading_zero_prompt_start_removes_only_the_unfinished_records() {
+        let driven = drive(seed_every_state, osc_stream(b"0133;A", Terminator::Bel)).await;
+        assert_eq!(
+            driven.records,
+            vec![
+                ("d".to_string(), ProgramState::Done),
+                ("e".to_string(), ProgramState::Error)
+            ]
+        );
+        assert_eq!(driven.revision, driven.revision_before + 1);
+        assert_eq!(driven.updates.len(), 1);
+        assert_eq!(driven.updates[0].revision, driven.revision);
+        assert!(!driven.updates[0].replay_derived);
+    }
+
+    /// AC-3: an `OSC 0133;A` on the alternate screen removes nothing.
+    #[tokio::test]
+    async fn leadzero_ac3_a_leading_zero_prompt_start_on_the_alternate_screen_removes_nothing() {
+        let mut stream = b"\x1b[?1049h".to_vec();
+        stream.extend_from_slice(&osc_stream(b"0133;A", Terminator::Bel));
+        stream.extend_from_slice(b"\x1b[?1049l");
+        let driven = drive(seed_every_state, stream).await;
+        assert_eq!(driven.records.len(), 5);
+        assert_eq!(driven.revision, driven.revision_before);
+        assert_eq!(driven.updates.len(), 0);
+    }
+
+    /// The OSC 777 agent-status report every latch case starts from.
+    fn working_report() -> Vec<u8> {
+        osc_stream(
+            b"777;emterm;agent-status;v=1;state=working",
+            Terminator::Bel,
+        )
+    }
+
+    /// AC-3: a non-canonical prompt start never reaches the OSC 777
+    /// inferred-clear latch, while the canonical `D` then `A` still fires it.
+    #[tokio::test]
+    async fn leadzero_ac3_a_non_canonical_prompt_start_stays_away_from_the_inferred_clear_latch() {
+        let d = osc_stream(b"133;D", Terminator::Bel);
+        let a = osc_stream(b"133;A", Terminator::Bel);
+        let a_leading_zero = osc_stream(b"0133;A", Terminator::Bel);
+
+        // `working`, `D`, then a leading-zero `A`: the state stays set.
+        let stream = cat(&[&working_report(), &d, &a_leading_zero]);
+        let driven = drive(seed_no_records, stream).await;
+        assert_eq!(driven.osc777_state, Some(AgentState::Working));
+
+        // `working`, `D`, canonical `A`: the inferred clear fires.
+        let stream = cat(&[&working_report(), &d, &a]);
+        let driven = drive(seed_no_records, stream).await;
+        assert_eq!(driven.osc777_state, None);
+
+        // The leading-zero `A` between them consumed nothing: the canonical
+        // `A` after it still pairs with the `D` before it.
+        let stream = cat(&[&working_report(), &d, &a_leading_zero, &a]);
+        let driven = drive(seed_no_records, stream).await;
+        assert_eq!(driven.osc777_state, None);
+    }
+
+    /// AC-3: `OSC 0777;emterm;agent-status;…` is not a report: it changes no
+    /// OSC 777 state.
+    #[tokio::test]
+    async fn leadzero_ac3_a_leading_zero_agent_status_report_changes_no_osc_777_state() {
+        let stream = osc_stream(
+            b"0777;emterm;agent-status;v=1;state=working",
+            Terminator::Bel,
+        );
+        let driven = drive(seed_no_records, stream).await;
+        assert_eq!(driven.osc777_state, None);
+        assert_eq!(driven.revision, 0);
+        assert_eq!(driven.updates.len(), 0);
+
+        // The canonical spelling of the same report does set it.
+        let driven = drive(seed_no_records, working_report()).await;
+        assert_eq!(driven.osc777_state, Some(AgentState::Working));
     }
 }

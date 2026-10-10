@@ -33,10 +33,10 @@ pub const MAX_RECORDS: usize = 256;
 /// Longest title used as a name, in Unicode scalar values.
 pub const MAX_NAME_TITLE_CHARS: usize = 80;
 
-/// `ESC ]` — the two bytes in front of the OSC string.
+/// `ESC ] 7501 ;` — ESC, `]`, the four digits and `;`.
+const INTRODUCER_BYTES: usize = 7;
+/// `ESC ]` — the part of the introducer that is not the OSC string.
 const OSC_INTRODUCER_BYTES: usize = 2;
-/// `7501;` — the number and the `;` as the canonical entries spell them.
-const CANONICAL_NUMBER_BYTES: usize = 5;
 const MAX_ENCODED_TITLE_BYTES: usize = 256;
 const MAX_DECODED_TITLE_BYTES: usize = 192;
 const MAX_ENCODED_MSG_BYTES: usize = 2732;
@@ -197,40 +197,44 @@ pub enum Parsed {
     Ignored,
 }
 
-/// Parse the text that follows `7501;` in a terminated sequence. The OSC
-/// string is taken to be spelled canonically (`7501;` and the body), which
-/// is what the whole-sequence length is measured on.
+/// Parse the text that follows `7501;` in a terminated sequence.
 pub fn parse(body: &str, terminator: Terminator) -> Parsed {
     parse_bytes(body.as_bytes(), terminator)
 }
 
-/// [`parse`] for callers that hold the body as raw bytes.
+/// [`parse`] for callers that hold the body as raw bytes. The body is taken
+/// to follow the canonical `7501;` introducer, so the received length of the
+/// OSC string is that introducer plus the body.
 pub fn parse_bytes(body: &[u8], terminator: Terminator) -> Parsed {
     parse_received(
         body,
-        CANONICAL_NUMBER_BYTES.saturating_add(body.len()),
+        (INTRODUCER_BYTES - OSC_INTRODUCER_BYTES).saturating_add(body.len()),
         terminator,
     )
 }
 
-/// Parse a terminated sequence whose OSC string was received with
-/// `received_osc_len` bytes: everything between `ESC ]` and the terminator
-/// (leading zeros, every digit, the `;` and every body byte, counted as
-/// received, before any replacement of invalid UTF-8). `body` is the text
-/// that followed the number and the first `;`, as bytes.
+/// The single place the whole-sequence limit is computed
+/// (osc7501-leading-zero-length SC-3).
 ///
-/// A body of exactly `?` is a query whatever the length. Any other body is
-/// ignored when the whole sequence (`ESC ]`, the received string and the
-/// terminator, summed with saturation) exceeds [`MAX_SEQUENCE_BYTES`];
-/// otherwise the body grammar decides.
+/// `body` is the data of the OSC string as bytes (the lossily decoded text's
+/// bytes). `received_osc_len` is the number of bytes of the OSC string as
+/// received — leading zeros, every digit, the first `;` and every data byte
+/// before any replacement included, `ESC ]` and the terminator excluded.
+/// The string ended with BEL or ST: an unterminated string never reaches it.
+///
+/// A body that is exactly `?` is a query for any received length. Otherwise
+/// the sequence is ignored when `ESC ]`, the received string and the
+/// terminator, summed with saturation, exceed [`MAX_SEQUENCE_BYTES`];
+/// otherwise the result is exactly what the body grammar gives for `body`.
+/// Pure: no logging, no panic.
 pub fn parse_received(body: &[u8], received_osc_len: usize, terminator: Terminator) -> Parsed {
     if body == b"?" {
         return Parsed::Query;
     }
-    let whole_sequence = OSC_INTRODUCER_BYTES
+    let sequence_len = OSC_INTRODUCER_BYTES
         .saturating_add(received_osc_len)
         .saturating_add(terminator.len());
-    if whole_sequence > MAX_SEQUENCE_BYTES {
+    if sequence_len > MAX_SEQUENCE_BYTES {
         return Parsed::Ignored;
     }
 

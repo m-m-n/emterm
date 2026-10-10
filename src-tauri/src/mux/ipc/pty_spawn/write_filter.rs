@@ -3,6 +3,10 @@
 
 use std::borrow::Cow;
 
+use crate::mux::osc_identify::{
+    OSC_NUMBER_PROGRAM_STATUS, OSC_NUMBER_SEMANTIC_PROMPT, osc_body_number, recover_osc,
+};
+
 // The CSI sub-state and the written end state are defined in the shared strip
 // module (so that module never depends on the IPC layer); both stay nameable
 // here. Inside a CSI the written end state carries the strip's classification
@@ -1447,6 +1451,14 @@ pub(super) const AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP: usize = 8 * 1024;
 /// An OSC 7501 body shares the bounded carry of every other body: one longer
 /// than [`AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP`], or one that never
 /// terminates, yields no item and the retained bytes never exceed the bound.
+///
+/// OSC 7501 and OSC 133 are recognized by the shared recognition rule
+/// ([`osc_body_number`]), so a leading-zero number or non-digit bytes before
+/// the first `;` name the same sequence the client's parser dispatches
+/// (osc7501-leading-zero-length FR3 / FR6); an OSC 777 agent-status report
+/// stays canonical-only. The OSC 7501 item carries the received length of the
+/// OSC string next to its body, so the 4096-byte rule is applied to what
+/// arrived (FR1 / FR7).
 pub(super) struct AgentStatusFeedScanner {
     state: AgentStatusFeedScanState,
     /// Body bytes accumulated for the in-flight OSC (introducer and
@@ -1569,6 +1581,19 @@ impl AgentStatusFeedScanner {
     /// terminator's final byte): emit a report (OSC 777 or OSC 7501)
     /// unconditionally, or a mark only when `idx` falls inside `live_spans`
     /// (FR5), then reset to `Idle` either way.
+    ///
+    /// The recognition order (osc7501-leading-zero-length FR3 / FR6):
+    ///
+    /// 1. A body that starts with the canonical OSC 777 agent-status prefix
+    ///    is a report (canonical-only, osc7501-program-status FR18).
+    /// 2. Otherwise the OSC number comes from the shared recognition rule
+    ///    ([`osc_body_number`]), never from an accumulation of the scanner's
+    ///    own. Number 7501 is an OSC 7501 item whatever the live spans say:
+    ///    its body is the shared-rule data decoded the way `term_core`
+    ///    decodes it ([`recover_osc`]), and it carries the received length of
+    ///    the OSC string, which is the raw body length.
+    /// 3. Number 133 inside a live span is a mark, see [`osc133_item`].
+    /// 4. Anything else gives nothing.
     fn commit(
         &mut self,
         idx: usize,
@@ -1580,24 +1605,19 @@ impl AgentStatusFeedScanner {
             let mut payload = String::from("emterm;agent-status;");
             payload.push_str(&String::from_utf8_lossy(rest));
             out.push(AgentStatusFeedItem::Report(payload));
-        } else if let Some(rest) = self.body.strip_prefix(b"7501;") {
-            // A byte outside ASCII becomes DEL: it keeps its one-byte width,
-            // so the sequence-length rule counts what arrived, and DEL lies
-            // outside every key and value alphabet, so the pair is skipped
-            // exactly as the original byte would have been.
-            let body = rest
-                .iter()
-                .map(|&b| if b.is_ascii() { b as char } else { '\u{7f}' })
-                .collect();
-            out.push(AgentStatusFeedItem::ProgramStatus { body, terminator });
-        } else if live_spans.iter().any(|r| r.contains(&idx)) {
-            if let Some(rest) = self.body.strip_prefix(b"133;") {
-                let head = rest.split(|&b| b == b';').next().unwrap_or(rest);
-                if head.len() == 1 {
-                    if let Some(kind) = crate::prompts::PromptMarkKind::from_byte(head[0]) {
-                        out.push(AgentStatusFeedItem::Osc133Mark(kind));
-                    }
+        } else {
+            match osc_body_number(&self.body) {
+                Some(OSC_NUMBER_PROGRAM_STATUS) => {
+                    out.push(AgentStatusFeedItem::ProgramStatus {
+                        body: recover_osc(&self.body).data,
+                        received_len: self.body.len(),
+                        terminator,
+                    });
                 }
+                Some(OSC_NUMBER_SEMANTIC_PROMPT) if live_spans.iter().any(|r| r.contains(&idx)) => {
+                    out.extend(osc133_item(&self.body));
+                }
+                _ => {}
             }
         }
         self.reset();
@@ -1613,4 +1633,31 @@ impl AgentStatusFeedScanner {
     pub(super) fn retained_len(&self) -> usize {
         self.body.len()
     }
+}
+
+/// The item for a completed OSC string whose number is 133 and whose
+/// terminator lies inside a live span (osc7501-leading-zero-length FR6).
+///
+/// A canonical mark — the body starts with `133;` and the first `;`-separated
+/// segment after it is one valid kind byte — is the existing
+/// [`AgentStatusFeedItem::Osc133Mark`], which feeds the OSC 777 exit latch.
+/// Any other spelling of the number is a mark only through the shared
+/// recognition rule: when the first `;`-separated segment of the data is the
+/// single prompt-start kind byte, the client's parser takes the string as a
+/// prompt start all the same, and the item is
+/// [`AgentStatusFeedItem::NonCanonicalPromptStart`], which never reaches the
+/// latch. Other kinds, in either spelling, give nothing.
+fn osc133_item(body: &[u8]) -> Option<AgentStatusFeedItem> {
+    if let Some(rest) = body.strip_prefix(b"133;") {
+        // With the canonical introducer the data is exactly `rest`, so a
+        // prompt start is canonical and no other spelling can match here.
+        let head = rest.split(|&b| b == b';').next().unwrap_or(rest);
+        return match head {
+            [kind] => crate::prompts::PromptMarkKind::from_byte(*kind)
+                .map(AgentStatusFeedItem::Osc133Mark),
+            _ => None,
+        };
+    }
+    let data = recover_osc(body).data;
+    (data.split(';').next() == Some("A")).then_some(AgentStatusFeedItem::NonCanonicalPromptStart)
 }
