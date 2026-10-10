@@ -942,6 +942,56 @@ mod tests {
         );
     }
 
+    // ---- osc7501-leading-zero-length task0002 AC-5 (FR5, FR8): leading-zero,
+    //      long and out-of-range OSC 7501 queries ----
+
+    /// AC-5: a query with a leading-zero number, and one preceded by five
+    /// thousand zeros, is one item spanning the whole sequence: the length of
+    /// the sequence does not matter to the delivery scan (FR8).
+    #[test]
+    fn leadzero_scan_reports_leading_zero_and_long_queries_as_one_item_each() {
+        let mut long = b"\x1b]".to_vec();
+        long.extend(std::iter::repeat_n(b'0', 5000));
+        long.extend_from_slice(b"7501;?\x07");
+        for chunk in [
+            b"\x1b]07501;?\x07".to_vec(),
+            b"\x1b]07501;?\x1b\\".to_vec(),
+            long,
+        ] {
+            let outcome = scan(&[], &chunk, &[]);
+            assert_eq!(
+                outcome.items,
+                vec![ScanItem {
+                    kind: ScanItemKind::ProgramStatusQuery,
+                    range: 0..chunk.len()
+                }],
+                "chunk of {} bytes",
+                chunk.len()
+            );
+            assert_eq!(outcome.tail, None);
+        }
+    }
+
+    /// AC-5: a number above the `u16` range is no 7501 query, however its
+    /// digits end.
+    #[test]
+    fn leadzero_scan_reports_no_item_for_out_of_range_numbers() {
+        for chunk in [
+            b"\x1b]65536;?\x07".as_slice(),
+            b"\x1b]655367501;?\x07",
+            b"\x1b]655367501;?\x1b\\",
+        ] {
+            let outcome = scan(&[], chunk, &[]);
+            assert!(
+                outcome.items.is_empty(),
+                "chunk {:?}: {:?}",
+                String::from_utf8_lossy(chunk),
+                outcome.items
+            );
+            assert_eq!(outcome.tail, None);
+        }
+    }
+
     fn count_occurrences(haystack: &[u8], needle: &[u8]) -> usize {
         haystack
             .windows(needle.len())

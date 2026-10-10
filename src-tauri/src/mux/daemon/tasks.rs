@@ -297,20 +297,26 @@ fn find_pane_by_id(mgr: &SessionManager, pane_id: u32) -> Option<&MuxPane> {
 /// Apply one complete OSC 7501 sequence to its pane and broadcast the result
 /// (osc7501-program-status FR14, D7).
 ///
-/// `body` is the text after `7501;`. It is parsed first, outside the
-/// session-manager lock: a query (the attached GUI answers it, A3) or a
-/// discarded / ignored body changes nothing and broadcasts nothing; the
-/// rejected input is not logged. An accepted report is applied to the pane's
-/// record table (the revision moves once) and exactly one
+/// `body` is the OSC string's data under the shared recognition rule (the
+/// number and the first `;` removed) and `received_len` the received length
+/// of the OSC string; `program_status::parse_received` measures the 4096-byte
+/// limit on the latter (osc7501-leading-zero-length FR1 / FR7). It is parsed
+/// first, outside the session-manager lock: a query (the attached GUI answers
+/// it, A3) or a discarded / ignored body changes nothing and broadcasts
+/// nothing; the rejected input is not logged. An accepted report is applied to
+/// the pane's record table (the revision moves once) and exactly one
 /// `AgentStatusUpdate` (`replay_derived: false`) is broadcast. Nothing
 /// depends on whether a GUI is attached.
 pub(super) async fn apply_program_status_report(
     session_manager: &Arc<Mutex<SessionManager>>,
     pane_id: u32,
     body: String,
+    received_len: usize,
     terminator: Terminator,
 ) {
-    let Parsed::Report(report) = crate::program_status::parse(&body, terminator) else {
+    let Parsed::Report(report) =
+        crate::program_status::parse_received(body.as_bytes(), received_len, terminator)
+    else {
         return;
     };
 
@@ -327,6 +333,37 @@ pub(super) async fn apply_program_status_report(
 
     if let Err(e) = notify_tx.send(msg) {
         log::debug!("apply_program_status_report: no active subscribers: {}", e);
+    }
+}
+
+/// Apply a non-canonical live OSC 133 prompt start to its pane's OSC 7501
+/// records only (osc7501-leading-zero-length FR6) and — only if a record was
+/// removed — broadcast the resulting update through the same path an accepted
+/// report takes. The OSC 777 inferred-clear latch is not involved: the pane
+/// operation never touches it.
+pub(super) async fn apply_program_status_prompt_start(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    pane_id: u32,
+) {
+    let mgr = session_manager.lock().await;
+    // An unknown pane is dropped quietly: nothing about it is logged.
+    let Some(pane) = find_pane_by_id(&mgr, pane_id) else {
+        return;
+    };
+
+    let Some(revision) = pane.apply_program_status_prompt_start() else {
+        // No record was removed: no change, no broadcast.
+        return;
+    };
+    let msg = build_agent_status_update_message(&mgr, pane, pane_id, revision);
+    let notify_tx = mgr.notify_tx().clone();
+    drop(mgr);
+
+    if let Err(e) = notify_tx.send(msg) {
+        log::debug!(
+            "apply_program_status_prompt_start: no active subscribers: {}",
+            e
+        );
     }
 }
 
@@ -362,8 +399,9 @@ pub(super) async fn apply_program_status_reset(
 /// attach state, SPEC FR3) and dispatches each [`AgentStatusFeedItem`] to
 /// [`apply_agent_status_report`] (an OSC 777 report),
 /// [`apply_live_osc133_mark`] (task0003, a live OSC 133 mark),
-/// [`apply_program_status_report`] (a complete OSC 7501) or
-/// [`apply_program_status_reset`] (RIS) IN RECEIVE ORDER — a single
+/// [`apply_program_status_report`] (a complete OSC 7501),
+/// [`apply_program_status_prompt_start`] (a non-canonical live OSC 133
+/// prompt start) or [`apply_program_status_reset`] (RIS) IN RECEIVE ORDER — a single
 /// sequential `while let` loop over one channel, never two
 /// independently-scheduled queues, is what gives SPEC FR4 its ordering
 /// guarantee. Exits when all senders are dropped (daemon shutdown).
@@ -380,8 +418,22 @@ pub(super) async fn run_agent_status_task(
             AgentStatusFeedItem::Osc133Mark(kind) => {
                 apply_live_osc133_mark(&session_manager, pane_id, kind).await;
             }
-            AgentStatusFeedItem::ProgramStatus { body, terminator } => {
-                apply_program_status_report(&session_manager, pane_id, body, terminator).await;
+            AgentStatusFeedItem::ProgramStatus {
+                body,
+                received_len,
+                terminator,
+            } => {
+                apply_program_status_report(
+                    &session_manager,
+                    pane_id,
+                    body,
+                    received_len,
+                    terminator,
+                )
+                .await;
+            }
+            AgentStatusFeedItem::NonCanonicalPromptStart => {
+                apply_program_status_prompt_start(&session_manager, pane_id).await;
             }
             AgentStatusFeedItem::Reset => {
                 apply_program_status_reset(&session_manager, pane_id).await;
