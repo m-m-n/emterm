@@ -108,7 +108,8 @@ tasks:
     domains:
     - api-contract
     complexity: low
-    status: pending
+    status: in_progress
+    branch: em-workflow/pane-state-rank-unify/task0001
     requirements:
     - FR1
     - FR2
