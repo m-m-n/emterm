@@ -1,10 +1,10 @@
 schema_version: 1
 feature: mux-upgrade-exited-pane-revision
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
 base_revision: 99535d3bf02b44ed67554d9cd4bd7ee6346a8c5e
-last_input_digest: null
+last_input_digest: sha256:29ba2508c52f0e37b990f157b9c253599d57eaa5ee0d9d1b98743b55742a09a3
 active_request_id: null
 packets: {}
 answers:
@@ -17,9 +17,47 @@ answers:
     - derive_from_task_description
     freeform: null
     normalized_answer: mux-upgrade-exited-pane-revision
-    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option_id derive_from_task_description (Notion タスクタイトル『mux hot-upgrade: 終了済みペインの OSC 7501 記録だけが更新され、更新番号が古いまま引き継がれる』から導出)'
-worker_runs: []
-artifacts: []
+    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option_id
+      derive_from_task_description (Notion タスクタイトル『mux hot-upgrade: 終了済みペインの OSC 7501
+      記録だけが更新され、更新番号が古いまま引き継がれる』から導出)'
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-10-10T21:05:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: skipped
+    resolution_note: 'gate: create-spec.design-step; batch-policies.yaml option_id
+      decide_autonomously（analyst 推奨: UI の変更が無い）'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-10-10T21:05:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: src-tauri/web-shared/settings/ui-theme-presets.ts'
+    resolution_note: 'gate: create-spec.design-system; batch-policies.yaml option_id
+      top_candidate_or_none（候補 1 件）'
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:fa19d94e15383ad3af9c18f8a3fe8afaa97f38fb3586900fe0f6eda3a89f9063
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:29ba2508c52f0e37b990f157b9c253599d57eaa5ee0d9d1b98743b55742a09a3
+  output_digest: null
+artifacts:
+- path: feature-docs/mux-upgrade-exited-pane-revision/REQUIREMENTS.md
+  sha256: sha256:f5024912b123824ad3269adc2ff1bcffb5f807ce5e17200585e88959ebd090b9
+  produced_by: create-spec-run-0002
+- path: feature-docs/mux-upgrade-exited-pane-revision/SPEC.md
+  sha256: sha256:1c5d00572de208e4f76dfa562f13fb4650e382803228486f25c0e94f13ca757d
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
