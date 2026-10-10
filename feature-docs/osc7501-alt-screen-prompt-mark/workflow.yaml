@@ -143,6 +143,8 @@ tasks:
     - input-handling
     - api-contract
     complexity: high
+    status: in_progress
+    branch: em-workflow/osc7501-alt-screen-prompt-mark/task0001
     requirements:
     - FR1
     - FR2
