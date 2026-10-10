@@ -1,7 +1,7 @@
 schema_version: 1
 feature: osc7501-alt-screen-prompt-mark
 phase: create-spec
-status: in_progress
+status: completed
 generation: 1
 base_revision: 70e3d1e54e558c90413ef6456e767076351431ec
 last_input_digest: sha256:ee6c7da01a50f95fd02cb85c6d77463e8457327117e1f0a4a38df3d8e63d091c
