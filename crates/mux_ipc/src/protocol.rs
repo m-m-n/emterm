@@ -963,7 +963,12 @@ pub struct ProgramStatusSummary {
 /// encoding of the leading fields never changes): the pane's OSC 7501
 /// summary, absent when the pane has no OSC 7501 records. A reader that
 /// predates the item ignores the trailing bytes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Decoding is hand-written so that a payload from an older daemon (six
+/// items, no trailing `program_status`) still decodes, with
+/// `program_status = None`. bincode 1 cannot absorb a missing trailing item
+/// via `serde(default)`; a failure to read the 7th item is treated as absent.
+#[derive(Debug, Clone, Serialize)]
 pub struct AgentStatusUpdateMsg {
     pub pane_id: u32,
     pub public_pane_id: String,
@@ -972,6 +977,68 @@ pub struct AgentStatusUpdateMsg {
     pub revision: u64,
     pub replay_derived: bool,
     pub program_status: Option<ProgramStatusSummary>,
+}
+
+impl<'de> Deserialize<'de> for AgentStatusUpdateMsg {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = AgentStatusUpdateMsg;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("struct AgentStatusUpdateMsg")
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                use serde::de::Error;
+                let pane_id = seq
+                    .next_element()?
+                    .ok_or_else(|| Error::invalid_length(0, &self))?;
+                let public_pane_id = seq
+                    .next_element()?
+                    .ok_or_else(|| Error::invalid_length(1, &self))?;
+                let state = seq
+                    .next_element()?
+                    .ok_or_else(|| Error::invalid_length(2, &self))?;
+                let name = seq
+                    .next_element()?
+                    .ok_or_else(|| Error::invalid_length(3, &self))?;
+                let revision = seq
+                    .next_element()?
+                    .ok_or_else(|| Error::invalid_length(4, &self))?;
+                let replay_derived = seq
+                    .next_element()?
+                    .ok_or_else(|| Error::invalid_length(5, &self))?;
+                // Older senders omit the trailing item: EOF here means absent.
+                let program_status = seq.next_element().ok().flatten().flatten();
+                Ok(AgentStatusUpdateMsg {
+                    pane_id,
+                    public_pane_id,
+                    state,
+                    name,
+                    revision,
+                    replay_derived,
+                    program_status,
+                })
+            }
+        }
+        deserializer.deserialize_struct(
+            "AgentStatusUpdateMsg",
+            &[
+                "pane_id",
+                "public_pane_id",
+                "state",
+                "name",
+                "revision",
+                "replay_derived",
+                "program_status",
+            ],
+            V,
+        )
+    }
 }
 
 /// Request: read the last `lines` lines of a mux pane's visible content.
