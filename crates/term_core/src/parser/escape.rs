@@ -19,6 +19,7 @@ impl Parser {
                 self.osc_buffer.clear();
                 self.osc_param = 0;
                 self.osc_param_done = false;
+                self.osc_received_len = 0;
             }
             // APC introducer (for Kitty Graphics Protocol)
             b'_' => {

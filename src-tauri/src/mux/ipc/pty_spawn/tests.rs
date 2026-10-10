@@ -8901,16 +8901,31 @@ mod program_status_feed {
     const ESC: u8 = 0x1b;
     const BEL: u8 = 0x07;
 
+    /// An OSC 7501 item for the canonical `7501;` introducer: the received
+    /// length is the introducer's five bytes plus the body.
     fn ps(body: &str, terminator: Terminator) -> AgentStatusFeedItem {
+        ps_received(body, 5 + body.len(), terminator)
+    }
+
+    /// An OSC 7501 item with an explicit received length (the byte count of
+    /// the OSC string between `ESC ]` and the terminator, as received).
+    fn ps_received(body: &str, received_len: usize, terminator: Terminator) -> AgentStatusFeedItem {
         AgentStatusFeedItem::ProgramStatus {
             body: body.to_string(),
+            received_len,
             terminator,
         }
     }
 
     fn osc(body: &str, terminator: Terminator) -> Vec<u8> {
+        osc_bytes(body.as_bytes(), terminator)
+    }
+
+    /// `ESC ] <osc string> <terminator>` for an OSC string that is not
+    /// necessarily valid UTF-8.
+    fn osc_bytes(body: &[u8], terminator: Terminator) -> Vec<u8> {
         let mut bytes = vec![ESC, b']'];
-        bytes.extend_from_slice(body.as_bytes());
+        bytes.extend_from_slice(body);
         match terminator {
             Terminator::Bel => bytes.push(BEL),
             Terminator::St => bytes.extend_from_slice(b"\x1b\\"),
@@ -8949,16 +8964,20 @@ mod program_status_feed {
         );
     }
 
-    /// AC-1: only the canonical `7501;` prefix is an OSC 7501.
+    /// AC-1 (osc7501-leading-zero-length FR3, FR9): the shared number rule
+    /// decides what is an OSC 7501. A leading-zero spelling and a body
+    /// without `;` are one; a neighbouring number is not.
     #[test]
-    fn ac1_only_the_canonical_prefix_is_an_osc_7501() {
-        for body in [
-            "7501",
-            "75010;x",
-            "07501;state=idle",
-            "750;state=idle",
-            "7502;x",
-        ] {
+    fn ac1_the_shared_number_rule_decides_what_is_an_osc_7501() {
+        assert_eq!(
+            scan(&osc("07501;state=idle", Terminator::Bel)),
+            vec![ps_received("state=idle", 16, Terminator::Bel)]
+        );
+        assert_eq!(
+            scan(&osc("7501", Terminator::Bel)),
+            vec![ps_received("", 4, Terminator::Bel)]
+        );
+        for body in ["75010;x", "750;state=idle", "7502;x"] {
             assert_eq!(scan(&osc(body, Terminator::Bel)), vec![], "{body}");
         }
     }
@@ -9182,5 +9201,249 @@ mod program_status_feed {
             vec![ps("state=done", Terminator::Bel)]
         );
         assert_eq!(scanner.retained_len(), 0);
+    }
+
+    // ---- osc7501-leading-zero-length task0002 AC-1 / AC-3 (FR3, FR6, FR7,
+    //      NFR3): the shared number rule at the feed scanner ----
+
+    const BOTH_TERMINATORS: [Terminator; 2] = [Terminator::Bel, Terminator::St];
+
+    /// AC-1: each spelling of 7501 yields exactly one item whose body is the
+    /// shared-rule data and whose received length is the raw byte count
+    /// between `ESC ]` and the terminator, with BEL and with ST.
+    #[test]
+    fn leadzero_ac1_each_spelling_of_7501_yields_one_item_with_its_data_and_received_length() {
+        let cases: &[(&str, &str)] = &[
+            ("07501;state=idle", "state=idle"),
+            ("x7501;:state=clear", "x:state=clear"),
+            ("7501", ""),
+            ("7501;state=idle", "state=idle"),
+            ("7501x;state=clear", "xstate=clear"),
+            ("75x01;?", "x?"),
+            ("0000007501;state=done", "state=done"),
+            ("7501;", ""),
+        ];
+        for &(osc_string, data) in cases {
+            for terminator in BOTH_TERMINATORS {
+                assert_eq!(
+                    scan(&osc(osc_string, terminator)),
+                    vec![ps_received(data, osc_string.len(), terminator)],
+                    "{osc_string} {terminator:?}"
+                );
+            }
+        }
+    }
+
+    /// AC-1: numbers that are not 7501 under the shared rule yield no item,
+    /// and an OSC 777 agent-status report is canonical-only.
+    #[test]
+    fn leadzero_ac1_other_numbers_yield_no_item_and_agent_status_stays_canonical() {
+        for osc_string in [
+            "7500;x",
+            "7502;x",
+            "750;state=idle",
+            "17501;x",
+            "75010;x",
+            "65536;x",
+            "655367501;state=error",
+            "0777;emterm;agent-status;v=1;state=working",
+            "777x;emterm;agent-status;v=1;state=working",
+        ] {
+            for terminator in BOTH_TERMINATORS {
+                assert_eq!(
+                    scan(&osc(osc_string, terminator)),
+                    vec![],
+                    "{osc_string} {terminator:?}"
+                );
+            }
+        }
+        assert_eq!(
+            scan(&osc(
+                "777;emterm;agent-status;v=1;state=working",
+                Terminator::Bel
+            )),
+            vec![AgentStatusFeedItem::Report(
+                "emterm;agent-status;v=1;state=working".to_string()
+            )]
+        );
+    }
+
+    /// AC-1 (D3): the body is the data decoded lossily, one U+FFFD per
+    /// invalid byte, while the received length counts the raw bytes.
+    #[test]
+    fn leadzero_ac1_invalid_bytes_are_decoded_lossily_and_counted_as_received() {
+        // FF(1) `7501;:state=clear`
+        let mut osc_string = vec![0xff];
+        osc_string.extend_from_slice(b"7501;:state=clear");
+        assert_eq!(
+            scan(&osc_bytes(&osc_string, Terminator::Bel)),
+            vec![ps_received(
+                "\u{fffd}:state=clear",
+                osc_string.len(),
+                Terminator::Bel
+            )]
+        );
+
+        // `7501;state=error:x=` FF(4074): the decoded body is far longer than
+        // the received length.
+        let mut osc_string = b"7501;state=error:x=".to_vec();
+        osc_string.extend(std::iter::repeat_n(0xffu8, 4074));
+        let expected_body = format!("state=error:x={}", "\u{fffd}".repeat(4074));
+        assert_eq!(osc_string.len(), 4093);
+        assert_eq!(
+            scan(&osc_bytes(&osc_string, Terminator::Bel)),
+            vec![ps_received(&expected_body, 4093, Terminator::Bel)]
+        );
+    }
+
+    /// AC-3: a live prompt start in a non-canonical spelling yields the
+    /// prompt-start-only item; the canonical spelling keeps the mark item.
+    #[test]
+    fn leadzero_ac3_a_non_canonical_live_prompt_start_yields_the_prompt_start_only_item() {
+        for osc_string in [
+            "0133;A",
+            "00133;A",
+            "133A",
+            "1A33",
+            "0133;A;aid=1",
+            "133;A;aid=1",
+            "0133;A;",
+        ] {
+            let expected = if osc_string.starts_with("133;A") {
+                AgentStatusFeedItem::Osc133Mark(crate::prompts::PromptMarkKind::PromptStart)
+            } else {
+                AgentStatusFeedItem::NonCanonicalPromptStart
+            };
+            for terminator in BOTH_TERMINATORS {
+                assert_eq!(
+                    scan(&osc(osc_string, terminator)),
+                    vec![expected.clone()],
+                    "{osc_string} {terminator:?}"
+                );
+            }
+        }
+    }
+
+    /// AC-3: other OSC 133 kinds and near misses in a non-canonical spelling
+    /// give nothing; so does a non-canonical prompt start outside every live
+    /// span (the alternate screen).
+    #[test]
+    fn leadzero_ac3_only_a_live_non_canonical_prompt_start_is_an_item() {
+        for osc_string in [
+            "0133;B", "0133;C", "0133;D;0", "0133;AB", "0133;a", "0133;", "0133", "133", "x133;A",
+            "133x;A", "134;A", "01330;A", "65536;A", "133;E",
+        ] {
+            assert_eq!(
+                scan(&osc(osc_string, Terminator::Bel)),
+                vec![],
+                "{osc_string}"
+            );
+        }
+        for osc_string in ["0133;A", "133A", "133;A"] {
+            assert_eq!(
+                AgentStatusFeedScanner::new().feed(&osc(osc_string, Terminator::Bel), &[]),
+                vec![],
+                "{osc_string} outside every live span"
+            );
+        }
+    }
+
+    /// AC-1: OSC 7501 in a leading-zero spelling is unconditional like the
+    /// canonical one: it is emitted outside every live span.
+    #[test]
+    fn leadzero_ac1_a_leading_zero_7501_is_emitted_outside_live_spans() {
+        let mut chunk = osc("07501;state=error", Terminator::Bel);
+        chunk.extend_from_slice(&osc("0133;A", Terminator::Bel));
+        assert_eq!(
+            AgentStatusFeedScanner::new().feed(&chunk, &[]),
+            vec![ps_received("state=error", 17, Terminator::Bel)]
+        );
+    }
+
+    /// AC-1: the new spellings keep the exact byte order of the stream, also
+    /// when the stream is cut at any single offset and when it arrives one
+    /// byte at a time.
+    #[test]
+    fn leadzero_ac1_new_spellings_keep_byte_order_across_any_split() {
+        let mut bytes = Vec::new();
+        let mut expected = Vec::new();
+        bytes.extend_from_slice(&osc("07501;state=working", Terminator::Bel));
+        expected.push(ps_received("state=working", 19, Terminator::Bel));
+        bytes.extend_from_slice(&osc("0133;A", Terminator::Bel));
+        expected.push(AgentStatusFeedItem::NonCanonicalPromptStart);
+        bytes.extend_from_slice(&osc("x7501;:state=clear", Terminator::St));
+        expected.push(ps_received("x:state=clear", 18, Terminator::St));
+        bytes.extend_from_slice(&osc("133;D", Terminator::Bel));
+        expected.push(AgentStatusFeedItem::Osc133Mark(
+            crate::prompts::PromptMarkKind::CommandEnd,
+        ));
+        bytes.extend_from_slice(&osc("133;A", Terminator::St));
+        expected.push(AgentStatusFeedItem::Osc133Mark(
+            crate::prompts::PromptMarkKind::PromptStart,
+        ));
+        bytes.extend_from_slice(&osc("7501", Terminator::Bel));
+        expected.push(ps_received("", 4, Terminator::Bel));
+        assert_eq!(scan(&bytes), expected);
+
+        for cut in 0..=bytes.len() {
+            let mut scanner = AgentStatusFeedScanner::new();
+            let mut items = feed_live(&mut scanner, &bytes[..cut]);
+            items.extend(feed_live(&mut scanner, &bytes[cut..]));
+            assert_eq!(items, expected, "cut at {cut}");
+        }
+        let mut scanner = AgentStatusFeedScanner::new();
+        let mut items = Vec::new();
+        for byte in &bytes {
+            items.extend(feed_live(&mut scanner, std::slice::from_ref(byte)));
+        }
+        assert_eq!(items, expected, "one byte at a time");
+    }
+
+    /// AC-1 / AC-7: leading zeros count toward the carry bound. An OSC string
+    /// of exactly the bound is delivered with its received length; one byte
+    /// more, or a long run of zeros, yields no item, and the retained bytes
+    /// never exceed the bound.
+    #[test]
+    fn leadzero_ac1_leading_zeros_count_toward_the_carry_bound() {
+        let tail = "7501;state=error";
+        let zeros_to = |total: usize| format!("{}{tail}", "0".repeat(total - tail.len()));
+
+        let at_bound = zeros_to(AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP);
+        assert_eq!(
+            scan(&osc(&at_bound, Terminator::Bel)),
+            vec![ps_received(
+                "state=error",
+                AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP,
+                Terminator::Bel
+            )]
+        );
+
+        let above = zeros_to(AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP + 1);
+        assert_eq!(scan(&osc(&above, Terminator::Bel)), vec![]);
+
+        // 9000 zeros then `7501;state=clear`: dropped by the bound, in any
+        // piece size, and the scanner recovers for the next sequence.
+        let mut stream = osc(
+            &format!("{}7501;state=clear", "0".repeat(9000)),
+            Terminator::Bel,
+        );
+        stream.extend_from_slice(&osc("7501;state=done", Terminator::Bel));
+        for piece in [stream.len(), 1000, 7, 1] {
+            let mut scanner = AgentStatusFeedScanner::new();
+            let mut items = Vec::new();
+            for chunk in stream.chunks(piece) {
+                items.extend(feed_live(&mut scanner, chunk));
+                assert!(
+                    scanner.retained_len() <= AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP,
+                    "piece {piece}: retained {} bytes",
+                    scanner.retained_len()
+                );
+            }
+            assert_eq!(
+                items,
+                vec![ps("state=done", Terminator::Bel)],
+                "piece {piece}"
+            );
+        }
     }
 }

@@ -1,0 +1,137 @@
+task_id: task0002
+baseline_failures: []          # 4a: 4615 passed, 0 failed, 3 ignored before the first edit
+final_failures: []             # re-executed after the implementation and the record: 4642 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::program_status_feed::leadzero_ac1_each_spelling_of_7501_yields_one_item_with_its_data_and_received_length
+      - mux::ipc::pty_spawn::tests::program_status_feed::leadzero_ac1_other_numbers_yield_no_item_and_agent_status_stays_canonical
+      - mux::ipc::pty_spawn::tests::program_status_feed::leadzero_ac1_invalid_bytes_are_decoded_lossily_and_counted_as_received
+      - mux::ipc::pty_spawn::tests::program_status_feed::leadzero_ac1_a_leading_zero_7501_is_emitted_outside_live_spans
+      - mux::ipc::pty_spawn::tests::program_status_feed::leadzero_ac1_new_spellings_keep_byte_order_across_any_split
+      - mux::ipc::pty_spawn::tests::program_status_feed::leadzero_ac1_leading_zeros_count_toward_the_carry_bound
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_items_keep_exact_byte_order_with_reports_and_live_marks
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_a_sequence_split_across_reads_yields_the_same_items
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac2_a_body_above_the_carry_bound_yields_no_item
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac2_retained_bytes_never_exceed_the_carry_bound
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac2_an_unterminated_body_yields_no_item_and_the_scanner_recovers
+    red_confirmed: true
+    red_reason: >-
+      With the scanner still on the canonical-only `7501;` prefix, the
+      spellings the criterion names produced no item:
+      `left: []  right: [ProgramStatus { body: "state=idle", received_len: 16,
+      terminator: Bel }]` for `07501;state=idle`, the same for the lossy-decode
+      case (`body: "\u{fffd}:state=clear", received_len: 18`), for the
+      leading-zero item outside live spans and for the at-bound body of 8192
+      leading-zero bytes (`left: []`, `received_len: 8192` expected), and the
+      byte-order test saw only `[Osc133Mark(CommandEnd), Osc133Mark(PromptStart)]`
+      instead of the six items of the stream. leadzero_ac1_other_numbers_yield_no_item_and_agent_status_stays_canonical
+      asserts a negative that already held and passed before the change; the
+      existing byte-order, split-read and carry-bound tests assert unchanged
+      behavior through the new item shape and were never red. They are
+      regression guards, not red-to-green proofs.
+  AC-2:
+    tests:
+      - mux::daemon::tests::leading_zero_length::leadzero_ac2_a_leading_zero_clear_removes_the_record_a_report_made
+      - mux::daemon::tests::leading_zero_length::leadzero_ac2_the_limit_is_applied_to_the_received_length
+      - mux::daemon::tests::leading_zero_length::leadzero_ac2_a_query_of_any_spelling_or_length_changes_nothing
+    red_confirmed: true
+    red_reason: >-
+      Through the real reader and the daemon task the leading-zero clear left
+      the record in place (`left: [("", Working)]  right: []`, repro 2), and
+      P4, which sits exactly at the limit, was not accepted
+      (`P4  left: [("", Working)]  right: [("", Error)]`). The query test
+      asserts that nothing changes and nothing is broadcast, which already held
+      because the scanner did not recognize the spellings at all; it passed
+      before the change and is a regression guard, not a red-to-green proof.
+  AC-3:
+    tests:
+      - mux::session::pane::tests::program_status_record::leadzero_ac3_the_prompt_start_only_operation_removes_records_and_bumps_once
+      - mux::session::pane::tests::program_status_record::leadzero_ac3_the_prompt_start_only_operation_with_an_empty_table_does_not_bump
+      - mux::session::pane::tests::program_status_record::leadzero_ac3_the_prompt_start_only_operation_does_not_touch_the_exit_latch
+      - mux::ipc::pty_spawn::tests::program_status_feed::leadzero_ac3_a_non_canonical_live_prompt_start_yields_the_prompt_start_only_item
+      - mux::ipc::pty_spawn::tests::program_status_feed::leadzero_ac3_only_a_live_non_canonical_prompt_start_is_an_item
+      - mux::daemon::tests::leading_zero_length::leadzero_ac3_a_live_leading_zero_prompt_start_removes_only_the_unfinished_records
+      - mux::daemon::tests::leading_zero_length::leadzero_ac3_a_leading_zero_prompt_start_on_the_alternate_screen_removes_nothing
+      - mux::daemon::tests::leading_zero_length::leadzero_ac3_a_non_canonical_prompt_start_stays_away_from_the_inferred_clear_latch
+      - mux::daemon::tests::leading_zero_length::leadzero_ac3_a_leading_zero_agent_status_report_changes_no_osc_777_state
+    red_confirmed: true
+    red_reason: >-
+      The pane operation was a stub returning None, so its tests failed with
+      `left: None  right: Some(6)` and `left: None  right: Some(3)`. The
+      scanner gave no item for a non-canonical prompt start
+      (`0133;A Bel  left: []  right: [NonCanonicalPromptStart]`), and through
+      the real reader and task the live `OSC 0133;A` removed no record
+      (`left: [("b", Blocked), ("d", Done), ("e", Error), ("i", Idle),
+      ("w", Working)]  right: [("d", Done), ("e", Error)]`). The alternate
+      screen, the latch and the `0777;emterm;agent-status` tests, and the
+      scanner test that only a live non-canonical prompt start is an item,
+      assert negatives that already held (the scanner recognized none of these
+      spellings) and passed before the change; they are regression guards that
+      keep the new item away from the latch and the alternate screen, not
+      red-to-green proofs.
+  AC-4:
+    tests:
+      - mux::daemon::tests::leading_zero_length::leadzero_ac4_every_sc4_row_ends_in_its_final_table_and_strip_verdict
+      - mux::osc_identify::tests::leadzero_ac4_the_number_entry_reports_the_shared_rule_number
+      - mux::osc_identify::tests::leadzero_ac4_the_number_entry_agrees_with_the_reference_over_the_corpus
+      - mux::osc_identify::tests::leadzero_ac4_the_number_entry_is_allocation_free
+      - mux::osc_identify::tests::leadzero_ac4_the_number_entry_finishes_large_bodies_within_two_seconds
+      - mux::osc_identify::tests::round3_ac1_osc_body_identity_matches_the_reference_over_the_corpus
+      - mux::osc_identify::tests::round3_b3e644c5_osc_identification_is_allocation_free_and_matches_the_reference
+    red_confirmed: true
+    red_reason: >-
+      The SC-4 table test failed on its first row (`P1: final table
+      left: [("", Working)]  right: []`) because the daemon ingested only the
+      canonical spelling. The number entry did not exist as behavior: its stub
+      returned None (`number of "7501;state=idle"  left: None
+      right: Some(7501)`, and `body "777;emterm;markdown;x"  left: None
+      right: Some(777)` over the corpus). The two existing round3 tests keep
+      the zero-allocation identity equal to the reference over the existing
+      corpus; they passed before the change and are regression guards for the
+      refactor that takes the identity's number from the shared entry.
+  AC-5:
+    tests:
+      - tabs::tests::output_pipeline::payload_has_device_query_follows_the_shared_number_rule_for_osc7501_queries
+      - tabs::tests::output_pipeline::payload_has_device_query_rejects_out_of_range_numbers_ending_in_7501
+      - mux::ipc::pty_spawn::client_parity_scan::tests::leadzero_scan_reports_leading_zero_and_long_queries_as_one_item_each
+      - mux::ipc::pty_spawn::client_parity_scan::tests::leadzero_scan_reports_no_item_for_out_of_range_numbers
+    red_confirmed: false
+    red_reason: >-
+      The coalesce gate accumulates the parameter with a saturating u32 and the
+      delivery scan classifies through `osc_identify::recover_osc`, so both
+      already follow the shared rule for leading zeros, five thousand zeros and
+      numbers above the u16 range. These tests pin that behavior and passed
+      before any implementation, so no red state occurred for this task; the
+      existing gate and delivery-scan tests (osc7501_query_predicate_selects_exactly_the_question_mark_query,
+      payload_has_device_query_detects_osc7501_queries and their neighbors)
+      detect the same family and are unchanged. No change to
+      src-tauri/src/tabs/input.rs or the delivery scan was needed.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_the_shared_number_rule_decides_what_is_an_osc_7501
+    red_confirmed: true
+    red_reason: >-
+      The renamed test with its new expectation failed while the scanner was
+      canonical-only: `left: []  right: [ProgramStatus { body: "state=idle",
+      received_len: 16, terminator: Bel }]` for `07501;state=idle`. The new
+      name appears as a test line in the `--lib -- --list` output, and
+      test-docs/osc7501-program-status/task0004.tests.yaml AC-1 lists it in
+      place of the old name with the supersede note (red_reason unchanged).
+  AC-7:
+    tests:
+      - mux::osc_identify::tests::round3_b3e644c5_osc_identification_is_allocation_free_and_matches_the_reference
+      - mux::osc_identify::tests::round3_ac4_one_mebibyte_bodies_finish_within_two_seconds_and_match_the_reference
+      - mux::osc_identify::tests::round3_ac4_a_number_of_one_million_digits_finishes_within_two_seconds_and_matches_the_reference
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac2_retained_bytes_never_exceed_the_carry_bound
+      - mux::ipc::pty_spawn::tests::program_status_feed::leadzero_ac1_leading_zeros_count_toward_the_carry_bound
+    red_confirmed: false
+    red_reason: >-
+      This criterion guards existing behavior and build outcomes: the
+      allocation-free identity test, the 1 MiB and million-digit bounds and the
+      8 KiB carry bound (listed here) passed before the change and still pass,
+      the change adds no log call on a rejecting, ignoring or unrecognizing
+      path (checked by reading the diff: the new daemon function drops an
+      unknown pane silently), and `cargo check --no-default-features` succeeds.
+      None of these had an executable check that was observed failing first, so
+      no red state occurred.

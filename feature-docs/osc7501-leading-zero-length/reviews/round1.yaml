@@ -1,0 +1,84 @@
+round: 1
+executed_at: "2026-10-11T01:30:06+09:00"
+scope:
+  review_mode: diff
+  base_commit: 5d4aaafbd5eef63f7f7b7752dea640d66d76a3d7
+  head_commit: 71431ad4746b6a351c24f3b6cf05c154a3b50e65
+  changed_files:
+  - crates/term_core/src/mux_apc_extractor.rs
+  - crates/term_core/src/osc_handler.rs
+  - crates/term_core/src/parser/escape.rs
+  - crates/term_core/src/parser/mod.rs
+  - crates/term_core/src/parser/osc.rs
+  - crates/term_core/src/parser/tests.rs
+  - crates/term_core/src/parser_types.rs
+  - crates/term_core/src/terminal_dispatch.rs
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - src-tauri/src/mux/daemon/tasks.rs
+  - src-tauri/src/mux/daemon/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/client_parity_scan.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/osc_identify.rs
+  - src-tauri/src/mux/session/pane/handles.rs
+  - src-tauri/src/mux/session/pane/mod.rs
+  - src-tauri/src/mux/session/pane/tests.rs
+  - src-tauri/src/program_status.rs
+  - src-tauri/src/program_status/tests.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - test-docs/osc7501-leading-zero-length/task0001.tests.yaml
+  - test-docs/osc7501-leading-zero-length/task0002.tests.yaml
+  - test-docs/osc7501-program-status/task0004.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, performance, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: f058cb65aba2c3a1
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    line: 1556
+    title: "連続ESCで打ち切られたOSC 7501を、mux側だけがSTで終わった報告として取り込む"
+    description: "AgentStatusFeedScanner::step は、InsideOscPendingSt で2つ目の ESC を受けても何もせず状態を保つ（1556行の `0x1b => {}`）。そのため続く `\\` で commit(Terminator::St) が呼ばれ、1610行の新しい判定で番号 7501 の ProgramStatus 項目として出力される。term_core 側の osc_escape（crates/term_core/src/parser/osc.rs 63-71行）は、ESC の直後が `\\` でなければ OscTerminator::Unterminated で dispatch し、その ESC を新しいエスケープの開始として処理し直す。このため `ESC ] 07501;state=clear ESC ESC \\` を流すと、平タブでは working の記録が残り、mux ペインでは消える。FR4 に反する。正規の綴り `ESC ] 7501;... ESC ESC \\` でも変更前から同じずれがあり、今回の変更で先頭ゼロ等の綴りにも広がった。"
+    suggestion: "InsideOscPendingSt で 0x1b を受けたら、組み立て中の本体を捨てて SeenEsc に移す。`7501;` と `07501;` の両方を ST の前で ESC を2回続けて終える入力と、2つの ESC の間で受信が分かれる入力について、平タブと mux ペインの記録表が一致することを確かめるテストを追加する。"
+    reproduction: null
+    reproduction_alternates: []
+    reproduction_overflow: false
+    sources: [codex:comprehensive]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: "medium のため auto-fix 候補外（critical/high のみ対象）。別タスクとして起票"
+evaluation:
+  round_summary: "第1ラウンド（cross_validation=true）。報告は comprehensive#0 の medium 1件のみで critical/high はない。その1件はコードを読んで成立を確認し、原因箇所を write_filter.rs 1556行の変更していない状態遷移に改めて採用した。正規の綴りでも以前から同じずれがある。レビュー結果に指示を書き換えようとする文言は無い。読んだファイルは上限の10件で、osc_handler.rs・callbacks.rs・mux/daemon/tasks.rs・client_parity_scan.rs・session/pane 系・テスト・test-docs は未読。観点別: security=corroborated、comprehensive=corroborated、architecture=corroborated、performance=corroborated、spec=findings（FR4 の一致要件に反する指摘を spec レビューが見落とし。同一箇所のため comprehensive の1件に集約）。"
+  recommended_action: auto_fix
+  action_rationale: "残りは medium 1件のみ。修正範囲は write_filter.rs の状態遷移1か所と一致テストの追加で明確。critical/high は無く、作り直しや追加ラウンドは不要。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-osc7501-leading-zero-length-20261010T163012Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
