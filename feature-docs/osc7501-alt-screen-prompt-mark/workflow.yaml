@@ -122,7 +122,7 @@ workflow:
   base_commit: 87618aeb25f4a99bd82953c35ee33d3e8efae2fe
   completed_at_commit: 89aeef20b650b6a7a398783b6a2f785820855c66
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -153,8 +153,18 @@ tasks:
     - NFR1
     - NFR2
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary:
+    - perspective: performance
+      reason: 変更が毎回の PTY 出力処理（output_pipeline / osc_handler）のホットパスに入り、NFR1 が処理コストを要求しているため
+    cross_validation: true
 requirements:
   FR1:
     title: 別画面の候補を突き合わせから除外する
