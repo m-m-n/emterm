@@ -1381,64 +1381,198 @@ fn refresh_live_agent_state_pulls_in_alt_screen_left_after_snapshot() {
     );
 }
 
-/// A pane that exits (in `mgr`) after the original snapshot must be left
-/// exactly as originally recorded -- refreshing exited-pane state is a
-/// separate, pre-existing concern this function does not attempt to fix
-/// (see its doc comment).
+/// mux-upgrade-exited-pane-revision AC-2: a pane that exits (in `mgr`) after
+/// the original snapshot and is cleared afterwards has its CURRENT agent
+/// status (state, name and revision) carried into the document, and nothing
+/// else about its entry changes. This replaces the task0006 expectation that
+/// such a pane is left entirely as originally recorded.
 #[test]
-fn refresh_live_agent_state_leaves_a_pane_that_since_exited_untouched() {
+fn refresh_live_agent_state_carries_the_agent_status_of_a_pane_that_since_exited_and_was_cleared() {
     let (mut mgr, sid, wid, pid) = single_live_pane_manager();
-    {
-        let pane = mgr
-            .get_session_mut(sid)
-            .unwrap()
-            .windows
-            .get_mut(&wid)
-            .unwrap()
-            .panes
-            .get_mut(&pid)
-            .unwrap();
-        pane.apply_agent_status_event(AgentStatusEvent::Set {
-            state: AgentState::Working,
-            name: Some("claude".to_string()),
-        });
-    }
+    pane_in(&mgr, sid, wid, pid).apply_agent_status_event(AgentStatusEvent::Set {
+        state: AgentState::Working,
+        name: Some("claude".to_string()),
+    });
 
-    let dir = tempfile::tempdir().expect("tempdir");
-    let socket_path = dir.path().join("mux-default.sock");
-    let listen_file = tempfile::NamedTempFile::new_in(dir.path()).expect("listen fd stand-in");
-    let listen_fd = listen_file.as_raw_fd();
-    let mut document = snapshot(&mgr, listen_fd, &socket_path).expect("snapshot must succeed");
+    let mut document = snapshot_document(&mgr);
     let recorded = document.sessions[0].windows[0].panes[0].clone();
+    assert_eq!(
+        recorded.agent_state,
+        Some(to_wire_state(AgentState::Working)),
+        "sanity: the snapshot records the Set"
+    );
+    assert_eq!(
+        recorded.agent_revision, 1,
+        "sanity: the Set moved the revision"
+    );
 
-    // The pane exits in `mgr`, AND its agent_status is explicitly
-    // cleared, AFTER the snapshot above -- proving refresh really SKIPS
-    // an exited pane rather than happening to leave the same value.
-    mgr.get_session_mut(sid)
+    // The pane exits in `mgr`, and is then cleared, AFTER the snapshot.
+    mark_pane_exited(&mut mgr, sid, wid, pid);
+    pane_in(&mgr, sid, wid, pid).apply_agent_status_event(AgentStatusEvent::Clear);
+    let current_revision = pane_in(&mgr, sid, wid, pid)
+        .agent_status
+        .lock()
         .unwrap()
-        .windows
-        .get_mut(&wid)
-        .unwrap()
-        .panes
-        .get_mut(&pid)
-        .unwrap()
-        .mark_exited();
-    mgr.get_session(sid)
-        .unwrap()
-        .windows
-        .get(&wid)
-        .unwrap()
-        .panes
-        .get(&pid)
-        .unwrap()
-        .apply_agent_status_event(AgentStatusEvent::Clear);
+        .revision;
+    assert_eq!(current_revision, 2, "sanity: the Clear moved the revision");
 
     refresh_live_agent_state(&mut document, &mgr);
 
+    let after = &document.sessions[0].windows[0].panes[0];
+    assert_eq!(after.agent_state, None, "AC-2: the Clear must be carried");
+    assert_eq!(after.agent_name, None, "AC-2: the Clear must be carried");
     assert_eq!(
-        document.sessions[0].windows[0].panes[0], recorded,
-        "task0006: a pane that has since exited must be left exactly as originally recorded"
+        after.agent_revision, current_revision,
+        "AC-2: the revision must be the pane's current revision"
     );
+    assert_eq!(
+        *after,
+        entry_with_current_agent_status(&recorded, pane_in(&mgr, sid, wid, pid)),
+        "AC-2: every field other than the four agent-status fields keeps its snapshot-time value"
+    );
+}
+
+/// mux-upgrade-exited-pane-revision AC-1: a pane that receives an accepted
+/// OSC 7501 report after the original snapshot and exits afterwards has the
+/// moved revision and the new record carried into the document.
+#[test]
+fn refresh_live_agent_state_carries_the_revision_and_records_of_a_pane_that_reported_an_error_and_since_exited()
+ {
+    let (mgr, sid, wid, pid, mut document, recorded) = pane_that_reported_an_error_then_exited();
+
+    refresh_live_agent_state(&mut document, &mgr);
+
+    let pane = pane_in(&mgr, sid, wid, pid);
+    let after = &document.sessions[0].windows[0].panes[0];
+    assert_eq!(
+        after.agent_revision, 1,
+        "AC-1: the report's revision bump must be carried"
+    );
+    assert_eq!(
+        after.program_records,
+        expected_program_records(&pane_table(pane)),
+        "AC-1: the records must equal the export of the pane's current table"
+    );
+    assert!(
+        after
+            .program_records
+            .iter()
+            .any(|record| record.id == "build" && record.state == "error"),
+        "AC-1: the carried records must contain the error record"
+    );
+    assert_eq!(
+        *after,
+        entry_with_current_agent_status(&recorded, pane),
+        "AC-1: state, name and every other field must match the expectation"
+    );
+}
+
+/// mux-upgrade-exited-pane-revision AC-3: a pane already exited when the
+/// snapshot was taken (no descriptor recorded) that receives an OSC 777 event
+/// and an OSC 7501 report afterwards has both carried into the document.
+#[test]
+fn refresh_live_agent_state_carries_an_osc_777_event_and_an_osc_7501_report_applied_to_a_pane_exited_at_snapshot()
+ {
+    let (mgr, sid, wid, pid) = single_exited_pane_manager();
+    let mut document = snapshot_document(&mgr);
+    let recorded = document.sessions[0].windows[0].panes[0].clone();
+    assert_eq!(
+        recorded.master_fd, None,
+        "sanity: no descriptor is recorded"
+    );
+    assert_eq!(recorded.agent_revision, 0, "sanity: nothing reported yet");
+
+    let pane = pane_in(&mgr, sid, wid, pid);
+    pane.apply_agent_status_event(AgentStatusEvent::Set {
+        state: AgentState::Blocked,
+        name: Some("claude".to_string()),
+    });
+    pane.apply_program_status_report(Report::Set {
+        id: "build".to_string(),
+        record: program_record(ProgramState::Error),
+    });
+    assert_eq!(
+        pane.agent_status.lock().unwrap().revision,
+        2,
+        "sanity: the event and the report each moved the revision"
+    );
+
+    refresh_live_agent_state(&mut document, &mgr);
+
+    let after = &document.sessions[0].windows[0].panes[0];
+    assert_eq!(after.agent_state, Some(to_wire_state(AgentState::Blocked)));
+    assert_eq!(after.agent_name.as_deref(), Some("claude"));
+    assert_eq!(after.agent_revision, 2);
+    assert_eq!(
+        after.program_records,
+        expected_program_records(&pane_table(pane))
+    );
+    assert_eq!(
+        *after,
+        entry_with_current_agent_status(&recorded, pane),
+        "AC-3: every field other than the four agent-status fields keeps its snapshot-time value"
+    );
+}
+
+/// mux-upgrade-exited-pane-revision AC-4: restoring the document the AC-1
+/// steps produce and running the session-wide resync sends exactly one
+/// replay-derived `AgentStatusUpdate` carrying the carried revision and the
+/// error summary.
+#[tokio::test]
+async fn ac4_resync_after_restoring_a_pane_that_reported_an_error_and_since_exited_sends_its_revision_and_error_summary()
+ {
+    use mux_ipc::protocol::{
+        AgentState as WireState, AgentStatusUpdateMsg, MessageType, ProgramStatusSummary,
+    };
+
+    let (mgr, sid, wid, pid, mut document, _recorded) = pane_that_reported_an_error_then_exited();
+    refresh_live_agent_state(&mut document, &mgr);
+
+    // The document still holds the master descriptor number recorded at
+    // snapshot time, but marking the pane exited closed that descriptor and
+    // a parallel test may already own the same number. Restoring it as-is
+    // would adopt (and later close) someone else's descriptor, so the copy
+    // being restored records none; restore then rebuilds the pane as exited.
+    // The fields under test are not touched by this.
+    document.sessions[0].windows[0].panes[0].master_fd = None;
+    let restored = restore_document(&document);
+    assert!(
+        pane_in(&restored, sid, wid, pid).exited,
+        "sanity: the pane is restored as exited"
+    );
+
+    let restored = Arc::new(tokio::sync::Mutex::new(restored));
+    let mut notify_rx = restored.lock().await.notify_tx().subscribe();
+    crate::mux::daemon::sync_agent_status_after_snapshot(&restored, sid).await;
+
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(1), notify_rx.recv())
+        .await
+        .expect("AC-4: the resync must send an AgentStatusUpdate for the restored pane")
+        .unwrap();
+    assert_eq!(msg.msg_type, MessageType::AgentStatusUpdate);
+    let update: AgentStatusUpdateMsg = msg.decode_payload().unwrap();
+    assert_eq!(update.pane_id, pid);
+    assert!(update.replay_derived, "AC-4: the resync is replay-derived");
+    assert_eq!(
+        update.revision, 1,
+        "AC-4: the carried revision must be sent"
+    );
+    assert_eq!(
+        update.program_status,
+        Some(ProgramStatusSummary {
+            state: WireState::Error,
+            title: None,
+            app: None,
+        }),
+        "AC-4: the summary must be the error state"
+    );
+
+    let none = tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+    assert!(
+        none.is_err(),
+        "AC-4: exactly one AgentStatusUpdate must be sent for the pane"
+    );
+    drop(mgr);
 }
 
 /// A document pane whose id no longer resolves in `mgr` (e.g. destroyed
@@ -1719,6 +1853,56 @@ fn restore_document(document: &HandoffDocument) -> SessionManager {
     )
 }
 
+/// Mark the pane `pid` exited in `mgr` (the manager-side exit the daemon
+/// performs when the child is gone).
+fn mark_pane_exited(mgr: &mut SessionManager, sid: u32, wid: u32, pid: u32) {
+    mgr.get_session_mut(sid)
+        .unwrap()
+        .windows
+        .get_mut(&wid)
+        .unwrap()
+        .panes
+        .get_mut(&pid)
+        .unwrap()
+        .mark_exited();
+}
+
+/// The entry the refresh must produce for `pane`: `recorded` with exactly
+/// the four agent-status fields replaced by the pane's current values. Built
+/// from the pane directly (not through the refresh), so it is the
+/// independent expectation.
+fn entry_with_current_agent_status(recorded: &HandoffPane, pane: &MuxPane) -> HandoffPane {
+    let status = pane.agent_status.lock().unwrap();
+    let mut expected = recorded.clone();
+    expected.agent_state = status.state.map(to_wire_state);
+    expected.agent_name = status.name.clone();
+    expected.agent_revision = status.revision;
+    expected.program_records = expected_program_records(&status.program_status);
+    expected
+}
+
+/// The setup shared by the AC-1 and AC-4 tests: a live pane at revision 0 is
+/// snapshotted, then receives an accepted OSC 7501 error report through the
+/// pane's report-apply operation (revision 1), then is marked exited. The
+/// returned document is the unrefreshed snapshot and the returned entry is a
+/// copy of its snapshot-time pane entry.
+fn pane_that_reported_an_error_then_exited()
+-> (SessionManager, u32, u32, u32, HandoffDocument, HandoffPane) {
+    let (mut mgr, sid, wid, pid) = single_live_pane_manager();
+    let document = snapshot_document(&mgr);
+    let recorded = document.sessions[0].windows[0].panes[0].clone();
+    assert_eq!(recorded.agent_revision, 0, "sanity: revision 0 at snapshot");
+    assert!(recorded.master_fd.is_some(), "sanity: recorded live");
+
+    let revision = pane_in(&mgr, sid, wid, pid).apply_program_status_report(Report::Set {
+        id: "build".to_string(),
+        record: program_record(ProgramState::Error),
+    });
+    assert_eq!(revision, 1, "sanity: the report moved the revision to 1");
+    mark_pane_exited(&mut mgr, sid, wid, pid);
+    (mgr, sid, wid, pid, document, recorded)
+}
+
 /// AC-3: the pane snapshot records a live pane's records in update order,
 /// every field intact.
 #[test]
@@ -1854,8 +2038,9 @@ fn ac3_refresh_drops_program_records_cleared_after_snapshot() {
     );
 }
 
-/// AC-3: the refresh reads the records of an exited pane too, and leaves
-/// the exited pane's other fields as recorded.
+/// AC-3: the refresh reads the records of an exited pane too. The table is
+/// edited directly here, so the pane's revision, state and name stay as
+/// recorded.
 #[test]
 fn ac3_refresh_pulls_in_a_program_record_added_to_an_exited_pane_after_snapshot() {
     let (mgr, sid, wid, pid) = single_exited_pane_manager();
@@ -1886,7 +2071,8 @@ fn ac3_refresh_pulls_in_a_program_record_added_to_an_exited_pane_after_snapshot(
     expected.program_records = after.program_records.clone();
     assert_eq!(
         *after, expected,
-        "only the records may change for an exited pane"
+        "the entry must equal its snapshot-time value with the refreshed records \
+         (this setup edits the table directly, so the revision does not move)"
     );
 }
 
