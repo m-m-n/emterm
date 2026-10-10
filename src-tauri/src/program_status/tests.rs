@@ -1554,3 +1554,117 @@ fn ac8_the_module_uses_only_always_built_crates() {
         "the module must not reach into other project modules"
     );
 }
+
+// ── pane-state-rank-unify: ProgramState::rank derives from compose_rank ──
+//
+// Names carry the `pane-state-rank-unify` task acceptance criterion they prove
+// (`rank_unify_ac1_` .. `rank_unify_ac3_`). They iterate `ProgramState::ALL`
+// (five members): `AgentState::ALL` has four and excludes `Error`.
+
+#[test]
+fn rank_unify_ac2_each_program_state_maps_to_the_agent_state_of_the_same_name() {
+    use crate::agent_status::AgentState;
+
+    assert_eq!(ProgramState::Idle.agent_state(), AgentState::Idle);
+    assert_eq!(ProgramState::Working.agent_state(), AgentState::Working);
+    assert_eq!(ProgramState::Done.agent_state(), AgentState::Done);
+    assert_eq!(ProgramState::Blocked.agent_state(), AgentState::Blocked);
+    assert_eq!(ProgramState::Error.agent_state(), AgentState::Error);
+}
+
+#[test]
+fn rank_unify_ac2_the_mapped_agent_state_display_word_equals_the_protocol_word() {
+    for state in ProgramState::ALL {
+        assert_eq!(
+            state.agent_state().to_string(),
+            state.word(),
+            "{state:?} must map to the AgentState with the same protocol word"
+        );
+    }
+}
+
+#[test]
+fn rank_unify_ac1_rank_equals_the_compose_rank_of_the_mapped_agent_state() {
+    for state in ProgramState::ALL {
+        assert_eq!(
+            state.rank(),
+            state.agent_state().compose_rank(),
+            "{state:?}: ProgramState::rank must be AgentState::compose_rank of its mapping"
+        );
+    }
+}
+
+#[test]
+fn rank_unify_ac3_all_25_ordered_pairs_order_the_same_under_both_rank_functions() {
+    let mut pairs = 0;
+    for a in ProgramState::ALL {
+        for b in ProgramState::ALL {
+            assert_eq!(
+                a.rank().cmp(&b.rank()),
+                a.agent_state()
+                    .compose_rank()
+                    .cmp(&b.agent_state().compose_rank()),
+                "ordering of ({a:?}, {b:?}) must agree between ProgramState::rank and AgentState::compose_rank"
+            );
+            pairs += 1;
+        }
+    }
+    assert_eq!(pairs, 25);
+}
+
+/// The doc comment directly above the first line that starts with
+/// `signature`, `///` markers removed and the lines joined by single spaces.
+fn doc_comment_above(source: &str, signature: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let at = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with(signature))
+        .unwrap_or_else(|| panic!("source declares `{signature}`"));
+    let mut doc: Vec<&str> = Vec::new();
+    for line in lines[..at].iter().rev() {
+        match line.trim_start().strip_prefix("///") {
+            Some(text) => doc.push(text.trim()),
+            None => break,
+        }
+    }
+    doc.reverse();
+    doc.join(" ")
+}
+
+#[test]
+fn rank_unify_ac4_compose_rank_doc_states_the_single_definition_and_its_derived_users() {
+    let doc = doc_comment_above(include_str!("../agent_status.rs"), "pub fn compose_rank(");
+    for required in [
+        "blocked > working > error > done > idle",
+        "single definition",
+        "read-flag free",
+        "`ProgramState::rank` takes its value from this function",
+        "`Table::summary` uses `ProgramState::rank`",
+        "`priority_rank`",
+        "separately defined",
+        "unseen-aware",
+        "does not derive its values from this function",
+    ] {
+        assert!(
+            doc.contains(required),
+            "the compose_rank doc must contain `{required}`, got: {doc}"
+        );
+    }
+    assert!(
+        !doc.contains("adds the unseen distinction"),
+        "the compose_rank doc must not say the cross-pane aggregation builds on it: {doc}"
+    );
+}
+
+#[test]
+fn rank_unify_ac5_program_state_rank_doc_names_compose_rank_as_the_source() {
+    let doc = doc_comment_above(include_str!("../program_status.rs"), "pub fn rank(");
+    assert!(
+        doc.contains("AgentState::compose_rank"),
+        "the ProgramState::rank doc must name AgentState::compose_rank, got: {doc}"
+    );
+    assert!(
+        !doc.contains("single definition") && !doc.contains("single place"),
+        "the ProgramState::rank doc must not present itself as the definition: {doc}"
+    );
+}
