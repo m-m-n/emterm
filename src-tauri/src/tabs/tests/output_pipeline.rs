@@ -1718,6 +1718,479 @@ fn osc7501_query_leaves_the_tabs_records_unchanged() {
     assert_eq!(count_writes_equal(&tab, b"\x1b]7501;?\x1b\\"), 1);
 }
 
+// ── osc7501-leading-zero-length task0001: received length on a plain tab ──
+//
+// The SC-4 parity corpus, plain-tab half. Every row starts from a tab whose
+// table holds one root `working` record (the canonical seed), feeds the
+// row's OSC string with its terminator through the live output path
+// (`process_combined`), and checks the final table and the answer.
+
+use crate::program_status::ProgramState;
+
+/// `Z(n)` of the corpus: `n` ASCII `0` bytes.
+fn zeros(n: usize) -> Vec<u8> {
+    vec![b'0'; n]
+}
+
+/// `FF(n)` of the corpus: `n` bytes of value 0xFF.
+fn ff(n: usize) -> Vec<u8> {
+    vec![0xFF; n]
+}
+
+fn concat(parts: &[&[u8]]) -> Vec<u8> {
+    parts.iter().flat_map(|part| part.iter().copied()).collect()
+}
+
+/// `ESC ]`, the OSC string, then BEL or ST.
+fn osc_string_sequence(osc_string: &[u8], st: bool) -> Vec<u8> {
+    let mut out = b"\x1b]".to_vec();
+    out.extend_from_slice(osc_string);
+    out.extend_from_slice(if st { b"\x1b\\" } else { b"\x07" });
+    out
+}
+
+/// A plain tab holding the corpus seed: one root `working` record.
+fn seeded_plain_tab() -> Tab {
+    let mut tab = test_tab();
+    tab.process_combined(osc7501("state=working", false));
+    tab.take_pending_program_status_changes();
+    assert_eq!(table_state(&tab), TableState::Root(ProgramState::Working));
+    tab
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableState {
+    Empty,
+    Root(ProgramState),
+}
+
+/// The tab's table as a corpus "final table": empty, or exactly one root
+/// record in the given state. Anything else is reported as a mismatch.
+fn table_state(tab: &Tab) -> TableState {
+    if tab.program_status.is_empty() {
+        return TableState::Empty;
+    }
+    assert_eq!(
+        tab.program_status.len(),
+        1,
+        "the corpus only ever holds the root record: {:?}",
+        tab.program_status.export()
+    );
+    let root = tab
+        .program_status
+        .get("")
+        .expect("the one record is the root");
+    TableState::Root(root.state)
+}
+
+/// How many outbound writes mention OSC 7501 at all.
+fn osc7501_write_count(tab: &Tab) -> usize {
+    let needle = b"]7501;";
+    tab.test_outbound_writes()
+        .iter()
+        .filter(|w| w.windows(needle.len()).any(|win| win == needle))
+        .count()
+}
+
+struct ParityRow {
+    name: &'static str,
+    osc_string: Vec<u8>,
+    st: bool,
+    /// Whole-sequence length from the corpus; `None` where the corpus has
+    /// none (the row is not a recognized OSC 7501 string).
+    length: Option<usize>,
+    table: TableState,
+    /// `true` = one `ESC ] 7501 ; ?` answer, ended like the row.
+    answered: bool,
+}
+
+fn parity_rows() -> Vec<ParityRow> {
+    use ProgramState::{Error, Working};
+    let row = |name, osc_string: Vec<u8>, st, length, table, answered| ParityRow {
+        name,
+        osc_string,
+        st,
+        length,
+        table,
+        answered,
+    };
+    let working = TableState::Root(Working);
+    let error = TableState::Root(Error);
+    vec![
+        row(
+            "P1",
+            b"07501;state=clear".to_vec(),
+            false,
+            Some(20),
+            TableState::Empty,
+            false,
+        ),
+        row(
+            "P2",
+            b"07501;state=clear".to_vec(),
+            true,
+            Some(21),
+            TableState::Empty,
+            false,
+        ),
+        row(
+            "P3",
+            concat(&[&zeros(4096), b"7501;state=error"]),
+            false,
+            Some(4115),
+            working,
+            false,
+        ),
+        row(
+            "P4",
+            concat(&[&zeros(4077), b"7501;state=error"]),
+            false,
+            Some(4096),
+            error,
+            false,
+        ),
+        row(
+            "P5",
+            concat(&[&zeros(4078), b"7501;state=error"]),
+            false,
+            Some(4097),
+            working,
+            false,
+        ),
+        row(
+            "P6",
+            concat(&[&zeros(4076), b"7501;state=error"]),
+            true,
+            Some(4096),
+            error,
+            false,
+        ),
+        row(
+            "P7",
+            concat(&[&zeros(4077), b"7501;state=error"]),
+            true,
+            Some(4097),
+            working,
+            false,
+        ),
+        row(
+            "P8",
+            concat(&[b"7501;state=error:x=", &ff(4074)]),
+            false,
+            Some(4096),
+            error,
+            false,
+        ),
+        row(
+            "P9",
+            concat(&[b"7501;state=error:x=", &ff(4075)]),
+            false,
+            Some(4097),
+            working,
+            false,
+        ),
+        row(
+            "P10",
+            b"x7501;:state=clear".to_vec(),
+            false,
+            Some(21),
+            TableState::Empty,
+            false,
+        ),
+        row(
+            "P11",
+            b"7501x;state=clear".to_vec(),
+            false,
+            Some(20),
+            working,
+            false,
+        ),
+        row("P12", b"7501".to_vec(), false, Some(7), working, false),
+        row(
+            "P13",
+            b"7500;state=clear".to_vec(),
+            false,
+            None,
+            working,
+            false,
+        ),
+        row(
+            "P14",
+            b"17501;state=clear".to_vec(),
+            false,
+            None,
+            working,
+            false,
+        ),
+        row(
+            "P15",
+            b"75010;state=clear".to_vec(),
+            false,
+            None,
+            working,
+            false,
+        ),
+        row(
+            "P16",
+            b"65536;state=clear".to_vec(),
+            false,
+            None,
+            working,
+            false,
+        ),
+        row(
+            "P17",
+            b"655367501;state=clear".to_vec(),
+            false,
+            None,
+            working,
+            false,
+        ),
+        row("P18", b"07501;?".to_vec(), false, Some(10), working, true),
+        row(
+            "P19",
+            concat(&[&zeros(5000), b"7501;?"]),
+            true,
+            Some(5010),
+            working,
+            true,
+        ),
+        row(
+            "P20",
+            b"7501;state=clear".to_vec(),
+            false,
+            Some(19),
+            TableState::Empty,
+            false,
+        ),
+        row(
+            "P21",
+            concat(&[&zeros(9000), b"7501;state=clear"]),
+            false,
+            Some(9019),
+            working,
+            false,
+        ),
+        row(
+            "P22",
+            concat(&[&ff(1), b"7501;:state=clear"]),
+            false,
+            Some(21),
+            TableState::Empty,
+            false,
+        ),
+        row(
+            "P23",
+            b"0133;A".to_vec(),
+            false,
+            None,
+            TableState::Empty,
+            false,
+        ),
+        row(
+            "P24",
+            b"133;A".to_vec(),
+            false,
+            None,
+            TableState::Empty,
+            false,
+        ),
+    ]
+}
+
+/// Feed one corpus row to a freshly seeded plain tab.
+fn feed_parity_row(row: &ParityRow) -> Tab {
+    let mut tab = seeded_plain_tab();
+    tab.process_combined(osc_string_sequence(&row.osc_string, row.st));
+    tab
+}
+
+/// The corpus rows' lengths are the whole-sequence lengths of the bytes the
+/// builders produce (`ESC ]`, the OSC string, the terminator).
+#[test]
+fn parity_corpus_rows_have_the_lengths_the_corpus_lists() {
+    for row in parity_rows() {
+        if let Some(length) = row.length {
+            let terminator_len = if row.st { 2 } else { 1 };
+            assert_eq!(
+                2 + row.osc_string.len() + terminator_len,
+                length,
+                "row {}",
+                row.name
+            );
+        }
+    }
+}
+
+/// AC-7: every corpus row fed to a plain tab ends in the row's final table
+/// and answer.
+#[test]
+fn parity_every_corpus_row_ends_in_its_final_table_and_answer() {
+    for row in parity_rows() {
+        let tab = feed_parity_row(&row);
+        assert_eq!(
+            table_state(&tab),
+            row.table,
+            "row {}: final table",
+            row.name
+        );
+
+        let expected_answer: Vec<u8> = if row.st {
+            b"\x1b]7501;?\x1b\\".to_vec()
+        } else {
+            b"\x1b]7501;?\x07".to_vec()
+        };
+        if row.answered {
+            assert_eq!(
+                count_writes_equal(&tab, &expected_answer),
+                1,
+                "row {}: one answer ended like the query, writes {:?}",
+                row.name,
+                tab.test_outbound_writes()
+            );
+            assert_eq!(
+                osc7501_write_count(&tab),
+                1,
+                "row {}: and nothing else mentioning OSC 7501",
+                row.name
+            );
+        } else {
+            assert_eq!(
+                osc7501_write_count(&tab),
+                0,
+                "row {}: no answer, writes {:?}",
+                row.name,
+                tab.test_outbound_writes()
+            );
+        }
+    }
+}
+
+/// AC-5 (repro 1): a report with 4096 leading zeros is 4115 bytes as
+/// received and leaves the table unchanged.
+#[test]
+fn leading_zero_report_of_4115_bytes_leaves_the_table_unchanged() {
+    let mut tab = seeded_plain_tab();
+    let mut bytes = b"\x1b]".to_vec();
+    bytes.extend_from_slice(&zeros(4096));
+    bytes.extend_from_slice(b"7501;state=error\x07");
+    assert_eq!(bytes.len(), 4115);
+
+    tab.process_combined(bytes);
+
+    assert_eq!(table_state(&tab), TableState::Root(ProgramState::Working));
+    assert!(tab.take_pending_program_status_changes().is_empty());
+}
+
+/// AC-5: at the limit (4096 bytes as received) a leading-zero report is
+/// accepted; one more byte is rejected; BEL and ST alike.
+#[test]
+fn leading_zero_reports_follow_the_received_length_at_the_limit() {
+    for row in parity_rows()
+        .into_iter()
+        .filter(|row| ["P4", "P5", "P6", "P7"].contains(&row.name))
+    {
+        let tab = feed_parity_row(&row);
+        assert_eq!(table_state(&tab), row.table, "row {}", row.name);
+    }
+    // Spelled out: P4/P6 accepted, P5/P7 rejected.
+    let accepted = feed_parity_row(&parity_rows().remove(3));
+    assert_eq!(
+        table_state(&accepted),
+        TableState::Root(ProgramState::Error)
+    );
+    let rejected = feed_parity_row(&parity_rows().remove(4));
+    assert_eq!(
+        table_state(&rejected),
+        TableState::Root(ProgramState::Working)
+    );
+}
+
+/// AC-5: invalid UTF-8 bytes are measured as received, not as their
+/// replacement text (P8 accepted at 4096, P9 rejected at 4097).
+#[test]
+fn invalid_utf8_report_is_measured_by_the_bytes_received() {
+    let rows = parity_rows();
+    let p8 = feed_parity_row(&rows[7]);
+    assert_eq!(table_state(&p8), TableState::Root(ProgramState::Error));
+    let p9 = feed_parity_row(&rows[8]);
+    assert_eq!(table_state(&p9), TableState::Root(ProgramState::Working));
+}
+
+/// AC-5: a report whose OSC string exceeds the parser's own size cap
+/// registers no record, whether the excess is leading zeros or data.
+#[test]
+fn report_longer_than_the_parser_cap_registers_no_record() {
+    // Leading zeros are not stored by the parser, so the body that reaches
+    // the table is the short canonical one: only the received length can
+    // reject it.
+    let mut tab = test_tab();
+    let mut bytes = b"\x1b]".to_vec();
+    bytes.extend_from_slice(&zeros(16 * 1024 * 1024 + 100));
+    bytes.extend_from_slice(b"7501;id=a:state=working\x07");
+    tab.process_combined(bytes);
+    assert!(tab.program_status.is_empty());
+    assert!(tab.take_pending_program_status_changes().is_empty());
+}
+
+/// AC-6: a query behind leading zeros (P18, P19, and P19 with BEL) is
+/// answered exactly once, ended like the query, and changes no record.
+#[test]
+fn leading_zero_queries_are_answered_once_with_their_own_terminator() {
+    for (name, osc_string, st) in [
+        ("P18", b"07501;?".to_vec(), false),
+        ("P19", concat(&[&zeros(5000), b"7501;?"]), true),
+        ("P19 with BEL", concat(&[&zeros(5000), b"7501;?"]), false),
+    ] {
+        let mut tab = seeded_plain_tab();
+        tab.process_combined(osc_string_sequence(&osc_string, st));
+
+        let answer: &[u8] = if st {
+            b"\x1b]7501;?\x1b\\"
+        } else {
+            b"\x1b]7501;?\x07"
+        };
+        assert_eq!(count_writes_equal(&tab, answer), 1, "{name}");
+        assert_eq!(osc7501_write_count(&tab), 1, "{name}: only that answer");
+        assert_eq!(
+            table_state(&tab),
+            TableState::Root(ProgramState::Working),
+            "{name}: no record changes"
+        );
+        assert!(
+            tab.take_pending_program_status_changes().is_empty(),
+            "{name}"
+        );
+    }
+}
+
+/// AC-6: a leading-zero query longer than 4096 bytes that never gets its
+/// terminator gets no answer (the stream ends, or an escape cancels it).
+#[test]
+fn unterminated_leading_zero_query_gets_no_answer() {
+    let mut query = b"\x1b]".to_vec();
+    query.extend_from_slice(&zeros(5000));
+    query.extend_from_slice(b"7501;?");
+
+    let mut at_end = seeded_plain_tab();
+    at_end.process_combined(query.clone());
+    assert_eq!(
+        osc7501_write_count(&at_end),
+        0,
+        "stream ends inside the query"
+    );
+
+    let mut cancelled = seeded_plain_tab();
+    let mut bytes = query;
+    bytes.extend_from_slice(b"\x1b[0m");
+    cancelled.process_combined(bytes);
+    assert_eq!(osc7501_write_count(&cancelled), 0, "cancelled by a CSI");
+    assert_eq!(
+        table_state(&cancelled),
+        TableState::Root(ProgramState::Working)
+    );
+}
+
 /// AC-3: reports terminated by BEL and by ST both reach the table in
 /// arrival order; each summary change is recorded in that order.
 #[test]

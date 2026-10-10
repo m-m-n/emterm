@@ -32,6 +32,9 @@ pub(crate) struct Parser {
     osc_buffer: Vec<u8>,
     osc_param: u16,
     osc_param_done: bool,
+    /// Bytes of the current OSC string received so far (SC-2,
+    /// osc7501-leading-zero-length); see `ParsedAction::OscDispatch`.
+    osc_received_len: usize,
     utf8_buffer: Vec<u8>,
     apc_buffer: Vec<u8>,
     dcs_buffer: Vec<u8>,
@@ -51,6 +54,7 @@ impl Parser {
             osc_buffer: Vec::with_capacity(256),
             osc_param: 0,
             osc_param_done: false,
+            osc_received_len: 0,
             utf8_buffer: Vec::with_capacity(4),
             apc_buffer: Vec::with_capacity(4096),
             dcs_buffer: Vec::with_capacity(4096),
@@ -68,6 +72,7 @@ impl Parser {
         self.osc_buffer.clear();
         self.osc_param = 0;
         self.osc_param_done = false;
+        self.osc_received_len = 0;
         self.utf8_buffer.clear();
         self.apc_buffer.clear();
         self.dcs_buffer.clear();

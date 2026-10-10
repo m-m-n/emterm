@@ -33,8 +33,10 @@ pub const MAX_RECORDS: usize = 256;
 /// Longest title used as a name, in Unicode scalar values.
 pub const MAX_NAME_TITLE_CHARS: usize = 80;
 
-/// `ESC ] 7501 ;` — ESC, `]`, the four digits and `;`.
-const INTRODUCER_BYTES: usize = 7;
+/// `ESC ]` — the two bytes in front of the OSC string.
+const OSC_INTRODUCER_BYTES: usize = 2;
+/// `7501;` — the number and the `;` as the canonical entries spell them.
+const CANONICAL_NUMBER_BYTES: usize = 5;
 const MAX_ENCODED_TITLE_BYTES: usize = 256;
 const MAX_DECODED_TITLE_BYTES: usize = 192;
 const MAX_ENCODED_MSG_BYTES: usize = 2732;
@@ -195,17 +197,40 @@ pub enum Parsed {
     Ignored,
 }
 
-/// Parse the text that follows `7501;` in a terminated sequence.
+/// Parse the text that follows `7501;` in a terminated sequence. The OSC
+/// string is taken to be spelled canonically (`7501;` and the body), which
+/// is what the whole-sequence length is measured on.
 pub fn parse(body: &str, terminator: Terminator) -> Parsed {
     parse_bytes(body.as_bytes(), terminator)
 }
 
 /// [`parse`] for callers that hold the body as raw bytes.
 pub fn parse_bytes(body: &[u8], terminator: Terminator) -> Parsed {
+    parse_received(
+        body,
+        CANONICAL_NUMBER_BYTES.saturating_add(body.len()),
+        terminator,
+    )
+}
+
+/// Parse a terminated sequence whose OSC string was received with
+/// `received_osc_len` bytes: everything between `ESC ]` and the terminator
+/// (leading zeros, every digit, the `;` and every body byte, counted as
+/// received, before any replacement of invalid UTF-8). `body` is the text
+/// that followed the number and the first `;`, as bytes.
+///
+/// A body of exactly `?` is a query whatever the length. Any other body is
+/// ignored when the whole sequence (`ESC ]`, the received string and the
+/// terminator, summed with saturation) exceeds [`MAX_SEQUENCE_BYTES`];
+/// otherwise the body grammar decides.
+pub fn parse_received(body: &[u8], received_osc_len: usize, terminator: Terminator) -> Parsed {
     if body == b"?" {
         return Parsed::Query;
     }
-    if INTRODUCER_BYTES + body.len() + terminator.len() > MAX_SEQUENCE_BYTES {
+    let whole_sequence = OSC_INTRODUCER_BYTES
+        .saturating_add(received_osc_len)
+        .saturating_add(terminator.len());
+    if whole_sequence > MAX_SEQUENCE_BYTES {
         return Parsed::Ignored;
     }
 

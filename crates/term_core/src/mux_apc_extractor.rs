@@ -128,6 +128,7 @@ impl MuxApcExtractor {
                     param,
                     data,
                     terminator: _,
+                    received_len: _,
                 } if param == osc_param && data.starts_with(prefix) => {
                     out.push((data.into_bytes(), end));
                 }
