@@ -1,0 +1,53 @@
+round: 1
+executed_at: "2026-10-10T23:55:06+09:00"
+scope:
+  review_mode: diff
+  base_commit: 87618aeb25f4a99bd82953c35ee33d3e8efae2fe
+  head_commit: 656705f6d71dda0c20c6256737c1e5a96bc791fb
+  changed_files:
+  - crates/term_core/src/callbacks.rs
+  - crates/term_core/src/osc_handler.rs
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - src-tauri/src/tabs/output_pipeline.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - test-docs/osc7501-alt-screen-prompt-mark/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+  - perspective: performance
+    reason: "変更が毎回の PTY 出力処理（output_pipeline / osc_handler）のホットパスに入り、NFR1 が処理コストを要求しているため"
+  cross_validation: true
+perspective_runs:
+- {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "5 観点（security / comprehensive / architecture / spec / performance）すべて完了、medium 以上の指摘は 0 件。評価者が独自に確認: fire_osc_callback は OSC ごとに on_osc_with_screen を 1 回呼び、OSC 133 のライブマーク判定と同じ MODE_ALT_SCREEN ビットを渡す。alt-screen の OSC 133 は 7501 フィードに入らずラッチフィードには残る（FR1/FR2・A4 と整合）。apply_program_status_feed の変更はコメントのみで FR3 の既存挙動は保たれる。medium 未満の所見: handle_semantic_prompt（src-tauri/src/callbacks.rs:1233）はマーク種別を先頭 1 バイトで判定し、term_core の parse_osc133_mark は先頭トークン完全一致で判定するため、'133;Ax' のような不正トークンはライブマークにならないのに 7501 フィードへ A 候補として入りうる。差分前からの挙動で、通常のシェル出力では起きない。読み取り予算 10 ファイルを使い切り、task0001.tests.yaml AC-7 の既存テスト名の実在は 1 件ずつは照合していない。"
+  recommended_action: "complete"
+  action_rationale: "全観点で medium 以上の指摘が無く評価者の確認でも裏付けられた。未処理の critical/high も無い。唯一の所見は medium 未満・差分前からの挙動で SPEC の範囲外。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-osc7501-alt-screen-prompt-mark-20261010T145443Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
