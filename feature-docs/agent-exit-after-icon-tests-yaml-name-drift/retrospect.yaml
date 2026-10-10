@@ -1,0 +1,44 @@
+feature: agent-exit-after-icon-tests-yaml-name-drift
+collected_at: "2026-10-10T22:52:00+09:00"
+session_ids: [01a12614-7afd-7275-9f78-c07127e5a8d3]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: reduced
+    rationale: "Final read (description_plus_code) put bucket 1 at 0.90 (score 0.97): one record line fix plus one guard test in a single module, so tier reduced was selected."
+    bases:
+      - basis: description_only
+        score:
+          type: score
+          score: 0.54
+          confidence: 0.53
+          probabilities: {'0': 0.47, '1': 0.53, '2': 0.0, '3': 0.0}
+        observed_at: "2026-10-10T22:08:00+09:00"
+      - basis: description_plus_code
+        score:
+          type: score
+          score: 0.97
+          confidence: 0.9
+          probabilities: {'0': 0.07, '1': 0.9, '2': 0.03, '3': 0.0}
+        observed_at: "2026-10-10T22:13:00+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - test-docs/agent-exit-after-icon/task0006.tests.yaml
+        - src-tauri/src/mux/upgrade/tests.rs
+      changed_lines_approx: 30
+      new_functions_needed: true
+      new_files_needed: false
+      new_dependencies_needed: false
+      covering_tests_exist: false
+      work_still_required: true
+      added_test_cases_approx: 1
+      change_containment: single_module
+      changes_external_contract: false
+      changes_behavior: false
+follow_up_drafts: []
+lessons_candidates: []

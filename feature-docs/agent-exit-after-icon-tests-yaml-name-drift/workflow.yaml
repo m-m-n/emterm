@@ -121,7 +121,7 @@ workflow:
   summary: 'build check ok; --lib 4602 passed 0 failed 3 ignored; TS-1..TS-6 pass (every mux::upgrade::tests name in the record resolves in --lib -- --list; record diff is line 51 only; src-tauri/src diff adds one test only)'
   completed_at_commit: 41c4fa30d450648f6b78de743165edeaadb8d849
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Correct the stale AC-2 test name in the agent-exit-after-icon task0006 record and add a guard test
