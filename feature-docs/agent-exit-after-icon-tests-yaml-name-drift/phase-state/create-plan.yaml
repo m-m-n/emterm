@@ -1,0 +1,20 @@
+schema_version: 1
+feature: agent-exit-after-icon-tests-yaml-name-drift
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 1fb56734006571e9286ae9e72b19a47175e51687
+last_input_digest: sha256:cfa4a52791768412f1c82dab99628acd08202ce5a656850b2fa09d5075236c4a
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:cfa4a52791768412f1c82dab99628acd08202ce5a656850b2fa09d5075236c4a
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
