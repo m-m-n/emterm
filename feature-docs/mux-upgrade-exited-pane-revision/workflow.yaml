@@ -113,7 +113,8 @@ workflow:
   completed_at_commit: 855cd267f142fcb189a4d15a211bef46053b51f6
   base_commit: a25f60875dbd7859d8e9781e0848fbaf949dc2aa
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 20711de1470ddf3d7651f485a3601289f8e6f50f
 - id: verify
   status: pending
   result: null
@@ -147,8 +148,8 @@ tasks:
     status: merged
     branch: em-workflow/mux-upgrade-exited-pane-revision/task0001
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor:
     - comprehensive
@@ -158,7 +159,12 @@ review:
     - architecture
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    security: completed
+    comprehensive: completed
+    performance: completed
+    architecture: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 requirements:
