@@ -1,0 +1,21 @@
+schema_version: 1
+feature: pane-state-rank-unify
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 4894626b887983c296ea5d66b8dd5816340cb7c6
+last_input_digest: sha256:bad2a74fe882d5d67040f5de6f42e769c2e9eebcf4cbdcbd2d3203d58c0e1279
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:bad2a74fe882d5d67040f5de6f42e769c2e9eebcf4cbdcbd2d3203d58c0e1279
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
