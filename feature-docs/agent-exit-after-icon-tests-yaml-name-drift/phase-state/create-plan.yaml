@@ -1,11 +1,11 @@
 schema_version: 1
 feature: agent-exit-after-icon-tests-yaml-name-drift
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 1fb56734006571e9286ae9e72b19a47175e51687
 last_input_digest: sha256:cfa4a52791768412f1c82dab99628acd08202ce5a656850b2fa09d5075236c4a
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
