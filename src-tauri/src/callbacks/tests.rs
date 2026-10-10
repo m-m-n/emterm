@@ -552,6 +552,218 @@ fn osc_133_unrecognized_kind_does_not_push_to_the_program_status_feed() {
     assert!(h.state.lock().pending_program_status_feed.is_empty());
 }
 
+// ── osc7501-alt-screen-prompt-mark task0001: screen-aware OSC 133 ───
+//
+// SC-1 (`TerminalCallbacks::on_osc_with_screen`) tells `NativeCallbacks`
+// whether the alternate screen was active when an OSC was dispatched. SC-2:
+// every prompt-mark item in the 7501 feed comes from the main screen; the
+// latch feed keeps one candidate per recognized OSC 133 on either screen.
+
+fn prompt_start_item() -> ProgramStatusFeedItem {
+    ProgramStatusFeedItem::PromptMark(crate::prompts::PromptMarkKind::PromptStart)
+}
+
+fn prompt_start_latch() -> LatchFeedEvent {
+    LatchFeedEvent::PromptMark(crate::prompts::PromptMarkKind::PromptStart)
+}
+
+/// AC-3: an OSC 133 `A` delivered with "alternate screen active" adds
+/// nothing to the 7501 feed and exactly one candidate to the latch feed.
+#[test]
+fn osc_133_a_on_the_alternate_screen_skips_the_7501_feed_and_keeps_the_latch_candidate() {
+    let h = default_harness();
+    h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, "A", true);
+    let s = h.state.lock();
+    assert!(
+        s.pending_program_status_feed.is_empty(),
+        "an alternate-screen mark never enters the 7501 feed"
+    );
+    assert_eq!(s.pending_latch_feed, vec![prompt_start_latch()]);
+}
+
+/// AC-3: with "alternate screen active" false, one prompt-mark item lands in
+/// each feed — exactly one, not one from an override plus one from a
+/// forwarded existing notification.
+#[test]
+fn osc_133_a_on_the_main_screen_adds_exactly_one_item_to_each_feed() {
+    let h = default_harness();
+    h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, "A", false);
+    let s = h.state.lock();
+    assert_eq!(s.pending_program_status_feed, vec![prompt_start_item()]);
+    assert_eq!(s.pending_latch_feed, vec![prompt_start_latch()]);
+}
+
+/// AC-3 / SC-2: the existing notification (no screen information) counts as
+/// the main screen.
+#[test]
+fn osc_133_a_through_the_existing_notification_counts_as_the_main_screen() {
+    let h = default_harness();
+    h.cb.on_osc(OSC_SEMANTIC_PROMPT, "A");
+    let s = h.state.lock();
+    assert_eq!(s.pending_program_status_feed, vec![prompt_start_item()]);
+    assert_eq!(s.pending_latch_feed, vec![prompt_start_latch()]);
+}
+
+/// AC-3: every recognized kind follows the same screen rule; an
+/// unrecognized kind pushes nothing to either feed on either screen.
+#[test]
+fn osc_133_every_recognized_kind_follows_the_screen_rule_and_an_unrecognized_one_pushes_nothing() {
+    use crate::prompts::PromptMarkKind::{CommandEnd, CommandExec, CommandStart, PromptStart};
+
+    for (data, kind) in [
+        ("A", PromptStart),
+        ("B", CommandStart),
+        ("C", CommandExec),
+        ("D;0", CommandEnd),
+    ] {
+        let alt = default_harness();
+        alt.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, data, true);
+        assert!(
+            alt.state.lock().pending_program_status_feed.is_empty(),
+            "{data}: alternate screen, 7501 feed"
+        );
+        assert_eq!(
+            alt.state.lock().pending_latch_feed,
+            vec![LatchFeedEvent::PromptMark(kind)],
+            "{data}: alternate screen, latch feed"
+        );
+
+        let main = default_harness();
+        main.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, data, false);
+        assert_eq!(
+            main.state.lock().pending_program_status_feed,
+            vec![ProgramStatusFeedItem::PromptMark(kind)],
+            "{data}: main screen, 7501 feed"
+        );
+        assert_eq!(
+            main.state.lock().pending_latch_feed,
+            vec![LatchFeedEvent::PromptMark(kind)],
+            "{data}: main screen, latch feed"
+        );
+    }
+
+    for alt_screen in [false, true] {
+        let h = default_harness();
+        h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, "Z", alt_screen);
+        let s = h.state.lock();
+        assert!(s.pending_program_status_feed.is_empty(), "alt={alt_screen}");
+        assert!(s.pending_latch_feed.is_empty(), "alt={alt_screen}");
+    }
+}
+
+/// AC-3: the order of the feeds' items is the order of the notifications; an
+/// alternate-screen mark leaves a hole in the 7501 feed only.
+#[test]
+fn screen_aware_notifications_keep_true_order_in_both_feeds() {
+    let h = default_harness();
+    h.responder()
+        .respond(7501, "id=a:state=working", OscTerminator::Bel);
+    h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, "A", true);
+    h.cb.on_reset();
+    h.responder()
+        .respond(7501, "id=b:state=working", OscTerminator::Bel);
+    h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, "A", false);
+    let s = h.state.lock();
+    assert_eq!(
+        s.pending_program_status_feed,
+        vec![
+            ProgramStatusFeedItem::Report(working_report("a")),
+            ProgramStatusFeedItem::Reset,
+            ProgramStatusFeedItem::Report(working_report("b")),
+            prompt_start_item(),
+        ]
+    );
+    assert_eq!(
+        s.pending_latch_feed,
+        vec![prompt_start_latch(), prompt_start_latch()]
+    );
+}
+
+/// Everything a notification can change in the callback state, reduced to
+/// comparable values (the notification sink's calls included).
+#[derive(Debug, PartialEq)]
+struct ObservedState {
+    title: Option<String>,
+    icon_name: Option<String>,
+    cwd: Option<String>,
+    osc_queue: Vec<String>,
+    bell_count: u32,
+    pending_apc: Vec<Vec<u8>>,
+    pending_dcs: Vec<Vec<u8>>,
+    clipboard_writes: Vec<(String, String)>,
+    clipboard_reads: Vec<String>,
+    theme_dirty: bool,
+    pending_agent_status: Vec<crate::agent_status::AgentStatusEvent>,
+    pending_latch_feed: Vec<LatchFeedEvent>,
+    pending_program_status_feed: Vec<ProgramStatusFeedItem>,
+    sink_calls: Vec<(String, String)>,
+}
+
+fn observed_state(h: &Harness) -> ObservedState {
+    let s = h.state.lock();
+    ObservedState {
+        title: s.title.clone(),
+        icon_name: s.icon_name.clone(),
+        cwd: s.cwd.clone(),
+        osc_queue: s.osc_queue.iter().map(|r| r.payload.clone()).collect(),
+        bell_count: s.bell_count,
+        pending_apc: s.pending_apc.clone(),
+        pending_dcs: s.pending_dcs.clone(),
+        clipboard_writes: s.pending_clipboard_writes.clone(),
+        clipboard_reads: s.pending_clipboard_reads.clone(),
+        theme_dirty: s.theme_dirty,
+        pending_agent_status: s.pending_agent_status.clone(),
+        pending_latch_feed: s.pending_latch_feed.clone(),
+        pending_program_status_feed: s.pending_program_status_feed.clone(),
+        sink_calls: h.sink.calls(),
+    }
+}
+
+/// AC-3: any action other than OSC 133 delivered through the screen-aware
+/// notification leaves the same callback state as the existing notification,
+/// on either screen.
+#[test]
+fn screen_aware_notification_of_other_actions_matches_the_existing_notification() {
+    let cases: &[(u8, &str)] = &[
+        (OSC_SET_TITLE_AND_ICON, "both"),
+        (OSC_SET_ICON_NAME, "icon"),
+        (OSC_SET_TITLE, "win-title"),
+        (OSC_SET_WORKING_DIRECTORY, "file:///home/me"),
+        (OSC_HYPERLINK, ";https://example.com"),
+        (OSC_NOTIFICATION, "Build done;all green"),
+        (OSC_CLIPBOARD, "c;aGk="),
+        (OSC_CLIPBOARD, "c;?"),
+        (OSC_CURSOR_STYLE, "underline"),
+        (OSC_RESET_COLOR_PALETTE, ""),
+        (OSC_SET_FG, "?"),
+        (OSC_PROGRAM_STATUS, "state=working"),
+        (OSC_EMTERM_EXTENSION, "emterm;markdown;begin"),
+        (
+            OSC_EMTERM_EXTENSION,
+            "emterm;agent-status;v=1;state=working",
+        ),
+        (OSC_EMTERM_EXTENSION, "emterm;agent-status;clear"),
+        (OSC_ITERM2, "File=inline=1:AAAA"),
+        (OSC_MUX_INBAND, "emterm-mux;QQ=="),
+        (OSC_UNKNOWN, "payload"),
+    ];
+    for &(action, data) in cases {
+        let existing = default_harness();
+        existing.cb.on_osc(action, data);
+        let expected = observed_state(&existing);
+
+        for alt_screen in [false, true] {
+            let screen_aware = default_harness();
+            screen_aware.cb.on_osc_with_screen(action, data, alt_screen);
+            assert_eq!(
+                observed_state(&screen_aware),
+                expected,
+                "action {action} {data:?} with alt_screen_active={alt_screen}"
+            );
+        }
+    }
+}
+
 // ── agent-exit-after-icon (task0002): pending_latch_feed ordering ──
 
 #[test]

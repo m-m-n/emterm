@@ -223,14 +223,25 @@ pub enum LatchFeedEvent {
 /// terminator), prompt-mark CANDIDATES from the OSC 133 callback and the
 /// reset from the RIS callback — all pushed in true synchronous call order,
 /// so the output pipeline can apply them to the tab's record table in byte
-/// order. A prompt mark is a candidate because the OSC 133 callback also
-/// fires on the alternate screen; the pipeline keeps only the ones the same
-/// pump's live, main-screen marks confirm (see `LatchFeedEvent`).
+/// order.
+///
+/// Main-screen invariant (osc7501-alt-screen-prompt-mark SC-2): every
+/// prompt-mark item in this feed comes from an OSC 133 dispatched on the MAIN
+/// screen. The callback learns the screen from `term_core`'s screen-aware
+/// notification (`TerminalCallbacks::on_osc_with_screen`) and does not push
+/// an alternate-screen mark here; the existing `on_osc` notification, which
+/// carries no screen information, counts as the main screen. The agent-status
+/// latch feed ([`LatchFeedEvent`]) is outside this invariant and still gets
+/// one candidate per recognized OSC 133 on either screen.
+///
+/// A prompt mark is still a candidate: the pipeline confirms it only when the
+/// same pump's live marks (`term_core`'s main-screen marks) match it, front to
+/// back (see `LatchFeedEvent`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProgramStatusFeedItem {
     /// A validated OSC 7501 report.
     Report(crate::program_status::Report),
-    /// An OSC 133 mark CANDIDATE, not yet confirmed live.
+    /// An OSC 133 mark CANDIDATE from the main screen, not yet confirmed live.
     PromptMark(crate::prompts::PromptMarkKind),
     /// A full terminal reset (RIS).
     Reset,
@@ -1186,6 +1197,54 @@ impl NativeCallbacks {
             }
         }
     }
+
+    /// OSC 133 (semantic prompt) handling, shared by the existing
+    /// [`TerminalCallbacks::on_osc`] notification (main screen, SC-2) and the
+    /// screen-aware [`TerminalCallbacks::on_osc_with_screen`] (SC-1). Each
+    /// notification reaches this method exactly once.
+    ///
+    /// OSC 133 marks are captured inside `term_core` (see
+    /// `TerminalCore::push_pending_prompt_mark`), which records each mark
+    /// with the absolute row it was emitted on. The native consumer drains
+    /// them via `take_prompt_marks` under the core lock; the notification
+    /// fires unconditionally (even on the alternate screen, unlike
+    /// `push_pending_prompt_mark`) to keep the wasm/WebView path's
+    /// `on_osc(133, …)` contract intact.
+    ///
+    /// agent-exit-after-icon (task0002 deviation): ALSO record a mark
+    /// CANDIDATE for the plain-tab inferred-clear latch feed (FR4) — see
+    /// `LatchFeedEvent`'s doc for why this is a "candidate" (not yet
+    /// alt-screen-confirmed) and how the relative order versus OSC 777
+    /// Set/Clear is preserved by construction (both push into the SAME
+    /// `pending_latch_feed` from a single synchronous callback). The latch
+    /// feed keeps one candidate per recognized OSC 133 on either screen.
+    ///
+    /// osc7501-program-status D4 / osc7501-alt-screen-prompt-mark SC-2: the
+    /// plain tab's OSC 7501 feed gets the same candidate, in the same call
+    /// order as the reports the responder pushes, so a prompt start lands
+    /// between the reports around it — but ONLY for a mark dispatched on the
+    /// main screen. `term_core` suppresses alternate-screen OSC 133 marks
+    /// from its live marks, and the output pipeline confirms the feed's
+    /// candidates against exactly those live marks front to back, so an
+    /// alternate-screen candidate in the feed would consume a live mark that
+    /// belongs to a later main-screen one. An unrecognized kind pushes
+    /// nothing to either feed.
+    fn handle_semantic_prompt(&self, data: &str, alt_screen_active: bool) {
+        if let Some(kind) = data
+            .as_bytes()
+            .first()
+            .copied()
+            .and_then(crate::prompts::PromptMarkKind::from_byte)
+        {
+            let mut s = self.state.lock();
+            s.pending_latch_feed.push(LatchFeedEvent::PromptMark(kind));
+            if !alt_screen_active {
+                s.pending_program_status_feed
+                    .push(ProgramStatusFeedItem::PromptMark(kind));
+            }
+        }
+        log::debug!("OSC 133 mark seen: {data}");
+    }
 }
 
 impl TerminalCallbacks for NativeCallbacks {
@@ -1218,41 +1277,11 @@ impl TerminalCallbacks for NativeCallbacks {
             }
             OSC_NOTIFICATION => self.handle_notify(data),
             OSC_CLIPBOARD => self.handle_clipboard(data),
-            OSC_SEMANTIC_PROMPT => {
-                // OSC 133 marks are captured inside `term_core` (see
-                // `TerminalCore::push_pending_prompt_mark`), which records
-                // each mark with the absolute row it was emitted on. The
-                // native consumer drains them via `take_prompt_marks` under
-                // the core lock; this callback fires unconditionally (even
-                // on the alternate screen, unlike `push_pending_prompt_mark`)
-                // only to keep the wasm/WebView path's `on_osc(133, …)`
-                // contract intact.
-                //
-                // agent-exit-after-icon (task0002 deviation): ALSO record a
-                // mark CANDIDATE for the plain-tab inferred-clear latch feed
-                // (FR4) — see `LatchFeedEvent`'s doc for why this is a
-                // "candidate" (not yet alt-screen-confirmed) and how the
-                // relative order versus OSC 777 Set/Clear below is
-                // preserved by construction (both push into the SAME
-                // `pending_latch_feed` from this single synchronous
-                // callback).
-                if let Some(kind) = data
-                    .as_bytes()
-                    .first()
-                    .copied()
-                    .and_then(crate::prompts::PromptMarkKind::from_byte)
-                {
-                    let mut s = self.state.lock();
-                    s.pending_latch_feed.push(LatchFeedEvent::PromptMark(kind));
-                    // osc7501-program-status D4: the plain tab's OSC 7501
-                    // feed gets the same candidate, in the same call order
-                    // as the reports the responder pushes, so a prompt
-                    // start lands between the reports around it.
-                    s.pending_program_status_feed
-                        .push(ProgramStatusFeedItem::PromptMark(kind));
-                }
-                log::debug!("OSC 133 mark seen: {data}");
-            }
+            // The existing notification carries no screen information, so an
+            // OSC 133 arriving through it counts as the main screen (SC-2).
+            // `term_core` itself delivers OSC 133 through
+            // `on_osc_with_screen` below, never through this arm.
+            OSC_SEMANTIC_PROMPT => self.handle_semantic_prompt(data, false),
             // OSC 7501 (Program Status): reports and queries are handled by
             // the SC-2 responder (`ThemeColorResponder::respond`), which is
             // consulted before this callback and is the only place that
@@ -1335,6 +1364,19 @@ impl TerminalCallbacks for NativeCallbacks {
                     data.len()
                 );
             }
+        }
+    }
+
+    /// SC-1: `term_core` delivers every dispatched OSC through here, with the
+    /// alternate-screen state read at the dispatch. OSC 133 is handled once,
+    /// with that state; every other action is forwarded once to
+    /// [`Self::on_osc`], so its callback state is exactly what the existing
+    /// notification produces on either screen.
+    fn on_osc_with_screen(&self, action_type: u8, data: &str, alt_screen_active: bool) {
+        if action_type == OSC_SEMANTIC_PROMPT {
+            self.handle_semantic_prompt(data, alt_screen_active);
+        } else {
+            self.on_osc(action_type, data);
         }
     }
 
