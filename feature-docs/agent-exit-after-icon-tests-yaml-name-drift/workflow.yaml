@@ -1,0 +1,172 @@
+schema_version: 1
+feature: agent-exit-after-icon-tests-yaml-name-drift
+created: '2026-10-10'
+base_branch: main
+goal: '# test-docs/agent-exit-after-icon/task0006.tests.yaml の AC-2 に存在しないテスト名が残っている
+
+
+  種別: バグ
+
+  Notion: https://www.notion.so/3f53509ec8ee814d93eeedd7ad1a7317
+
+
+  ## 現象 (必須)
+
+  `test-docs/agent-exit-after-icon/task0006.tests.yaml` の AC-2 の `tests` に、存在しないテスト名 `mux::upgrade::tests::rewrite_handoff_file_overwrites_an_already_written_handoff_file_in_place` が残っている。現行の関数名は `rewrite_handoff_file_replaces_an_already_written_handoff_file_at_the_same_path`（`src-tauri/src/mux/upgrade/tests.rs:1640`）。`.claude/rules/test-docs-records.md` の解決確認（`--lib -- --list` に各名前が出ること）を満たさない。
+
+  em-workflow mux-upgrade-exited-pane-revision の review round 1 で medium として残った指摘（stable_id 285abe531173477d）。古い名前は 2275bc93 で追加され、ccfc1d65 で関数名だけが変わった。
+
+  ## 再現手順 (必須)
+
+  1. `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --list` を実行する
+
+  2. 出力に `mux::upgrade::tests::rewrite_handoff_file_overwrites_an_already_written_handoff_file_in_place: test` が無い
+
+  ## 期待する挙動 (必須)
+
+  AC-2 の該当行が `mux::upgrade::tests::rewrite_handoff_file_replaces_an_already_written_handoff_file_at_the_same_path` になっている。`red_reason` は変更しない。
+
+  ## 完了の定義 (必須)
+
+  - [ ] 再現手順で現象が起きない
+
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所 (任意)
+
+  - `test-docs/agent-exit-after-icon/task0006.tests.yaml:51`
+
+  ## 実害・発生条件 (任意)
+
+  \<誰が何に困るか / 特定バージョン・データのときだけ 等\>
+
+
+  Once the implementation is finished, push the integration branch to the remote and create a Pull Request against base_branch with gh pr create. Keep the integration branch both locally and on the remote (do not auto-merge it into base_branch).
+
+  Consult Codex on any unclear points and adopt the option judged to be comparatively better.
+
+  Record the content of that discussion in Notion.
+
+  '
+parent_branch: em-workflow/agent-exit-after-icon-tests-yaml-name-drift/integration
+tier: reduced
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.47
+      '1': 0.53
+      '2': 0.0
+      '3': 0.0
+    description_plus_code:
+      '0': 0.07
+      '1': 0.9
+      '2': 0.03
+      '3': 0.0
+  at: '2026-10-10T22:14:00+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - design step
+  - IMPLEMENTATION.md (when no two tasks declare the same file)
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - SPEC.md
+  status: completed
+  completed_at_commit: 94aead2f745210dee53551d788c1dddfd25457f5
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'tier reduced: design step removed. UI の変更が無い（test-docs 記録の修正と Rust ユニットテストの追加のみ）'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: Replace the stale AC-2 entry
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+    - TS-3
+  FR2:
+    title: Keep everything else in the record unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-4
+  FR3:
+    title: Test that catches the problem coming back
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+    - TS-2
+  NFR1:
+    title: Resolution check
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+    - TS-3
+  NFR2:
+    title: No production code change
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-5
+  NFR3:
+    title: No new failures
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-5

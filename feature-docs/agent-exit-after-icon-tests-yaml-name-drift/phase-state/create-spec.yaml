@@ -1,11 +1,11 @@
 schema_version: 1
 feature: agent-exit-after-icon-tests-yaml-name-drift
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: c556008584a189aefa902f45b6784323962a4d27
 last_input_digest: sha256:d13e7cf53ec32c66536804c25f81ad88dc5d32cad59afe20af59865e3e61b125
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -13,9 +13,12 @@ worker_runs:
   status: completed
   input_digest: sha256:d13e7cf53ec32c66536804c25f81ad88dc5d32cad59afe20af59865e3e61b125
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   worker: spec-writer
-artifacts: []
+artifacts:
+- path: feature-docs/agent-exit-after-icon-tests-yaml-name-drift/SPEC.md
+  sha256: sha256:c24db0454b1a04736050655f708c9d2ae033214a2223ec1c9ef6ce70d6baf875
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
