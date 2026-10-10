@@ -1,0 +1,33 @@
+feature: mux-upgrade-exited-pane-revision
+collected_at: "2026-10-10T21:40:00+09:00"
+session_ids:
+  - 01a125ba-6b80-7555-97b1-d8e6d594b869
+  - 01a125ce-ed6c-7556-86f0-8c1d0f86d0ff
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code の最終読みがバケット 2（新しいロジック）寄り（score 1.57）となり full を採用"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.1, confidence: 0.9}
+        observed_at: "2026-10-10T20:50:00+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.57, confidence: 0.57}
+        observed_at: "2026-10-10T20:58:00+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/mux/upgrade.rs
+        - src-tauri/src/mux/upgrade/tests.rs
+      changed_lines_approx: 170
+      change_containment: single_module
+      work_still_required: true
+follow_up_drafts: []
+lessons_candidates:
+  - "計画の files 予測（5 ファイル）に対し、実際の変更は test-docs の自 feature 記録を含む 6 ファイル。予測漏れは自 feature の test-docs 記録のみ"
+  - "review の deferred medium（285abe531173477d、既存 test-docs のテスト名不一致）は triage_filing で起票されず filed が空だった"

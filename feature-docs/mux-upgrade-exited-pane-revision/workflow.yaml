@@ -122,7 +122,8 @@ workflow:
   completed_at_commit: f81cc5f514726420953c0fc02dfe6b323413d329
   summary: 'cargo check (default / --no-default-features) ok; --lib 4601 passed 0 failed 3 ignored; TS-1..TS-4 pass; TS-6/TS-7 inspection ok; test-docs resolution check ok (old name absent from --list). excluded: none'
 - id: retrospect
-  status: pending
+  status: completed
+  completed_at_commit: 969ec80918c22ed73992b4a7668e68b249faa71e
 tasks:
   task0001:
     title: Carry exited panes' full agent status through the hot-upgrade refresh
