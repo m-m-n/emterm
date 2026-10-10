@@ -129,8 +129,8 @@ impl Tab {
         // agent-exit-after-icon (task0002 deviation — see task0002's
         // implementer report): reconcile this pump's OSC 133 mark
         // CANDIDATES (`cb_state.pending_latch_feed`, populated by
-        // `NativeCallbacks::on_osc` in true synchronous order alongside
-        // OSC 777 Set/Clear — see `callbacks::LatchFeedEvent`'s doc)
+        // `NativeCallbacks`' OSC notifications in true synchronous order
+        // alongside OSC 777 Set/Clear — see `callbacks::LatchFeedEvent`'s doc)
         // against `pending_marks` (`term_core`'s alt-screen-filtered,
         // authoritative live-mark list just drained above) to produce a
         // true-order, live-only sequence for this tab's inferred-clear
@@ -154,6 +154,8 @@ impl Tab {
                     &live_kinds,
                 ));
         }
+        // The OSC 7501 feed holds main-screen prompt candidates only (SC-2),
+        // so it is matched against the same `live_kinds` list.
         self.apply_program_status_feed(program_status_feed, &live_kinds);
         self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
         // New PTY bytes reached the core — latch for the
@@ -164,14 +166,17 @@ impl Tab {
     /// Apply this pump's ordered OSC 7501 feed to the tab's record table
     /// (osc7501-program-status D4, FR7).
     ///
-    /// Reports and resets apply in feed order. A prompt-mark candidate
-    /// applies only when the SAME pump's live, main-screen marks
-    /// (`live_marks`, `term_core`'s alt-screen-filtered list) confirm it —
-    /// the same forward walk `reconcile_latch_feed` uses — and only a
-    /// confirmed prompt START removes records. A reset also discards every
-    /// mark `term_core` had captured before it (`TerminalCore::reset`), so
-    /// candidates ahead of the feed's last reset can never be live and are
-    /// skipped without consuming a live mark.
+    /// Reports and resets apply in feed order. Every prompt-mark candidate in
+    /// the feed comes from the main screen (osc7501-alt-screen-prompt-mark
+    /// SC-2: `NativeCallbacks` keeps alternate-screen OSC 133 marks out of
+    /// the feed), so the feed's candidates line up with the SAME pump's live,
+    /// main-screen marks (`live_marks`, `term_core`'s alt-screen-filtered
+    /// list). A candidate applies only when that list confirms it — the same
+    /// forward walk `reconcile_latch_feed` uses — and only a confirmed prompt
+    /// START removes records. A reset also discards every mark `term_core`
+    /// had captured before it (`TerminalCore::reset`), so candidates ahead of
+    /// the feed's last reset can never be live and are skipped without
+    /// consuming a live mark.
     ///
     /// After each item that changes the summary, the new summary (or `None`
     /// for its absence) joins [`Tab::pending_program_status_changes`] for
@@ -198,8 +203,8 @@ impl Tab {
                 }
                 Item::PromptMark(kind) => {
                     if index < last_reset || live_marks.get(live_idx) != Some(&kind) {
-                        // Captured before a reset, or on the alternate
-                        // screen: not a live mark.
+                        // Captured before a reset, or not confirmed by this
+                        // pump's live marks: not a live mark.
                         false
                     } else {
                         live_idx += 1;

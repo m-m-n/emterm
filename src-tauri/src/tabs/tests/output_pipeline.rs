@@ -1898,6 +1898,125 @@ fn osc7501_alternate_screen_prompt_start_does_not_count_when_a_main_one_follows_
     );
 }
 
+// ── osc7501-alt-screen-prompt-mark task0001: alternate-screen marks stay
+// out of the ordered 7501 feed ──────────────────────────────────────────
+//
+// An OSC 133 dispatched while the alternate screen is active never enters
+// the feed, so the forward walk that confirms the feed's prompt starts
+// against `term_core`'s live main-screen marks cannot spend a live mark on
+// an alternate-screen candidate. Each test feeds ONE `process_combined`
+// call, the processing unit the defect needs.
+
+/// One report plus the main-screen OSC 133 A that follows an alternate-screen
+/// excursion: the bytes of the reported defect, parameterized by the
+/// alternate-screen switch (`1049`, `1047` or `47`).
+fn alt_screen_a_then_report_then_main_a(switch: &str) -> Vec<u8> {
+    let mut bytes = format!("\x1b[?{switch}h\x1b]133;A\x07\x1b[?{switch}l").into_bytes();
+    bytes.extend_from_slice(&osc7501("id=job:state=working", false));
+    bytes.extend_from_slice(b"\x1b]133;A\x07");
+    bytes
+}
+
+fn assert_report_discarded_by_the_main_screen_prompt_start(tab: &mut Tab) {
+    use crate::program_status::ProgramState::Working;
+
+    assert_eq!(
+        tab.program_status.len(),
+        0,
+        "the main-screen A after the report discards its record"
+    );
+    assert_eq!(
+        tab.take_pending_program_status_changes(),
+        vec![Some(summary_of(Working)), None]
+    );
+}
+
+/// AC-4: alternate-screen A (`?1049`), return, report, main-screen A in one
+/// call: the record table ends empty.
+#[test]
+fn osc7501_alt_screen_a_then_report_then_main_a_discards_the_record() {
+    let mut tab = test_tab();
+    tab.process_combined(alt_screen_a_then_report_then_main_a("1049"));
+    assert_report_discarded_by_the_main_screen_prompt_start(&mut tab);
+}
+
+/// AC-5: the same sequence with the alternate screen switched by `?1047`.
+#[test]
+fn osc7501_alt_screen_a_via_1047_then_report_then_main_a_discards_the_record() {
+    let mut tab = test_tab();
+    tab.process_combined(alt_screen_a_then_report_then_main_a("1047"));
+    assert_report_discarded_by_the_main_screen_prompt_start(&mut tab);
+}
+
+/// AC-5: the same sequence with the alternate screen switched by `?47`.
+#[test]
+fn osc7501_alt_screen_a_via_47_then_report_then_main_a_discards_the_record() {
+    let mut tab = test_tab();
+    tab.process_combined(alt_screen_a_then_report_then_main_a("47"));
+    assert_report_discarded_by_the_main_screen_prompt_start(&mut tab);
+}
+
+/// AC-6 (a): a main-screen A, then an alternate-screen A, a return, a
+/// report, and a main-screen A in one call: the last A discards the record.
+#[test]
+fn osc7501_main_a_then_alt_screen_a_then_report_then_main_a_discards_the_record() {
+    let mut tab = test_tab();
+    let mut bytes = b"\x1b]133;A\x07\x1b[?1049h\x1b]133;A\x07\x1b[?1049l".to_vec();
+    bytes.extend_from_slice(&osc7501("id=job:state=working", false));
+    bytes.extend_from_slice(b"\x1b]133;A\x07");
+    tab.process_combined(bytes);
+    assert_report_discarded_by_the_main_screen_prompt_start(&mut tab);
+}
+
+/// AC-6 (b): two alternate-screen A marks, a return, a report, and a
+/// main-screen A in one call: the main-screen A discards the record.
+#[test]
+fn osc7501_two_alt_screen_a_then_report_then_main_a_discards_the_record() {
+    let mut tab = test_tab();
+    let mut bytes = b"\x1b[?1049h\x1b]133;A\x07\x1b]133;A\x07\x1b[?1049l".to_vec();
+    bytes.extend_from_slice(&osc7501("id=job:state=working", false));
+    bytes.extend_from_slice(b"\x1b]133;A\x07");
+    tab.process_combined(bytes);
+    assert_report_discarded_by_the_main_screen_prompt_start(&mut tab);
+}
+
+/// Edge case: a RIS issued on the alternate screen ends it, so the report
+/// and the A after the RIS are main-screen items of the same call.
+#[test]
+fn osc7501_ris_on_the_alt_screen_then_report_then_main_a_discards_the_record() {
+    let mut tab = test_tab();
+    let mut bytes = b"\x1b[?1049h\x1b]133;A\x07\x1bc".to_vec();
+    bytes.extend_from_slice(&osc7501("id=job:state=working", false));
+    bytes.extend_from_slice(b"\x1b]133;A\x07");
+    tab.process_combined(bytes);
+    assert_report_discarded_by_the_main_screen_prompt_start(&mut tab);
+}
+
+/// FR2: the main-screen A still keeps `done` and `error` records when an
+/// alternate-screen A precedes it in the same call.
+#[test]
+fn osc7501_main_a_after_an_alt_screen_a_keeps_done_and_error_records() {
+    use crate::program_status::ProgramState::Error;
+
+    let mut tab = test_tab();
+    tab.process_combined(osc7501("id=d:state=done", false));
+    tab.process_combined(osc7501("id=e:state=error", false));
+    tab.take_pending_program_status_changes();
+
+    tab.process_combined(alt_screen_a_then_report_then_main_a("1049"));
+    assert_eq!(
+        tab.program_status.len(),
+        2,
+        "the working record is discarded; done and error survive"
+    );
+    assert_eq!(tab.program_status.summary(), Some(summary_of(Error)));
+    assert_eq!(
+        tab.take_pending_program_status_changes().last(),
+        Some(&Some(summary_of(Error))),
+        "the last summary change is the table after the A"
+    );
+}
+
 /// AC-4: RIS removes every record and honors byte order against reports in
 /// the same pump.
 #[test]
