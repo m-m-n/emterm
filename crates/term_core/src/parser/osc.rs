@@ -8,30 +8,46 @@ impl Parser {
         F: FnMut(ParsedAction),
     {
         match byte {
-            // BEL terminates OSC
+            // BEL terminates OSC (not part of the received length)
             0x07 => {
                 self.dispatch_osc(emit, OscTerminator::Bel);
                 self.state = State::Ground;
             }
-            // ESC might be start of ST (ESC \)
+            // ESC might be start of ST (ESC \); not counted either
             0x1B => {
                 self.state = State::OscEscape;
             }
-            // OSC parameter (number before semicolon)
+            // OSC parameter (number before semicolon). The value saturates on
+            // both the multiply and the add: once above the u16 range it
+            // stays at `u16::MAX` for the rest of the digits, which no OSC
+            // code (native or host-registered) uses.
             b'0'..=b'9' if !self.osc_param_done => {
-                self.osc_param = self.osc_param.saturating_mul(10) + (byte - b'0') as u16;
+                self.count_osc_byte();
+                self.osc_param = self
+                    .osc_param
+                    .saturating_mul(10)
+                    .saturating_add((byte - b'0') as u16);
             }
             // Semicolon separates param from data
             b';' if !self.osc_param_done => {
+                self.count_osc_byte();
                 self.osc_param_done = true;
             }
             // Data bytes
             _ => {
+                self.count_osc_byte();
                 if self.osc_buffer.len() < MAX_OSC_LEN {
                     self.osc_buffer.push(byte);
                 }
             }
         }
+    }
+
+    /// Count one received byte of the open OSC string (SC-2). Counts every
+    /// byte the string consumes, including the ones dropped past
+    /// `MAX_OSC_LEN`; saturates instead of overflowing.
+    fn count_osc_byte(&mut self) {
+        self.osc_received_len = self.osc_received_len.saturating_add(1);
     }
 
     pub(super) fn osc_escape<F>(&mut self, byte: u8, emit: &mut F)
@@ -70,8 +86,10 @@ impl Parser {
             param: self.osc_param,
             data,
             terminator,
+            received_len: self.osc_received_len,
         });
         self.osc_param = 0;
         self.osc_param_done = false;
+        self.osc_received_len = 0;
     }
 }

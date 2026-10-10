@@ -1442,19 +1442,30 @@ impl ThemeColorResponder {
     }
 
     /// OSC 7501: answer a query, record a report, ignore everything else.
+    ///
+    /// `received_len` is the OSC-string length term_core counted as received
+    /// (osc7501-leading-zero-length SC-2) and decides the 4096-byte rule
+    /// through `parse_received` (SC-3). `None` is the existing method's
+    /// caller, which only has the payload: the canonical spelling is
+    /// measured instead.
     fn respond_program_status(
         &self,
         payload: &str,
         terminator: term_core::OscTerminator,
+        received_len: Option<usize>,
     ) -> Vec<Vec<u8>> {
-        use crate::program_status::{Parsed, Terminator, parse};
+        use crate::program_status::{Parsed, Terminator, parse, parse_received};
 
         let terminator = match terminator {
             term_core::OscTerminator::Bel => Terminator::Bel,
             term_core::OscTerminator::St => Terminator::St,
             term_core::OscTerminator::Unterminated => return Vec::new(),
         };
-        match parse(payload, terminator) {
+        let parsed = match received_len {
+            Some(received_len) => parse_received(payload.as_bytes(), received_len, terminator),
+            None => parse(payload, terminator),
+        };
+        match parsed {
             Parsed::Query => {
                 let mut answer = format!("\x1b]{OSC_PROGRAM_STATUS_PARAM};?").into_bytes();
                 answer.extend_from_slice(match terminator {
@@ -1473,6 +1484,24 @@ impl ThemeColorResponder {
             Parsed::Ignored => Vec::new(),
         }
     }
+
+    /// The theme codes (OSC 4/10/11/12): apply the payload and return the
+    /// replies; every other code returns nothing.
+    fn respond_theme_color(
+        &self,
+        code: u16,
+        payload: &str,
+        terminator: term_core::OscTerminator,
+    ) -> Vec<Vec<u8>> {
+        if !matches!(code, 4 | 10 | 11 | 12) {
+            return Vec::new();
+        }
+        let outcome = self.theme.lock().apply_osc(code as u8, payload, terminator);
+        if outcome.changed {
+            self.state.lock().theme_dirty = true;
+        }
+        outcome.responses
+    }
 }
 
 impl term_core::OscResponder for ThemeColorResponder {
@@ -1483,16 +1512,24 @@ impl term_core::OscResponder for ThemeColorResponder {
         terminator: term_core::OscTerminator,
     ) -> Vec<Vec<u8>> {
         if code == OSC_PROGRAM_STATUS_PARAM {
-            return self.respond_program_status(payload, terminator);
+            return self.respond_program_status(payload, terminator, None);
         }
-        if !matches!(code, 4 | 10 | 11 | 12) {
-            return Vec::new();
+        self.respond_theme_color(code, payload, terminator)
+    }
+
+    /// What term_core calls: OSC 7501 is measured by the bytes actually
+    /// received; every other code behaves exactly as in [`Self::respond`].
+    fn respond_with_received_len(
+        &self,
+        code: u16,
+        payload: &str,
+        terminator: term_core::OscTerminator,
+        received_len: usize,
+    ) -> Vec<Vec<u8>> {
+        if code == OSC_PROGRAM_STATUS_PARAM {
+            return self.respond_program_status(payload, terminator, Some(received_len));
         }
-        let outcome = self.theme.lock().apply_osc(code as u8, payload, terminator);
-        if outcome.changed {
-            self.state.lock().theme_dirty = true;
-        }
-        outcome.responses
+        self.respond_theme_color(code, payload, terminator)
     }
 }
 
