@@ -1,0 +1,27 @@
+schema_version: 1
+feature: mux-upgrade-exited-pane-revision
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: 99535d3bf02b44ed67554d9cd4bd7ee6346a8c5e
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers:
+  create-spec.feature-identity:
+    packet_id: null
+    answered_at: '2026-10-10T20:49:30+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - derive_from_task_description
+    freeform: null
+    normalized_answer: mux-upgrade-exited-pane-revision
+    resolution_note: 'gate: create-spec.feature-identity; batch-policies.yaml option_id derive_from_task_description (Notion タスクタイトル『mux hot-upgrade: 終了済みペインの OSC 7501 記録だけが更新され、更新番号が古いまま引き継がれる』から導出)'
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
