@@ -1,0 +1,62 @@
+round: 1
+executed_at: "2026-10-11T01:53:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 36e0279d48e9a3c186e2a82d66b2b266ac9a1d14
+  head_commit: 6e987da8a0e52e5e69a14fbaa1f70a27e9bc6093
+  changed_files:
+  - src-tauri/src/agent_status.rs
+  - src-tauri/src/program_status.rs
+  - src-tauri/src/program_status/tests.rs
+  - test-docs/pane-state-rank-unify/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+- {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+- stable_id: 3b85e79896a0cf72
+  severity: medium
+  category: architecture
+  file: src-tauri/src/program_status.rs
+  line: 28
+  title: "`use super::agent_status` が綴りの違いだけで ac8 ガードを通り、その「他のプロジェクトモジュールに依存しない」という主張が事実と合わなくなっている"
+  description: "program_status.rs:28 で `use super::agent_status::AgentState;` が追加された。program_status はクレート直下のモジュールなので `super::` は `crate::` と同じものを指す。既存のガード `program_status::tests::ac8_the_module_uses_only_always_built_crates` は use のルートに `super` を許し `crate::` という文字列だけを拒否しており、拒否時のメッセージは \"the module must not reach into other project modules\" である。新しい import は他のプロジェクトモジュールへの依存だが `super::` と綴ったためにガードを通っている。依存そのものは SPEC が求めたもの（A2）で agent_status は常にビルドされるため、ビルド構成に依存しない性質（NFR2）は保たれている。問題は緑のテストが、コードがもう満たしていない不変条件を主張し続けている点にある。"
+  suggestion: "依存はそのまま残す。SPEC NFR3 で ac8 テストは変更できないため、import 行に短いコメントを付ける。ac8 を変更できる後続作業では、`crate::` の文字列チェックを明示的な許可リスト（`super::agent_status`）に置き換え、メッセージを実際に守っている不変条件（gui feature 非依存）に合わせて書き直す。"
+  reproduction: null
+  reproduction_alternates: []
+  reproduction_overflow: false
+  sources: ["claude:evaluator"]
+  confidence: 55
+  resolution: deferred
+  resolution_reason: "medium のため自動修正対象外。本来の修正（ac8 テストの許可リスト化）は SPEC NFR3（既存テストを変えない）と衝突するため、後続タスクとして起票して見送る"
+evaluation:
+  round_summary: "4 観点（security#0 / comprehensive#0 / architecture#0 / spec#0）はすべて findings が空。critical/high の報告・dismissed_sites・インジェクションの試みは無し。評価者が独自に確認: compose_rank の値は変更前の ProgramState::rank と同一で Table::summary の挙動は不変、agent_state は wildcard なしの 5 アーム網羅 match、compose_rank の doc は agent_status_model.rs の実装と一致、agent_status は gui gate なし。評価者自身の指摘は medium 1 件（program_status.rs:28 の super:: import と ac8 ガードの主張の食い違い）。観点別: security=corroborated, comprehensive=corroborated（tests.rs の区切りコメントの ac 番号範囲のずれは閾値未満）, architecture=findings, spec=corroborated（FR1-FR5, NFR1-NFR3 充足）。"
+  recommended_action: complete
+  action_rationale: "critical/high は無く、仕様の要求はすべて満たし、振る舞いの変化も無い。残る medium 1 件の本来の直し方は SPEC NFR3 とぶつかるため、見送りか後続作業として記録するのが適切。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-pane-state-rank-unify-20261010T165300Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
