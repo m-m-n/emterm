@@ -1,0 +1,64 @@
+schema_version: 2
+feature: agent-exit-after-icon-tests-yaml-name-drift
+tier: reduced
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 0.54
+    confidence: 0.53
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.47
+      '1': 0.53
+      '2': 0.0
+      '3': 0.0
+  observed_at: '2026-10-10T22:08:00+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 0.97
+    confidence: 0.9
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.07
+      '1': 0.9
+      '2': 0.03
+      '3': 0.0
+  observed_at: '2026-10-10T22:13:00+09:00'
+pre_survey_estimate:
+  files_expected:
+  - test-docs/agent-exit-after-icon/task0006.tests.yaml
+  - src-tauri/src/mux/upgrade/tests.rs
+  changed_lines_approx: 30
+  new_functions_needed: true
+  new_files_needed: false
+  new_dependencies_needed: false
+  covering_tests_exist: false
+  spillover_modules: []
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 1
+  body_change_kind: new_logic
+  change_containment: single_module
+  caller_and_dependency_count: 0
+  changes_external_contract: false
+  changes_behavior: false
+  notes: '対象YAMLの51行目には旧名が残っている。現行の #[test] 関数は src-tauri/src/mux/upgrade/tests.rs:1640
+    の rewrite_handoff_file_replaces_an_already_written_handoff_file_at_the_same_path。対象AC-2の名前を検証する既存テストは見つからなかった。別の記録の改名を文字列で検証するテストは
+    strip_open_string_body_closure.rs:984 に存在するが、test-docsの名前をcargoの一覧と照合する汎用テストやスクリプトは見つからなかった。規則には手動の一覧照合手順がある。行数などの見積もりは1行の置換と再発検知テスト1件の追加を含む。red_reasonは変更対象外。ファイル変更を避けるためcargoは実行していない'
+decided_at: '2026-10-10T22:14:00+09:00'
