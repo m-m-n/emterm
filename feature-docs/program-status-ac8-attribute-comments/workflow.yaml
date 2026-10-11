@@ -86,7 +86,7 @@ workflow:
   completed_at_commit: f3c32159bb7d57e1db28299e717aba24a1d4f138
   base_commit: 1b497b0bedff82446f0a4fb4a9dee580bb7ca6a5
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -115,9 +115,15 @@ tasks:
     status: merged
     branch: em-workflow/program-status-ac8-attribute-comments/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
