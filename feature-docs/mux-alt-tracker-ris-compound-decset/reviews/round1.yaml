@@ -1,0 +1,115 @@
+round: 1
+executed_at: '2026-10-11T13:33:45+09:00'
+scope:
+  review_mode: diff
+  base_commit: 66485a8d0c8bbfcba3d487349ed061dbd18bf6b6
+  head_commit: 31c11d9cc288a54e5ba939d158c28401f58a3e64
+  changed_files:
+  - src-tauri/src/mux/daemon/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/altscreen_split_read.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - test-docs/mux-alt-tracker-ris-compound-decset/task0001.tests.yaml
+  - test-docs/mux-alt-tracker-ris-compound-decset/task0002.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  discretionary:
+  - perspective: performance
+    reason: write_filter.rs の scan/advance は PTY 読み取りごとに走るホットパスで、今回その走査に RIS 判定と引数列検査が追加されたため
+  cross_validation: true
+perspective_runs:
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  model: gpt-6-astra
+  status: completed
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: 2139988314e6d6ac
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  line: 1814
+  title: 同じ読み取りの中で、検出の後に来る複合DECSETがclient_altに反映されない
+  description: scan() は複合形を、条件 `self.client_alt != self.shadow_alt` が成り立つときだけ扱う。走査中の shadow_alt は複合形では更新されない。M1（\x1b[?1047h）の後に、1回の読み取りで `\x1b[?1;1049l\x1b[?1;1049h\x1b]133;A\x07` を受けた場合、C1l で検出が起きて client_alt=false になり shadow_alt(false) と一致するため、続く C1h は無視される。検出した読み取りは事後照合を飛ばすので [0..28] を返し OSC 133;A がライブになる。さらに client_alt=false / shadow_alt=true の誤った食い違いが残り、次の読み取りの印も [0..8] になる。通常タブは代替画面にいるので印を無視する。C1l と C1h を別々の読み取りにすると事後照合の adopt で正しく戻るため、読み込み境界で結果が変わり FR6 に反する。
+  suggestion: '一度検出した読み取りでは、以降の複合形も食い違いの有無によらず client 側の向きを反映する（例: 条件を `parse.names_a_screen_mode() && (detected || self.client_alt != self.shadow_alt)` にする）。M1/M2 の後に複合形を2つ続けて1回の読み取りに入れる行を、トラッカーの単体テストと SC-1y の行（デーモン側と通常タブ側）に追加する。'
+  reproduction: null
+  reproduction_alternates: []
+  reproduction_overflow: false
+  sources:
+  - codex:comprehensive
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix 対象外（critical/high のみ）。Notion に後続タスクとして起票'
+  confidence: 90
+- stable_id: 89b935844bd8bc3b
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  line: 1679
+  title: 検出した読み取りが複合形より後に始まった引き継ぎ状態まで消し、読み込み境界で結果が変わる
+  description: 'advance() の検出分岐は `self.carry = TrackerCarry::Nothing` を無条件に実行する。前の読み取りの引き継ぎは scan() 冒頭で取り出し済みなので、ここで消えるのは複合形より後に始まった引き継ぎ（指示子待ち、切り替えの途中状態、CSI の解析状態）だけになる。例: M1 の後の読み取りが `\x1b[?1;1047h\x1b(` で終わり、次が `\x1bc\x1b]133;A\x07` の場合、指示子待ちが消えるため ESC c を RIS として扱い [2..10] を返す。term_core では ESC が指示子として消費され代替画面に残る。M1 の後に `\x1b[?1;1049l\x1b[?10` | `47h` + 印と分割した場合も、途中状態が消えて ?1047h を見落とし事後照合でも直らない。テスト altmismatch_ac4_a_detection_read_applies_later_switches_and_clears_the_carry はこの消去を正しい挙動として固定している。FR6 に反する。'
+  suggestion: 検出分岐では、走査が複合形より後で記録した carry を残す。SPEC FR4/FR5 の「adopt のときに引き継ぎ状態を消す」は検出時には複合形以前の状態に限る形に文言を揃える。上のテストの期待値を更新し、複合形の後で読み取りを ESC ( / ESC / ESC [?10 で分割する回帰テストを追加する。
+  reproduction: null
+  reproduction_alternates: []
+  reproduction_overflow: false
+  sources:
+  - codex:comprehensive
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix 対象外（critical/high のみ）。Notion に後続タスクとして起票'
+  confidence: 90
+evaluation:
+  round_summary: レビュー観点5本はすべて完了。critical/high の指摘は無い。comprehensive の medium 3件はコードを読んで再現を確認した。FR6（読み込み境界をまたいでも通常タブと一致）を破る2件（同じ読み取り内の2つ目以降の複合形の取りこぼし、検出時に後から始まった引き継ぎ状態を消すこと）は medium のまま残した。CSI の打ち切り規則が term_core と違う件は SPEC FR5 が定めている挙動なので low に下げた（low は R3b step 2 で記録対象外）。注入の試みは無かった。security / architecture / performance は corroborated。spec は FR6 違反を comprehensive の2件にまとめた。FR4 の「読み込み後のパーサー状態を adopt する」は実装では shadow 側だけを adopt し client 側は終端の向きで判定しており、K50/K53 の期待値に合うのは実装の方なので指摘にはせず、SPEC 文言を実装に揃えることを勧める。
+  recommended_action: auto_fix
+  action_rationale: medium の2件は AltSpanTracker::advance/scan の中で直せる。2件目の修正は SPEC FR4/FR5 の「adopt で引き継ぎを消す」文言とぶつかるので、修正時に検出時に消す範囲をはっきりさせる必要がある。low の件は SPEC FR5 の改訂が前提になるので人の判断に回す。
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-mux-alt-tracker-ris-compound-decset-20261011T043315Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
