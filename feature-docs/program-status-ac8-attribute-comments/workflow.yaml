@@ -2,34 +2,60 @@ schema_version: 1
 feature: program-status-ac8-attribute-comments
 created: '2026-10-11'
 base_branch: main
-goal: |
-  # program_status の ac8 許可リスト検査で、属性内のコメントが属性の開閉判定を狂わせ以降の use 行を見逃す
+goal: '# program_status の ac8 許可リスト検査で、属性内のコメントが属性の開閉判定を狂わせ以降の use 行を見逃す
+
 
   Notion task: https://www.notion.so/3f63509ec8ee813a8510e178bdbd3511 (種別: 改善)
 
+
   ## やりたいこと
+
   `program_status` の ac8 許可リスト検査（`src-tauri/src/program_status/tests.rs`）で、属性の中のコメントが属性の開閉判定に影響しないようにする。
 
+
   ## 背景・なぜ
-  em-workflow program-status-ac8-use-line-forms の review round 1 で残った medium 指摘（stable_id `50aab977c776b600`）。
-  複数行属性の状態を次の行へ持ち越すようにした結果、`ac8_scan_attribute`（`tests.rs:1579-1609` 付近）が属性内のコメント（`//`、`/* */`）にある `[` や `"` も構文として数える。閉じている属性を開いたままと判定し、`ac8_check_allowlist` がその状態を持ち越すため、以降の行がすべて use ルートの検査から外れる。
+
+  em-workflow program-status-ac8-use-line-forms の review round 1 で残った medium 指摘（stable_id
+  `50aab977c776b600`）。
+
+  複数行属性の状態を次の行へ持ち越すようにした結果、`ac8_scan_attribute`（`tests.rs:1579-1609` 付近）が属性内のコメント（`//`、`/*
+  */`）にある `[` や `"` も構文として数える。閉じている属性を開いたままと判定し、`ac8_check_allowlist` がその状態を持ち越すため、以降の行がすべて
+  use ルートの検査から外れる。
+
   再現例（コード読みで確認済み）:
+
   ```
+
   #[allow(dead_code /* [ */)]
+
   struct X;
+
   use winit::event::Event;
+
   ```
+
   結果は空の Vec。変更前は 3 行目を winit 違反として 1 件報告していた。`/* [ */` を `/* " */` にしても同じく見逃す。
-  現行の `program_status.rs` の属性はすべて同じ行で閉じるため、今の `ac8_the_module_uses_only_always_built_crates` がすり抜けて合格しているわけではない。
+
+  現行の `program_status.rs` の属性はすべて同じ行で閉じるため、今の `ac8_the_module_uses_only_always_built_crates`
+  がすり抜けて合格しているわけではない。
+
 
   ## 受け入れ条件 / 完了の定義
+
   - 属性内の行コメント・ブロックコメントの中の `[` `]` `"` が属性の開閉判定に影響しない
+
   - ソース末尾で属性が閉じないまま終わった場合は違反として報告する
+
   - 上の再現例と、引用符を使った版が winit 違反を返す自己テストがある
+
   - 既存の許可リスト・自己テストの期待は変わらない
 
+
   ## 制約・前提
+
   変更はテスト専用の検査（`src-tauri/src/program_status/tests.rs`）に限る。
+
+  '
 parent_branch: em-workflow/program-status-ac8-attribute-comments/integration
 tier: reduced
 tier_decision:
@@ -58,8 +84,10 @@ project:
   components:
     main:
       language: rust
-      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
-      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+        src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
       format_command: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       e2e_test_command: ''
 workflow:
@@ -73,13 +101,16 @@ workflow:
   - DESIGN.md
   - design/
   status: skipped
-  skipped_reason: tier reduced subtracts the design step; requirements-analyst also recommended skip (test-only change to the ac8 allowlist checker in src-tauri/src/program_status/tests.rs; no UI)
+  skipped_reason: tier reduced subtracts the design step; requirements-analyst also
+    recommended skip (test-only change to the ac8 allowlist checker in src-tauri/src/program_status/tests.rs;
+    no UI)
 - id: create-plan
   artifacts:
-  - IMPLEMENTATION.md
   - VERIFICATION.md
+  - THREAT-MODEL.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: 3b859f86e33ef9fd4b21d6ff8b4b1e853c5de96b
 - id: implement
   status: pending
   base_commit: 1b497b0bedff82446f0a4fb4a9dee580bb7ca6a5
@@ -91,7 +122,27 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Comment-aware attribute scan and end-of-source rule in the ac8 allowlist
+      checker
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/program_status/tests.rs
+    skills: []
+    domains:
+    - input-handling
+    complexity: medium
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - NFR1
+    - NFR2
+    - NFR3
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -105,57 +156,80 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   FR2:
     title: Block comments inside an attribute
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+    - TS-5
+    - TS-6
+    - TS-7
   FR3:
     title: Attribute still open at the end of the source
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+    - TS-9
   FR4:
     title: Self-tests for the reproduction source
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
   FR5:
     title: Existing expectations unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-10
   NFR1:
     title: Change scope
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-11
   NFR2:
     title: Doc comments match behavior
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-12
   NFR3:
     title: Test commands
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-10
 batch:
   review_rework_count: 0
   verify_rework:
