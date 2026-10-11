@@ -1,14 +1,18 @@
 schema_version: 1
 feature: mux-osc-abort-altscreen-split-read
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
 base_revision: b9191255afa13a2f295bc13af38a1f354bc0ea45
-last_input_digest: null
-active_request_id: null
+last_input_digest: sha256:73d0ab0f92eca5728065b7239b224dd5740be5fbb84c8342e5b316db52e2e9f0
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:73d0ab0f92eca5728065b7239b224dd5740be5fbb84c8342e5b316db52e2e9f0
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
