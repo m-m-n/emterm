@@ -1,13 +1,25 @@
 schema_version: 1
 feature: program-status-ac8-block-comment-carry-test
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: a747f79e9451f1b1373f3e8bb2426c717087e19f
 last_input_digest: sha256:a9015abaf4eded67fc25907fb3d45982ce263615cc7d9118e282a61ec176060b
 active_request_id: null
 packets: {}
-answers: {}
+answers:
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-10-11T23:05:09+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: src-tauri/src/render/theme.rs (top candidate,
+      Native theme files)'
+    resolution_note: batch-policies.yaml create-spec.design-system -> top_candidate_or_none;
+      one candidate reported by requirements-analyst
 worker_runs:
 - request_id: create-spec-run-0001
   status: completed

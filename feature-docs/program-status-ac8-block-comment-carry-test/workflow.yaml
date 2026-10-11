@@ -1,0 +1,152 @@
+schema_version: 1
+feature: program-status-ac8-block-comment-carry-test
+created: '2026-10-11'
+base_branch: main
+goal: |
+  # program_status の ac8 許可リスト検査で、ブロックコメント深さの行またぎ持ち越しを判別する自己テストが無い
+
+  Notion: https://www.notion.so/3f63509ec8ee8104ad8ece7f699ffac7  (種別: 改善)
+
+  ## やりたいこと (必須)
+  `program_status` の ac8 許可リスト検査（`src-tauri/src/program_status/tests.rs`）に、ブロックコメント深さの行またぎ持ち越しを判別する自己テストを足す。
+
+  ## 背景・なぜ (必須)
+  em-workflow program-status-ac8-attribute-comments の review round 1 で残った medium 指摘（stable_id `be2393610313debe`、`src-tauri/src/program_status/tests.rs:2512` 付近）。
+  `ac8_scan_attribute` は FR2 どおりブロックコメント深さを次の行へ持ち越している。ただし、持ち越しを落とした変異（`Open(Ac8OpenAttribute { depth, in_string, block_comment: 0 })`）でも新規テストが全部通る。
+  - `ac8_comments_ac3_a_bracket_in_a_block_comment_spanning_lines_does_not_hide_a_use_line`: 変異版では 2 行目の先頭 `]` で属性が閉じ、3 行目が通常の use 行として winit 違反になるため通る
+  - `ac8_comments_ac5_a_source_ending_inside_a_block_comment_returns_one_end_of_source_violation`: 2 行目に括弧も引用符も無く、変異版でも末尾違反が 1 件出て通る
+  - ほかの `ac8_comments_*` は 1 行内のコメントだけを扱う
+  `test-docs/program-status-ac8-attribute-comments/task0001.tests.yaml` の AC-3 red_reason と `feature-docs/program-status-ac8-attribute-comments/tasks/task0001.md` の Test Notes は「持ち越しを落とした実装への回帰ガード」と書いているが、実態と合わない。
+
+  ## 受け入れ条件 / 完了の定義 (必須)
+  - [ ] 持ち越しを落とした実装では落ちる判別テストがある（例: `#[cfg(all( /* ]` / `] */ unix))] use winit::event::Event;` の 2 行で、閉じ行の use が winit 違反として報告される）
+  - [ ] 引用符版（例: `#[allow(x /*` / `" */)]` / `use winit::event::Event;`）も判別できる
+  - [ ] `task0001.tests.yaml` の AC-3 の tests と red_reason が、実際に回帰ガードを担うテストを指す
+  - [ ] 既存の許可リスト・自己テストの期待は変わらない
+
+  ## 制約・前提 (任意)
+  変更はテスト専用の検査（`src-tauri/src/program_status/tests.rs`）と、その test-docs 記録に限る。
+parent_branch: em-workflow/program-status-ac8-block-comment-carry-test/integration
+tier: reduced
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.01
+      '1': 0.99
+      '2': 0.0
+      '3': 0.0
+    description_plus_code:
+      '0': 0.01
+      '1': 0.98
+      '2': 0.01
+      '3': 0.0
+  at: '2026-10-11T23:00:21+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - design step
+  - IMPLEMENTATION.md (only when no two tasks declare the same file)
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - src-tauri/src/render/theme.rs
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - SPEC.md
+  status: completed
+  completed_at_commit: 2736674d3e93d01741496c0fa623562452539bb6
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: tier reduced subtracts the design step; requirements-analyst also recommended skip (test-only change in src-tauri/src/program_status/tests.rs and a test-docs record; no UI)
+- id: create-plan
+  artifacts:
+  - VERIFICATION.md
+  - THREAT-MODEL.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: 3e1afa42e4f9ef3c2b4c8c73efcd373805aecec6
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: Bracket carry test
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Quote carry test
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Predecessor test record AC-3
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Existing behavior unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Change set limit
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: Test name resolution
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Cargo invocation
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
