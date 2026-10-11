@@ -1,0 +1,12 @@
+schema_version: 1
+feature: agent-latch-alt-screen-prompt-mark
+records:
+  - question_id: create-spec.latch-release-condition
+    packet_id: null
+    answered_at: "2026-10-11T16:41:43+09:00"
+    source: batch-safe-default
+    answer_mode: select
+    selected_option_ids: [keep_release_condition]
+    freeform: null
+    normalized_answer: "Option A: keep the latch release condition (Set -> main D -> main A); exclude alt-screen OSC 133 candidates from latch matching; tests use sequences whose alt kinds line up with main kinds (analyst assumption A1)."
+    resolution_note: "gate: orchestrator-raised clarification on the task's reproduction steps (no D after Set) vs the release condition pinned by ac1/ac2; options: A keep release condition (chosen) / B also release on Set -> main A alone (not chosen, out of scope spec change); codex_consulted: true (Codex recommended A: release condition pinned by agent_status_exit_latch.rs and ac2, root cause is kind-only mis-matching of alt candidates); opus_escalation: false; residual risk: the literal reproduction without D still does not release after the fix, per existing spec. Discussion recorded as a Notion comment on the task page."
