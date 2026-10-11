@@ -1,16 +1,32 @@
 schema_version: 1
 feature: osc133-mark-token-exact-match
 phase: create-plan
-status: running
+status: applying_patch
 generation: 1
 base_revision: 480fd36c3f589354ef5ac1cfe5447d863b821e61
 last_input_digest: sha256:b6d84e9b720bb9df65c83f0b4fa8b9dbec5b36d6d6dcf50dd3555047087051d5
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
-worker_runs: []
-artifacts: []
-patches: []
+worker_runs:
+- request_id: create-plan-run-0001
+  status: completed
+  input_digest: sha256:b6d84e9b720bb9df65c83f0b4fa8b9dbec5b36d6d6dcf50dd3555047087051d5
+  output_digest: sha256:25afb867b86505a43f8b701cabec2de066b4c56360a34cb68f0e7f9ce1a2fceb
+artifacts:
+- path: feature-docs/osc133-mark-token-exact-match/VERIFICATION.md
+  sha256: sha256:88f01404655baccd2a975590235b5793100d4e4999be832de9eb673b339689c8
+  produced_by: create-plan-run-0001
+- path: feature-docs/osc133-mark-token-exact-match/THREAT-MODEL.md
+  sha256: sha256:4e94f99d5ead82a071d666b305c58275981aa9cb25d24f045416ac4eba6a33bf
+  produced_by: create-plan-run-0001
+- path: feature-docs/osc133-mark-token-exact-match/tasks/task0001.md
+  sha256: sha256:b28417b10e34d50b08baa2d7f0e8afcc1ae1f5fd3f48297192bb273494cdbc60
+  produced_by: create-plan-run-0001
+patches:
+- patch_id: create-plan-p0001
+  request_id: create-plan-run-0001
+  status: pending
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
