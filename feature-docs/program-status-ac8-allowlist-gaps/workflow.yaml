@@ -2,26 +2,51 @@ schema_version: 1
 feature: program-status-ac8-allowlist-gaps
 created: '2026-10-11'
 base_branch: main
-goal: |
-  # program_status ac8 許可リスト検査の判定漏れ 2 件を塞ぐ
+goal: '# program_status ac8 許可リスト検査の判定漏れ 2 件を塞ぐ
+
 
   Notion: https://www.notion.so/3f63509ec8ee815a9cf9e49a2256172f
 
+
   ## やりたいこと (必須)
-  `program_status` の ac8 許可リスト検査（`src-tauri/src/program_status/tests.rs`）に残る判定漏れ 2 件を塞ぐ。
+
+  `program_status` の ac8 許可リスト検査（`src-tauri/src/program_status/tests.rs`）に残る判定漏れ 2
+  件を塞ぐ。
+
   ## 背景・なぜ (必須)
-  em-workflow program-status-ac8-allowlist の review round 1 で medium として残した指摘 2 件（stable_id `1efd012a5982dfcb`, `2912970a9817a6de`）。
-  1. `ac8_use_path`（`tests.rs:1558` 付近）は `use ` と `pub(` しか認識しない。`pub (crate) use winit::event::Event;`、`use\twinit::event::Event;`、`use` だけの行で改行する形、`#[cfg(...)] use winit::...;` のように属性と同じ行に書く形は use 行として扱われず、違反なしになる。
-  2. `ac8_continues_identifier`（`tests.rs:1548` 付近）は `is_alphanumeric() || c == '_'` で判定しているため、U+0301 などの結合文字を識別子の継続と見なさない。`use super::agent_status\u{0301}::X;` が許可される。
+
+  em-workflow program-status-ac8-allowlist の review round 1 で medium として残した指摘 2 件（stable_id
+  `1efd012a5982dfcb`, `2912970a9817a6de`）。
+
+  1. `ac8_use_path`（`tests.rs:1558` 付近）は `use ` と `pub(` しか認識しない。`pub (crate) use
+  winit::event::Event;`、`use\twinit::event::Event;`、`use` だけの行で改行する形、`#[cfg(...)]
+  use winit::...;` のように属性と同じ行に書く形は use 行として扱われず、違反なしになる。
+
+  2. `ac8_continues_identifier`（`tests.rs:1548` 付近）は `is_alphanumeric() || c == ''_''`
+  で判定しているため、U+0301 などの結合文字を識別子の継続と見なさない。`use super::agent_status\u{0301}::X;` が許可される。
+
   どちらもテスト専用の検査での検出漏れで、`cargo check --no-default-features` は同じ入力で失敗する。
-  コードは統合ブランチ `em-workflow/program-status-ac8-allowlist/integration` にある（PR 経由で main に入る予定）。
+
+  コードは統合ブランチ `em-workflow/program-status-ac8-allowlist/integration` にある（PR 経由で main
+  に入る予定）。
+
   ## 受け入れ条件 / 完了の定義 (必須)
-  - [ ] `use`・`pub`・可視性指定のあとを空白類 1 文字以上で判定し、`pub (crate) use winit::event::Event;` と `use\twinit::event::Event;` を拒否する自己テストがある
-  - [ ] 許可条件が fail-closed（直後が空・`::`・明示した終端文字のときだけ許可）になっており、`use super::agent_status\u{0301}::X;` を拒否する自己テストがある
+
+  - [ ] `use`・`pub`・可視性指定のあとを空白類 1 文字以上で判定し、`pub (crate) use winit::event::Event;`
+  と `use\twinit::event::Event;` を拒否する自己テストがある
+
+  - [ ] 許可条件が fail-closed（直後が空・`::`・明示した終端文字のときだけ許可）になっており、`use super::agent_status\u{0301}::X;`
+  を拒否する自己テストがある
+
   ## スコープ外 (任意)
+
   \<今回やらないこと。あれば\>
+
   ## 制約・前提 (任意)
+
   \<触ってほしくない箇所 / 使う技術 / 互換性など。あれば\>
+
+  '
 parent_branch: em-workflow/program-status-ac8-allowlist-gaps/integration
 tier: reduced
 tier_decision:
@@ -41,7 +66,8 @@ tier_decision:
   reductions:
   - REQUIREMENTS.md
   - design step
-  - IMPLEMENTATION.md (kept with Shared Components when multiple tasks declare the same file)
+  - IMPLEMENTATION.md (kept with Shared Components when multiple tasks declare the
+    same file)
 project:
   license: MIT
   design_system:
@@ -51,15 +77,16 @@ project:
   components:
     src-tauri:
       language: rust
-      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+        src-tauri/Cargo.toml
       test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
         --lib
       format_command: ''
       e2e_test_command: ''
     src-tauri-cli:
       language: rust
-      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
-        --no-default-features
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+        src-tauri/Cargo.toml --no-default-features
       test_command: ''
       format_command: ''
       e2e_test_command: ''
@@ -82,8 +109,8 @@ workflow:
   - DESIGN.md
   - design/
   status: skipped
-  skipped_reason: UI 変更なし（テストのみの変更。requirements-analyst の推奨を batch 方針 decide_autonomously で採用）。reduced
-    tier の削減対象でもある
+  skipped_reason: UI 変更なし（テストのみの変更。requirements-analyst の推奨を batch 方針 decide_autonomously
+    で採用）。reduced tier の削減対象でもある
 - id: create-plan
   artifacts:
   - VERIFICATION.md
@@ -96,7 +123,7 @@ workflow:
   base_commit: b571caad039f95f928a7c8c2b8ddcba8414316b7
   completed_at_commit: 832ec910f2c58a9121846b6635439e424edfe8ab
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -126,11 +153,18 @@ tasks:
     status: merged
     branch: em-workflow/program-status-ac8-allowlist-gaps/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
   perspectives: []
   residual_critical_high: 0
   needs_rework: false
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
 requirements:
   FR1:
     title: Whitespace after use / pub / visibility qualifier
