@@ -1,0 +1,76 @@
+task_id: task0001
+# Run before any change (the project test command, full --lib suite): 4825 passed, 1 failed, 3 ignored.
+# The one failure is a PTY test outside program_status that is load-sensitive (see the header of
+# test-docs/program-status-ac8-attribute-comments/task0001.tests.yaml): the machine load average was
+# about 5 during the run.
+baseline_failures:
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+# Re-executed full run after the implementation and the records (the project test command):
+# 4828 passed, 0 failed, 3 ignored. The 2 new ac8_carry_* tests are the difference from the
+# baseline's 4825 passed, and the baseline's one PTY failure did not recur in this run (load
+# sensitive, nothing in this task touches it).
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - program_status::tests::ac8_carry_ac1_a_bracket_in_a_block_comment_carried_to_the_next_line_does_not_hide_a_use_line
+    red_confirmed: true
+    red_reason: >-
+      The test is a guard that is green on the current scanner, so its red is the temporary mutant:
+      the end-of-text return of ac8_scan_attribute changed to report block_comment: 0. Under the
+      mutant it failed with the message "expected at least one violation for <the two-line source>,
+      got none". On the current scanner it passed. The mutant was reverted after the observation
+      and the scanner has no diff against the base revision.
+  AC-2:
+    tests:
+      - program_status::tests::ac8_carry_ac2_a_quote_in_a_block_comment_carried_to_the_next_line_does_not_hide_a_use_line
+    red_confirmed: true
+    red_reason: >-
+      The test is a guard that is green on the current scanner, so its red is the same temporary
+      mutant. Under the mutant it failed with the message "expected a winit violation quoting
+      "use winit::event::Event;" for <the three-line source>, got [<one violation that starts with
+      `#[allow(x /*` and says the attribute opened here does not close before the end of the
+      source>]", that is, only the end-of-source violation quoting the first line and no winit
+      violation. On the current scanner it passed. The mutant was reverted after the observation.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The verifiable outcome is the resolution check of .claude/rules/test-docs-records.md: each of
+      the five names in AC-3 of test-docs/program-status-ac8-attribute-comments/task0001.tests.yaml
+      appears as a `<name>: test` line in the output of the `--lib -- --list` command. No existing
+      test reads that record (searched the Rust sources and crates by the record path and by the
+      basename task0001.tests.yaml: the only hits are other features' records), and no red state
+      was observed before the record was updated, so there is no executable red. After the update
+      the `--list` output was checked: all five names appear as `<name>: test` lines.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The criterion is about the text of the AC-3 red_reason in the predecessor record and the
+      unchanged remainder of the file. No existing test reads that record (same search as AC-3), and
+      the check is reading the diff of the record file; no executable check can be made to fail.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The outcome is the full --lib run (the project test command) plus the branch diff showing
+      that tests.rs hunks are additions only and program_status.rs has no diff. The existing ac8
+      tests listed in the predecessor record AC-7 detect a behavior change of the checker; no red
+      state occurred for this change, because nothing in the checker changed.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The outcome is the branch diff scope: outside the feature's own feature-docs and test-docs,
+      exactly src-tauri/src/program_status/tests.rs and
+      test-docs/program-status-ac8-attribute-comments/task0001.tests.yaml, and no diff for
+      feature-docs/program-status-ac8-attribute-comments/tasks/task0001.md. No test reads these
+      paths; the check is the diff and has no executable red.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The outcome is the form of the cargo commands run for this task (project root of the
+      worktree, CARGO_TARGET_DIR=src-tauri/target, --manifest-path src-tauri/Cargo.toml). It is a
+      property of how the commands were invoked, with no executable check that can be made to fail.
