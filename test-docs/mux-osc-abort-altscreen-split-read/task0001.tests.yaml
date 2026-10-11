@@ -1,0 +1,52 @@
+task_id: task0001
+baseline_failures:             # full --lib run before any edit: 4688 passed, 1 failed, 3 ignored
+  - mux::ipc::pty_spawn::tests::on_demand_snapshot_redelivers_alt_screen_and_main_screen_color_queries_once   # 'the reader must reach P2 on the main-buffer chunk: Timeout' (a P2 pause-point timeout); it passed in every later run of this task
+final_failures: []             # full --lib run re-executed after the implementation and the record: 4704 passed, 0 failed, 3 ignored (4688 + the 1 baseline failure that passed this time + 15 new tests)
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac1_every_delivery_of_the_corpus_gives_the_bulk_spans_of_each_read
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac1_random_streams_and_cuts_match_the_oracle
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac1_the_reference_for_k16_is_the_main_screen_after_the_switch_back
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_edge_a_read_ending_in_a_lone_esc_is_decided_by_the_next_reads_first_byte
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_edge_a_designator_slot_is_carried_across_a_read_boundary
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_edge_back_to_main_and_into_the_alternate_screen_within_one_read
+    red_confirmed: true
+    red_reason: "Run against a stand-in AltSpanTracker that returned today's per-read spans (extract_main_buffer per read plus the reader's cross-check fallback), altsplit_ac1_every_delivery_of_the_corpus_gives_the_bulk_spans_of_each_read failed with '25309 of 37463 reads mismatched', first 'K16 cut at [9]: read 9..26: spans [], expected [7..17]' (the mark after the split switch back got no live span) and 'K16 cut at [1]: read 0..1: spans [0..1], expected []' (the lone ESC); altsplit_ac1_random_streams_and_cuts_match_the_oracle failed with 'read 0..9 left: [0..9] right: [0..4]'. The reference test for K16 first failed on the empty range the bulk extraction records between two back-to-back switches and was corrected to drop empty ranges, so it is an oracle sanity check with no observed red of its own. The three altsplit_edge_ tests were added after the stand-in was replaced and were never run against it (no observed red)."
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac2_the_scanner_yields_the_items_of_the_bulk_spans
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac2_k16_reads_give_exactly_one_prompt_start_mark
+    red_confirmed: true
+    red_reason: "Against the same stand-in, altsplit_ac2_k16_reads_give_exactly_one_prompt_start_mark failed with 'items: [] left: 0 right: 1' and altsplit_ac2_the_scanner_yields_the_items_of_the_bulk_spans failed with '3121 reads mismatched', first 'K16 cut at [9]: read 9..26: items [], expected [Osc133Mark(PromptStart)]'."
+  AC-3:
+    tests:
+      - mux::daemon::tests::leading_zero_length::altsplit_ac3_every_sc1x_row_ends_in_its_final_table_and_osc_777_state
+    red_confirmed: true
+    red_reason: "With the tracker implemented but the reader's scanner call temporarily fed the per-read extraction spans again (the pre-change input; reverted afterwards), the test failed with '173 of 261 deliveries mismatched': K16 'delivered as reads cut at [8, 15, 23]: table [(\"\", Working)], expected []', K32 cut at [1] 'table [], expected [(\"\", Working)]' with '1 broadcasts, expected 0' and 'revision 1 -> 2, expected 0 step(s)'; the rows that mismatched were K16, K17-K20, K25-K29, K31-K36 (K35 cut inside the switch, K33 cut at 8 among them)."
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac4_k16_reads_leave_the_ring_and_the_delivered_chunks_as_they_were
+    red_confirmed: false
+    red_reason: "A non-regression pin: the expected ring bytes and delivered chunks were recorded by running K16's reads (no read suppressed, then each single read suppressed) through run_reader_with_suppressed_reads against the reader before the production change, then written as literals, so the test passed on the unmodified reader by construction and no red state occurred. It stays green with the tracker wired in."
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac5_every_prefix_followed_by_every_byte_value_is_well_formed
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac5_a_one_mib_stream_is_well_formed_in_64_kib_and_in_one_byte_reads
+    red_confirmed: false
+    red_reason: "Both tests passed against the stand-in tracker, which carries no state (partial 0) and returns the pre-change spans: the bound on the carried partial, the no-panic property and the span-form properties hold trivially without the new state, so no executable red exists for this criterion before the implementation; the tests guard the new state's bound."
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac6a_an_unmodelled_switch_form_keeps_the_alternate_screen_until_a_modelled_leave
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac6b_a_rebuilt_shadow_parser_resets_the_tracker
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac6c_the_shadow_parser_follows_1049_and_47_and_ignores_1047
+    red_confirmed: true
+    red_reason: "Part (b) only: against the stand-in, altsplit_ac6b_a_rebuilt_shadow_parser_resets_the_tracker failed with 'left: 0 right: 5' (the stand-in carried no partial after 'ESC [?10' on the alternate screen, so the case 'a partial pending when the parser is rebuilt' could not be set up). Parts (a) and (c) passed on the stand-in: the unmodelled-form fallback is today's cross-check behavior and the shadow-parser pin only reads vt100, so neither had a red state."
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::fallback_path_keeps_the_whole_chunk_gate
+      - mux::daemon::tests::leading_zero_length::dblesc_ac6_every_sc1_row_ends_in_its_final_table_and_osc_777_state
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac5_every_split_of_the_cut_cases_yields_the_items_of_one_feed
+      - mux::ipc::pty_spawn::tests::strip_non_sixel_dcs_linear::non_sixel_dcs_linear_the_write_filter_flushes_a_chain_past_the_cap_in_linear_time
+    red_confirmed: false
+    red_reason: "A dedicated new module is out of scope, but the existing fallback_path_keeps_the_whole_chunk_gate, the daemon SC-1 K1-K15 test, the dblesc_ac5 split-invariance test and the strip_non_sixel_dcs_linear budget tests detect any change to the write path's fallback, the scanner's rules and the reader's cost; no red state occurred for this change (the whole existing suite stays green with its assertions unchanged: 4704 passed, 0 failed). The term_core --lib suite (895 passed), cargo check --manifest-path src-tauri/Cargo.toml and the --no-default-features check have no failing executable check to observe beforehand; the diff conditions (no log call, no platform-gated code, no file under crates/term_core/, no change to the extraction's signature or the scanner's rules) were checked by reading the diff."

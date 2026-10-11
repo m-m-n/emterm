@@ -361,6 +361,13 @@ pub(in crate::mux) fn pty_reader_loop(
     // lock and adds none; main-span extraction maintains it inside its
     // existing pass over the chunk.
     let mut designator_slot = DesignatorSlot::default();
+    // mux-osc-abort-altscreen-split-read FR1: the live spans the feed scanner
+    // is handed. The tracker carries the partial state of an alternate-screen
+    // switch sequence from one read to the next, so each read gets the spans
+    // the bulk extraction of the same bytes gives it. Reader-thread-local O(1)
+    // state, advanced inside the capture step below for every read the shadow
+    // parser processes, in order.
+    let mut alt_span_tracker = AltSpanTracker::new();
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
@@ -451,7 +458,7 @@ pub(in crate::mux) fn pty_reader_loop(
                 // chunk's main-buffer byte ranges) is returned out of the
                 // step for the FR8 side effects below and for the FR9/FR10
                 // replacement builder if this chunk ends up suppressed.
-                let ((title_changed, live_spans, carried_over), chunk_number) = output_capture.capture(|| {
+                let ((title_changed, live_spans, carried_over, scanner_spans), chunk_number) = output_capture.capture(|| {
                     // Feed the shadow parser (OSC title + alt-screen state)
                     // FIRST, in a single lock scope, so the scrollback write
                     // below can be gated on the alt-screen state.
@@ -500,6 +507,14 @@ pub(in crate::mux) fn pty_reader_loop(
                     // the ring write.
                     #[cfg(test)]
                     output_capture.p1.hit();
+
+                    // FR1 (mux-osc-abort-altscreen-split-read): the feed
+                    // scanner's live spans, from the tracker advanced with this
+                    // read and the shadow parser's states around it. They are
+                    // used for the scanner only (FR5): the write path below
+                    // keeps deciding `to_write`, `cuts` and `live_spans` from
+                    // this read's own extraction.
+                    let scanner_spans = alt_span_tracker.advance(data, alt_before, alt_after);
 
                     // Phase C: scrollback write, restricted to the chunk's
                     // MAIN-buffer byte spans. Like a real terminal the alternate
@@ -586,7 +601,7 @@ pub(in crate::mux) fn pty_reader_loop(
                         }
                         carried_over = carried;
                     }
-                    (title_changed, live_spans, carried_over)
+                    (title_changed, live_spans, carried_over, scanner_spans)
                 });
 
                 // P2 (test builds only): after the capture step, before this
@@ -615,14 +630,20 @@ pub(in crate::mux) fn pty_reader_loop(
                 // once. Reports are unconditional — a report's validity does
                 // not depend on screen content (unchanged from before
                 // task0003) — while marks are only accepted when their
-                // completing byte falls inside `live_spans`, this chunk's
-                // LIVE, MAIN-BUFFER spans computed above: a mark produced
-                // while the pane is on the alternate screen never reaches
-                // the scanner (mirrors `term_core`'s own OSC 133 alt-screen
-                // suppression), and only live PTY bytes (never
+                // completing byte falls inside `scanner_spans`, this chunk's
+                // LIVE, MAIN-BUFFER spans from the split-aware tracker
+                // (mux-osc-abort-altscreen-split-read FR1): they equal the
+                // bulk extraction of the stream restricted to this read, a
+                // switch sequence split across reads included. A mark
+                // produced while the pane is on the alternate screen never
+                // reaches the scanner (mirrors `term_core`'s own OSC 133
+                // alt-screen suppression), and only live PTY bytes (never
                 // scrollback/snapshot/reattach-reconstructed bytes) ever do,
-                // since `live_spans` is computed fresh from THIS read.
-                let items = agent_status_feed_scanner.feed(data, &live_spans);
+                // since the spans are computed fresh from the reads. The
+                // per-read `live_spans` computed above are the ranges written
+                // to the ring; they stay the input of the suppressed-chunk
+                // pipeline (FR5) and are not the scanner's input.
+                let items = agent_status_feed_scanner.feed(data, &scanner_spans);
                 if !items.is_empty() {
                     forward_agent_status_items(pane_id, items, &agent_status_report_sender);
                 }
