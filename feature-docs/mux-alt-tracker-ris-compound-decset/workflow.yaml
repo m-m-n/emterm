@@ -132,7 +132,7 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-alt-tracker-ris-compound-decset/task0001
   task0002:
     title: Plain-tab half of the SC-1y parity corpus
