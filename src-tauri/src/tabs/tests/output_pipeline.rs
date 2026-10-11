@@ -3978,3 +3978,300 @@ fn altmismatch_ac1_rows_that_keep_the_working_record_cause_no_table_change() {
         }
     }
 }
+
+// ── mux-alt-tracker-detection-read-boundary task0002: plain-tab half of the
+//    parity corpus extension, rows K58 to K64 (IMPLEMENTATION.md SC-1z) ───────
+//
+// The plain tab is the reference behavior (D1): `term_core` follows a DEC
+// private mode set or reset whose parameter list holds 47, 1047 or 1049 in
+// any of the compound forms below, takes the `ESC` after `ESC (` as the
+// charset designator (so the byte after it is text and no RIS happens), and
+// treats the `ESC c` after a compound as RIS. Each row starts from the seed
+// S-W, delivers its stream in ONE `process_combined` call (D3) and is checked
+// by the SC-1 row assertion (`assert_cut_row`): the final OSC 7501 table, the
+// final OSC 777 state resolved from the tab's events and latch inputs, the
+// table-change count (the number of pending summary changes) where the row
+// gives it, and no OSC 7501 answer written. The mux half asserts the same rows
+// against the mux reader and scanner in every delivery the SC-1z table lists;
+// the plain side ignores that column.
+//
+// The rows are kept in a list of their own: `cut_rows` holds K1 to K15 and a
+// test pins its names to exactly those, `altsplit_rows` holds K16 to K37 and
+// `altmismatch_rows` holds K38 to K57. The constants of those lists are reused
+// here; the streams are built from the SC-1z notation.
+
+/// The SC-1z parity corpus extension, rows K58 to K64.
+///
+/// M1 is E(1047): term_core ends on the alternate screen. M2 is DS E(1049):
+/// term_core ends on the main screen, because the switch's `ESC` is the
+/// designator. C1h, C1l, Crh, C7h and C7l are the compound forms; the h-forms
+/// take term_core to the alternate screen and the l-forms to the main screen.
+fn altdetect_rows() -> Vec<CutRow> {
+    use ProgramState::Working;
+    // Every row starts from S-W and takes the one-call delivery; no row has an
+    // OSC 777 string, so the final OSC 777 state is none.
+    let row =
+        |name, parts: &[&[u8]], table: Vec<(&'static str, ProgramState)>, table_changes| CutRow {
+            name,
+            seed: CutSeed::Working,
+            stream: concat(parts),
+            deliveries: vec![CutDelivery::One],
+            table,
+            osc777: None,
+            table_changes,
+        };
+    // The table ends empty: the seed's `working` record is removed by a RIS or
+    // by the OSC 133;A on the main screen. The table-change count is not
+    // asserted.
+    let empty = |name, parts: &[&[u8]]| row(name, parts, vec![], None);
+    // The root `working` record stays and the stream causes 0 table changes.
+    let kept = |name, parts: &[&[u8]]| row(name, parts, vec![("", Working)], Some(0));
+
+    let (a, bel, w, r) = (ALTSPLIT_A, ALTSPLIT_BEL, ALTMISMATCH_W, ALTMISMATCH_R);
+    let (ds, e1049, e1047) = (ALTSPLIT_DS, ALTSPLIT_E1049, ALTSPLIT_E1047);
+    let (c1h, c1l, crh) = (ALTMISMATCH_C1H, ALTMISMATCH_C1L, ALTMISMATCH_CRH);
+    let (c7h, c7l) = (ALTMISMATCH_C7H, ALTMISMATCH_C7L);
+    let m1 = e1047;
+
+    vec![
+        // Two compounds in one read. K58 is reproduction 1: M1, then an l-form
+        // and an h-form; the second compound leaves term_core on the alternate
+        // screen, so the mark is not counted. K59 has the same shape with C7l
+        // and Crh.
+        kept("K58", &[m1, c1l, c1h, a, bel]),
+        kept("K59", &[m1, c7l, crh, a, bel]),
+        // The reverse direction: M2, then an h-form and an l-form; the second
+        // compound returns term_core to the main screen, so the mark removes
+        // the record. K61 has C7h as the h-form.
+        empty("K60", &[ds, e1049, c1h, c1l, a, bel]),
+        empty("K61", &[ds, e1049, c7h, c1l, a, bel]),
+        // A carried item after the compound. K62 is reproduction 2: term_core
+        // takes the `ESC` after `ESC (` as the designator, so the `c` is text,
+        // no RIS happens, and the mark lands on the alternate screen.
+        kept("K62", &[m1, c7h, ds, r, a, bel]),
+        // The `ESC c` after the compound is a RIS, and the mark after W
+        // removes the re-reported record.
+        empty("K63", &[m1, c7h, r, w, a, bel]),
+        // The ?1047h after C1l takes term_core back to the alternate screen.
+        kept("K64", &[m1, c1l, e1047, a, bel]),
+    ]
+}
+
+/// The `altdetect_rows` rows with the given names, in the given order. A name
+/// the list does not have fails the test instead of silently selecting fewer
+/// rows.
+fn altdetect_rows_named(names: &[&str]) -> Vec<CutRow> {
+    let mut all = altdetect_rows();
+    names
+        .iter()
+        .map(|name| {
+            let at = all
+                .iter()
+                .position(|row| row.name == *name)
+                .unwrap_or_else(|| panic!("the K58-K64 list has no row {name}"));
+            all.remove(at)
+        })
+        .collect()
+}
+
+/// AC-2 (FR5): the list names exactly K58 to K64 in order, each with seed S-W
+/// and the one-call delivery, and each stream has the length the SC-1z table
+/// lists (and is the byte string the SC-1z notation builds). The row also
+/// carries the SC-1z final table and table-change count. The K1-K15, K16-K37
+/// and K38-K57 lists hold none of these names.
+#[test]
+fn altdetect_ac2_corpus_lists_rows_k58_to_k64_with_seed_s_w_one_call_and_the_listed_lengths() {
+    use ProgramState::Working;
+    // (row, SC-1z length, the stream written out from the SC-1z notation,
+    //  final table, table-change count)
+    #[allow(clippy::type_complexity)]
+    let table: [(&str, usize, &[u8], Vec<(&str, ProgramState)>, Option<usize>); 7] = [
+        // M1 C1l C1h A BEL
+        (
+            "K58",
+            36,
+            b"\x1b[?1047h\x1b[?1;1049l\x1b[?1;1049h\x1b]133;A\x07",
+            vec![("", Working)],
+            Some(0),
+        ),
+        // M1 C7l Crh A BEL
+        (
+            "K59",
+            36,
+            b"\x1b[?1047h\x1b[?1;1047l\x1b[?1049;1h\x1b]133;A\x07",
+            vec![("", Working)],
+            Some(0),
+        ),
+        // M2 C1h C1l A BEL
+        (
+            "K60",
+            38,
+            b"\x1b(\x1b[?1049h\x1b[?1;1049h\x1b[?1;1049l\x1b]133;A\x07",
+            vec![],
+            None,
+        ),
+        // M2 C7h C1l A BEL
+        (
+            "K61",
+            38,
+            b"\x1b(\x1b[?1049h\x1b[?1;1047h\x1b[?1;1049l\x1b]133;A\x07",
+            vec![],
+            None,
+        ),
+        // M1 C7h DS R A BEL
+        (
+            "K62",
+            30,
+            b"\x1b[?1047h\x1b[?1;1047h\x1b(\x1bc\x1b]133;A\x07",
+            vec![("", Working)],
+            Some(0),
+        ),
+        // M1 C7h R W A BEL
+        (
+            "K63",
+            49,
+            b"\x1b[?1047h\x1b[?1;1047h\x1bc\x1b]7501;state=working\x07\x1b]133;A\x07",
+            vec![],
+            None,
+        ),
+        // M1 C1l E(1047) A BEL
+        (
+            "K64",
+            34,
+            b"\x1b[?1047h\x1b[?1;1049l\x1b[?1047h\x1b]133;A\x07",
+            vec![("", Working)],
+            Some(0),
+        ),
+    ];
+
+    let rows = altdetect_rows();
+    let names: Vec<&str> = rows.iter().map(|row| row.name).collect();
+    let expected: Vec<&str> = table.iter().map(|(name, ..)| *name).collect();
+    assert_eq!(names, expected, "the list names K58 to K64 in order");
+
+    for (row, (name, length, literal, final_table, table_changes)) in rows.iter().zip(table) {
+        assert_eq!(literal.len(), length, "row {name}: the notation's length");
+        assert_eq!(row.stream.len(), length, "row {name}: stream length");
+        assert_eq!(
+            row.stream, literal,
+            "row {name}: stream built from the notation"
+        );
+        assert!(
+            matches!(row.seed, CutSeed::Working),
+            "row {name}: seed S-W, got {:?}",
+            row.seed
+        );
+        assert_eq!(
+            row.deliveries,
+            vec![CutDelivery::One],
+            "row {name}: the one-call delivery"
+        );
+        assert_eq!(row.table, final_table, "row {name}: final OSC 7501 table");
+        assert!(
+            row.osc777.is_none(),
+            "row {name}: no OSC 777 state is expected"
+        );
+        assert_eq!(
+            row.table_changes, table_changes,
+            "row {name}: table-change count"
+        );
+    }
+
+    // The earlier lists stay as they are and hold none of these rows.
+    let earlier: Vec<&str> = cut_rows()
+        .iter()
+        .chain(altsplit_rows().iter())
+        .chain(altmismatch_rows().iter())
+        .map(|row| row.name)
+        .collect();
+    assert_eq!(earlier.len(), 15 + 22 + 20, "K1-K57 hold 57 rows");
+    for name in &expected {
+        assert!(
+            !earlier.contains(name),
+            "row {name} is not in the K1-K57 lists"
+        );
+    }
+}
+
+/// AC-1 (FR4, FR5; TM-1): K60, K61 and K63, each in one call on a plain tab
+/// seeded with S-W, end in an empty OSC 7501 table and no OSC 777 state, with
+/// no OSC 7501 answer written. The rows give no table-change count.
+///
+/// K60 and K61: the second compound returns term_core to the main screen, so
+/// the mark removes the record. K63: the `ESC c` after the compound is a RIS,
+/// and the mark after W removes the re-reported record.
+#[test]
+fn altdetect_ac1_rows_that_remove_the_working_record_end_in_an_empty_table_and_no_osc777_state() {
+    let rows = altdetect_rows_named(&["K60", "K61", "K63"]);
+    assert_eq!(rows.len(), 3);
+
+    for row in rows {
+        assert!(
+            row.table.is_empty() && row.osc777.is_none(),
+            "row {}: the row expects an empty table and no OSC 777 state",
+            row.name
+        );
+        assert_eq!(row.table_changes, None, "row {}", row.name);
+        for &delivery in &row.deliveries {
+            let outcome = assert_cut_row(&row, delivery);
+            assert_eq!(
+                table_records(&outcome.tab),
+                vec![],
+                "row {} delivered {delivery:?}: the table ends empty",
+                row.name
+            );
+            assert_eq!(
+                outcome.osc777, None,
+                "row {} delivered {delivery:?}: no OSC 777 state (events {:?})",
+                row.name, outcome.events
+            );
+        }
+    }
+}
+
+/// AC-1 (FR4, FR5; TM-1): K58, K59, K62 and K64, each in one call on a plain
+/// tab seeded with S-W, end with only the root `working` record, cause 0 table
+/// changes (no pending summary change), end in no OSC 777 state, and write no
+/// OSC 7501 answer.
+///
+/// K58 (reproduction 1) and K59: the second compound leaves term_core on the
+/// alternate screen, so the mark is not counted. K62 (reproduction 2):
+/// term_core takes the `ESC` after `ESC (` as the designator, so the following
+/// `c` is text and no RIS happens. K64: the ?1047h after C1l takes term_core
+/// back to the alternate screen.
+#[test]
+fn altdetect_ac1_rows_that_keep_the_working_record_cause_no_table_change() {
+    let rows = altdetect_rows_named(&["K58", "K59", "K62", "K64"]);
+    assert_eq!(rows.len(), 4);
+
+    for row in rows {
+        assert_eq!(
+            row.table,
+            vec![("", ProgramState::Working)],
+            "row {}: the row expects only the root working record",
+            row.name
+        );
+        assert_eq!(row.table_changes, Some(0), "row {}", row.name);
+        assert!(row.osc777.is_none(), "row {}", row.name);
+        for &delivery in &row.deliveries {
+            let outcome = assert_cut_row(&row, delivery);
+            assert_eq!(
+                table_records(&outcome.tab),
+                vec![(String::new(), ProgramState::Working)],
+                "row {} delivered {delivery:?}: only the root working record",
+                row.name
+            );
+            assert!(
+                outcome.changes.is_empty(),
+                "row {} delivered {delivery:?}: pending summary changes {:?}",
+                row.name,
+                outcome.changes
+            );
+            assert_eq!(
+                outcome.osc777, None,
+                "row {} delivered {delivery:?}: no OSC 777 state (events {:?})",
+                row.name, outcome.events
+            );
+        }
+    }
+}

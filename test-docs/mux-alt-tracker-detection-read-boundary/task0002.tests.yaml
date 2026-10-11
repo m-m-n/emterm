@@ -1,0 +1,75 @@
+task_id: task0002
+# Baseline run before any edit (src-tauri --lib, project test command, run while other worktrees were
+# building and the load average was above 7): 4735 passed, 1 failed, 3 ignored. The one failure is a
+# PTY echo test in a file this task does not touch; an earlier full run of the same unmodified tree
+# had no failure.
+baseline_failures:
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+# Actually re-executed after the implementation (src-tauri --lib, project test command): 4739 passed,
+# 0 failed, 3 ignored (the baseline's 4736 tests + this task's 3 new tests). An earlier full run
+# after the implementation failed one test that is not in the baseline,
+# render::font::user_dir::tests::user_font_dir_falls_back_to_home_local_share (left
+# "/tmp/xdg-test/...", right "/tmp/home-test/..."): that test and
+# user_font_dir_prefers_xdg_data_home both set XDG_DATA_HOME / HOME in the process environment, so
+# they race when libtest runs them in parallel. It is outside this task's file and it passed in
+# the run recorded here.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - tabs::tests::output_pipeline::altdetect_ac1_rows_that_remove_the_working_record_end_in_an_empty_table_and_no_osc777_state
+      - tabs::tests::output_pipeline::altdetect_ac1_rows_that_keep_the_working_record_cause_no_table_change
+    red_confirmed: false
+    red_reason: >-
+      The plain tab already behaves as SC-1z expects (IMPLEMENTATION.md D1) and this task changes
+      no production file, so no behavioral red state occurred. Run with the row list still empty
+      the two tests failed only with "the K58-K64 list has no row K60" and "... no row K58", which
+      is the rows being absent, not the criterion's behavior. As a substitute for a red phase,
+      four rows were temporarily mutated and the tests then failed: K58 without its C1h ("row K58
+      delivered One: final OSC 7501 table, left: [], right: [("", Working)]"), K60 without its
+      C1l ("row K60 delivered One: final OSC 7501 table, left: [("", Working)], right: []"), K62
+      without its DS ("row K62 delivered One: final OSC 7501 table, left: [], right: [("",
+      Working)]") and K63 without its R ("row K63 delivered One: final OSC 7501 table, left:
+      [("", Working)], right: []"); the rows were restored afterwards. All 7 rows ended in the
+      SC-1z table, OSC 777 state and (where given) table-change count on the first run, so no row
+      is reported as a plan deviation.
+  AC-2:
+    # The unchanged K1-K15, K16-K37 and K38-K57 lists and the unchanged name tests that pin them
+    # are checked by `git diff --numstat` against the parent branch (297 added lines, 0 removed)
+    # and by the existing tests listed under AC-3. The new test also asserts that none of the
+    # K58-K64 names is in the K1-K57 lists.
+    tests:
+      - tabs::tests::output_pipeline::altdetect_ac2_corpus_lists_rows_k58_to_k64_with_seed_s_w_one_call_and_the_listed_lengths
+    red_confirmed: true
+    red_reason: >-
+      The test was run before the K58-K64 list was filled in (the list function returned no
+      rows) and failed with "the list names K58 to K64 in order, left: [], right: ["K58", "K59",
+      "K60", "K61", "K62", "K63", "K64"]"; it passed once the 7 rows were written.
+  AC-3:
+    # Existing tests of the file named by the criterion (the SC-1 cut parity corpus, including
+    # the K1-K15 name test, the SC-1x K16-K37 list and its row tests, the SC-1y K38-K57 list and
+    # its row tests, and the SC-4 parity corpus); they were not edited.
+    tests:
+      - tabs::tests::output_pipeline::cut_parity_corpus_lists_rows_k1_to_k15_with_the_named_deliveries
+      - tabs::tests::output_pipeline::ac1_cut_rows_k1_to_k5_end_in_the_final_osc7501_table_without_summary_changes
+      - tabs::tests::output_pipeline::ac2_cut_rows_k6_and_k7_record_one_working_set_event_and_end_working
+      - tabs::tests::output_pipeline::ac3_cut_rows_k8_to_k10_end_in_the_final_osc777_state
+      - tabs::tests::output_pipeline::ac3_cut_rows_k11_to_k15_end_in_the_final_osc7501_table
+      - tabs::tests::output_pipeline::altsplit_ac1_corpus_lists_rows_k16_to_k37_with_seed_s_w_one_call_and_the_listed_lengths
+      - tabs::tests::output_pipeline::altsplit_ac2_rows_k16_to_k31_k35_and_k37_in_one_call_end_in_an_empty_table_and_no_osc777_state
+      - tabs::tests::output_pipeline::altsplit_ac3_rows_k32_to_k34_and_k36_in_one_call_keep_only_the_root_working_record
+      - tabs::tests::output_pipeline::altmismatch_ac2_corpus_lists_rows_k38_to_k57_with_seed_s_w_one_call_and_the_listed_lengths
+      - tabs::tests::output_pipeline::altmismatch_ac1_rows_that_remove_the_working_record_end_in_an_empty_table_and_no_osc777_state
+      - tabs::tests::output_pipeline::altmismatch_ac1_row_k41_with_a_csi_ending_in_c_keeps_the_root_working_record
+      - tabs::tests::output_pipeline::altmismatch_ac1_rows_that_keep_the_working_record_cause_no_table_change
+      - tabs::tests::output_pipeline::parity_corpus_rows_have_the_lengths_the_corpus_lists
+      - tabs::tests::output_pipeline::parity_every_corpus_row_ends_in_its_final_table_and_answer
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing tests listed here detect a change
+      to the K1-K15, K16-K37 and K38-K57 lists and their rows, the SC-1 rows' tables and OSC 777
+      states, and the SC-4 parity corpus answers and tables; no red state occurred for this
+      change, which only adds tests to the file. That the task changes no file other than the
+      declared test file (nothing under crates/term_core/, no other production file) is checked
+      by `git diff --stat` against the parent branch, not by a test. That the whole src-tauri
+      --lib suite passes is the final run recorded above (4739 passed, 0 failed).
