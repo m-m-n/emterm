@@ -119,7 +119,8 @@ workflow:
     TS1-TS6: covered by the passing dblesc_* / cut_* tests; TS7: no log call added; TS8: crates/term_core diff empty; TS9: no platform-gated code added
     manual M1 / M2 (release build, Windows): not executed in batch
 - id: retrospect
-  status: pending
+  status: completed
+  completed_at_commit: 6bcdf311bb0691f9573aed51d268148f882469f3
 tasks:
   task0001:
     title: 'Mux feed scanner: cut rule, unit tests and the mux half of the parity corpus'
