@@ -108,7 +108,16 @@ workflow:
   status: completed
   completed_at_commit: 5508905dd248499a7522b647126ca10fdeed873b
 - id: verify
-  status: in_progress
+  status: completed
+  completed_at_commit: aa86b22b4daa9bacb533c9bdf191c6af2b0e6688
+  result: pass
+  failed_items: []
+  summary: |
+    build: cargo check (default) ok / --no-default-features ok
+    test: src-tauri --lib 4689 passed 0 failed / term_core --lib 895 passed 0 failed
+    format: rustfmt --check (style_edition 2024) on the 4 changed .rs files: no diff
+    TS1-TS6: covered by the passing dblesc_* / cut_* tests; TS7: no log call added; TS8: crates/term_core diff empty; TS9: no platform-gated code added
+    manual M1 / M2 (release build, Windows): not executed in batch
 - id: retrospect
   status: pending
 tasks:
