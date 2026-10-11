@@ -3628,3 +3628,353 @@ fn altsplit_ac3_rows_k32_to_k34_and_k36_in_one_call_keep_only_the_root_working_r
         }
     }
 }
+
+// ── mux-alt-tracker-ris-compound-decset task0002: plain-tab half of the
+//    parity corpus extension, rows K38 to K57 (IMPLEMENTATION.md SC-1y) ───────
+//
+// The plain tab is the reference behavior (D1): `term_core` treats `ESC c` as
+// RIS (empty table, back to the main screen) except where the `ESC` is the
+// charset designator after `ESC (` / `ESC )`, treats a CSI whose final byte
+// is `c` as no RIS, and switches screens on a DEC private mode set or reset
+// whose parameter list holds 47, 1047 or 1049 in any of the compound forms
+// below. Each row starts from the seed S-W, delivers its stream in ONE
+// `process_combined` call (D3) and is checked by the SC-1 row assertion
+// (`assert_cut_row`): the final OSC 7501 table, the final OSC 777 state
+// resolved from the tab's events and latch inputs, the table-change count
+// (the number of pending summary changes) where the row gives it, and no OSC
+// 7501 answer written. The mux half asserts the same rows against the mux
+// reader and scanner in every delivery the SC-1y table lists; the plain side
+// ignores that column.
+//
+// The rows are kept in a list of their own: `cut_rows` holds K1 to K15 and a
+// test pins its names to exactly those, and `altsplit_rows` holds K16 to K37.
+
+/// DC: `ESC )`, after which the next byte is a charset designator (2 bytes).
+const ALTMISMATCH_DC: &[u8] = b"\x1b)";
+/// R: `ESC c`, RIS (2 bytes).
+const ALTMISMATCH_R: &[u8] = b"\x1bc";
+/// CC: `ESC [ c`, a CSI whose final byte is `c`; it is not RIS (3 bytes).
+const ALTMISMATCH_CC: &[u8] = b"\x1b[c";
+/// W: `ESC ] 7501;state=working BEL`, an OSC 7501 working report for the root
+/// (21 bytes).
+const ALTMISMATCH_W: &[u8] = b"\x1b]7501;state=working\x07";
+/// C1h: `ESC [?1;1049h` (10 bytes).
+const ALTMISMATCH_C1H: &[u8] = b"\x1b[?1;1049h";
+/// C1l: `ESC [?1;1049l` (10 bytes).
+const ALTMISMATCH_C1L: &[u8] = b"\x1b[?1;1049l";
+/// Crh: `ESC [?1049;1h` (10 bytes).
+const ALTMISMATCH_CRH: &[u8] = b"\x1b[?1049;1h";
+/// C7h: `ESC [?1;1047h` (10 bytes).
+const ALTMISMATCH_C7H: &[u8] = b"\x1b[?1;1047h";
+/// C7l: `ESC [?1;1047l` (10 bytes).
+const ALTMISMATCH_C7L: &[u8] = b"\x1b[?1;1047l";
+/// C0h: `ESC [?01049h`, a leading zero (9 bytes).
+const ALTMISMATCH_C0H: &[u8] = b"\x1b[?01049h";
+/// Ceh: `ESC [?;1049h`, an empty first parameter (9 bytes).
+const ALTMISMATCH_CEH: &[u8] = b"\x1b[?;1049h";
+/// P1: `ESC [?1;10`, the start of a DEC private CSI that the R right after it
+/// interrupts (7 bytes).
+const ALTMISMATCH_P1: &[u8] = b"\x1b[?1;10";
+/// P2: `ESC [?10`, the start of a DEC private CSI that the R right after it
+/// interrupts (5 bytes).
+const ALTMISMATCH_P2: &[u8] = b"\x1b[?10";
+
+/// The SC-1y parity corpus extension, rows K38 to K57.
+///
+/// M1 is E(1047): term_core ends on the alternate screen. M2 is DS E(1049):
+/// term_core ends on the main screen, because the switch's `ESC` is the
+/// designator.
+fn altmismatch_rows() -> Vec<CutRow> {
+    use ProgramState::Working;
+    // Every row starts from S-W and takes the one-call delivery; no row has an
+    // OSC 777 string, so the final OSC 777 state is none.
+    let row =
+        |name, parts: &[&[u8]], table: Vec<(&'static str, ProgramState)>, table_changes| CutRow {
+            name,
+            seed: CutSeed::Working,
+            stream: concat(parts),
+            deliveries: vec![CutDelivery::One],
+            table,
+            osc777: None,
+            table_changes,
+        };
+    // The table ends empty: the seed's `working` record is removed by a RIS or
+    // by the OSC 133;A on the main screen. The table-change count is not
+    // asserted.
+    let empty = |name, parts: &[&[u8]]| row(name, parts, vec![], None);
+    // The root `working` record stays, and the table-change count is not
+    // asserted.
+    let working = |name, parts: &[&[u8]]| row(name, parts, vec![("", Working)], None);
+    // The root `working` record stays and the stream causes 0 table changes.
+    let kept = |name, parts: &[&[u8]]| row(name, parts, vec![("", Working)], Some(0));
+
+    let (a, bel, w, r) = (ALTSPLIT_A, ALTSPLIT_BEL, ALTMISMATCH_W, ALTMISMATCH_R);
+    let (ds, dc, cc) = (ALTSPLIT_DS, ALTMISMATCH_DC, ALTMISMATCH_CC);
+    let (e1049, l1049, m1) = (ALTSPLIT_E1049, ALTSPLIT_L1049, ALTSPLIT_E1047);
+    let (c1h, c1l, crh) = (ALTMISMATCH_C1H, ALTMISMATCH_C1L, ALTMISMATCH_CRH);
+    let (c7h, c7l) = (ALTMISMATCH_C7H, ALTMISMATCH_C7L);
+    let (c0h, ceh) = (ALTMISMATCH_C0H, ALTMISMATCH_CEH);
+    let (p1, p2) = (ALTMISMATCH_P1, ALTMISMATCH_P2);
+
+    vec![
+        // RIS. K38 is reproduction 1; K39 makes the mismatch with ?1049; K40
+        // is RIS on an alternate screen where both rules agree.
+        empty("K38", &[m1, r, w, a, bel]),
+        empty("K39", &[e1049, ds, l1049, r, w, a, bel]),
+        empty("K40", &[e1049, r, w, a, bel]),
+        // A CSI whose final byte is `c` is not RIS: the report stays.
+        working("K41", &[m1, cc, w, a, bel]),
+        // An `ESC c` in a designator slot on the alternate screen is not RIS:
+        // the mark lands on the alternate screen and counts for nothing.
+        kept("K42", &[e1049, ds, r, a, bel]),
+        kept("K43", &[e1049, dc, r, a, bel]),
+        // Every compound form after M1 (term_core on the alternate screen).
+        kept("K44", &[m1, c1h, a, bel]),
+        empty("K45", &[m1, c1l, a, bel]),
+        kept("K46", &[m1, crh, a, bel]),
+        kept("K47", &[m1, c7h, a, bel]),
+        empty("K48", &[m1, c7l, a, bel]),
+        // Every compound form after M2 (term_core on the main screen).
+        kept("K49", &[ds, e1049, c1h, a, bel]),
+        empty("K50", &[ds, e1049, c1l, a, bel]),
+        kept("K51", &[ds, e1049, crh, a, bel]),
+        kept("K52", &[ds, e1049, c7h, a, bel]),
+        empty("K53", &[ds, e1049, c7l, a, bel]),
+        // The leading-zero and empty-parameter edge cases.
+        kept("K54", &[ds, e1049, c0h, a, bel]),
+        kept("K55", &[ds, e1049, ceh, a, bel]),
+        // A RIS that interrupts a DEC private CSI.
+        empty("K56", &[m1, p1, r, w, a, bel]),
+        empty("K57", &[m1, p2, r, w, a, bel]),
+    ]
+}
+
+/// The `altmismatch_rows` rows with the given names, in the given order. A
+/// name the list does not have fails the test instead of silently selecting
+/// fewer rows.
+fn altmismatch_rows_named(names: &[&str]) -> Vec<CutRow> {
+    let mut all = altmismatch_rows();
+    names
+        .iter()
+        .map(|name| {
+            let at = all
+                .iter()
+                .position(|row| row.name == *name)
+                .unwrap_or_else(|| panic!("the K38-K57 list has no row {name}"));
+            all.remove(at)
+        })
+        .collect()
+}
+
+/// AC-2 (FR7): the list names exactly K38 to K57 in order, each with seed S-W
+/// and the one-call delivery, and each stream has the length the SC-1y table
+/// lists (and is the byte string the SC-1y notation builds).
+#[test]
+fn altmismatch_ac2_corpus_lists_rows_k38_to_k57_with_seed_s_w_one_call_and_the_listed_lengths() {
+    // (row, SC-1y length, the stream written out from the SC-1y notation)
+    let table: [(&str, usize, &[u8]); 20] = [
+        // M1 R W A BEL
+        (
+            "K38",
+            39,
+            b"\x1b[?1047h\x1bc\x1b]7501;state=working\x07\x1b]133;A\x07",
+        ),
+        // E(1049) DS L(1049) R W A BEL
+        (
+            "K39",
+            49,
+            b"\x1b[?1049h\x1b(\x1b[?1049l\x1bc\x1b]7501;state=working\x07\x1b]133;A\x07",
+        ),
+        // E(1049) R W A BEL
+        (
+            "K40",
+            39,
+            b"\x1b[?1049h\x1bc\x1b]7501;state=working\x07\x1b]133;A\x07",
+        ),
+        // M1 CC W A BEL
+        (
+            "K41",
+            40,
+            b"\x1b[?1047h\x1b[c\x1b]7501;state=working\x07\x1b]133;A\x07",
+        ),
+        // E(1049) DS R A BEL
+        ("K42", 20, b"\x1b[?1049h\x1b(\x1bc\x1b]133;A\x07"),
+        // E(1049) DC R A BEL
+        ("K43", 20, b"\x1b[?1049h\x1b)\x1bc\x1b]133;A\x07"),
+        // M1 C1h A BEL
+        ("K44", 26, b"\x1b[?1047h\x1b[?1;1049h\x1b]133;A\x07"),
+        // M1 C1l A BEL
+        ("K45", 26, b"\x1b[?1047h\x1b[?1;1049l\x1b]133;A\x07"),
+        // M1 Crh A BEL
+        ("K46", 26, b"\x1b[?1047h\x1b[?1049;1h\x1b]133;A\x07"),
+        // M1 C7h A BEL
+        ("K47", 26, b"\x1b[?1047h\x1b[?1;1047h\x1b]133;A\x07"),
+        // M1 C7l A BEL
+        ("K48", 26, b"\x1b[?1047h\x1b[?1;1047l\x1b]133;A\x07"),
+        // M2 C1h A BEL
+        ("K49", 28, b"\x1b(\x1b[?1049h\x1b[?1;1049h\x1b]133;A\x07"),
+        // M2 C1l A BEL
+        ("K50", 28, b"\x1b(\x1b[?1049h\x1b[?1;1049l\x1b]133;A\x07"),
+        // M2 Crh A BEL
+        ("K51", 28, b"\x1b(\x1b[?1049h\x1b[?1049;1h\x1b]133;A\x07"),
+        // M2 C7h A BEL
+        ("K52", 28, b"\x1b(\x1b[?1049h\x1b[?1;1047h\x1b]133;A\x07"),
+        // M2 C7l A BEL
+        ("K53", 28, b"\x1b(\x1b[?1049h\x1b[?1;1047l\x1b]133;A\x07"),
+        // M2 C0h A BEL
+        ("K54", 27, b"\x1b(\x1b[?1049h\x1b[?01049h\x1b]133;A\x07"),
+        // M2 Ceh A BEL
+        ("K55", 27, b"\x1b(\x1b[?1049h\x1b[?;1049h\x1b]133;A\x07"),
+        // M1 P1 R W A BEL
+        (
+            "K56",
+            46,
+            b"\x1b[?1047h\x1b[?1;10\x1bc\x1b]7501;state=working\x07\x1b]133;A\x07",
+        ),
+        // M1 P2 R W A BEL
+        (
+            "K57",
+            44,
+            b"\x1b[?1047h\x1b[?10\x1bc\x1b]7501;state=working\x07\x1b]133;A\x07",
+        ),
+    ];
+
+    let rows = altmismatch_rows();
+    let names: Vec<&str> = rows.iter().map(|row| row.name).collect();
+    let expected: Vec<&str> = table.iter().map(|(name, _, _)| *name).collect();
+    assert_eq!(names, expected, "the list names K38 to K57 in order");
+
+    for (row, (name, length, literal)) in rows.iter().zip(table) {
+        assert_eq!(literal.len(), length, "row {name}: the notation's length");
+        assert_eq!(row.stream.len(), length, "row {name}: stream length");
+        assert_eq!(
+            row.stream, literal,
+            "row {name}: stream built from the notation"
+        );
+        assert!(
+            matches!(row.seed, CutSeed::Working),
+            "row {name}: seed S-W, got {:?}",
+            row.seed
+        );
+        assert_eq!(
+            row.deliveries,
+            vec![CutDelivery::One],
+            "row {name}: the one-call delivery"
+        );
+        assert!(
+            row.osc777.is_none(),
+            "row {name}: no OSC 777 state is expected"
+        );
+    }
+}
+
+/// AC-1 (FR6, FR7; TM-2): K38 to K40, K45, K48, K50, K53, K56 and K57, each in
+/// one call on a plain tab seeded with S-W, end in an empty OSC 7501 table and
+/// no OSC 777 state, with no OSC 7501 answer written.
+#[test]
+fn altmismatch_ac1_rows_that_remove_the_working_record_end_in_an_empty_table_and_no_osc777_state() {
+    let names = [
+        "K38", "K39", "K40", "K45", "K48", "K50", "K53", "K56", "K57",
+    ];
+    let rows = altmismatch_rows_named(&names);
+    assert_eq!(rows.len(), 9);
+
+    for row in rows {
+        assert!(
+            row.table.is_empty() && row.osc777.is_none(),
+            "row {}: the row expects an empty table and no OSC 777 state",
+            row.name
+        );
+        for &delivery in &row.deliveries {
+            let outcome = assert_cut_row(&row, delivery);
+            assert_eq!(
+                table_records(&outcome.tab),
+                vec![],
+                "row {} delivered {delivery:?}: the table ends empty",
+                row.name
+            );
+            assert_eq!(
+                outcome.osc777, None,
+                "row {} delivered {delivery:?}: no OSC 777 state (events {:?})",
+                row.name, outcome.events
+            );
+        }
+    }
+}
+
+/// AC-1 (FR6, FR7; TM-2): K41, processed in one call on a plain tab seeded with
+/// S-W, ends with only the root `working` record and no OSC 777 state. The row
+/// gives no table-change count.
+#[test]
+fn altmismatch_ac1_row_k41_with_a_csi_ending_in_c_keeps_the_root_working_record() {
+    let rows = altmismatch_rows_named(&["K41"]);
+    assert_eq!(rows.len(), 1);
+
+    for row in rows {
+        assert_eq!(
+            row.table,
+            vec![("", ProgramState::Working)],
+            "row {}: the row expects only the root working record",
+            row.name
+        );
+        assert_eq!(row.table_changes, None, "row {}", row.name);
+        for &delivery in &row.deliveries {
+            let outcome = assert_cut_row(&row, delivery);
+            assert_eq!(
+                table_records(&outcome.tab),
+                vec![(String::new(), ProgramState::Working)],
+                "row {} delivered {delivery:?}: only the root working record",
+                row.name
+            );
+            assert_eq!(
+                outcome.osc777, None,
+                "row {} delivered {delivery:?}: no OSC 777 state (events {:?})",
+                row.name, outcome.events
+            );
+        }
+    }
+}
+
+/// AC-1 (FR6, FR7; TM-2): K42 to K44, K46, K47, K49, K51, K52, K54 and K55, each
+/// in one call on a plain tab seeded with S-W, end with only the root `working`
+/// record, cause 0 table changes (no pending summary change), end in no OSC 777
+/// state, and write no OSC 7501 answer.
+#[test]
+fn altmismatch_ac1_rows_that_keep_the_working_record_cause_no_table_change() {
+    let names = [
+        "K42", "K43", "K44", "K46", "K47", "K49", "K51", "K52", "K54", "K55",
+    ];
+    let rows = altmismatch_rows_named(&names);
+    assert_eq!(rows.len(), 10);
+
+    for row in rows {
+        assert_eq!(
+            row.table,
+            vec![("", ProgramState::Working)],
+            "row {}: the row expects only the root working record",
+            row.name
+        );
+        assert_eq!(row.table_changes, Some(0), "row {}", row.name);
+        assert!(row.osc777.is_none(), "row {}", row.name);
+        for &delivery in &row.deliveries {
+            let outcome = assert_cut_row(&row, delivery);
+            assert_eq!(
+                table_records(&outcome.tab),
+                vec![(String::new(), ProgramState::Working)],
+                "row {} delivered {delivery:?}: only the root working record",
+                row.name
+            );
+            assert!(
+                outcome.changes.is_empty(),
+                "row {} delivered {delivery:?}: pending summary changes {:?}",
+                row.name,
+                outcome.changes
+            );
+            assert_eq!(
+                outcome.osc777, None,
+                "row {} delivered {delivery:?}: no OSC 777 state (events {:?})",
+                row.name, outcome.events
+            );
+        }
+    }
+}
