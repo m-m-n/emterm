@@ -153,6 +153,16 @@ tasks:
 review:
   status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary:
+    - perspective: performance
+      reason: write_filter.rs の scan/advance は PTY 読み取りごとに走るホットパスで、今回その走査に RIS 判定と引数列検査が追加されたため
+    cross_validation: true
 requirements:
   FR1:
     title: RIS への追従
