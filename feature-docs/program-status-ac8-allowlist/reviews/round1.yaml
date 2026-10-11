@@ -1,0 +1,111 @@
+round: 1
+executed_at: '2026-10-11T18:55:00+09:00'
+scope:
+  review_mode: diff
+  base_commit: 9be4f537be832537d4462853d7019915741bc611
+  head_commit: f3e678eb57da89e6fa260a0f16f3af187015a7e5
+  changed_files:
+  - src-tauri/src/program_status/tests.rs
+  - test-docs/program-status-ac8-allowlist/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - spec
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  model: gpt-6-astra
+  status: completed
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: 1efd012a5982dfcb
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/program_status/tests.rs
+  line: 1558
+  title: use 行の判定が空白の書き方の揺れで外れ、規則 B をすり抜ける
+  description: 'ac8_use_path は、`use ` (半角空白1つ) と、`pub` の直後に来る `(` しか認識しない。`pub (crate) use winit::event::Event;`、`use\twinit::event::Event;`、`use`
+    だけの行で改行する形、`#[cfg(...)] use winit::...;` のように属性と同じ行に書く形は use 行として扱われず、crate::／super:: も含まないため違反なしになる。どれも
+    rustfmt が正規の形に直す書き方で普段の編集では現れにくい。不変条件の最終的な防壁は `cargo check --no-default-features` で、こちらは失敗する。影響は ac8
+    テスト単体での検出漏れにとどまる。'
+  suggestion: '`use`・`pub`・可視性指定のあとは空白類 1 文字以上で判定する。strip_prefix("use") のあとに char::is_whitespace を要求し、`pub`
+    のあとは trim_start してから `(` を見る。`pub (crate) use winit::event::Event;` と `use\twinit::event::Event;`
+    を拒否する自己テストを追加する。'
+  reproduction: null
+  reproduction_alternates: []
+  reproduction_overflow: false
+  sources:
+  - codex:comprehensive
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: 'medium severity: not an auto-fix candidate (critical/high only); evaluator recommended
+    complete. Filed as a follow-up task.'
+- stable_id: 2912970a9817a6de
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/program_status/tests.rs
+  line: 1548
+  title: 識別子が続くかの判定で結合文字を取りこぼし、別のモジュールを許可する
+  description: 'ac8_continues_identifier は is_alphanumeric() || c == ''_'' で判定している。U+0301 などの結合文字 (Mn)
+    は XID_Continue に含まれるが Alphabetic ではないため false になり、`super::agent_status\u{0301}::X` が許可される。rustc は別モジュール
+    `agent_statuś` として解決するので、SPEC FR2 の境界の定義にも反する。自己テストの文字 (é, 日本, １) ではこの穴を検出できない。非 ASCII 名のモジュールは #[path]
+    かインラインでしか宣言できず (E0754)、現実の編集で起きる可能性は極めて低い。`cargo check --no-default-features` は失敗するので影響は ac8 テスト単体での検出漏れにとどまる。'
+  suggestion: 許可条件を肯定形で書いて fail-closed にする。直後が空、`::`、または明示した終端文字 (`;` `,` `)` `}` 空白など) のときだけ許可する。`use
+    super::agent_status\u{0301}::X;` を拒否する自己テストを追加する。
+  reproduction: null
+  reproduction_alternates: []
+  reproduction_overflow: false
+  sources:
+  - codex:comprehensive
+  confidence: 80
+  resolution: unresolved
+  resolution_reason: 'medium severity: not an auto-fix candidate (critical/high only); evaluator recommended
+    complete. Filed as a follow-up task.'
+evaluation:
+  round_summary: 'ラウンド 1 (diff モード)。comprehensive が報告した medium 2 件 (空白の書き方の揺れによるすり抜け / 結合文字による境界判定の誤り)
+    はコードを読んで成立を確認し carry した。どちらもテスト専用ヒューリスティックでの検出漏れで、本来の防壁 cargo check --no-default-features は失敗する。critical/high
+    なし、dismissed_sites 空、注入なし。security: corroborated (THREAT-MODEL は no-trust-boundary、テストビルド専用)。spec:
+    corroborated (FR1〜FR7、NFR1・NFR3、TS-1〜TS-8 が対応、test-docs の 12 件のテスト名が差分内の関数名と一致)。読んだファイル 8/10。'
+  recommended_action: complete
+  action_rationale: critical/high はない。残る medium 2 件はテスト専用ヒューリスティックでの検出漏れにとどまり、原因入力は rustfmt が直す書き方や非 ASCII
+    のモジュール名に限られる。不変条件そのものは cargo check --no-default-features が守っている。
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-program-status-ac8-allowlist-20261011T095343Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []

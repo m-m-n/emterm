@@ -97,7 +97,8 @@ workflow:
   base_commit: 9be4f537be832537d4462853d7019915741bc611
   completed_at_commit: f2569d09ed90bd65d182a246f1955f0e3712348b
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: f3e678eb57da89e6fa260a0f16f3af187015a7e5
 - id: verify
   status: pending
 - id: retrospect
@@ -127,7 +128,14 @@ tasks:
     notes: null
     branch: em-workflow/program-status-ac8-allowlist/task0001
 review:
-  status: pending
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - spec
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive
