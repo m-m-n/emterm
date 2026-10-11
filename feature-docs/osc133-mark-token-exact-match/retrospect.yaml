@@ -1,5 +1,5 @@
 feature: osc133-mark-token-exact-match
-collected_at: "2026-10-11T18:20:00+09:00"
+collected_at: "2026-10-11T18:01:00+09:00"
 session_ids: [01a12a31-6619-73b0-be9b-0a4807727d94.jsonl]
 signals:
   review_critical_high: []
