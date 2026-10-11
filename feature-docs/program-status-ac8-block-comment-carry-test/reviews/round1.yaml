@@ -1,0 +1,59 @@
+round: 1
+executed_at: "2026-10-11T23:25:20+09:00"
+scope:
+  review_mode: diff
+  base_commit: 3e1afa42e4f9ef3c2b4c8c73efcd373805aecec6
+  head_commit: 877ab67bce990d477792ec37773a9f1f687a0917
+  changed_files:
+  - src-tauri/src/program_status/tests.rs
+  - test-docs/program-status-ac8-attribute-comments/task0001.tests.yaml
+  - test-docs/program-status-ac8-block-comment-carry-test/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    Round 1 (diff mode). The change adds 2 guard tests to tests.rs (ac8_carry_ac1_ / ac8_carry_ac2_)
+    plus 1 shared helper, adds those 2 names to AC-3 of the predecessor record and rewrites its
+    red_reason, and adds a new test record for this feature. The evaluator traced ac8_scan_attribute /
+    ac8_after_leading_attributes / ac8_check_allowlist by reading the code: on the current scanner the
+    FR1 source gives a winit violation quoting line 2 and the FR2 source gives a winit violation quoting
+    line 3 with no end-of-source violation; under the block_comment: 0 mutant FR1 gives no violation and
+    FR2 gives only the end-of-source violation for `#[allow(x /*`, matching the records. The existing
+    line-spanning test passes under the mutant, as the new red_reason states. Both YAML records parse;
+    the 3 existing AC-3 entries and the nested-comment / `/*/` text are unchanged; the tests.rs diff is
+    added lines only; program_status.rs has no diff; NFR1 change-set limit holds. No injection attempt in
+    reviewer output. Coverage: comprehensive = corroborated; security = corroborated; spec = corroborated.
+    Read budget used: 6 of 10 files.
+  recommended_action: complete
+  action_rationale: >-
+    None of the 3 perspectives reported a finding, and the evaluator's own inspection of every changed
+    file found no issue at medium or above. No critical/high site needs to be accounted for.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: ~/src/my_projects/tauri/emterm/tmp/sca-triage-program-status-ac8-block-comment-carry-test-20261011T142503Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
