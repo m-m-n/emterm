@@ -4310,4 +4310,327 @@ mod leading_zero_length {
         }
         assert!(mismatches.is_empty(), "{mismatches:#?}");
     }
+
+    // ---- mux-osc-abort-altscreen-split-read task0001 AC-3 (FR1, FR2, FR3,
+    //      FR4, FR6, FR7; TM-1): the mux half of the SC-1x parity corpus
+    //      (IMPLEMENTATION.md, rows K16 to K37), through the real reader loop
+    //      and the daemon agent-status task. The K1 to K15 list above and its
+    //      test are not edited ----
+
+    /// `ESC [?P h`: switch to the alternate screen.
+    fn alt_enter(p: u16) -> Vec<u8> {
+        format!("\x1b[?{p}h").into_bytes()
+    }
+
+    /// `ESC [?P l`: switch back to the main screen.
+    fn alt_leave(p: u16) -> Vec<u8> {
+        format!("\x1b[?{p}l").into_bytes()
+    }
+
+    /// `ESC (`: the byte after it is a charset designator.
+    const DS: &[u8] = b"\x1b(";
+    /// `ESC [?104x`: a prefix of ?1047 / ?1049 followed by a byte that
+    /// completes no switch.
+    const X: &[u8] = b"\x1b[?104x";
+    const BEL: &[u8] = b"\x07";
+    /// `ST`: `ESC \`.
+    const ST: &[u8] = b"\x1b\\";
+
+    /// The rows K16 to K37 of SC-1x, each with the seed S-W (one root `working`
+    /// record).
+    fn sc1x_rows() -> Vec<Sc1Row> {
+        use ProgramState::Working;
+        let a = open_osc(b"133;A");
+        let (e1049, l1049) = (alt_enter(1049), alt_leave(1049));
+        let (e1047, l1047) = (alt_enter(1047), alt_leave(1047));
+        let (e47, l47) = (alt_enter(47), alt_leave(47));
+
+        // The deliveries a row names: "cuts a..b" (two reads cut at each
+        // offset) and "AC1 shape a..b" (reads cut at [|E(P)|, o, string end]).
+        let cuts = |offsets: std::ops::RangeInclusive<usize>| -> Vec<Vec<usize>> {
+            offsets.map(|o| vec![o]).collect()
+        };
+        let ac1_shape = |enter_len: usize,
+                         offsets: std::ops::RangeInclusive<usize>,
+                         string_end: usize|
+         -> Vec<Vec<usize>> {
+            offsets.map(|o| vec![enter_len, o, string_end]).collect()
+        };
+        let one = || vec![Vec::new()];
+        let join = |parts: Vec<Vec<Vec<usize>>>| -> Vec<Vec<usize>> { parts.concat() };
+        // K17 to K24 (P = 1049 / 1047).
+        let deliveries_8 = || {
+            join(vec![
+                one(),
+                cuts(9..=15),
+                vec![vec![23]],
+                ac1_shape(8, 9..=15, 23),
+            ])
+        };
+        // K25 to K28 (P = 47).
+        let deliveries_6 = || {
+            join(vec![
+                one(),
+                cuts(7..=11),
+                vec![vec![19]],
+                ac1_shape(6, 7..=11, 19),
+            ])
+        };
+
+        let row = |name: &'static str,
+                   stream: Vec<u8>,
+                   length: usize,
+                   deliveries: Vec<Vec<usize>>,
+                   final_table: Vec<(&'static str, ProgramState)>,
+                   table_changes: Option<usize>| {
+            assert_eq!(stream.len(), length, "{name}: stream length");
+            Sc1Row {
+                name,
+                seed: Seed::W,
+                stream,
+                deliveries,
+                final_table,
+                final_osc777: None,
+                table_changes,
+            }
+        };
+        let root_working = || vec![("", Working)];
+
+        vec![
+            row(
+                "K16",
+                cat(&[&e1049, &l1049, &a, EE]),
+                26,
+                join(vec![one(), vec![vec![8, 15, 23]]]),
+                vec![],
+                None,
+            ),
+            row(
+                "K17",
+                cat(&[&e1049, &l1049, &a, BEL]),
+                24,
+                deliveries_8(),
+                vec![],
+                None,
+            ),
+            row(
+                "K18",
+                cat(&[&e1049, &l1049, &a, ST]),
+                25,
+                deliveries_8(),
+                vec![],
+                None,
+            ),
+            row(
+                "K19",
+                cat(&[&e1049, &l1049, &a, EE]),
+                26,
+                deliveries_8(),
+                vec![],
+                None,
+            ),
+            row(
+                "K20",
+                cat(&[&e1049, &l1049, &a, EX]),
+                27,
+                deliveries_8(),
+                vec![],
+                None,
+            ),
+            row(
+                "K21",
+                cat(&[&e1047, &l1047, &a, BEL]),
+                24,
+                deliveries_8(),
+                vec![],
+                None,
+            ),
+            row(
+                "K22",
+                cat(&[&e1047, &l1047, &a, ST]),
+                25,
+                deliveries_8(),
+                vec![],
+                None,
+            ),
+            row(
+                "K23",
+                cat(&[&e1047, &l1047, &a, EE]),
+                26,
+                deliveries_8(),
+                vec![],
+                None,
+            ),
+            row(
+                "K24",
+                cat(&[&e1047, &l1047, &a, EX]),
+                27,
+                deliveries_8(),
+                vec![],
+                None,
+            ),
+            row(
+                "K25",
+                cat(&[&e47, &l47, &a, BEL]),
+                20,
+                deliveries_6(),
+                vec![],
+                None,
+            ),
+            row(
+                "K26",
+                cat(&[&e47, &l47, &a, ST]),
+                21,
+                deliveries_6(),
+                vec![],
+                None,
+            ),
+            row(
+                "K27",
+                cat(&[&e47, &l47, &a, EE]),
+                22,
+                deliveries_6(),
+                vec![],
+                None,
+            ),
+            row(
+                "K28",
+                cat(&[&e47, &l47, &a, EX]),
+                23,
+                deliveries_6(),
+                vec![],
+                None,
+            ),
+            row(
+                "K29",
+                cat(&[&e1049, &l1049, &a, BEL, &e1049]),
+                32,
+                join(vec![one(), cuts(9..=15)]),
+                vec![],
+                None,
+            ),
+            row(
+                "K30",
+                cat(&[&e1047, &l1047, &a, BEL, &e1047]),
+                32,
+                join(vec![one(), cuts(9..=15)]),
+                vec![],
+                None,
+            ),
+            row(
+                "K31",
+                cat(&[&e47, &l47, &a, BEL, &e47]),
+                26,
+                join(vec![one(), cuts(7..=11)]),
+                vec![],
+                None,
+            ),
+            row(
+                "K32",
+                cat(&[&e1049, &a, BEL, &l1049]),
+                24,
+                join(vec![one(), cuts(1..=8)]),
+                root_working(),
+                Some(0),
+            ),
+            row(
+                "K33",
+                cat(&[&e1047, &a, BEL, &l1047]),
+                24,
+                join(vec![one(), cuts(1..=8)]),
+                root_working(),
+                Some(0),
+            ),
+            row(
+                "K34",
+                cat(&[&e47, &a, BEL, &l47]),
+                20,
+                join(vec![one(), cuts(1..=6)]),
+                root_working(),
+                Some(0),
+            ),
+            row(
+                "K35",
+                cat(&[DS, &e1049, &a, BEL]),
+                18,
+                join(vec![one(), cuts(1..=9)]),
+                vec![],
+                None,
+            ),
+            row(
+                "K36",
+                cat(&[&e1049, DS, &l1049, &a, BEL]),
+                26,
+                join(vec![one(), cuts(1..=17)]),
+                root_working(),
+                Some(0),
+            ),
+            row(
+                "K37",
+                cat(&[X, &a, BEL]),
+                15,
+                join(vec![one(), cuts(1..=7)]),
+                vec![],
+                None,
+            ),
+        ]
+    }
+
+    /// AC-3: every SC-1x row K16 to K37, fed with the row's seed and every mux
+    /// delivery the row names, ends in the row's final OSC 7501 table and OSC
+    /// 777 state; K32 to K34 and K36 also cause no broadcast and no revision
+    /// change. Every mismatch names its row and delivery.
+    #[tokio::test]
+    async fn altsplit_ac3_every_sc1x_row_ends_in_its_final_table_and_osc_777_state() {
+        let mut mismatches: Vec<String> = Vec::new();
+        let mut deliveries_run = 0usize;
+        for row in sc1x_rows() {
+            let expected_table: Vec<(String, ProgramState)> = row
+                .final_table
+                .iter()
+                .map(|&(id, state)| (id.to_string(), state))
+                .collect();
+            for offsets in &row.deliveries {
+                deliveries_run += 1;
+                let label = format!("{} delivered as reads cut at {offsets:?}", row.name);
+                let seed = row.seed;
+                let driven = drive_reads(
+                    move |pane| seed.apply(pane),
+                    cut_into_reads(&row.stream, offsets),
+                )
+                .await;
+                if driven.records != expected_table {
+                    mismatches.push(format!(
+                        "{label}: table {:?}, expected {expected_table:?}",
+                        driven.records
+                    ));
+                }
+                if driven.osc777_state != row.final_osc777 {
+                    mismatches.push(format!(
+                        "{label}: OSC 777 state {:?}, expected {:?}",
+                        driven.osc777_state, row.final_osc777
+                    ));
+                }
+                if let Some(changes) = row.table_changes {
+                    if driven.updates.len() != changes {
+                        mismatches.push(format!(
+                            "{label}: {} broadcasts, expected {changes}",
+                            driven.updates.len()
+                        ));
+                    }
+                    if driven.revision != driven.revision_before + changes as u64 {
+                        mismatches.push(format!(
+                            "{label}: revision {} -> {}, expected {changes} step(s)",
+                            driven.revision_before, driven.revision
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "{} of {deliveries_run} deliveries mismatched: {mismatches:#?}",
+            mismatches.len()
+        );
+    }
 }
