@@ -111,7 +111,8 @@ tasks:
     - NFR1
     - NFR2
     - NFR3
-    status: pending
+    status: in_progress
+    branch: em-workflow/program-status-ac8-attribute-comments/task0001
 review:
   status: pending
   rounds_completed: 0
