@@ -100,7 +100,12 @@ workflow:
   status: completed
   completed_at_commit: f3e678eb57da89e6fa260a0f16f3af187015a7e5
 - id: verify
-  status: in_progress
+  status: completed
+  completed_at_commit: 7e3c01f612c2b36c0ddbdef385eb52ce5a17e779
+  result: pass
+  failed_items: []
+  excluded_scenarios: []
+  summary: build (src-tauri, src-tauri-cli) exit 0; cargo test --lib 4785 passed 0 failed; TS-1..TS-12 pass (TS-12: only src-tauri/src/program_status/tests.rs changed outside feature-docs/test-docs)
 - id: retrospect
   status: pending
 tasks:
