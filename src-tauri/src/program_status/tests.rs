@@ -1543,25 +1543,81 @@ const AC8_ALLOWED_PROJECT_PATH: &str = "super::agent_status";
 /// First path segments a `use` line may start with.
 const AC8_ALLOWED_USE_ROOTS: [&str; 4] = ["std", "base64", "self", "super"];
 
-/// Whether `c` can continue a Rust identifier: letters, digits and `_`,
-/// non-ASCII ones included.
-fn ac8_continues_identifier(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+/// What the use-line recognizer found on one trimmed line.
+enum Ac8Use<'a> {
+    /// A use line with a path after the keyword (leading whitespace skipped).
+    Path(&'a str),
+    /// A use line with nothing after the keyword: its path starts on the next
+    /// non-blank line.
+    Bare,
 }
 
-/// The text after the `use ` keyword when `line` (trimmed) is a use line,
-/// with or without a `pub` / `pub(..)` qualifier. A comment line is not one.
-fn ac8_use_path(line: &str) -> Option<&str> {
-    if let Some(path) = line.strip_prefix("use ") {
-        return Some(path);
-    }
-    let after_pub = line.strip_prefix("pub")?;
-    let after_qualifier = match after_pub.strip_prefix('(') {
-        Some(restriction) => &restriction[restriction.find(')')? + 1..],
-        None if after_pub.starts_with(char::is_whitespace) => after_pub,
-        None => return None,
+/// The text after a leading `#[..]` attribute, leading whitespace skipped.
+/// The attribute ends at the `]` that closes the opening `#[`, with square
+/// brackets nested inside it balanced (parentheses do not end it). A line
+/// that does not start with `#[` is returned unchanged; one whose attribute
+/// has no closing bracket on the line yields the empty string, which is not a
+/// use line.
+fn ac8_after_leading_attribute(line: &str) -> &str {
+    let Some(attribute) = line.strip_prefix("#[") else {
+        return line;
     };
-    after_qualifier.trim_start().strip_prefix("use ")
+    let mut depth = 1_usize;
+    for (at, c) in attribute.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return attribute[at + 1..].trim_start();
+                }
+            }
+            _ => {}
+        }
+    }
+    ""
+}
+
+/// Recognize a use line in `line` (trimmed): the `use` keyword, optionally
+/// preceded by `pub` or `pub(..)` and, on the same line, by a leading `#[..]`
+/// attribute. Any `char::is_whitespace` characters may separate `pub`, a
+/// parenthesized qualifier and `use`; none are needed between `)` and `use`.
+/// `use` must end the line (a bare use line) or be followed by whitespace, so
+/// a field named `user` is not a use line; neither is a comment line.
+fn ac8_use_path(line: &str) -> Option<Ac8Use<'_>> {
+    let rest = ac8_after_leading_attribute(line);
+    let after_visibility = match rest.strip_prefix("pub") {
+        None => rest,
+        Some(after_pub) => {
+            let spaced = after_pub.trim_start();
+            if spaced.len() == after_pub.len() && !after_pub.starts_with('(') {
+                // `pub` begins a longer word, so it is not a visibility keyword.
+                return None;
+            }
+            match spaced.strip_prefix('(') {
+                Some(restriction) => &restriction[restriction.find(')')? + 1..],
+                None => spaced,
+            }
+        }
+    };
+    let after_use = after_visibility.trim_start().strip_prefix("use")?;
+    let path = after_use.trim_start();
+    if path.is_empty() {
+        Some(Ac8Use::Bare)
+    } else if path.len() < after_use.len() {
+        Some(Ac8Use::Path(path))
+    } else {
+        // `use` begins a longer word, such as a field named `user`.
+        None
+    }
+}
+
+/// Whether `after`, the text right after a `super::agent_status` occurrence on
+/// one scanned line, ends the allowed path: the end of the line, `::`, `;` or
+/// `,`. Every other following character, whitespace and non-ASCII ones
+/// included, is not an allowed terminator.
+fn ac8_allowed_path_terminator(after: &str) -> bool {
+    after.is_empty() || after.starts_with("::") || after.starts_with([';', ','])
 }
 
 /// A violation description: the offending line, what is wrong with it, the
@@ -1578,19 +1634,40 @@ fn ac8_violation(line: &str, problem: &str) -> String {
 /// violations in source order (empty when the source satisfies every rule).
 ///
 /// Rule A: every `crate::` is a violation; every `super::` is a violation
-/// unless it is `super::agent_status` ending at a path-segment boundary.
-/// Occurrences are found as plain text on every line (code, comments and
-/// string literals alike), with no boundary requirement before them.
+/// unless it is `super::agent_status` followed by the end of the line, `::`,
+/// `;` or `,` (see `ac8_allowed_path_terminator`). Occurrences are found as
+/// plain text on every line (code, comments and string literals alike), with
+/// no requirement on the text before them.
 ///
-/// Rule B: the first path segment of a `use` line is one of
-/// `AC8_ALLOWED_USE_ROOTS`.
+/// Rule B: the first path segment of a use line is one of
+/// `AC8_ALLOWED_USE_ROOTS`. Use lines are the forms `ac8_use_path`
+/// recognizes; for a bare use line the segment is the first one of the next
+/// non-blank line, and that line is the offending line.
 fn ac8_check_allowlist(source: &str) -> Vec<String> {
     let mut violations = Vec::new();
+    let mut bare_use_pending = false;
     for raw in source.lines() {
         let line = raw.trim();
 
-        if let Some(path) = ac8_use_path(line) {
-            let root = path.trim_start().split("::").next().unwrap_or("");
+        let use_path = if bare_use_pending {
+            if line.is_empty() {
+                None
+            } else {
+                bare_use_pending = false;
+                Some(line)
+            }
+        } else {
+            match ac8_use_path(line) {
+                Some(Ac8Use::Path(path)) => Some(path),
+                Some(Ac8Use::Bare) => {
+                    bare_use_pending = true;
+                    None
+                }
+                None => None,
+            }
+        };
+        if let Some(path) = use_path {
+            let root = path.split("::").next().unwrap_or("");
             if !AC8_ALLOWED_USE_ROOTS.contains(&root) {
                 let roots = AC8_ALLOWED_USE_ROOTS
                     .map(|root| format!("`{root}`"))
@@ -1610,7 +1687,7 @@ fn ac8_check_allowlist(source: &str) -> Vec<String> {
         for (at, marker) in occurrences {
             let allowed = raw[at..]
                 .strip_prefix(AC8_ALLOWED_PROJECT_PATH)
-                .is_some_and(|after| !after.chars().next().is_some_and(ac8_continues_identifier));
+                .is_some_and(ac8_allowed_path_terminator);
             if !allowed {
                 violations.push(ac8_violation(
                     line,
@@ -1736,7 +1813,7 @@ fn ac8_allowlist_ac2_the_path_end_and_surrounding_text_are_allowed() {
         // The allowlisted path is the last text of the source.
         "use super::agent_status",
         "let state = super::agent_status",
-        // The next character cannot continue an identifier.
+        // The text after the path is `;`, `,` or `::`.
         "use super::agent_status;",
         "f(super::agent_status, 1)",
         "let s = super::agent_status::AgentState::Idle;",
@@ -1763,6 +1840,7 @@ fn ac8_allowlist_ac3_rejected_project_path_use_lines_return_a_violation() {
 
 #[test]
 fn ac8_allowlist_ac3_an_identifier_continuation_after_the_allowed_path_is_rejected() {
+    // Each text after the path starts outside the terminator set.
     for snippet in [
         "use super::agent_status_exit_latch::X;",
         "use super::agent_status2::X;",
@@ -1843,6 +1921,217 @@ fn ac8_allowlist_ac6_an_external_root_violation_names_the_root_list() {
             violation.contains("`std`, `base64`, `self`, `super`"),
             "violation for {snippet:?} lacks the external-root list: {violation:?}"
         );
+    }
+}
+
+// ── program-status-ac8-allowlist-gaps: use-line forms and path terminators ──
+//
+// Names carry the `program-status-ac8-allowlist-gaps` task acceptance criterion
+// they prove (`ac8_gaps_ac1_` .. `ac8_gaps_ac5_`). They feed synthetic sources
+// to `ac8_check_allowlist`; tests.rs itself is never a scan target, so the
+// `crate::` / `super::` text in these snippets does not reach the ac8 test.
+
+/// Use lines with whitespace the recognizer must accept around `pub`, a
+/// qualifier and `use`, or none at all between `)` and `use`.
+const AC8_GAPS_REJECTED_WHITESPACE_USE_LINES: [&str; 4] = [
+    "pub (crate) use winit::event::Event;",
+    "use\twinit::event::Event;",
+    "pub(crate)use winit::event::Event;",
+    "pub\tuse winit::event::Event;",
+];
+
+/// Use lines separated by Unicode whitespace other than space and tab.
+const AC8_GAPS_REJECTED_UNICODE_WHITESPACE_USE_LINES: [&str; 3] = [
+    "use\u{a0}winit::event::Event;",
+    "pub\u{2003}use winit::event::Event;",
+    "pub(crate)\u{3000}use winit::event::Event;",
+];
+
+/// Sources whose `use` keyword ends its line; the root is on a later line.
+const AC8_GAPS_REJECTED_BARE_USE_SOURCES: [&str; 2] = [
+    "use\nwinit::event::Event;",
+    "pub use\n\nwinit::event::Event;",
+];
+
+/// Use statements that follow a leading attribute on the same line.
+const AC8_GAPS_REJECTED_ATTRIBUTE_USE_LINES: [&str; 2] = [
+    "#[cfg(feature = \"gui\")] use winit::event::Event;",
+    "#[cfg(all(unix, feature = \"gui\"))] pub use winit::event::Event;",
+];
+
+/// Occurrences of the allowed path followed by a character outside the
+/// terminator set (end of line, `::`, `;`, `,`).
+const AC8_GAPS_REJECTED_TERMINATOR_LINES: [&str; 3] = [
+    "use super::agent_status\u{0301}::X;",
+    "use super::agent_status as status;",
+    "f(super::agent_status)",
+];
+
+/// Reject `snippet` and require a violation that reports use root `winit`.
+fn ac8_gaps_assert_rejected_with_root_winit(snippet: &str) {
+    let violations = ac8_assert_rejected(snippet);
+    assert!(
+        violations.iter().any(|v| v.contains("use root `winit`")),
+        "expected a violation reporting use root `winit` for {snippet:?}, got {violations:?}"
+    );
+}
+
+#[test]
+fn ac8_gaps_ac1_whitespace_variants_of_a_use_line_are_rejected_with_root_winit() {
+    for snippet in AC8_GAPS_REJECTED_WHITESPACE_USE_LINES {
+        ac8_gaps_assert_rejected_with_root_winit(snippet);
+    }
+}
+
+#[test]
+fn ac8_gaps_ac1_other_unicode_whitespace_separates_the_use_line_keywords() {
+    for snippet in AC8_GAPS_REJECTED_UNICODE_WHITESPACE_USE_LINES {
+        ac8_gaps_assert_rejected_with_root_winit(snippet);
+    }
+}
+
+#[test]
+fn ac8_gaps_ac1_a_field_whose_name_begins_with_use_is_not_a_use_line() {
+    for snippet in [
+        "pub user: String,",
+        "pub(crate) useful: u32,",
+        "user: String,",
+        "pub (crate) useful: u32,",
+    ] {
+        ac8_assert_allowed(snippet);
+    }
+}
+
+#[test]
+fn ac8_gaps_ac1_whitespace_variants_with_an_allowed_root_are_allowed() {
+    for snippet in [
+        "pub (crate) use std::fmt;",
+        "use\tstd::fmt;",
+        "pub(crate)use std::fmt;",
+        "pub\tuse std::fmt;",
+    ] {
+        ac8_assert_allowed(snippet);
+    }
+}
+
+#[test]
+fn ac8_gaps_ac2_a_bare_use_line_takes_its_root_from_the_next_non_blank_line() {
+    for snippet in AC8_GAPS_REJECTED_BARE_USE_SOURCES {
+        ac8_gaps_assert_rejected_with_root_winit(snippet);
+    }
+}
+
+#[test]
+fn ac8_gaps_ac2_a_bare_use_line_with_an_allowed_root_ends_at_its_root_line() {
+    for snippet in [
+        "use\nstd::fmt;",
+        "pub use\n\nstd::fmt;\n",
+        "use\nstd::fmt;\nlet x = 1;\n",
+    ] {
+        ac8_assert_allowed(snippet);
+    }
+}
+
+#[test]
+fn ac8_gaps_ac2_a_bare_use_violation_is_reported_at_its_root_line_in_source_order() {
+    let source = "use\nwinit::event::Event;\nuse std::fmt;\nlet x = crate::foo::bar();\n";
+    let violations = ac8_check_allowlist(source);
+    assert_eq!(
+        violations.len(),
+        2,
+        "violations for {source:?}: {violations:?}"
+    );
+    assert!(
+        violations[0].starts_with("`winit::event::Event;`"),
+        "first violation for {source:?}: {:?}",
+        violations[0]
+    );
+    assert!(
+        violations[1].contains("let x = crate::foo::bar();"),
+        "second violation for {source:?}: {:?}",
+        violations[1]
+    );
+}
+
+#[test]
+fn ac8_gaps_ac3_a_leading_attribute_does_not_hide_a_use_line() {
+    for snippet in AC8_GAPS_REJECTED_ATTRIBUTE_USE_LINES {
+        ac8_gaps_assert_rejected_with_root_winit(snippet);
+    }
+}
+
+#[test]
+fn ac8_gaps_ac3_attributes_without_a_use_statement_are_allowed() {
+    for snippet in ["#[derive(Debug)]", "#[derive(Debug)] pub struct Probe;"] {
+        ac8_assert_allowed(snippet);
+    }
+}
+
+#[test]
+fn ac8_gaps_ac3_an_attributed_use_line_with_an_allowed_root_is_allowed() {
+    for snippet in [
+        "#[cfg(test)] use std::fmt;",
+        "#[cfg(all(unix, test))] pub(crate) use super::agent_status::AgentState;",
+    ] {
+        ac8_assert_allowed(snippet);
+    }
+}
+
+#[test]
+fn ac8_gaps_ac4_a_character_outside_the_terminator_set_after_the_allowed_path_is_rejected() {
+    for snippet in AC8_GAPS_REJECTED_TERMINATOR_LINES {
+        ac8_assert_rejected(snippet);
+    }
+}
+
+#[test]
+fn ac8_gaps_ac4_the_terminator_set_after_the_allowed_path_is_allowed() {
+    for snippet in [
+        "use super::agent_status",
+        "use super::agent_status;",
+        "f(super::agent_status, 1)",
+        "super::agent_status::AgentState",
+    ] {
+        ac8_assert_allowed(snippet);
+    }
+}
+
+#[test]
+fn ac8_gaps_ac5_every_violation_for_a_closed_form_names_the_line_the_allowlist_and_the_invariant() {
+    let single_line = AC8_GAPS_REJECTED_WHITESPACE_USE_LINES
+        .iter()
+        .chain(&AC8_GAPS_REJECTED_UNICODE_WHITESPACE_USE_LINES)
+        .chain(&AC8_GAPS_REJECTED_ATTRIBUTE_USE_LINES)
+        .chain(&AC8_GAPS_REJECTED_TERMINATOR_LINES)
+        .copied()
+        .map(|snippet| (snippet, snippet.trim()));
+    // A bare use is reported at the line that holds its root.
+    let bare = AC8_GAPS_REJECTED_BARE_USE_SOURCES
+        .iter()
+        .copied()
+        .map(|snippet| {
+            let root_line = snippet
+                .lines()
+                .map(str::trim)
+                .rfind(|line| !line.is_empty())
+                .expect("a bare use source has a root line");
+            (snippet, root_line)
+        });
+    for (snippet, line) in single_line.chain(bare) {
+        for violation in ac8_assert_rejected(snippet) {
+            assert!(
+                violation.contains(line),
+                "violation for {snippet:?} lacks the line text {line:?}: {violation:?}"
+            );
+            assert!(
+                violation.contains("super::agent_status"),
+                "violation for {snippet:?} lacks the allowlist: {violation:?}"
+            );
+            assert!(
+                violation.contains("without the `gui` feature"),
+                "violation for {snippet:?} lacks the invariant: {violation:?}"
+            );
+        }
     }
 }
 
