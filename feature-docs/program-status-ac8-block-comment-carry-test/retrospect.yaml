@@ -1,0 +1,41 @@
+feature: program-status-ac8-block-comment-carry-test
+collected_at: "2026-10-11T23:28:34+09:00"
+session_ids: [01a12b5d-173b-72b0-9e4e-cb80972d19b8]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: reduced
+    rationale: "description_plus_code の最終読みでバケット 1（ルール追加とテスト追加、または少数ファイルの小変更）が確率 0.98 で最大となり reduced に決定"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 0.99, confidence: 0.99, probabilities: {'0': 0.01, '1': 0.99, '2': 0.0, '3': 0.0}}
+        observed_at: "2026-10-11T23:00:21+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.0, confidence: 0.98, probabilities: {'0': 0.01, '1': 0.98, '2': 0.01, '3': 0.0}}
+        observed_at: "2026-10-11T23:00:21+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/program_status/tests.rs
+        - test-docs/program-status-ac8-attribute-comments/task0001.tests.yaml
+      changed_lines_approx: 20
+      new_functions_needed: 2
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules: []
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 2
+      body_change_kind: new_logic
+      change_containment: single_module
+      caller_and_dependency_count: 1
+      changes_external_contract: false
+      changes_behavior: false
+follow_up_drafts: []
+lessons_candidates:
+  - "pre_survey_estimate.files_expected は 2 ファイルだったが、実変更は自 feature の test-docs 記録を含む 3 ファイル（task 宣言の files には含まれず deviation 報告も無し）"
