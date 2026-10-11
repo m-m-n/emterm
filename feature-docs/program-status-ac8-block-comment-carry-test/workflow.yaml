@@ -86,9 +86,19 @@ workflow:
   status: completed
   completed_at_commit: 877ab67bce990d477792ec37773a9f1f687a0917
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  completed_at_commit: 5ff0080b1cfe9615540d805d985f1d0a69d3364c
+  result: pass
   failed_items: []
+  summary:
+    build: pass (cargo check exit 0)
+    test: pass (cargo test --lib 4828 passed, 0 failed, 3 ignored)
+    format: pass (cargo fmt --check exit 0)
+    TS-1: pass (FR1 test passes; fails under the carry-dropping mutant with no violation; mutant reverted)
+    TS-2: pass (FR2 test passes; fails under the mutant with only the end-of-source violation; mutant reverted)
+    TS-3: pass (all five AC-3 tests resolve in --list; red_reason names the two carry tests as the guard)
+    TS-4: pass (tests.rs added lines only; predecessor record AC-3 only; program_status.rs and predecessor task0001.md unchanged)
+  excluded: []
 - id: retrospect
   status: pending
 tasks:
