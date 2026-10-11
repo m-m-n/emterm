@@ -4,14 +4,71 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: 0a924cbf1ca8d1bc9eb4c48ddedc999b20dc00ff
-last_input_digest: sha256:c56f0e9d93a971427bc6d4f473fb72f0dea6171e6fe007ab5e1d85e2bec4473c
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+last_input_digest: sha256:9542517040cd8e4a9aaef1c35adbe05453af990cc6e843d9029d7aeba893a085
+active_request_id: create-spec-run-0002
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-11T21:03:09+09:00'
+    questions:
+    - question_id: requirement.unclosed-attribute-violation
+      status: answered
+    - question_id: requirement.block-comment-nesting
+      status: answered
+    - question_id: design-step.recommendation
+      status: answered
+answers:
+  requirement.unclosed-attribute-violation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T21:03:09+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - opening_line
+    freeform: null
+    normalized_answer: 'The end-of-source violation names the trimmed physical line
+      holding the #[ of the attribute still open, built with ac8_violation; its problem
+      text states the attribute does not close before the end of the source.'
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted:
+      true (1 turn, codex harness); Codex recommended opening_line; orchestrator adopted
+      it: the opening line identifies the unclosed attribute and ac8_violation keeps
+      the line/allowlist/invariant content the ac5-style self-tests require; not chosen:
+      last_line; recorded as assumption'
+  requirement.block-comment-nesting:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T21:03:09+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - nest
+    freeform: null
+    normalized_answer: 'Block comments inside an attribute nest as in the Rust lexer:
+      each /* opens a level, each */ closes one; the depth carries across lines while
+      the attribute is open.'
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted:
+      true (1 turn, codex harness); Codex recommended nest; orchestrator adopted it:
+      matches the Rust lexer, and first_close would let brackets in the outer comment
+      change attribute depth and skip later use lines; not chosen: first_close; recorded
+      as assumption'
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T21:03:09+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: Skip the design step (test-only change, no UI).
+    resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously
+      -> accepted analyst recommendation skip'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:c56f0e9d93a971427bc6d4f473fb72f0dea6171e6fe007ab5e1d85e2bec4473c
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:9542517040cd8e4a9aaef1c35adbe05453af990cc6e843d9029d7aeba893a085
   output_digest: null
 artifacts: []
 patches: []
