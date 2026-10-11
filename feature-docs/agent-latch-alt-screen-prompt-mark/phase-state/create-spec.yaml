@@ -4,7 +4,7 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: bec0e823c970c00677d6423105421f8a4600e7a9
-last_input_digest: sha256:a2d938985e4078241027d14b7fa79501a8b3a63852d114071c76bddf399f67e3
+last_input_digest: sha256:5bf91680c4c59cc6b63a5121aab16430baf23450ada6ff0f82673ff0e3f732ee
 active_request_id: null
 packets: {}
 answers: {}
@@ -13,7 +13,16 @@ worker_runs:
   status: completed
   input_digest: sha256:a2d938985e4078241027d14b7fa79501a8b3a63852d114071c76bddf399f67e3
   output_digest: sha256:e2eb30d23fb667caadd4b3677497caaef70d9a926259235d6e8621092c007005
-artifacts: []
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:5bf91680c4c59cc6b63a5121aab16430baf23450ada6ff0f82673ff0e3f732ee
+artifacts:
+- path: feature-docs/agent-latch-alt-screen-prompt-mark/REQUIREMENTS.md
+  sha256: sha256:de13d614079ab9e042df4373d3520343fd7d124784f04e3ac33e3a446415d848
+  produced_by: create-spec-run-0002
+- path: feature-docs/agent-latch-alt-screen-prompt-mark/SPEC.md
+  sha256: sha256:08824274b6fe083dd52d1a021e1701282745b268b6fc123d0ec5be1f87bc0397
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
