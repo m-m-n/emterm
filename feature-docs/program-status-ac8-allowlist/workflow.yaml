@@ -1,0 +1,175 @@
+schema_version: 1
+feature: program-status-ac8-allowlist
+created: '2026-10-11'
+base_branch: main
+goal: |
+  # program_status の ac8 ガードを super:: import に対応させる
+
+  Notion: <redacted-notion-url>
+
+  ## やりたいこと (必須)
+  `program_status` の ac8 ガードテストが、`super::` 経由のプロジェクト内依存も検出できるようにし、テストの主張を実態に合わせる。
+  ## 背景・なぜ (必須)
+  em-workflow pane-state-rank-unify の review round 1 で medium として見送った指摘（stable_id `3b85e79896a0cf72`）。
+  `src-tauri/src/program_status.rs:28` に `use super::agent_status::AgentState;` が追加された。`program_status` はクレート直下のモジュールなので `super::` は `crate::` と同じものを指し、他のプロジェクトモジュールへの依存になる。一方、テスト `program_status::tests::ac8_the_module_uses_only_always_built_crates` は `crate::` という文字列だけを拒否するため、この import は素通りする。拒否時のメッセージ "the module must not reach into other project modules" は、もう実態と合っていない。
+  依存そのものは pane-state-rank-unify の SPEC が求めたもので、`agent_status` は gui gate なしで常にビルドされるため、ビルド構成に依存しない性質は保たれている。pane-state-rank-unify では SPEC NFR3（既存テストを変えない）によりテストを直せなかった。
+  コードは統合ブランチ `em-workflow/pane-state-rank-unify/integration` 上にある。
+  ## 受け入れ条件 / 完了の定義 (必須)
+  - [ ] ac8 の検査が `crate::` の文字列チェックではなく、明示的な許可リスト（`super::agent_status`）で判定している
+  - [ ] ac8 の失敗メッセージが、実際に守っている不変条件（gui feature 非依存）を述べている
+  ## スコープ外 (任意)
+  \<今回やらないこと。あれば\>
+  ## 制約・前提 (任意)
+  \<触ってほしくない箇所 / 使う技術 / 互換性など。あれば\>
+parent_branch: em-workflow/program-status-ac8-allowlist/integration
+tier: reduced
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.01
+      '1': 0.88
+      '2': 0.11
+      '3': 0.0
+    description_plus_code:
+      '0': 0.01
+      '1': 0.98
+      '2': 0.01
+      '3': 0.0
+  at: '2026-10-11T18:12:45+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - design step
+  - IMPLEMENTATION.md (kept with Shared Components when multiple tasks declare the
+    same file)
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - src-tauri/web-shared/settings/ui-theme-presets.ts
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+        src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
+      format_command: ''
+      e2e_test_command: ''
+    src-tauri-cli:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+        src-tauri/Cargo.toml --no-default-features
+      test_command: ''
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - SPEC.md
+  status: completed
+  completed_at_commit: f027b97d7e95af13ff28146025e6076aef8b8e77
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI 変更なし（テストのみの変更。requirements-analyst の推奨を batch 方針 decide_autonomously
+    で採用）。reduced tier の削減対象でもある
+- id: create-plan
+  artifacts:
+  - VERIFICATION.md
+  - THREAT-MODEL.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+requirements:
+  FR1:
+    title: Scan every project-module path occurrence
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Explicit allowlist
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: External crate roots on use lines
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Failure message states the invariant
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: Checker extracted into a function
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Checker self-tests
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: Test name kept
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Change confined to tests
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: Existing tests stay green
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: No new dependencies
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []

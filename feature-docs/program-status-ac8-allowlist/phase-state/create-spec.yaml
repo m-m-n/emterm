@@ -1,7 +1,7 @@
 schema_version: 1
 feature: program-status-ac8-allowlist
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 6673f82dfbee3cbe279a0871020fa4fe1c891c3f
 last_input_digest: sha256:347f6b07c75070c90c561f21a379557ac105c857862c6b6ec5b4d2f6c0b930cd
