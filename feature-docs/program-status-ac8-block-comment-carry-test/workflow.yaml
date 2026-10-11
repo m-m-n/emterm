@@ -83,7 +83,8 @@ workflow:
   completed_at_commit: a5c5b0ddfa1936715b7ae725ffd47d44e17c112d
   base_commit: 3e1afa42e4f9ef3c2b4c8c73efcd373805aecec6
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 877ab67bce990d477792ec37773a9f1f687a0917
 - id: verify
   status: pending
   result: null
@@ -111,8 +112,14 @@ tasks:
     status: merged
     branch: em-workflow/program-status-ac8-block-comment-carry-test/task0001
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - spec
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive
