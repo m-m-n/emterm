@@ -131,11 +131,15 @@ impl Tab {
         // CANDIDATES (`cb_state.pending_latch_feed`, populated by
         // `NativeCallbacks`' OSC notifications in true synchronous order
         // alongside OSC 777 Set/Clear — see `callbacks::LatchFeedEvent`'s doc)
-        // against `pending_marks` (`term_core`'s alt-screen-filtered,
-        // authoritative live-mark list just drained above) to produce a
-        // true-order, live-only sequence for this tab's inferred-clear
-        // latch (FR4/FR5). Computed from `&pending_marks` BEFORE
-        // `backfill_marks` below consumes it by value.
+        // against `pending_marks` (`term_core`'s main-screen live-mark list
+        // just drained above) to produce a true-order, live-only sequence for
+        // this tab's inferred-clear latch (FR4/FR5). Every mark candidate in
+        // the feed was dispatched on the main screen
+        // (agent-latch-alt-screen-prompt-mark FR1: `NativeCallbacks` keeps
+        // alternate-screen OSC 133 marks out of the feed), so the feed's
+        // candidates and the live marks are the same marks in the same order.
+        // Computed from `&pending_marks` BEFORE `backfill_marks` below
+        // consumes it by value.
         let live_kinds: Vec<crate::prompts::PromptMarkKind> = pending_marks
             .iter()
             .filter_map(|m| crate::prompts::PromptMarkKind::from_byte(m.kind))
@@ -155,7 +159,8 @@ impl Tab {
                 ));
         }
         // The OSC 7501 feed holds main-screen prompt candidates only (SC-2),
-        // so it is matched against the same `live_kinds` list.
+        // like the latch feed above, so it is matched against the same
+        // `live_kinds` list.
         self.apply_program_status_feed(program_status_feed, &live_kinds);
         self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
         // New PTY bytes reached the core — latch for the

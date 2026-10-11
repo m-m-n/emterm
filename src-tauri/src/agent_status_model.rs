@@ -157,27 +157,32 @@ pub enum ResolvedLatchInput {
     Set,
     /// A live OSC 777 agent-status `Clear` report.
     Clear,
-    /// A live, alt-screen-confirmed OSC 133 mark.
+    /// A live, main-screen OSC 133 mark, confirmed by the pump's live marks.
     Mark(crate::prompts::PromptMarkKind),
 }
 
 /// Reconcile this pump's OSC 133 mark CANDIDATES
-/// (`callbacks::LatchFeedEvent`, which may include alt-screen-suppressed
-/// marks — see that type's doc) against `live_marks`, the alt-screen
-/// -filtered ground truth for the SAME pump (e.g.
-/// `TerminalCore::take_prompt_marks`'s output, converted to
-/// `PromptMarkKind`), to produce a single true-order, live-only sequence
-/// for [`AgentStatusModel`]'s per-tab inferred-clear latch
+/// (`callbacks::LatchFeedEvent`, every one of which was dispatched on the
+/// main screen — see that type's doc) against `live_marks`, the same pump's
+/// main-screen live marks (e.g. `TerminalCore::take_prompt_marks`'s output,
+/// converted to `PromptMarkKind`), to produce a single true-order, live-only
+/// sequence for [`AgentStatusModel`]'s per-tab inferred-clear latch
 /// (agent-exit-after-icon FR4/FR5).
+///
+/// Precondition: every mark candidate in `feed` was dispatched on the main
+/// screen (or arrived through the screen-less notification); `Set`/`Clear`
+/// entries are in call order. Postcondition: the result holds every
+/// `Set`/`Clear` in original order and each candidate `live_marks` confirms
+/// (front to back, kind match) at its own position; an unconfirmed candidate
+/// is dropped without consuming a live mark.
 ///
 /// `live_marks` is, by construction, an ordered subsequence of the
 /// `PromptMark` candidates in `feed` (every live mark also fired the
 /// candidate-producing callback, in the same relative position) — so a
-/// single forward walk correctly tells live candidates from
-/// alt-screen-suppressed ones without this function (or any caller) ever
-/// re-deriving alt-screen state itself. OSC 777 `Set`/`Clear` candidates
-/// are never suppressed and always pass through unchanged, in their
-/// original position.
+/// single forward walk tells confirmed candidates from unconfirmed ones
+/// without this function (or any caller) ever re-deriving alt-screen state
+/// itself. OSC 777 `Set`/`Clear` candidates are never dropped and always
+/// pass through unchanged, in their original position.
 pub fn reconcile_latch_feed(
     feed: Vec<crate::callbacks::LatchFeedEvent>,
     live_marks: &[crate::prompts::PromptMarkKind],
@@ -193,8 +198,8 @@ pub fn reconcile_latch_feed(
                     live_idx += 1;
                     resolved.push(ResolvedLatchInput::Mark(kind));
                 }
-                // else: alt-screen-suppressed (or otherwise non-live)
-                // candidate — dropped, `live_idx` not advanced.
+                // else: a candidate `live_marks` does not confirm — dropped,
+                // `live_idx` not advanced.
             }
         }
     }
@@ -413,7 +418,7 @@ impl AgentStatusModel {
             .record_clear();
     }
 
-    /// Record a live, alt-screen-confirmed OSC 133 mark for a plain tab's
+    /// Record a live, main-screen OSC 133 mark for a plain tab's
     /// inferred-clear latch (agent-exit-after-icon FR2/FR4/FR5). Callers
     /// (the plain-tab wiring; see [`reconcile_latch_feed`]) must supply
     /// only live, main-screen marks, in true arrival order relative to

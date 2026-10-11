@@ -678,17 +678,18 @@ fn ac4_reconcile_latch_feed_drops_replay_equivalent_candidates() {
     );
 }
 
-// ── AC-5: marks captured on the alternate screen never fire ───────────
+// ── AC-5: candidates the live marks do not confirm never fire ─────────
 
 #[test]
 fn ac5_reconcile_latch_feed_drops_alt_screen_suppressed_candidates() {
-    // Two D candidates observed by `on_osc` (fires unconditionally),
-    // but `take_prompt_marks()` (alt-screen-gated) only ever captured
-    // the SECOND one — the first was suppressed while on the alt
-    // screen. `live_marks` reflects that: only one CommandEnd.
+    // A hand-built feed with two D candidates, of which the live marks
+    // (`take_prompt_marks()`'s output) confirm only the SECOND: the first
+    // is a candidate the live marks do not confirm. `live_marks` reflects
+    // that: only one CommandEnd. (The callbacks push no candidate from the
+    // alternate screen; this test exercises the reconciliation alone.)
     let feed = vec![
         LatchFeedEvent::Set,
-        LatchFeedEvent::PromptMark(PromptMarkKind::CommandEnd), // alt-screen: suppressed
+        LatchFeedEvent::PromptMark(PromptMarkKind::CommandEnd), // unconfirmed by the live marks
         LatchFeedEvent::PromptMark(PromptMarkKind::CommandEnd), // live
         LatchFeedEvent::PromptMark(PromptMarkKind::PromptStart), // live
     ];
@@ -701,7 +702,7 @@ fn ac5_reconcile_latch_feed_drops_alt_screen_suppressed_candidates() {
             ResolvedLatchInput::Mark(PromptMarkKind::CommandEnd),
             ResolvedLatchInput::Mark(PromptMarkKind::PromptStart),
         ],
-        "the alt-screen-suppressed D candidate is dropped, not the live pair"
+        "the unconfirmed D candidate is dropped, not the live pair"
     );
 
     let mut model = AgentStatusModel::new();
@@ -718,9 +719,10 @@ fn ac5_reconcile_latch_feed_drops_alt_screen_suppressed_candidates() {
 
 #[test]
 fn ac5_alt_screen_suppressed_d_a_pair_never_reaches_the_model() {
-    // The alt-screen scenario that must NOT fire: a D/A pair observed
-    // by `on_osc` while on the alt screen never appears in
-    // `take_prompt_marks()`'s live output at all.
+    // A hand-built feed whose D/A pair the live marks do not confirm at
+    // all (nothing is live): the pair never reaches the model and must NOT
+    // fire. (The callbacks push no candidate from the alternate screen;
+    // this test exercises the reconciliation alone.)
     let feed = vec![
         LatchFeedEvent::Set,
         LatchFeedEvent::PromptMark(PromptMarkKind::CommandEnd),
