@@ -849,6 +849,154 @@ fn osc_133_alt_a_then_main_a_leaves_exactly_one_latch_candidate() {
     );
 }
 
+// ── osc133-mark-token-exact-match task0001: exact first-token match ──
+//
+// A candidate enters the feeds only when the payload's first `;`-separated
+// token is exactly `A`, `B`, `C` or `D` (the criterion `term_core`'s
+// `parse_osc133_mark` applies to its live marks). Every case runs on a fresh
+// harness and asserts on BOTH feeds, so one case cannot mask another.
+
+/// Both plain-tab feeds of `h` hold nothing.
+fn assert_both_feeds_empty(h: &Harness, case: &str) {
+    let s = h.state.lock();
+    assert!(
+        s.pending_program_status_feed.is_empty(),
+        "{case}: the 7501 feed must stay empty"
+    );
+    assert!(
+        s.pending_latch_feed.is_empty(),
+        "{case}: the latch feed must stay empty"
+    );
+}
+
+/// Both plain-tab feeds of `h` hold exactly one candidate of `kind`.
+fn assert_one_candidate_in_each_feed(
+    h: &Harness,
+    kind: crate::prompts::PromptMarkKind,
+    case: &str,
+) {
+    let s = h.state.lock();
+    assert_eq!(
+        s.pending_program_status_feed,
+        vec![ProgramStatusFeedItem::PromptMark(kind)],
+        "{case}: 7501 feed"
+    );
+    assert_eq!(
+        s.pending_latch_feed,
+        vec![LatchFeedEvent::PromptMark(kind)],
+        "{case}: latch feed"
+    );
+}
+
+/// First tokens that merely START with a recognized letter, or are a
+/// recognized letter followed by more characters.
+const MALFORMED_FIRST_TOKENS: [&str; 6] = ["AB", "Ax", "Bx", "Cx", "Dx", "D0"];
+
+/// AC-2: on the main screen a malformed first token pushes nothing to either
+/// feed, through the screen-aware notification.
+#[test]
+fn osc_133_malformed_first_token_on_the_main_screen_pushes_nothing_to_either_feed() {
+    for token in MALFORMED_FIRST_TOKENS {
+        let h = default_harness();
+        h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, token, false);
+        assert_both_feeds_empty(&h, &format!("{token:?} main screen"));
+    }
+}
+
+/// AC-2: on the alternate screen a malformed first token pushes nothing to
+/// either feed (the screen rule and the token rule agree).
+#[test]
+fn osc_133_malformed_first_token_on_the_alternate_screen_pushes_nothing_to_either_feed() {
+    for token in MALFORMED_FIRST_TOKENS {
+        let h = default_harness();
+        h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, token, true);
+        assert_both_feeds_empty(&h, &format!("{token:?} alternate screen"));
+    }
+}
+
+/// AC-2: the existing notification (counted as the main screen) applies the
+/// same token rule.
+#[test]
+fn osc_133_malformed_first_token_through_the_existing_notification_pushes_nothing() {
+    for token in MALFORMED_FIRST_TOKENS {
+        let h = default_harness();
+        h.cb.on_osc(OSC_SEMANTIC_PROMPT, token);
+        assert_both_feeds_empty(&h, &format!("{token:?} existing notification"));
+    }
+}
+
+/// AC-3: well-formed first tokens (alone, or followed by `;` segments that
+/// never affect the result) push exactly one matching candidate to each feed
+/// on the main screen, through either notification.
+#[test]
+fn osc_133_well_formed_first_token_pushes_one_matching_candidate_to_each_feed() {
+    use crate::prompts::PromptMarkKind::{CommandEnd, CommandExec, CommandStart, PromptStart};
+
+    for (data, kind) in [
+        ("A", PromptStart),
+        ("B", CommandStart),
+        ("C", CommandExec),
+        ("D", CommandEnd),
+        ("D;0", CommandEnd),
+        ("D;x", CommandEnd),
+        ("A;aid=1", PromptStart),
+    ] {
+        let screen_aware = default_harness();
+        screen_aware
+            .cb
+            .on_osc_with_screen(OSC_SEMANTIC_PROMPT, data, false);
+        assert_one_candidate_in_each_feed(
+            &screen_aware,
+            kind,
+            &format!("{data:?} screen-aware main screen"),
+        );
+
+        let existing = default_harness();
+        existing.cb.on_osc(OSC_SEMANTIC_PROMPT, data);
+        assert_one_candidate_in_each_feed(
+            &existing,
+            kind,
+            &format!("{data:?} existing notification"),
+        );
+    }
+}
+
+/// AC-4: an empty payload and a payload whose first segment is empty
+/// (`;A`) have no first token, so they push nothing on either screen.
+#[test]
+fn osc_133_empty_first_segment_pushes_nothing_on_either_screen() {
+    for data in ["", ";A"] {
+        for alt_screen in [false, true] {
+            let h = default_harness();
+            h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, data, alt_screen);
+            assert_both_feeds_empty(&h, &format!("{data:?} alt_screen={alt_screen}"));
+        }
+        let existing = default_harness();
+        existing.cb.on_osc(OSC_SEMANTIC_PROMPT, data);
+        assert_both_feeds_empty(&existing, &format!("{data:?} existing notification"));
+    }
+}
+
+/// AC-4: `D;42` on the main screen is a command end (the segments after the
+/// first token never affect the result).
+#[test]
+fn osc_133_command_end_with_an_exit_code_on_the_main_screen_pushes_one_candidate() {
+    let h = default_harness();
+    h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, "D;42", false);
+    assert_one_candidate_in_each_feed(&h, crate::prompts::PromptMarkKind::CommandEnd, "D;42");
+}
+
+/// AC-4: well-formed first tokens followed by further segments still push
+/// nothing on the alternate screen.
+#[test]
+fn osc_133_well_formed_first_token_with_segments_on_the_alternate_screen_pushes_nothing() {
+    for data in ["D;42", "D;x", "A;aid=1"] {
+        let h = default_harness();
+        h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, data, true);
+        assert_both_feeds_empty(&h, &format!("{data:?} alternate screen"));
+    }
+}
+
 /// Everything a notification can change in the callback state, reduced to
 /// comparable values (the notification sink's calls included).
 #[derive(Debug, PartialEq)]
