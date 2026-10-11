@@ -1552,13 +1552,29 @@ enum Ac8Use<'a> {
     Bare,
 }
 
-/// An attribute opened on an earlier line that has not closed yet.
+/// An attribute opened on an earlier line that has not closed yet. This is the
+/// state carried to the next line: the bracket depth, whether the scan stopped
+/// inside a string literal, and how deeply it is nested in block comments. A
+/// line comment is never part of it: it ends with its physical line.
 #[derive(Clone, Copy)]
 struct Ac8OpenAttribute {
     /// Square-bracket depth, at least one while the attribute is open.
     depth: usize,
     /// Whether the scan stopped inside a plain string literal.
     in_string: bool,
+    /// Block-comment nesting level; zero when the scan is not inside a block
+    /// comment.
+    block_comment: usize,
+}
+
+impl Ac8OpenAttribute {
+    /// The state right after a `#[`: depth one, outside a string literal and
+    /// outside every block comment.
+    const OPENED: Self = Self {
+        depth: 1,
+        in_string: false,
+        block_comment: 0,
+    };
 }
 
 /// What scanning the text of an attribute found.
@@ -1570,19 +1586,34 @@ enum Ac8AttributeScan<'a> {
 }
 
 /// Scan `text`, the part of an attribute after `#[` (or the whole of a later
-/// line of it), starting from the state `open`. Outside a string literal `[`
-/// and `]` change the bracket depth and `"` opens a plain string literal; the
-/// attribute ends at the `]` that brings the depth back to zero. Inside a
-/// string literal brackets are ignored, a backslash makes the next character
-/// part of the literal and an unescaped `"` closes it. Raw strings and char
-/// literals get no special treatment.
+/// line of it), starting from the state `open`. The rules apply in this order,
+/// and a two-character token (`//`, `/*`, `*/`) is consumed as a unit, so its
+/// characters never start or end another token:
+///
+/// 1. Inside a string literal, a backslash makes the next character part of the
+///    literal and an unescaped `"` closes it; everything else, comment openers
+///    and brackets included, is string content.
+/// 2. Inside a block comment, `/*` raises the nesting level and `*/` lowers it;
+///    the comment ends when the level returns to zero. Every other character,
+///    `[`, `]`, `"` and `//` included, is comment content.
+/// 3. Otherwise `//` starts a line comment that runs to the end of `text` (the
+///    physical line): the scan reports the attribute still open with its
+///    current depth, outside a string literal and outside every block comment,
+///    so a line comment never carries to the next line. `/*` opens a block
+///    comment at level one, `"` opens a plain string literal, `[` and `]`
+///    change the depth, and the `]` that brings the depth back to zero ends the
+///    attribute.
+///
+/// Raw strings and char literals get no special treatment.
 fn ac8_scan_attribute(text: &str, open: Ac8OpenAttribute) -> Ac8AttributeScan<'_> {
     let Ac8OpenAttribute {
         mut depth,
         mut in_string,
+        mut block_comment,
     } = open;
-    let mut chars = text.char_indices();
+    let mut chars = text.char_indices().peekable();
     while let Some((at, c)) = chars.next() {
+        let next = chars.peek().map(|&(_, next)| next);
         if in_string {
             match c {
                 '\\' => {
@@ -1591,11 +1622,28 @@ fn ac8_scan_attribute(text: &str, open: Ac8OpenAttribute) -> Ac8AttributeScan<'_
                 '"' => in_string = false,
                 _ => {}
             }
+        } else if block_comment > 0 {
+            match (c, next) {
+                ('/', Some('*')) => {
+                    chars.next();
+                    block_comment += 1;
+                }
+                ('*', Some('/')) => {
+                    chars.next();
+                    block_comment -= 1;
+                }
+                _ => {}
+            }
         } else {
-            match c {
-                '"' => in_string = true,
-                '[' => depth += 1,
-                ']' => {
+            match (c, next) {
+                ('/', Some('/')) => break,
+                ('/', Some('*')) => {
+                    chars.next();
+                    block_comment = 1;
+                }
+                ('"', _) => in_string = true,
+                ('[', _) => depth += 1,
+                (']', _) => {
                     depth -= 1;
                     if depth == 0 {
                         return Ac8AttributeScan::Closed(&text[at + 1..]);
@@ -1605,35 +1653,58 @@ fn ac8_scan_attribute(text: &str, open: Ac8OpenAttribute) -> Ac8AttributeScan<'_
             }
         }
     }
-    Ac8AttributeScan::Open(Ac8OpenAttribute { depth, in_string })
+    Ac8AttributeScan::Open(Ac8OpenAttribute {
+        depth,
+        in_string,
+        block_comment,
+    })
+}
+
+/// An attribute still open at the end of a line (see
+/// `ac8_after_leading_attributes`).
+struct Ac8StillOpen {
+    /// The state that carries to the next line.
+    attribute: Ac8OpenAttribute,
+    /// Whether the `#[` of this attribute is on the line just scanned; `false`
+    /// when the attribute was opened on an earlier line and did not close.
+    opened_on_this_line: bool,
 }
 
 /// The text of `line` (trimmed) after its leading `#[..]` attributes, leading
 /// whitespace skipped before each attribute and before the returned text. When
 /// `open` is set the line first continues that attribute from its first
-/// character. `Err` carries the attribute state when an attribute is still
-/// open at the end of the line: such a line is not a use line and the state
-/// carries to the next line.
+/// character; every attribute opened on the line starts at depth one, outside a
+/// string literal and outside every block comment (`Ac8OpenAttribute::OPENED`).
+/// Brackets and quotes inside comments of an attribute do not count (see
+/// `ac8_scan_attribute`). `Err` carries the attribute (`Ac8StillOpen`) when an
+/// attribute is still open at the end of the line, a line comment included:
+/// such a line is not a use line and the state carries to the next line.
 fn ac8_after_leading_attributes(
     line: &str,
     open: Option<Ac8OpenAttribute>,
-) -> Result<&str, Ac8OpenAttribute> {
+) -> Result<&str, Ac8StillOpen> {
     let mut rest = line;
     if let Some(open) = open {
         match ac8_scan_attribute(rest, open) {
             Ac8AttributeScan::Closed(after) => rest = after,
-            Ac8AttributeScan::Open(still_open) => return Err(still_open),
+            Ac8AttributeScan::Open(attribute) => {
+                return Err(Ac8StillOpen {
+                    attribute,
+                    opened_on_this_line: false,
+                });
+            }
         }
     }
     rest = rest.trim_start();
     while let Some(attribute) = rest.strip_prefix("#[") {
-        let opened = Ac8OpenAttribute {
-            depth: 1,
-            in_string: false,
-        };
-        match ac8_scan_attribute(attribute, opened) {
+        match ac8_scan_attribute(attribute, Ac8OpenAttribute::OPENED) {
             Ac8AttributeScan::Closed(after) => rest = after.trim_start(),
-            Ac8AttributeScan::Open(still_open) => return Err(still_open),
+            Ac8AttributeScan::Open(attribute) => {
+                return Err(Ac8StillOpen {
+                    attribute,
+                    opened_on_this_line: true,
+                });
+            }
         }
     }
     Ok(rest)
@@ -1704,13 +1775,22 @@ fn ac8_violation(line: &str, problem: &str) -> String {
 /// `AC8_ALLOWED_USE_ROOTS`. Use lines are the forms `ac8_use_path` recognizes
 /// after any leading `#[..]` attributes, including ones that open on an
 /// earlier line and close on the use line (the open-attribute state carries
-/// from line to line); the offending line is the physical line holding `use`.
-/// For a bare use line the segment is the first one of the next non-blank
-/// line, and that line is the offending line.
+/// from line to line, `[`, `]` and `"` inside comments of an attribute not
+/// counting); the offending line is the physical line holding `use`. For a bare
+/// use line the segment is the first one of the next non-blank line, and that
+/// line is the offending line.
+///
+/// End of source: when the source ends with an attribute still open (in
+/// attribute code, inside a string literal or inside a block comment of that
+/// attribute), one more violation is appended after every other violation. It
+/// quotes the trimmed physical line holding the `#[` of that attribute and says
+/// the attribute does not close before the end of the source.
 fn ac8_check_allowlist(source: &str) -> Vec<String> {
     let mut violations = Vec::new();
     let mut bare_use_pending = false;
     let mut open_attribute: Option<Ac8OpenAttribute> = None;
+    // The trimmed line holding the `#[` of `open_attribute`.
+    let mut open_attribute_line = "";
     for raw in source.lines() {
         let line = raw.trim();
 
@@ -1724,7 +1804,10 @@ fn ac8_check_allowlist(source: &str) -> Vec<String> {
         } else {
             match ac8_after_leading_attributes(line, open_attribute.take()) {
                 Err(still_open) => {
-                    open_attribute = Some(still_open);
+                    if still_open.opened_on_this_line {
+                        open_attribute_line = line;
+                    }
+                    open_attribute = Some(still_open.attribute);
                     None
                 }
                 Ok(code) => match ac8_use_path(code) {
@@ -1766,6 +1849,12 @@ fn ac8_check_allowlist(source: &str) -> Vec<String> {
                 ));
             }
         }
+    }
+    if open_attribute.is_some() {
+        violations.push(ac8_violation(
+            open_attribute_line,
+            "the attribute opened here does not close before the end of the source",
+        ));
     }
     violations
 }
@@ -2344,6 +2433,220 @@ fn ac8_forms_ac5_every_violation_names_the_line_the_allowlist_and_the_invariant(
             );
         }
     }
+}
+
+// ── program-status-ac8-attribute-comments: comments inside attributes, open attribute at the end ──
+//
+// Names carry the `program-status-ac8-attribute-comments` task acceptance criterion
+// they prove (`ac8_comments_ac1_` .. `ac8_comments_ac6_`). They feed synthetic
+// sources to `ac8_check_allowlist`; tests.rs itself is never a scan target, so
+// the `crate::` / `super::` text in these snippets does not reach the ac8 test.
+
+/// The phrase every end-of-source violation carries in its problem text.
+const AC8_COMMENTS_END_OF_SOURCE_PHRASE: &str = "does not close before the end of the source";
+
+/// The violations of `source` that carry the end-of-source phrase.
+fn ac8_comments_end_of_source_violations(source: &str) -> Vec<String> {
+    ac8_check_allowlist(source)
+        .into_iter()
+        .filter(|violation| violation.contains(AC8_COMMENTS_END_OF_SOURCE_PHRASE))
+        .collect()
+}
+
+#[test]
+fn ac8_comments_ac1_a_bracket_in_a_block_comment_does_not_hide_a_use_line() {
+    ac8_gaps_assert_rejected_with_root_winit(
+        "#[allow(dead_code /* [ */)]\nstruct X;\nuse winit::event::Event;",
+    );
+}
+
+#[test]
+fn ac8_comments_ac1_a_quote_in_a_block_comment_does_not_hide_a_use_line() {
+    ac8_gaps_assert_rejected_with_root_winit(
+        "#[allow(dead_code /* \" */)]\nstruct X;\nuse winit::event::Event;",
+    );
+}
+
+#[test]
+fn ac8_comments_ac1_a_block_comment_with_a_bracket_before_an_allowed_root_is_allowed() {
+    ac8_assert_allowed("#[allow(dead_code /* [ */)]\nstruct X;\nuse std::fmt;");
+}
+
+/// Reject a two-line source whose first line opens an attribute and ends in a
+/// line comment holding `character`, and require a winit violation that quotes
+/// the second line.
+fn ac8_comments_assert_line_comment_character_is_ignored(character: char) {
+    let source = format!("#[cfg(all( // {character}\nunix))] use winit::event::Event;");
+    let violations = ac8_assert_rejected(&source);
+    let second_line = "unix))] use winit::event::Event;";
+    assert!(
+        violations.iter().any(|violation| {
+            violation.starts_with(&format!("`{second_line}`"))
+                && violation.contains("use root `winit`")
+        }),
+        "expected a winit violation quoting {second_line:?} for {source:?}, got {violations:?}"
+    );
+}
+
+#[test]
+fn ac8_comments_ac2_a_closing_bracket_in_a_line_comment_does_not_hide_a_use_line() {
+    ac8_comments_assert_line_comment_character_is_ignored(']');
+}
+
+#[test]
+fn ac8_comments_ac2_an_opening_bracket_in_a_line_comment_does_not_hide_a_use_line() {
+    ac8_comments_assert_line_comment_character_is_ignored('[');
+}
+
+#[test]
+fn ac8_comments_ac2_a_quote_in_a_line_comment_does_not_hide_a_use_line() {
+    ac8_comments_assert_line_comment_character_is_ignored('"');
+}
+
+#[test]
+fn ac8_comments_ac2_a_line_comment_with_a_bracket_before_an_allowed_root_is_allowed() {
+    ac8_assert_allowed("#[cfg(all( // [\nunix))] use std::fmt;");
+}
+
+#[test]
+fn ac8_comments_ac3_a_bracket_in_a_block_comment_spanning_lines_does_not_hide_a_use_line() {
+    ac8_gaps_assert_rejected_with_root_winit(
+        "#[cfg(all( /* ]\n] */ unix))]\nuse winit::event::Event;",
+    );
+}
+
+#[test]
+fn ac8_comments_ac3_a_bracket_in_a_nested_block_comment_does_not_hide_a_use_line() {
+    ac8_gaps_assert_rejected_with_root_winit(
+        "#[allow(dead_code /* /* */ [ */)]\nstruct X;\nuse winit::event::Event;",
+    );
+}
+
+#[test]
+fn ac8_comments_ac3_a_slash_star_slash_does_not_close_its_own_block_comment() {
+    // `/*/` opens a block comment; the `*/` after the bracket closes it.
+    ac8_gaps_assert_rejected_with_root_winit("#[allow(a /*/ ] */)] use winit::event::Event;");
+}
+
+#[test]
+fn ac8_comments_ac4_comment_openers_in_an_attribute_string_are_string_content() {
+    for snippet in [
+        "#[doc = \"/*\"] use winit::event::Event;",
+        "#[doc = \"//\"] use winit::event::Event;",
+    ] {
+        ac8_gaps_assert_rejected_with_root_winit(snippet);
+    }
+}
+
+/// Require exactly one violation for `source`, the end-of-source violation: it
+/// starts with `first_line` (the trimmed line holding the `#[` of the open
+/// attribute) enclosed in backticks and carries the phrase, the allowlist and
+/// the invariant.
+fn ac8_comments_assert_one_end_of_source_violation(source: &str, first_line: &str) {
+    let violations = ac8_check_allowlist(source);
+    assert_eq!(
+        violations.len(),
+        1,
+        "violations for {source:?}: {violations:?}"
+    );
+    let violation = &violations[0];
+    assert!(
+        violation.starts_with(&format!("`{first_line}`")),
+        "violation for {source:?} does not start with the line {first_line:?}: {violation:?}"
+    );
+    assert!(
+        violation.contains(AC8_COMMENTS_END_OF_SOURCE_PHRASE),
+        "violation for {source:?} lacks the end-of-source phrase: {violation:?}"
+    );
+    assert!(
+        violation.contains("super::agent_status"),
+        "violation for {source:?} lacks the allowlist: {violation:?}"
+    );
+    assert!(
+        violation.contains("without the `gui` feature"),
+        "violation for {source:?} lacks the invariant: {violation:?}"
+    );
+}
+
+#[test]
+fn ac8_comments_ac5_a_source_ending_in_attribute_code_returns_one_end_of_source_violation() {
+    ac8_comments_assert_one_end_of_source_violation(
+        "#[cfg(all(\nunix,\nuse std::fmt;",
+        "#[cfg(all(",
+    );
+}
+
+#[test]
+fn ac8_comments_ac5_a_source_ending_inside_a_block_comment_returns_one_end_of_source_violation() {
+    ac8_comments_assert_one_end_of_source_violation(
+        "#[allow(dead_code /* ]\nuse std::fmt;",
+        "#[allow(dead_code /* ]",
+    );
+}
+
+#[test]
+fn ac8_comments_ac5_a_source_ending_inside_a_string_literal_returns_one_end_of_source_violation() {
+    ac8_comments_assert_one_end_of_source_violation(
+        "#[doc = \"abc\nuse std::fmt;",
+        "#[doc = \"abc",
+    );
+}
+
+#[test]
+fn ac8_comments_ac5_a_source_whose_attributes_all_close_has_no_end_of_source_violation() {
+    for source in [
+        "#[allow(dead_code /* [ */)]\nstruct X;\nuse std::fmt;",
+        "#[cfg(all( // [\nunix))]\nuse std::fmt;",
+        "#[cfg(all(\nunix,\n))]",
+        "#[doc = \"abc\"] #[allow(a)]",
+        "",
+    ] {
+        let violations = ac8_comments_end_of_source_violations(source);
+        assert!(
+            violations.is_empty(),
+            "unexpected end-of-source violation for {source:?}: {violations:?}"
+        );
+    }
+}
+
+#[test]
+fn ac8_comments_ac6_the_end_of_source_violation_follows_every_other_violation() {
+    let source = "#[cfg(all(\nlet x = crate::foo::bar();";
+    let violations = ac8_check_allowlist(source);
+    assert_eq!(
+        violations.len(),
+        2,
+        "violations for {source:?}: {violations:?}"
+    );
+    assert!(
+        violations[0].starts_with("`let x = crate::foo::bar();`")
+            && violations[0].contains("`crate::` path is outside the allowlist"),
+        "first violation for {source:?} is not the rule A violation of the second line: {:?}",
+        violations[0]
+    );
+    assert!(
+        violations[1].starts_with("`#[cfg(all(`")
+            && violations[1].contains(AC8_COMMENTS_END_OF_SOURCE_PHRASE),
+        "last violation for {source:?} is not the end-of-source violation: {:?}",
+        violations[1]
+    );
+}
+
+#[test]
+fn ac8_comments_ac6_the_end_of_source_violation_names_the_line_of_the_open_attribute() {
+    let source = "#[cfg(all(\nunix))] #[allow(\nx,";
+    let violations = ac8_check_allowlist(source);
+    assert_eq!(
+        violations.len(),
+        1,
+        "violations for {source:?}: {violations:?}"
+    );
+    assert!(
+        violations[0].starts_with("`unix))] #[allow(`")
+            && violations[0].contains(AC8_COMMENTS_END_OF_SOURCE_PHRASE),
+        "violation for {source:?} is not the end-of-source violation of the second line: {:?}",
+        violations[0]
+    );
 }
 
 // ── pane-state-rank-unify: ProgramState::rank derives from compose_rank ──
