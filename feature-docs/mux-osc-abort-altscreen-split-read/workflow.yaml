@@ -2,35 +2,60 @@ schema_version: 1
 feature: mux-osc-abort-altscreen-split-read
 created: '2026-10-11'
 base_branch: main
-goal: |
-  # mux: 代替画面の終了シーケンスが読み取りをまたぐと、連続 ESC で打ち切られた OSC 133 マークが mux 側だけ失われる
+goal: '# mux: 代替画面の終了シーケンスが読み取りをまたぐと、連続 ESC で打ち切られた OSC 133 マークが mux 側だけ失われる
+
 
   Notion task: https://www.notion.so/3f63509ec8ee81d188baf77cf2d1ae20 (種別: バグ)
 
+
   ## 現象
+
   mux ペインの取り込み（`AgentStatusFeedScanner`）で、代替画面の終了シーケンス（`ESC [?1049l`）が読み取り境界をまたぎ、同じ読み取りに OSC 133 本文が載り、さらに本文と本文中 ESC の間にもう 1 つ読み取り境界があると、連続 ESC で打ち切られた OSC 133 マーク（PromptStart）が mux 側だけ失われる。通常タブでは打ち切り時に PromptStart が出るため、OSC 7501 の working / blocked / idle の記録と OSC 777 の D→A ラッチの結果が通常タブと mux ペインで食い違う。
+
   em-workflow mux-osc-double-esc-abort の review round 1 で medium として残った指摘（stable_id 353100630a31bb34）。
+
   ## 再現手順
+
   1. mux ペインで root の working 記録を作る
+
   2. `drive_reads` に順に `\x1b[?1049h`、`\x1b[?1049`、`l\x1b]133;A`、`\x1b\x1b\\` を渡す
+
   3. 主画面の PromptStart で記録表が空になるべきだが、working が残る（コード読みで確認。実行は未実施）
+
   ## 期待する挙動
+
   読み取りの分割位置によらず、通常タブの一括処理と同じ記録表になる。
+
   ## 完了の定義
+
   - [ ] 再現手順で現象が起きない
+
   - [ ] 再発を検出するテストがある
+
   ## 該当箇所
+
   - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1579`（cut_live の判定）
+
   - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1538`（tail_live の記録）
+
   - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1197`、`write_filter.rs:1332`（読み取りごとの画面切り替え検出）
+
   - `src-tauri/src/mux/ipc/pty_spawn/mod.rs:544`（代替画面が絡むフォールバックで live_spans が空になる）
+
   対処案: 前の読み取りがフォールバックに入ったとき本文最後のバイトの live 判定を「不明」として持ち越し打ち切り側の位置で判定する、または読み取り間で切り替えシーケンスの途中状態を引き継ぐ。
+
   ## 実害・発生条件
+
   3 つの読み取り境界の条件がすべて揃ったときだけ起きる。根本原因は既存の保守的なフォールバック（終端が同じ読み取りに入った BEL/ST 形式のマークも捨てる挙動）にある。
 
+
   ## 追加指示
+
   - 完了後 integration ブランチを remote へ push し gh pr create で base_branch への PR を作成。integration ブランチはローカル・リモートとも残す（自動マージしない）
+
   - 不明点は Codex に相談して比較的良い案を採用し、その議論内容を Notion に記録する
+
+  '
 parent_branch: em-workflow/mux-osc-abort-altscreen-split-read/integration
 tier: full
 tier_decision:
@@ -101,7 +126,52 @@ workflow:
   status: pending
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Split-aware live spans for the mux feed scanner
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/altscreen_split_read.rs
+    - src-tauri/src/mux/daemon/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - FR8
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    status: pending
+  task0002:
+    title: Plain-tab half of the SC-1x parity corpus
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/tabs/tests/output_pipeline.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: medium
+    requirements:
+    - FR6
+    - FR7
+    - FR8
+    - NFR5
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -109,65 +179,107 @@ requirements:
   FR1:
     title: Carry the partial switch-sequence state across reads (scanner live spans)
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS1
+    - TS2
   FR2:
     title: Live spans in today's alternate-screen fallback reads
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS1
+    - TS2
+    - TS3
   FR3:
     title: Non-fallback reads with wrong live spans
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS1
+    - TS2
+    - TS3
   FR4:
     title: Consistency with the charset designator slot
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS1
+    - TS2
+    - TS3
   FR5:
     title: Scrollback write path unchanged
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS4
+    - TS5
   FR6:
     title: Parity with the plain tab
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS2
+    - TS3
   FR7:
     title: Regression tests
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS1
+    - TS2
+    - TS3
   FR8:
     title: Unchanged behavior
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS5
   NFR1:
     title: Robustness
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS1
+    - TS6
   NFR2:
     title: Feature gate
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS5
   NFR3:
     title: Logging
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS7
   NFR4:
     title: Platform
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS9
   NFR5:
     title: term_core unchanged
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS8
