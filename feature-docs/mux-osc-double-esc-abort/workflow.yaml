@@ -137,7 +137,8 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-osc-double-esc-abort/task0001
   task0002:
     title: Plain-tab half of the cut parity corpus
     plan: tasks/task0002.md
@@ -154,7 +155,8 @@ tasks:
     - FR9
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-osc-double-esc-abort/task0002
 review:
   status: pending
   rounds_completed: 0
