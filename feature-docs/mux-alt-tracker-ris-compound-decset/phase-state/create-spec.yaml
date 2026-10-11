@@ -6,11 +6,49 @@ generation: 1
 base_revision: 670ff311f2401df09836c6db78a4e5c0a610752c
 last_input_digest: sha256:5aa2157855519b5455e949c2696df95bf228b0cff40af4d68848b80088b7aa70
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-11T12:12:28+09:00'
+    questions:
+    - question_id: requirement.compound-decset-split
+      status: answered
+    - question_id: design-step.recommendation
+      status: answered
+answers:
+  requirement.compound-decset-split:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T12:12:28+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - carry_csi_state
+    freeform: null
+    normalized_answer: 'Codex consulted (1 turn, codex harness). Codex chose carry_csi_state:
+      match_switch/resume only carry ALT_SCREEN_TOGGLES prefixes, so a split ESC [?1;10
+      | 49h loses its partial state and advance (which compares shadow_alt with the
+      real parser) misses a compound form that does not change the parser''s screen
+      state while client_alt disagrees; carrying O(1) CSI parse state and detecting
+      on the later h/l makes the planned fallback/adopt independent of read boundaries,
+      consistent with the RIS split handling and the predecessor''s split-position-independence
+      goal. Risks: more carried state must stay consistent with resume, the designator
+      slot and adopt-time clearing; numeric overflow and sequence abort must be handled
+      safely; verify every split position and byte-at-a-time delivery in the disagreement
+      state. Not chosen: single_read_only (leaves the symptom for split forms). Orchestrator
+      agreed. Opus escalation not run. Recorded as assumption.'
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T12:12:28+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: 'Batch policy create-spec.design-step: decide_autonomously
+      -> accept analyst recommendation (skip, no UI change).'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:5aa2157855519b5455e949c2696df95bf228b0cff40af4d68848b80088b7aa70
   output_digest: null
 artifacts: []
