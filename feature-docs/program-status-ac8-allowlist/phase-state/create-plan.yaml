@@ -1,20 +1,32 @@
 schema_version: 1
 feature: program-status-ac8-allowlist
 phase: create-plan
-status: dispatched
+status: applying_patch
 generation: 1
 base_revision: 8a707b3b698fe9883fd40f3b3506c0acf6316f94
 last_input_digest: sha256:82d7557a6e2f4a00158b6170d1c09dc71fd3aaa1ec71e9724331791d2b4670bc
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
 - request_id: create-plan-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:82d7557a6e2f4a00158b6170d1c09dc71fd3aaa1ec71e9724331791d2b4670bc
-  output_digest: null
-artifacts: []
-patches: []
+  output_digest: sha256:5bda6abe78761f3d209258060b0e900aeca32cb9a38c228632e6bf150395e0ac
+artifacts:
+- path: feature-docs/program-status-ac8-allowlist/tasks/task0001.md
+  sha256: sha256:b5c5b433f31db80bd2550d96ac10b147df0d932c351a0c165660933564231b2d
+  produced_by: create-plan-run-0001
+- path: feature-docs/program-status-ac8-allowlist/THREAT-MODEL.md
+  sha256: sha256:c458f2389214d90c988d7666a53ae2c395fe4e2456d7f71364e03b8b4e64d24b
+  produced_by: create-plan-run-0001
+- path: feature-docs/program-status-ac8-allowlist/VERIFICATION.md
+  sha256: sha256:b2b79a9b15c44ae941ae8c33961178a4cda50262d1fc40206a16193a2e161f33
+  produced_by: create-plan-run-0001
+patches:
+- patch_id: create-plan-p0001
+  request_id: create-plan-run-0001
+  status: pending
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
