@@ -113,7 +113,7 @@ workflow:
   summary: 'cargo check (default / --no-default-features) ok; src-tauri --lib 4766 passed, 0 failed, 3 ignored; TS-1..TS-7 and AC-1..AC-6 covered by named passing tests; NFR1 diff adds no loop/lock/IO'
   completed_at_commit: 538fe408c22ff1e4bc2a3c3f15ad26459961cf7b
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Exclude alternate-screen OSC 133 candidates from the agent-status latch feed
