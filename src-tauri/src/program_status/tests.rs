@@ -2649,6 +2649,48 @@ fn ac8_comments_ac6_the_end_of_source_violation_names_the_line_of_the_open_attri
     );
 }
 
+// ── program-status-ac8-block-comment-carry-test: block-comment level carried to the next line ──
+//
+// Names carry the `program-status-ac8-block-comment-carry-test` task acceptance
+// criterion they prove (`ac8_carry_ac1_`, `ac8_carry_ac2_`). They feed synthetic
+// sources to `ac8_check_allowlist`; tests.rs itself is never a scan target, so
+// the `crate::` / `super::` text in these snippets does not reach the ac8 test.
+
+/// Reject `source` and require a violation that quotes `line` (the trimmed
+/// offending line) enclosed in backticks and reports use root `winit`.
+fn ac8_carry_assert_winit_violation_quotes_line(source: &str, line: &str) {
+    let violations = ac8_assert_rejected(source);
+    assert!(
+        violations.iter().any(|violation| {
+            violation.starts_with(&format!("`{line}`")) && violation.contains("use root `winit`")
+        }),
+        "expected a winit violation quoting {line:?} for {source:?}, got {violations:?}"
+    );
+}
+
+#[test]
+fn ac8_carry_ac1_a_bracket_in_a_block_comment_carried_to_the_next_line_does_not_hide_a_use_line() {
+    // Line 1 ends inside a block comment, so the leading `]` of line 2 is comment
+    // content and the attribute closes at the later `]`.
+    ac8_carry_assert_winit_violation_quotes_line(
+        "#[cfg(all( /* ]\n] */ unix))] use winit::event::Event;",
+        "] */ unix))] use winit::event::Event;",
+    );
+}
+
+#[test]
+fn ac8_carry_ac2_a_quote_in_a_block_comment_carried_to_the_next_line_does_not_hide_a_use_line() {
+    // Line 1 ends inside a block comment, so the `"` of line 2 is comment content
+    // and no string literal swallows the use line on line 3.
+    let source = "#[allow(x /*\n\" */)]\nuse winit::event::Event;";
+    ac8_carry_assert_winit_violation_quotes_line(source, "use winit::event::Event;");
+    let end_of_source = ac8_comments_end_of_source_violations(source);
+    assert!(
+        end_of_source.is_empty(),
+        "unexpected end-of-source violation for {source:?}: {end_of_source:?}"
+    );
+}
+
 // ── pane-state-rank-unify: ProgramState::rank derives from compose_rank ──
 //
 // Names carry the `pane-state-rank-unify` task acceptance criterion they prove

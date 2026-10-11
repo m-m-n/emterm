@@ -39,14 +39,25 @@ acceptance_tests:
       - program_status::tests::ac8_comments_ac3_a_bracket_in_a_block_comment_spanning_lines_does_not_hide_a_use_line
       - program_status::tests::ac8_comments_ac3_a_bracket_in_a_nested_block_comment_does_not_hide_a_use_line
       - program_status::tests::ac8_comments_ac3_a_slash_star_slash_does_not_close_its_own_block_comment
+      - program_status::tests::ac8_carry_ac1_a_bracket_in_a_block_comment_carried_to_the_next_line_does_not_hide_a_use_line
+      - program_status::tests::ac8_carry_ac2_a_quote_in_a_block_comment_carried_to_the_next_line_does_not_hide_a_use_line
     red_confirmed: true
     red_reason: >-
       Before the scanner change the nested-comment test failed ("expected at least one violation for
       \"#[allow(dead_code /* /* */ [ */)]\\nstruct X;\\nuse winit::event::Event;\", got none") and so
       did the `/*/` test (\"#[allow(a /*/ ] */)] use winit::event::Event;\", got none). The
       line-spanning block-comment test passed before and after: the old scanner already closed the
-      attribute at the `]` inside the comment and the next line is a use line, so it stays as a
-      regression guard against an implementation that does not carry the block-comment level.
+      attribute at the `]` inside the comment and the next line is a use line. It also passes under
+      an implementation that does not carry the block-comment level (the end-of-text return of
+      ac8_scan_attribute reporting level zero), because line 2's `]` closes the attribute there too
+      and line 3 is still a winit use line. The guard against a dropped block-comment carry is the
+      pair
+      ac8_carry_ac1_a_bracket_in_a_block_comment_carried_to_the_next_line_does_not_hide_a_use_line
+      and
+      ac8_carry_ac2_a_quote_in_a_block_comment_carried_to_the_next_line_does_not_hide_a_use_line:
+      both pass on the current scanner and both fail under that mutant (the first with "expected at
+      least one violation for ... got none", the second with only the end-of-source violation for
+      `#[allow(x /*` returned and no winit violation).
   AC-4:
     tests:
       - program_status::tests::ac8_comments_ac4_comment_openers_in_an_attribute_string_are_string_content
