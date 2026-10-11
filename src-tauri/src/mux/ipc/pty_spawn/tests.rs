@@ -8890,6 +8890,10 @@ mod strip_non_sixel_dcs_linear;
 // reading, the CPU budget meter and its judgment, with their own tests.
 mod thread_cpu_time;
 
+// mux-osc-abort-altscreen-split-read task0001 (AC-1, AC-2, AC-4, AC-5, AC-6): the split-aware
+// live-span tracker the reader feeds the agent-status scanner with.
+mod altscreen_split_read;
+
 // ── osc7501-program-status task0004 (AC-1, AC-2): OSC 7501 and RIS in the
 //    agent-status feed ────────────────────────────────────────────────────
 
