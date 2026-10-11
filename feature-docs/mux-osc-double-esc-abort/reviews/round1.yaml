@@ -1,0 +1,67 @@
+round: 1
+executed_at: "2026-10-11T09:57:57+09:00"
+scope:
+  review_mode: diff
+  base_commit: 31513380a92c232ebcc573dc0deb2b68c89c5757
+  head_commit: 5508905dd248499a7522b647126ca10fdeed873b
+  changed_files:
+  - src-tauri/src/mux/daemon/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - test-docs/mux-osc-double-esc-abort/task0001.tests.yaml
+  - test-docs/mux-osc-double-esc-abort/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+  - perspective: performance
+    reason: 変更箇所が mux デーモンの PTY 出力を 1 バイトずつ処理する取り込み経路（AgentStatusFeedScanner::step）にある
+  cross_validation: true
+perspective_runs:
+- {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+- stable_id: 353100630a31bb34
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  line: 1579
+  title: "代替画面の終了シーケンスが読み取りをまたぐと、打ち切られた OSC 133 マークが mux 側だけ失われる"
+  description: "extract_main_buffer は画面切り替えを読み取りごとの完全一致でしか検出しない（write_filter.rs:1197-1202, 1332-1345）。ESC [?1049 / l ESC]133;A のように終了シーケンスが読み取りをまたぐと、pty_reader_loop の代替画面フォールバック（mod.rs:544-563）で live_spans が空になり、本文途中で読み取りが終わると tail_live=false が記録される。次の読み取り ESC ESC \\ では cut_live=false となり（1579-1580）PromptStart が出ない。旧実装は \\ で ST として確定し PromptStart を出していた。通常タブは打ち切り時に PromptStart を出すため、7501 記録と OSC 777 の D→A ラッチが mux ペインとずれる（FR7）。発生には終了シーケンスの途中分割・同じ読み取りへの 133 本文・本文と本文中 ESC の間の追加の読み取り境界がすべて要る。根本原因は FR8 で維持された既存フォールバック。追加の分割テストは全ストリームから求めた区間を切り分けるため、この経路を検出できない。"
+  suggestion: "前の読み取りが代替画面絡みのフォールバックに入ったとき、本文最後のバイトの live 判定を「不明」として持ち越し打ち切り側の位置で判定する、または読み取り間で切り替えシーケンスの途中状態を引き継ぐ。drive_reads に [\\x1b[?1049h, \\x1b[?1049, l\\x1b]133;A, \\x1b\\x1b\\\\] を渡し通常タブの一括処理と同じ表になる回帰テストを追加する。"
+  reproduction: null
+  reproduction_alternates: []
+  reproduction_overflow: false
+  sources: ["codex:comprehensive"]
+  confidence: 80
+  resolution: unresolved
+  resolution_reason: "medium のため auto-fix 対象外。別タスクとして起票する"
+evaluation:
+  round_summary: "ラウンド 1（diff、cross_validation=true）。指摘は comprehensive#0 の medium 1 件のみで critical/high は無い。評価者がコード読みで経路を確認し medium のまま採用。条件は狭く根本原因は既存フォールバック。prompt injection の試みは無し。security / comprehensive / architecture / spec / performance はすべて corroborated。"
+  recommended_action: complete
+  action_rationale: "medium 1 件のみで critical/high は無い。修正には読み取りループと抽出処理にまたがる設計判断が要り自動修正に向かないため、追加作業にするか既知の制限とするかを人が判断する。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-mux-osc-double-esc-abort-20261011T005736Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
