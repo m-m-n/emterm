@@ -1,7 +1,7 @@
 schema_version: 1
 feature: program-status-ac8-use-line-forms
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: a7624f7098559113804b914b754f700d2847773c
 last_input_digest: sha256:42b1fb9078e4b9687d43af18386af45a3b7d3326b25b1b580d5240da80849ae0
