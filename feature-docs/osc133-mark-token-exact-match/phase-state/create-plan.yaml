@@ -1,0 +1,17 @@
+schema_version: 1
+feature: osc133-mark-token-exact-match
+phase: create-plan
+status: running
+generation: 1
+base_revision: 480fd36c3f589354ef5ac1cfe5447d863b821e61
+last_input_digest: sha256:b6d84e9b720bb9df65c83f0b4fa8b9dbec5b36d6d6dcf50dd3555047087051d5
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
