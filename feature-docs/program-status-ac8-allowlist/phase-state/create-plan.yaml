@@ -1,0 +1,21 @@
+schema_version: 1
+feature: program-status-ac8-allowlist
+phase: create-plan
+status: dispatched
+generation: 1
+base_revision: 8a707b3b698fe9883fd40f3b3506c0acf6316f94
+last_input_digest: sha256:82d7557a6e2f4a00158b6170d1c09dc71fd3aaa1ec71e9724331791d2b4670bc
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:82d7557a6e2f4a00158b6170d1c09dc71fd3aaa1ec71e9724331791d2b4670bc
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
