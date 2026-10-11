@@ -155,7 +155,7 @@ tasks:
     - FR9
     - NFR4
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-osc-double-esc-abort/task0002
 review:
   status: pending
