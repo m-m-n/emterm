@@ -157,7 +157,8 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-osc-abort-altscreen-split-read/task0001
   task0002:
     title: Plain-tab half of the SC-1x parity corpus
     plan: tasks/task0002.md
@@ -173,7 +174,8 @@ tasks:
     - FR7
     - FR8
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-osc-abort-altscreen-split-read/task0002
 review:
   status: pending
   rounds_completed: 0
