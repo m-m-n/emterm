@@ -1,0 +1,173 @@
+schema_version: 1
+feature: mux-osc-abort-altscreen-split-read
+created: '2026-10-11'
+base_branch: main
+goal: |
+  # mux: 代替画面の終了シーケンスが読み取りをまたぐと、連続 ESC で打ち切られた OSC 133 マークが mux 側だけ失われる
+
+  Notion task: <redacted-notion-url> (種別: バグ)
+
+  ## 現象
+  mux ペインの取り込み（`AgentStatusFeedScanner`）で、代替画面の終了シーケンス（`ESC [?1049l`）が読み取り境界をまたぎ、同じ読み取りに OSC 133 本文が載り、さらに本文と本文中 ESC の間にもう 1 つ読み取り境界があると、連続 ESC で打ち切られた OSC 133 マーク（PromptStart）が mux 側だけ失われる。通常タブでは打ち切り時に PromptStart が出るため、OSC 7501 の working / blocked / idle の記録と OSC 777 の D→A ラッチの結果が通常タブと mux ペインで食い違う。
+  em-workflow mux-osc-double-esc-abort の review round 1 で medium として残った指摘（stable_id 353100630a31bb34）。
+  ## 再現手順
+  1. mux ペインで root の working 記録を作る
+  2. `drive_reads` に順に `\x1b[?1049h`、`\x1b[?1049`、`l\x1b]133;A`、`\x1b\x1b\\` を渡す
+  3. 主画面の PromptStart で記録表が空になるべきだが、working が残る（コード読みで確認。実行は未実施）
+  ## 期待する挙動
+  読み取りの分割位置によらず、通常タブの一括処理と同じ記録表になる。
+  ## 完了の定義
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  ## 該当箇所
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1579`（cut_live の判定）
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1538`（tail_live の記録）
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1197`、`write_filter.rs:1332`（読み取りごとの画面切り替え検出）
+  - `src-tauri/src/mux/ipc/pty_spawn/mod.rs:544`（代替画面が絡むフォールバックで live_spans が空になる）
+  対処案: 前の読み取りがフォールバックに入ったとき本文最後のバイトの live 判定を「不明」として持ち越し打ち切り側の位置で判定する、または読み取り間で切り替えシーケンスの途中状態を引き継ぐ。
+  ## 実害・発生条件
+  3 つの読み取り境界の条件がすべて揃ったときだけ起きる。根本原因は既存の保守的なフォールバック（終端が同じ読み取りに入った BEL/ST 形式のマークも捨てる挙動）にある。
+
+  ## 追加指示
+  - 完了後 integration ブランチを remote へ push し gh pr create で base_branch への PR を作成。integration ブランチはローカル・リモートとも残す（自動マージしない）
+  - 不明点は Codex に相談して比較的良い案を採用し、その議論内容を Notion に記録する
+parent_branch: em-workflow/mux-osc-abort-altscreen-split-read/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.58
+      '2': 0.42
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.21
+      '2': 0.79
+      '3': 0.0
+  at: '2026-10-11T10:11:50+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    term_core:
+      language: rust
+      build_command: ''
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 0c11b20d7369a12e77f035a6d45b811ce52b0214
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI 変更なし（requirements-analyst の推奨を batch 方針 decide_autonomously で採用）
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: Carry the partial switch-sequence state across reads (scanner live spans)
+    status: resolved
+    tasks: []
+    tests: []
+  FR2:
+    title: Live spans in today's alternate-screen fallback reads
+    status: resolved
+    tasks: []
+    tests: []
+  FR3:
+    title: Non-fallback reads with wrong live spans
+    status: resolved
+    tasks: []
+    tests: []
+  FR4:
+    title: Consistency with the charset designator slot
+    status: resolved
+    tasks: []
+    tests: []
+  FR5:
+    title: Scrollback write path unchanged
+    status: resolved
+    tasks: []
+    tests: []
+  FR6:
+    title: Parity with the plain tab
+    status: resolved
+    tasks: []
+    tests: []
+  FR7:
+    title: Regression tests
+    status: resolved
+    tasks: []
+    tests: []
+  FR8:
+    title: Unchanged behavior
+    status: resolved
+    tasks: []
+    tests: []
+  NFR1:
+    title: Robustness
+    status: resolved
+    tasks: []
+    tests: []
+  NFR2:
+    title: Feature gate
+    status: resolved
+    tasks: []
+    tests: []
+  NFR3:
+    title: Logging
+    status: resolved
+    tasks: []
+    tests: []
+  NFR4:
+    title: Platform
+    status: resolved
+    tasks: []
+    tests: []
+  NFR5:
+    title: term_core unchanged
+    status: resolved
+    tasks: []
+    tests: []
