@@ -121,7 +121,7 @@ workflow:
   completed_at_commit: 75a99bbd5b0151b94cef0450db31d2d7d71296ac
   base_commit: 75ef77fa9ac2b15b29fc296d0eea3944a151a5ca
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -174,8 +174,19 @@ tasks:
     status: merged
     branch: em-workflow/mux-alt-tracker-detection-read-boundary/task0002
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  needs_rework: false
+  residual_critical_high: null
+  perspectives: []
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
 requirements:
   FR1:
     title: 検出した読み取りの、後続の複合形
