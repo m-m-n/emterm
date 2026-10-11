@@ -132,7 +132,8 @@ tasks:
     - FR3
     - NFR1
     - NFR2
-    status: pending
+    status: in_progress
+    branch: em-workflow/agent-latch-alt-screen-prompt-mark/task0001
     notes: null
 review:
   status: pending
