@@ -94,7 +94,7 @@ workflow:
   failed_items: []
   completed_at_commit: 3deda61eb92ad29607390ea6c2d39bb5e4d79af0
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Comment-aware attribute scan and end-of-source rule in the ac8 allowlist checker
