@@ -711,8 +711,9 @@ fn osc_133_unrecognized_kind_does_not_push_to_the_program_status_feed() {
 //
 // SC-1 (`TerminalCallbacks::on_osc_with_screen`) tells `NativeCallbacks`
 // whether the alternate screen was active when an OSC was dispatched. SC-2:
-// every prompt-mark item in the 7501 feed comes from the main screen; the
-// latch feed keeps one candidate per recognized OSC 133 on either screen.
+// every prompt-mark item in the 7501 feed comes from the main screen.
+// agent-latch-alt-screen-prompt-mark FR1: the latch feed follows the same
+// rule, so an alternate-screen OSC 133 adds a candidate to neither feed.
 
 fn prompt_start_item() -> ProgramStatusFeedItem {
     ProgramStatusFeedItem::PromptMark(crate::prompts::PromptMarkKind::PromptStart)
@@ -722,10 +723,11 @@ fn prompt_start_latch() -> LatchFeedEvent {
     LatchFeedEvent::PromptMark(crate::prompts::PromptMarkKind::PromptStart)
 }
 
-/// AC-3: an OSC 133 `A` delivered with "alternate screen active" adds
-/// nothing to the 7501 feed and exactly one candidate to the latch feed.
+/// AC-3 (superseded by agent-latch-alt-screen-prompt-mark FR1): an OSC 133
+/// `A` delivered with "alternate screen active" adds nothing to the 7501 feed
+/// and nothing to the latch feed.
 #[test]
-fn osc_133_a_on_the_alternate_screen_skips_the_7501_feed_and_keeps_the_latch_candidate() {
+fn osc_133_a_on_the_alternate_screen_skips_both_feeds() {
     let h = default_harness();
     h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, "A", true);
     let s = h.state.lock();
@@ -733,7 +735,10 @@ fn osc_133_a_on_the_alternate_screen_skips_the_7501_feed_and_keeps_the_latch_can
         s.pending_program_status_feed.is_empty(),
         "an alternate-screen mark never enters the 7501 feed"
     );
-    assert_eq!(s.pending_latch_feed, vec![prompt_start_latch()]);
+    assert!(
+        s.pending_latch_feed.is_empty(),
+        "an alternate-screen mark never enters the latch feed"
+    );
 }
 
 /// AC-3: with "alternate screen active" false, one prompt-mark item lands in
@@ -777,9 +782,8 @@ fn osc_133_every_recognized_kind_follows_the_screen_rule_and_an_unrecognized_one
             alt.state.lock().pending_program_status_feed.is_empty(),
             "{data}: alternate screen, 7501 feed"
         );
-        assert_eq!(
-            alt.state.lock().pending_latch_feed,
-            vec![LatchFeedEvent::PromptMark(kind)],
+        assert!(
+            alt.state.lock().pending_latch_feed.is_empty(),
             "{data}: alternate screen, latch feed"
         );
 
@@ -807,7 +811,7 @@ fn osc_133_every_recognized_kind_follows_the_screen_rule_and_an_unrecognized_one
 }
 
 /// AC-3: the order of the feeds' items is the order of the notifications; an
-/// alternate-screen mark leaves a hole in the 7501 feed only.
+/// alternate-screen mark leaves a hole in both feeds.
 #[test]
 fn screen_aware_notifications_keep_true_order_in_both_feeds() {
     let h = default_harness();
@@ -828,9 +832,20 @@ fn screen_aware_notifications_keep_true_order_in_both_feeds() {
             prompt_start_item(),
         ]
     );
+    assert_eq!(s.pending_latch_feed, vec![prompt_start_latch()]);
+}
+
+/// agent-latch-alt-screen-prompt-mark AC-5: a screen-aware alternate-screen
+/// `A` followed by a screen-aware main-screen `A` leaves exactly one candidate
+/// in the latch feed (the main-screen one).
+#[test]
+fn osc_133_alt_a_then_main_a_leaves_exactly_one_latch_candidate() {
+    let h = default_harness();
+    h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, "A", true);
+    h.cb.on_osc_with_screen(OSC_SEMANTIC_PROMPT, "A", false);
     assert_eq!(
-        s.pending_latch_feed,
-        vec![prompt_start_latch(), prompt_start_latch()]
+        h.state.lock().pending_latch_feed,
+        vec![prompt_start_latch()]
     );
 }
 
