@@ -1,7 +1,7 @@
 schema_version: 1
 feature: agent-latch-alt-screen-prompt-mark
 phase: create-plan
-status: dispatching
+status: applying_patch
 generation: 1
 base_revision: 1451a9f4820028b121acd0edf724b0cec42fdcd4
 last_input_digest: sha256:52ab7e99c6503cb223adbcb13d6ad2319464082430d7e9469c675f74870ae0bb
@@ -10,10 +10,26 @@ packets: {}
 answers: {}
 worker_runs:
 - request_id: create-plan-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:52ab7e99c6503cb223adbcb13d6ad2319464082430d7e9469c675f74870ae0bb
-artifacts: []
-patches: []
+  output_digest: sha256:e2f7fe2cf9b0c530fe7b24446613b79c3281f75c952f68149fd685f258b7f74a
+artifacts:
+- path: feature-docs/agent-latch-alt-screen-prompt-mark/IMPLEMENTATION.md
+  sha256: sha256:efdf15aa1bfb2cf42950440bdca8c77605c3d6763ab7752a80d155c595ad3cb5
+  produced_by: create-plan-run-0001
+- path: feature-docs/agent-latch-alt-screen-prompt-mark/VERIFICATION.md
+  sha256: sha256:efb15111264ac35744b78002a221909c444e26f6a393cd85bed76d5e10468825
+  produced_by: create-plan-run-0001
+- path: feature-docs/agent-latch-alt-screen-prompt-mark/THREAT-MODEL.md
+  sha256: sha256:7d40128dca948d9d77a43ae662e046ae4314ae9dbe6b8a14da8f47fb88b07bf7
+  produced_by: create-plan-run-0001
+- path: feature-docs/agent-latch-alt-screen-prompt-mark/tasks/task0001.md
+  sha256: sha256:192943aafe3c8949c030f627490c90f13583191c03be7bb74de8be946aaa7f74
+  produced_by: create-plan-run-0001
+patches:
+- patch_id: agent-latch-alt-screen-prompt-mark-p0001
+  request_id: create-plan-run-0001
+  status: validated
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
