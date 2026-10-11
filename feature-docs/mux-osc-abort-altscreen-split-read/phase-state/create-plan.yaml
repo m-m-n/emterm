@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-osc-abort-altscreen-split-read
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 5aca59faabf74f33dc6c68e4608cacc61b4e7238
+last_input_digest: sha256:f7638234a2b212b5db1df6ddeac6e75bde160b7035dd0a636843d5b74fb50ce4
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:f7638234a2b212b5db1df6ddeac6e75bde160b7035dd0a636843d5b74fb50ce4
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
