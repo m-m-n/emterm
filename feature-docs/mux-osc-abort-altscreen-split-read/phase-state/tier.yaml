@@ -1,0 +1,68 @@
+schema_version: 2
+feature: mux-osc-abort-altscreen-split-read
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.42
+    confidence: 0.58
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.58
+      '2': 0.42
+      '3': 0.0
+  observed_at: '2026-10-11T10:11:50+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.79
+    confidence: 0.79
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.21
+      '2': 0.79
+      '3': 0.0
+  observed_at: '2026-10-11T10:11:50+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/daemon/tests.rs
+  changed_lines_approx: 100
+  new_functions_needed: 1
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules:
+  - mux::daemon::tests
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 3
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 1
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: HEAD e89373ae をコードで確認し、実行はしていない。write_filter.rs:1197 は完全な切り替え列だけを認識し、mod.rs:563
+    のフォールバックは live_spans を空にする。write_filter.rs:1543 が tail_live=false を記録し、同:1676、1579、1694
+    を通じて次の読み取りの PromptStart が捨てられる。本番呼び出し元は mod.rs:625 の1箇所。既存 tests.rs:9824 は一括抽出した範囲を分割しており、このフォールバックを検証しない。daemon/tests.rs:3990
+    の drive_reads と同:4267 の既存テストを利用できる。変更量と追加数は、フォールバック情報を渡す内部メソッドと回帰テストを追加する場合の概算。
+decided_at: '2026-10-11T10:11:50+09:00'
