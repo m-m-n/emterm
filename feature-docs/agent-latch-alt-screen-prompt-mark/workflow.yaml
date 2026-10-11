@@ -97,7 +97,8 @@ workflow:
   - VERIFICATION.md
   - THREAT-MODEL.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: 8d136a141fdd0d619df60e1c7c06707534e854fa
 - id: implement
   status: pending
 - id: review
@@ -106,7 +107,32 @@ workflow:
   status: pending
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Exclude alternate-screen OSC 133 candidates from the agent-status latch feed
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - src-tauri/src/agent_status_model.rs
+    - src-tauri/src/agent_status_model/tests.rs
+    - src-tauri/src/tabs/output_pipeline.rs
+    - src-tauri/src/tabs/tests/mux_link.rs
+    - test-docs/osc7501-alt-screen-prompt-mark/task0001.tests.yaml
+    - test-docs/agent-latch-alt-screen-prompt-mark/task0001.tests.yaml
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: medium
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - NFR1
+    - NFR2
+    status: pending
+    notes: null
 review:
   status: pending
   rounds_completed: 0
@@ -114,25 +140,44 @@ requirements:
   FR1:
     title: alt screen の候補を latch の照合から除外する
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+    - TS-4
+    - TS-5
+    - TS-6
   FR2:
     title: main screen のマークを真の順序で latch に渡す
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-3
+    - TS-4
+    - TS-6
   FR3:
     title: 既存の振る舞いを維持する
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
+    - TS-7
   NFR1:
     title: 処理コスト
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-7
   NFR2:
     title: 他経路の維持
     status: resolved
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-7
