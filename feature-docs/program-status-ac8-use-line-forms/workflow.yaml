@@ -113,7 +113,12 @@ workflow:
   status: completed
   completed_at_commit: 3913b6f044fe88d6704131ef33cfa4e0c93c0b83
 - id: verify
-  status: in_progress
+  status: completed
+  completed_at_commit: 194ddfb2170ffefbb37f1523a0c14dd3c69a21bd
+  result: pass
+  failed_items: []
+  excluded_scenarios: []
+  summary: build x2 ok (gui / --no-default-features); cargo test --lib 4809 passed 0 failed 3 ignored; TS-1..TS-6 pass; TS-7 diff scope = src-tauri/src/program_status/tests.rs only; SC-4 review residual_critical_high 0
 - id: retrospect
   status: pending
 tasks:
