@@ -1,0 +1,222 @@
+schema_version: 1
+feature: mux-alt-tracker-detection-read-boundary
+created: '2026-10-11'
+base_branch: main
+goal: '# mux: AltSpanTracker が食い違い状態で複合 DECSET を検出した読み取りで、読み込み境界の位置により通常タブと記録表がずれる
+
+
+  Notion: https://www.notion.so/3f63509ec8ee81df9caadcfd3629cad9
+
+
+  ## 現象 (必須)
+
+  mux ペインの `AltSpanTracker` が、食い違い状態（client_alt と shadow_alt が異なる状態）で複合 DECSET（例: `ESC [?1;1049h`）を検出した読み取りについて、読み込み境界の位置によって通常タブと異なる結果を返す。OSC 133 マークの live 判定が通常タブとずれ、OSC 7501 の working / blocked / idle の記録が食い違う。
+
+  em-workflow mux-alt-tracker-ris-compound-decset の review round 1 で medium として残った指摘 2 件（stable_id 2139988314e6d6ac、89b935844bd8bc3b）。どちらも検出した読み取りの扱い（`advance()` の検出分岐と `scan()` の検出条件）が原因のため 1 件にまとめた。
+
+  1. 同じ読み取り内の 2 つ目以降の複合形を取りこぼす（2139988314e6d6ac）: `scan()` は複合形を `self.client_alt != self.shadow_alt` が成り立つときだけ扱う。M1（`\x1b[?1047h`）の後に 1 回の読み取りで `\x1b[?1;1049l\x1b[?1;1049h\x1b]133;A\x07` を受けると、C1l の検出で client_alt=false になり shadow_alt と一致するため、続く C1h が無視される。検出した読み取りは事後照合を飛ばすので OSC 133;A がライブになり、client_alt=false / shadow_alt=true の誤った食い違いが次の読み取りにも残る。C1l と C1h を別々の読み取りにすると正しく代替画面に戻る。
+
+  2. 検出時に複合形より後に始まった引き継ぎ状態まで消す（89b935844bd8bc3b）: `advance()` の検出分岐は `self.carry = TrackerCarry::Nothing` を無条件に実行する。M1 の後の読み取りが `\x1b[?1;1047h\x1b(` で終わり、次が `\x1bc\x1b]133;A\x07` の場合、指示子待ちが消えて ESC c を RIS として扱い、マークがライブになる（term_core は ESC を指示子として消費し代替画面に残る）。`\x1b[?1;1049l\x1b[?10` \| `47h` と分割した場合も、途中状態が消えて `?1047h` を見落とす。テスト `altmismatch_ac4_a_detection_read_applies_later_switches_and_clears_the_carry` はこの消去を正しい挙動として固定している。
+
+  ## 再現手順 (必須)
+
+  1. 取りこぼし: tracker の Rig で `read(b"\x1b[?1047h")` の後に `read(b"\x1b[?1;1049l\x1b[?1;1049h\x1b]133;A\x07")` を呼ぶ。代替画面なので空の範囲が必要だが `[0..28]` を返し、続く `mark()` も `[0..8]` を返す
+
+  2. 引き継ぎ消去: `read(b"\x1b[?1047h\x1b[?1;1047h\x1b(")`、`read(b"\x1bc\x1b]133;A\x07")` の順で送る。2 回目は空の範囲が必要だが `[2..10]` になる。同じバイト列を分割せず送ると空になる
+
+  （どちらもコード読みで確認。実行は未実施）
+
+  ## 期待する挙動 (必須)
+
+  食い違い状態で複合形を検出した読み取りでも、読み込み境界の位置によらず通常タブの一括処理と同じ記録表になる（SPEC FR6）。
+
+  ## 完了の定義 (必須)
+
+  - [ ] 再現手順で現象が起きない
+
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所 (任意)
+
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1814`（`scan()` の複合形の検出条件）
+
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1679`（`advance()` の検出分岐の carry 消去）
+
+  対処案: 一度検出した読み取りでは以降の複合形も食い違いの有無によらず client 側の向きを反映する（例: 条件を `parse.names_a_screen_mode() && (detected || self.client_alt != self.shadow_alt)` にする）。検出分岐では走査が複合形より後で記録した carry を残す。SPEC FR4/FR5 の「adopt のときに引き継ぎ状態を消す」は、検出時には複合形以前の状態に限る形に揃える。上記テストの期待値を更新し、M1/M2 の後に複合形を 2 つ続ける行と、複合形の後で読み取りを `ESC (` / `ESC` / `ESC [?10` で分割する行を tracker の単体テストと SC-1y（デーモン側・通常タブ側）に追加する。
+
+  同じレビューで low とした関連事項（起票対象外の参考）: `scan()` の CSI 解析は C0 制御文字（NUL・CAN・SUB）や `:` で解析を打ち切るが、term_core の `csi_param`（`crates/term_core/src/parser/csi.rs:65-79`）は C0 を実行して CSI を続ける。SPEC FR5 が打ち切りを定めているため実装は仕様どおり。揃えるなら SPEC FR5 の改訂が前提。
+
+  ## 実害・発生条件 (任意)
+
+  食い違い状態（`?1047` の使用、または designator スロットの切り替え）で複合 DECSET を使い、かつ同じ読み取りに複合形が 2 つ続くか、複合形の直後で読み込み境界が切れる場合に限る。ペイン内のプログラム自身が出すバイト列なので信頼境界は越えない。
+
+
+  '
+parent_branch: em-workflow/mux-alt-tracker-detection-read-boundary/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.8
+      '2': 0.2
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.22
+      '2': 0.78
+      '3': 0.0
+  at: '2026-10-11T14:00:10+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    term_core:
+      language: rust
+      build_command: ''
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: fafb1e7c2dc783843d70e88f0e12e7ff99e70b03
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI 変更なし（requirements-analyst の推奨を batch 方針 decide_autonomously で採用）
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: 検出した読み取りの、後続の複合形
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: 検出した読み取りの引き継ぎ状態
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: 検出した読み取りの、ほかの扱い
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: 通常タブとの一致
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: 回帰テスト
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: 既存テストの名前と期待値の更新
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: 前身 SPEC FR4/FR5 の上書き
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: 変わらない挙動
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: 堅牢性
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: フィーチャーゲート
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: ログ
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: プラットフォーム
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: term_core 不変
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
