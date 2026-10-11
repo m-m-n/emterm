@@ -1,0 +1,12 @@
+schema_version: 2
+feature: mux-alt-tracker-ris-compound-decset
+tier: full
+bases:
+  - basis: description_only
+    score: {"type": "score", "score": 1.33, "confidence": 0.67, "legend": {"0": "Only a wording or rule-text change: no new logic, and no test change.", "1": "A rule addition combined with a test addition, or a small change spread across a few files together with a small test change.", "2": "New logic, a change reaching across several modules, or a change to an external contract.", "3": "A broad cross-cutting change: new files, new modules, a new dependency, or a change to the architecture."}, "probabilities": {"0": 0.0, "1": 0.67, "2": 0.33, "3": 0.0}}
+    observed_at: "2026-10-11T12:04:42+09:00"
+  - basis: description_plus_code
+    score: {"type": "score", "score": 1.83, "confidence": 0.83, "legend": {"0": "Only a wording or rule-text change: no new logic, and no test change.", "1": "A rule addition combined with a test addition, or a small change spread across a few files together with a small test change.", "2": "New logic, a change reaching across several modules, or a change to an external contract.", "3": "A broad cross-cutting change: new files, new modules, a new dependency, or a change to the architecture."}, "probabilities": {"0": 0.0, "1": 0.17, "2": 0.83, "3": 0.0}}
+    observed_at: "2026-10-11T12:04:42+09:00"
+pre_survey_estimate: {"files_expected": ["src-tauri/src/mux/ipc/pty_spawn/write_filter.rs", "src-tauri/src/mux/ipc/pty_spawn/tests/altscreen_split_read.rs", "src-tauri/src/mux/daemon/tests.rs", "src-tauri/src/tabs/tests/output_pipeline.rs"], "changed_lines_approx": 200, "new_functions_needed": 0, "new_files_needed": 0, "new_dependencies_needed": 0, "covering_tests_exist": true, "spillover_modules": ["mux::daemon::tests::leading_zero_length", "tabs::tests::output_pipeline"], "work_still_required": true, "work_still_required_evidence": "write_filter.rs:1688のOther分岐はESC cで画面状態を更新せず、resumeにもRIS処理がない。advance:1581はshadow_altと処理後のパーサー状態の不一致だけでフォールバックするため、両状態が一致したままの複合DECSETを検知できない。既存のAC-6aは初期状態からの複合DECSETを検証しているが、画面状態の食い違い後を検証していない。既存のデーモンRISテストは報告をRISより前に置いている。trackerの比較基準であるextract_main_bufferもRISを認識しない。両再現条件の回帰検証は未追加。呼び出し・依存数は本番呼び出し元pty_reader_loopと既存のvt100、term_coreを数えた。変更行数と追加ケース数は既存実装・テスト構造に基づく概算。ファイル変更とテスト実行はしていない", "test_change_kind": "new_behavior_tests", "added_test_cases_approx": 6, "body_change_kind": "new_logic", "change_containment": "multiple_modules", "caller_and_dependency_count": 3, "changes_external_contract": false, "changes_behavior": true}
+decided_at: "2026-10-11T12:04:42+09:00"
