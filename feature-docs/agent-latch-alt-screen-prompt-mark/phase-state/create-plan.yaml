@@ -1,0 +1,20 @@
+schema_version: 1
+feature: agent-latch-alt-screen-prompt-mark
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 1451a9f4820028b121acd0edf724b0cec42fdcd4
+last_input_digest: sha256:52ab7e99c6503cb223adbcb13d6ad2319464082430d7e9469c675f74870ae0bb
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:52ab7e99c6503cb223adbcb13d6ad2319464082430d7e9469c675f74870ae0bb
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
