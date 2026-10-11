@@ -161,6 +161,16 @@ tasks:
 review:
   status: pending
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary:
+    - perspective: performance
+      reason: 変更箇所が mux デーモンの PTY 出力を 1 バイトずつ処理する取り込み経路（AgentStatusFeedScanner::step）にある
+    cross_validation: true
 requirements:
   FR1:
     title: Cut rule in mux ingestion
