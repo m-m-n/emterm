@@ -2799,3 +2799,557 @@ fn payload_has_device_query_rejects_out_of_range_numbers_ending_in_7501() {
         "655367501 with ST"
     );
 }
+
+// ── mux-osc-double-esc-abort task0002: plain-tab half of the cut parity
+//    corpus (IMPLEMENTATION.md SC-1) ─────────────────────────────────────────
+//
+// The plain tab is the reference behavior (D1): `term_core` cuts an OSC
+// string at an in-body `ESC` followed by a byte other than `\`, and the
+// plain-tab callbacks drop a cut OSC 7501 string and apply a cut OSC 777 /
+// OSC 133 string. Each row below starts from the row's seed, delivers the
+// row's stream through the live output path (`process_combined`) in the way
+// the row names, and checks the final OSC 7501 table, the final OSC 777
+// state and, where the row gives it, the number of table changes. The mux
+// half of the corpus asserts the same rows against the mux scanner.
+//
+// A row's final OSC 777 state is read the way the app applies a pump's
+// agent-status inputs (`App::apply_agent_status_batch`): the tab's latch
+// inputs are walked in order, a `Set` / `Clear` input first applies the tab's
+// next unconsumed OSC 777 event and then records the latch set / clear, a
+// `Mark` input records a live prompt mark, and events left over are applied
+// afterwards — all through `AgentStatusModel`'s public plain-tab operations.
+
+/// `ESC ESC \`: the EE cut form. The second `ESC` cuts the string.
+const CUT_EE: &[u8] = b"\x1b\x1b\\";
+/// `ESC [0m`: the EX cut form. The `[` cuts the string.
+const CUT_EX: &[u8] = b"\x1b[0m";
+/// R777: `ESC ] 777;emterm;agent-status;v=1;state=working BEL`.
+const CUT_R777: &[u8] = b"\x1b]777;emterm;agent-status;v=1;state=working\x07";
+
+/// The seed of a corpus row: the table and OSC 777 state before the stream.
+#[derive(Debug, Clone, Copy)]
+enum CutSeed {
+    /// S-W: one root `working` record.
+    Working,
+    /// S-ALL: `w` working, `b` blocked, `i` idle, `d` done, `e` error.
+    All,
+    /// S-0: no record.
+    Empty,
+}
+
+/// How a row's stream reaches `process_combined`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CutDelivery {
+    /// The whole stream in one call.
+    One,
+    /// Two consecutive calls; the first carries the stream's first `n` bytes.
+    SplitAt(usize),
+}
+
+#[derive(Debug)]
+struct CutRow {
+    name: &'static str,
+    seed: CutSeed,
+    stream: Vec<u8>,
+    deliveries: Vec<CutDelivery>,
+    /// The final OSC 7501 table: record ids and states.
+    table: Vec<(&'static str, ProgramState)>,
+    /// The final OSC 777 state (`None` is "none").
+    osc777: Option<crate::agent_status::AgentState>,
+    /// The number of OSC 7501 table changes, where the row asserts it.
+    table_changes: Option<usize>,
+}
+
+/// SC-1 "one" delivery plus every cut point: one call, and a two-call split
+/// right after the string's last own byte, after the in-body `ESC`, and after
+/// the cutting byte. `own_end` is the offset right after the last own byte.
+fn cut_points(own_end: usize) -> Vec<CutDelivery> {
+    vec![
+        CutDelivery::One,
+        CutDelivery::SplitAt(own_end),
+        CutDelivery::SplitAt(own_end + 1),
+        CutDelivery::SplitAt(own_end + 2),
+    ]
+}
+
+fn all_five_records() -> Vec<(&'static str, ProgramState)> {
+    use ProgramState::{Blocked, Done, Error, Idle, Working};
+    vec![
+        ("w", Working),
+        ("b", Blocked),
+        ("i", Idle),
+        ("d", Done),
+        ("e", Error),
+    ]
+}
+
+/// The SC-1 cut parity corpus, rows K1 to K15.
+fn cut_rows() -> Vec<CutRow> {
+    use ProgramState::{Done, Error, Working};
+    let working777 = Some(crate::agent_status::AgentState::Working);
+    let row = |name,
+               seed,
+               parts: &[&[u8]],
+               deliveries,
+               table: Vec<(&'static str, ProgramState)>,
+               osc777,
+               table_changes| CutRow {
+        name,
+        seed,
+        stream: concat(parts),
+        deliveries,
+        table,
+        osc777,
+        table_changes,
+    };
+    let root_working = vec![("", Working)];
+    let done_and_error = vec![("d", Done), ("e", Error)];
+
+    let k1_own: &[u8] = b"\x1b]07501;state=clear";
+    let k2_own: &[u8] = b"\x1b]7501;state=clear";
+    let k6_own: &[u8] = b"\x1b]777;emterm;agent-status;v=1;state=working";
+    let a_own: &[u8] = b"\x1b]133;A";
+    let d_own: &[u8] = b"\x1b]133;D";
+    let alt_on: &[u8] = b"\x1b[?1049h";
+    let alt_off: &[u8] = b"\x1b[?1049l";
+
+    vec![
+        row(
+            "K1",
+            CutSeed::Working,
+            &[k1_own, CUT_EE],
+            vec![CutDelivery::One],
+            root_working.clone(),
+            None,
+            Some(0),
+        ),
+        row(
+            "K2",
+            CutSeed::Working,
+            &[k2_own, CUT_EE],
+            vec![CutDelivery::One],
+            root_working.clone(),
+            None,
+            Some(0),
+        ),
+        // Between the ESCs: the first call ends with the first ESC of EE.
+        row(
+            "K3",
+            CutSeed::Working,
+            &[k1_own, CUT_EE],
+            vec![CutDelivery::SplitAt(k1_own.len() + 1)],
+            root_working.clone(),
+            None,
+            Some(0),
+        ),
+        row(
+            "K4",
+            CutSeed::Working,
+            &[k2_own, CUT_EE],
+            vec![CutDelivery::SplitAt(k2_own.len() + 1)],
+            root_working.clone(),
+            None,
+            Some(0),
+        ),
+        row(
+            "K5",
+            CutSeed::Working,
+            &[b"\x1b]7501;state=error\x1b\x1b]7501;state=clear\x07"],
+            vec![CutDelivery::One],
+            vec![],
+            None,
+            Some(1),
+        ),
+        row(
+            "K6",
+            CutSeed::Empty,
+            &[k6_own, CUT_EE],
+            vec![CutDelivery::One],
+            vec![],
+            working777,
+            None,
+        ),
+        row(
+            "K7",
+            CutSeed::Empty,
+            &[k6_own, CUT_EX],
+            vec![CutDelivery::One],
+            vec![],
+            working777,
+            None,
+        ),
+        row(
+            "K8",
+            CutSeed::Empty,
+            &[CUT_R777, d_own, CUT_EE, a_own, CUT_EE],
+            vec![CutDelivery::One],
+            vec![],
+            None,
+            None,
+        ),
+        row(
+            "K9",
+            CutSeed::Empty,
+            &[CUT_R777, d_own, CUT_EX, a_own, CUT_EX],
+            vec![CutDelivery::One],
+            vec![],
+            None,
+            None,
+        ),
+        row(
+            "K10",
+            CutSeed::Empty,
+            &[CUT_R777, alt_on, d_own, CUT_EE, a_own, CUT_EE, alt_off],
+            vec![CutDelivery::One],
+            vec![],
+            working777,
+            None,
+        ),
+        row(
+            "K11",
+            CutSeed::All,
+            &[a_own, CUT_EE],
+            vec![CutDelivery::One],
+            done_and_error.clone(),
+            None,
+            None,
+        ),
+        row(
+            "K12",
+            CutSeed::All,
+            &[a_own, CUT_EX],
+            vec![CutDelivery::One],
+            done_and_error.clone(),
+            None,
+            None,
+        ),
+        row(
+            "K13",
+            CutSeed::All,
+            &[b"\x1b]0133;A", CUT_EE],
+            vec![CutDelivery::One],
+            done_and_error.clone(),
+            None,
+            None,
+        ),
+        row(
+            "K14",
+            CutSeed::All,
+            &[alt_on, a_own, CUT_EE, alt_off],
+            cut_points(alt_on.len() + a_own.len()),
+            all_five_records(),
+            None,
+            None,
+        ),
+        // The ESC that cuts the string also starts the switch to the alternate
+        // screen: the cutting byte is the `[` of `ESC [?1049h`.
+        row(
+            "K15",
+            CutSeed::All,
+            &[a_own, alt_on, alt_off],
+            cut_points(a_own.len()),
+            done_and_error.clone(),
+            None,
+            None,
+        ),
+    ]
+}
+
+/// The corpus rows with the given names, in the given order. A name the
+/// corpus does not have fails the test instead of silently selecting fewer
+/// rows.
+fn cut_rows_named(names: &[&str]) -> Vec<CutRow> {
+    let mut all = cut_rows();
+    names
+        .iter()
+        .map(|name| {
+            let at = all
+                .iter()
+                .position(|row| row.name == *name)
+                .unwrap_or_else(|| panic!("the cut corpus has no row {name}"));
+            all.remove(at)
+        })
+        .collect()
+}
+
+/// A plain tab holding the row's seed, with the pending inputs the seed made
+/// drained.
+fn cut_seeded_tab(seed: CutSeed) -> Tab {
+    let mut tab = match seed {
+        CutSeed::Working => seeded_plain_tab(),
+        CutSeed::All => tab_with_one_record_per_state(),
+        CutSeed::Empty => test_tab(),
+    };
+    tab.take_pending_program_status_changes();
+    tab.take_pending_agent_status_events();
+    tab.take_pending_latch_inputs();
+    tab
+}
+
+/// Hand `stream` to `process_combined` the way `delivery` says.
+fn deliver_cut_stream(tab: &mut Tab, stream: &[u8], delivery: CutDelivery) {
+    match delivery {
+        CutDelivery::One => {
+            tab.process_combined(stream.to_vec());
+        }
+        CutDelivery::SplitAt(at) => {
+            assert!(at <= stream.len(), "split offset {at} is inside the stream");
+            tab.process_combined(stream[..at].to_vec());
+            tab.process_combined(stream[at..].to_vec());
+        }
+    }
+}
+
+/// The tab's OSC 777 state after its pending agent-status events and latch
+/// inputs are applied the way `App::apply_agent_status_batch` applies them.
+fn resolved_osc777_state(
+    tab_stable_id: u64,
+    events: Vec<crate::agent_status::AgentStatusEvent>,
+    latch_inputs: Vec<crate::agent_status_model::ResolvedLatchInput>,
+) -> Option<crate::agent_status::AgentState> {
+    use crate::agent_status_model::{AgentStatusModel, PaneKey, ResolvedLatchInput};
+
+    let mut model = AgentStatusModel::new();
+    let mut events: std::collections::VecDeque<_> = events.into();
+    for input in latch_inputs {
+        match input {
+            ResolvedLatchInput::Set | ResolvedLatchInput::Clear => {
+                if let Some(event) = events.pop_front() {
+                    model.apply_plain_tab_event(tab_stable_id, event);
+                }
+                if matches!(input, ResolvedLatchInput::Set) {
+                    model.record_latch_set(tab_stable_id);
+                } else {
+                    model.record_latch_clear(tab_stable_id);
+                }
+            }
+            ResolvedLatchInput::Mark(kind) => model.record_live_prompt_mark(tab_stable_id, kind),
+        }
+    }
+    for event in events {
+        model.apply_plain_tab_event(tab_stable_id, event);
+    }
+    model
+        .status(&PaneKey::Tab(tab_stable_id))
+        .and_then(|status| status.osc777_state)
+}
+
+/// What a plain tab ended in after one row was delivered one way.
+struct CutOutcome {
+    tab: Tab,
+    /// The pending OSC 7501 summary changes the stream recorded.
+    changes: Vec<Option<crate::program_status::Summary>>,
+    /// The pending OSC 777 events the stream recorded.
+    events: Vec<crate::agent_status::AgentStatusEvent>,
+    /// The final OSC 777 state.
+    osc777: Option<crate::agent_status::AgentState>,
+}
+
+fn drive_cut_row(row: &CutRow, delivery: CutDelivery) -> CutOutcome {
+    let mut tab = cut_seeded_tab(row.seed);
+    deliver_cut_stream(&mut tab, &row.stream, delivery);
+    let changes = tab.take_pending_program_status_changes();
+    let events = tab.take_pending_agent_status_events();
+    let latch_inputs = tab.take_pending_latch_inputs();
+    let osc777 = resolved_osc777_state(tab.stable_id, events.clone(), latch_inputs);
+    CutOutcome {
+        tab,
+        changes,
+        events,
+        osc777,
+    }
+}
+
+/// The tab's table as record ids and states, sorted by id.
+fn table_records(tab: &Tab) -> Vec<(String, ProgramState)> {
+    let mut records: Vec<(String, ProgramState)> = tab
+        .program_status
+        .iter()
+        .map(|(id, record)| (id.to_string(), record.state))
+        .collect();
+    records.sort_by(|a, b| a.0.cmp(&b.0));
+    records
+}
+
+fn expected_records(table: &[(&'static str, ProgramState)]) -> Vec<(String, ProgramState)> {
+    let mut records: Vec<(String, ProgramState)> = table
+        .iter()
+        .map(|(id, state)| (id.to_string(), *state))
+        .collect();
+    records.sort_by(|a, b| a.0.cmp(&b.0));
+    records
+}
+
+/// Deliver `row` one way and check everything the row asserts: the final
+/// OSC 7501 table, the final OSC 777 state, the table-change count where
+/// given, and that no OSC 7501 answer was written.
+fn assert_cut_row(row: &CutRow, delivery: CutDelivery) -> CutOutcome {
+    let outcome = drive_cut_row(row, delivery);
+    let label = format!("row {} delivered {:?}", row.name, delivery);
+    assert_eq!(
+        table_records(&outcome.tab),
+        expected_records(&row.table),
+        "{label}: final OSC 7501 table"
+    );
+    assert_eq!(
+        outcome.osc777, row.osc777,
+        "{label}: final OSC 777 state (events {:?})",
+        outcome.events
+    );
+    if let Some(expected) = row.table_changes {
+        assert_eq!(
+            outcome.changes.len(),
+            expected,
+            "{label}: table changes {:?}",
+            outcome.changes
+        );
+    }
+    assert_eq!(
+        osc7501_write_count(&outcome.tab),
+        0,
+        "{label}: no OSC 7501 answer, writes {:?}",
+        outcome.tab.test_outbound_writes()
+    );
+    outcome
+}
+
+/// The corpus is the 15 rows SC-1 lists, with the deliveries SC-1 names.
+#[test]
+fn cut_parity_corpus_lists_rows_k1_to_k15_with_the_named_deliveries() {
+    let rows = cut_rows();
+    let names: Vec<&str> = rows.iter().map(|row| row.name).collect();
+    let expected: Vec<String> = (1..=15).map(|n| format!("K{n}")).collect();
+    assert_eq!(
+        names,
+        expected.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+
+    for row in &rows {
+        assert!(!row.deliveries.is_empty(), "row {}", row.name);
+        for delivery in &row.deliveries {
+            if let CutDelivery::SplitAt(at) = delivery {
+                assert!(
+                    0 < *at && *at < row.stream.len(),
+                    "row {}: split offset {at} falls inside the stream",
+                    row.name
+                );
+            }
+        }
+    }
+    // K3 / K4 split between the two ESCs of EE; K14 / K15 take one call and
+    // three cut points.
+    let named = |name: &str| cut_rows_named(&[name]).remove(0);
+    for name in ["K3", "K4"] {
+        let row = named(name);
+        let CutDelivery::SplitAt(at) = row.deliveries[0] else {
+            panic!("row {name} splits");
+        };
+        assert_eq!(
+            &row.stream[at - 1..at + 1],
+            b"\x1b\x1b",
+            "row {name}: the split sits between the two ESCs"
+        );
+        assert_eq!(row.deliveries.len(), 1, "row {name}");
+    }
+    for name in ["K14", "K15"] {
+        assert_eq!(named(name).deliveries.len(), 4, "row {name}");
+    }
+}
+
+/// AC-1 (FR7, FR9; reference for TM-1): K1 to K5 end in the row's final OSC
+/// 7501 table. K1 to K4 record no pending summary change; K5 records exactly
+/// one, the empty table. None writes an OSC 7501 answer.
+#[test]
+fn ac1_cut_rows_k1_to_k5_end_in_the_final_osc7501_table_without_summary_changes() {
+    for row in cut_rows_named(&["K1", "K2", "K3", "K4", "K5"]) {
+        for &delivery in &row.deliveries {
+            let outcome = assert_cut_row(&row, delivery);
+            if row.name == "K5" {
+                assert_eq!(
+                    outcome.changes,
+                    vec![None],
+                    "row {} delivered {delivery:?}: the one change is the empty table",
+                    row.name
+                );
+            } else {
+                assert!(
+                    outcome.changes.is_empty(),
+                    "row {} delivered {delivery:?}: pending changes {:?}",
+                    row.name,
+                    outcome.changes
+                );
+            }
+        }
+    }
+}
+
+/// AC-2 (FR7): K6 and K7 each produce exactly one OSC 777 Set event with
+/// state working, and their final OSC 777 state is working.
+#[test]
+fn ac2_cut_rows_k6_and_k7_record_one_working_set_event_and_end_working() {
+    for row in cut_rows_named(&["K6", "K7"]) {
+        for &delivery in &row.deliveries {
+            let outcome = assert_cut_row(&row, delivery);
+            assert!(
+                matches!(
+                    outcome.events.as_slice(),
+                    [crate::agent_status::AgentStatusEvent::Set {
+                        state: crate::agent_status::AgentState::Working,
+                        ..
+                    }]
+                ),
+                "row {} delivered {delivery:?}: events {:?}",
+                row.name,
+                outcome.events
+            );
+            assert_eq!(
+                outcome.osc777,
+                Some(crate::agent_status::AgentState::Working),
+                "row {} delivered {delivery:?}: final OSC 777 state",
+                row.name
+            );
+        }
+    }
+}
+
+/// AC-3 (FR7; reference for TM-2): K8 to K10 end in the row's final OSC 777
+/// state, resolved from the tab's agent-status events and latch inputs. K8 and
+/// K9 end with the OSC 777 inferred clear fired; K10 keeps working because an
+/// alternate-screen D and A fire nothing.
+#[test]
+fn ac3_cut_rows_k8_to_k10_end_in_the_final_osc777_state() {
+    for row in cut_rows_named(&["K8", "K9", "K10"]) {
+        for &delivery in &row.deliveries {
+            let outcome = assert_cut_row(&row, delivery);
+            let expected = if row.name == "K10" {
+                Some(crate::agent_status::AgentState::Working)
+            } else {
+                None
+            };
+            assert_eq!(
+                outcome.osc777, expected,
+                "row {} delivered {delivery:?}: final OSC 777 state",
+                row.name
+            );
+        }
+    }
+}
+
+/// AC-3 (FR7; reference for TM-2): K11 to K15 end in the row's final OSC 7501
+/// table; K14 and K15 do so in one call and at each cut-point split.
+#[test]
+fn ac3_cut_rows_k11_to_k15_end_in_the_final_osc7501_table() {
+    for row in cut_rows_named(&["K11", "K12", "K13", "K14", "K15"]) {
+        if row.name == "K14" || row.name == "K15" {
+            assert_eq!(
+                row.deliveries.len(),
+                4,
+                "row {}: one call and three cut points",
+                row.name
+            );
+        }
+        for &delivery in &row.deliveries {
+            assert_cut_row(&row, delivery);
+        }
+    }
+}
