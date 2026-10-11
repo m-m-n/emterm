@@ -113,7 +113,8 @@ workflow:
     diff inspection: no change under crates/term_core (NFR5), no log call (NFR3), no platform gate (NFR4), write_filter.rs changes confined to AltSpanTracker region, no existing test line removed (FR8)
     excluded requirements: none
 - id: retrospect
-  status: pending
+  status: completed
+  completed_at_commit: cb5bbb1da88ae9ee1c50cda626adea121a3e868e
 tasks:
   task0001:
     title: Tracker follows RIS and compound DECSET in a mismatched state (mux half of SC-1y)
