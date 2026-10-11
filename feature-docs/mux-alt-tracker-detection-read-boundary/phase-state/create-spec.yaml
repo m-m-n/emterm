@@ -1,16 +1,84 @@
 schema_version: 1
 feature: mux-alt-tracker-detection-read-boundary
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: f906e19a0563ffd101056436867e4141fa7049ae
 last_input_digest: sha256:c8043f21d4725048e561510d389c213de6c2e4b823d73cf046ef0f30c6136f9d
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-11T14:12:00+09:00'
+    questions:
+    - question_id: requirement.predecessor-spec-carry-wording
+      status: answered
+    - question_id: testing.regression-row-list
+      status: answered
+    - question_id: testing.existing-test-rename
+      status: answered
+    - question_id: design-step.recommendation
+      status: answered
+answers:
+  requirement.predecessor-spec-carry-wording:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T14:12:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - supersede_in_new_spec
+    freeform: null
+    normalized_answer: 'Codex consulted (1 turn, codex harness, batched packet). Codex
+      chose supersede_in_new_spec: predecessor SPEC FR5 and the carry table explicitly
+      state clearing on adopt; the new SPEC overrides FR4/FR5 and that table for detection
+      reads (keep state recorded after the last detected compound form) without rewriting
+      the predecessor docs, keeping the change set explicit. Risk: a reader of the
+      predecessor docs alone may assume clearing still applies. Not chosen: edit_predecessor_docs,
+      supersede_and_annotate. Orchestrator agreed. Opus escalation not run. Recorded
+      as assumption.'
+  testing.regression-row-list:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T14:12:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - separate_list
+    freeform: null
+    normalized_answer: 'Codex consulted (1 turn, codex harness, batched packet). Codex
+      chose separate_list: daemon/tests.rs:4854 pins 20 rows and output_pipeline.rs:3845
+      pins K38-K57 names; the predecessor IMPLEMENTATION.md also used separate lists.
+      Define K58+ as an SC-1y addition in its own list on both sides, with tests that
+      run every row. Risk: forgetting the runner test for the new list drops coverage.
+      Not chosen: extend_sc1y. Orchestrator agreed. Opus escalation not run. Recorded
+      as assumption.'
+  testing.existing-test-rename:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T14:12:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - rename_and_update_records
+    freeform: null
+    normalized_answer: 'Codex consulted (1 turn, codex harness, batched packet). Codex
+      chose rename_and_update_records: the test will verify keeping the carry, so
+      rename to ..._and_keeps_the_later_carry; per .claude/rules/test-docs-records.md
+      update test-docs/mux-alt-tracker-ris-compound-decset/task0001.tests.yaml AC-4
+      entry and add a Superseded comment naming the new SPEC/FRs, red_reason unchanged.
+      Risk: missed record update breaks AC-to-test traceability. Not chosen: keep_name.
+      Orchestrator agreed. Opus escalation not run. Recorded as assumption.'
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T14:12:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: 'Batch policy create-spec.design-step: decide_autonomously
+      -> accept analyst recommendation (skip, no UI change).'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:c8043f21d4725048e561510d389c213de6c2e4b823d73cf046ef0f30c6136f9d
   output_digest: null
 artifacts: []
