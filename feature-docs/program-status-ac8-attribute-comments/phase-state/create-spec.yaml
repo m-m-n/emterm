@@ -1,0 +1,21 @@
+schema_version: 1
+feature: program-status-ac8-attribute-comments
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 0a924cbf1ca8d1bc9eb4c48ddedc999b20dc00ff
+last_input_digest: sha256:c56f0e9d93a971427bc6d4f473fb72f0dea6171e6fe007ab5e1d85e2bec4473c
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:c56f0e9d93a971427bc6d4f473fb72f0dea6171e6fe007ab5e1d85e2bec4473c
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
