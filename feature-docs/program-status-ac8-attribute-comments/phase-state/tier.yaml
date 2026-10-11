@@ -20,7 +20,7 @@ bases:
       '1': 0.98
       '2': 0.02
       '3': 0.0
-  observed_at: '2026-10-11T20:58:00+09:00'
+  observed_at: '2026-10-11T20:56:54+09:00'
 - basis: description_plus_code
   score:
     type: score
@@ -39,7 +39,7 @@ bases:
       '1': 0.94
       '2': 0.06
       '3': 0.0
-  observed_at: '2026-10-11T21:03:00+09:00'
+  observed_at: '2026-10-11T20:58:38+09:00'
 pre_survey_estimate:
   files_expected:
   - src-tauri/src/program_status/tests.rs
@@ -60,4 +60,4 @@ pre_survey_estimate:
   evidence: src-tauri/src/program_status/tests.rs:1557 の属性状態は深さと文字列内フラグのみ。:1579 の走査はコメントを識別せず、:1725
     で未閉鎖状態を持ち越し、:1770 では末尾の未閉鎖を検査せず返す。:2237・:2280・:2308 に文字列・複数行属性の自己テストはあるが、属性内コメントと未閉鎖末尾の検証はない。:1710
     の検査関数は直接呼出元7関数、内部依存4関数。src-tauri/src/program_status.rs:705 でテスト時のみ組み込まれる。行数・追加ケース数は概算
-decided_at: '2026-10-11T21:03:30+09:00'
+decided_at: '2026-10-11T20:58:38+09:00'
