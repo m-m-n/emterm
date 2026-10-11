@@ -1,0 +1,127 @@
+task_id: task0001
+# Run before any change (the project test command, full --lib suite): 4809 passed, 0 failed, 3 ignored.
+baseline_failures: []
+# Last re-executed full run after the implementation and this record: 4826 passed, 0 failed,
+# 3 ignored (the 17 new ac8_comments_* tests are the difference from the baseline's 4809 passed).
+# Two earlier full runs under machine load (load average about 7) each failed on PTY tests
+# outside program_status: mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+# (both runs) and mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
+# (second run). Running the mux:: tests alone passed (1564 passed), and the next full run
+# passed with no change in between, so those failures are load-sensitive and not part of the final set.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - program_status::tests::ac8_comments_ac1_a_bracket_in_a_block_comment_does_not_hide_a_use_line
+      - program_status::tests::ac8_comments_ac1_a_quote_in_a_block_comment_does_not_hide_a_use_line
+      - program_status::tests::ac8_comments_ac1_a_block_comment_with_a_bracket_before_an_allowed_root_is_allowed
+    red_confirmed: true
+    red_reason: >-
+      Before the scanner change both winit tests failed ("expected at least one violation for
+      \"#[allow(dead_code /* [ */)]\\nstruct X;\\nuse winit::event::Event;\", got none" and the same
+      message for the `/* \" */` source), each observed on its own run. The allowed-root test
+      (`use std::fmt;` after the same attribute) passed before and after as a guard against a
+      false end-of-source violation.
+  AC-2:
+    tests:
+      - program_status::tests::ac8_comments_ac2_a_closing_bracket_in_a_line_comment_does_not_hide_a_use_line
+      - program_status::tests::ac8_comments_ac2_an_opening_bracket_in_a_line_comment_does_not_hide_a_use_line
+      - program_status::tests::ac8_comments_ac2_a_quote_in_a_line_comment_does_not_hide_a_use_line
+      - program_status::tests::ac8_comments_ac2_a_line_comment_with_a_bracket_before_an_allowed_root_is_allowed
+    red_confirmed: true
+    red_reason: >-
+      Before the scanner change each of the three winit tests failed on its own ("expected at least
+      one violation for \"#[cfg(all( // ]\\nunix))] use winit::event::Event;\", got none", and the
+      same message with `[` and with `\"`). The allowed-root test (`#[cfg(all( // [` followed by
+      `unix))] use std::fmt;`) passed before and after as a guard.
+  AC-3:
+    tests:
+      - program_status::tests::ac8_comments_ac3_a_bracket_in_a_block_comment_spanning_lines_does_not_hide_a_use_line
+      - program_status::tests::ac8_comments_ac3_a_bracket_in_a_nested_block_comment_does_not_hide_a_use_line
+      - program_status::tests::ac8_comments_ac3_a_slash_star_slash_does_not_close_its_own_block_comment
+    red_confirmed: true
+    red_reason: >-
+      Before the scanner change the nested-comment test failed ("expected at least one violation for
+      \"#[allow(dead_code /* /* */ [ */)]\\nstruct X;\\nuse winit::event::Event;\", got none") and so
+      did the `/*/` test (\"#[allow(a /*/ ] */)] use winit::event::Event;\", got none). The
+      line-spanning block-comment test passed before and after: the old scanner already closed the
+      attribute at the `]` inside the comment and the next line is a use line, so it stays as a
+      regression guard against an implementation that does not carry the block-comment level.
+  AC-4:
+    tests:
+      - program_status::tests::ac8_comments_ac4_comment_openers_in_an_attribute_string_are_string_content
+    red_confirmed: false
+    red_reason: >-
+      The test passed before the scanner change: the old scanner had no comment handling, so
+      `/*` and `//` inside an attribute string literal were already string content. It is a guard
+      that fails an implementation which recognises comment openers inside a string literal; no
+      executable red exists for the criterion.
+  AC-5:
+    tests:
+      - program_status::tests::ac8_comments_ac5_a_source_ending_in_attribute_code_returns_one_end_of_source_violation
+      - program_status::tests::ac8_comments_ac5_a_source_ending_inside_a_block_comment_returns_one_end_of_source_violation
+      - program_status::tests::ac8_comments_ac5_a_source_ending_inside_a_string_literal_returns_one_end_of_source_violation
+      - program_status::tests::ac8_comments_ac5_a_source_whose_attributes_all_close_has_no_end_of_source_violation
+    red_confirmed: true
+    red_reason: >-
+      Before the checker change the three end-of-source tests each failed on their own run
+      ("violations for \"#[cfg(all(\\nunix,\\nuse std::fmt;\": []", and the same empty list for the
+      block-comment and the string-literal sources). The no-false-positive test (sources whose
+      attributes all close, the empty source included) passed before and after as a guard.
+  AC-6:
+    tests:
+      - program_status::tests::ac8_comments_ac6_the_end_of_source_violation_follows_every_other_violation
+      - program_status::tests::ac8_comments_ac6_the_end_of_source_violation_names_the_line_of_the_open_attribute
+    red_confirmed: true
+    red_reason: >-
+      Before the checker change the ordering test failed (left: 1, right: 2: only the rule A
+      violation for `let x = crate::foo::bar();` was returned) and the line-naming test failed
+      (left: 0, right: 1 for \"#[cfg(all(\\nunix))] #[allow(\\nx,\": []).
+  AC-7:
+    tests:
+      - program_status::tests::ac8_the_module_uses_only_always_built_crates
+      - program_status::tests::ac8_the_module_is_declared_without_a_gui_gate
+      - program_status::tests::ac8_allowlist_ac1_one_offending_line_may_yield_more_than_one_violation
+      - program_status::tests::ac8_allowlist_ac1_violations_are_returned_in_source_order
+      - program_status::tests::ac8_allowlist_ac2_allowed_sources_return_no_violation
+      - program_status::tests::ac8_allowlist_ac2_the_path_end_and_surrounding_text_are_allowed
+      - program_status::tests::ac8_allowlist_ac3_an_identifier_continuation_after_the_allowed_path_is_rejected
+      - program_status::tests::ac8_allowlist_ac3_rejected_project_path_use_lines_return_a_violation
+      - program_status::tests::ac8_allowlist_ac4_qualified_and_external_root_use_lines_return_a_violation
+      - program_status::tests::ac8_allowlist_ac5_continuation_lines_of_a_multi_line_use_statement_are_scanned
+      - program_status::tests::ac8_allowlist_ac5_occurrences_outside_use_lines_return_a_violation
+      - program_status::tests::ac8_allowlist_ac6_an_external_root_violation_names_the_root_list
+      - program_status::tests::ac8_allowlist_ac6_every_violation_states_the_gui_feature_invariant
+      - program_status::tests::ac8_gaps_ac1_a_field_whose_name_begins_with_use_is_not_a_use_line
+      - program_status::tests::ac8_gaps_ac1_other_unicode_whitespace_separates_the_use_line_keywords
+      - program_status::tests::ac8_gaps_ac1_whitespace_variants_of_a_use_line_are_rejected_with_root_winit
+      - program_status::tests::ac8_gaps_ac1_whitespace_variants_with_an_allowed_root_are_allowed
+      - program_status::tests::ac8_gaps_ac2_a_bare_use_line_takes_its_root_from_the_next_non_blank_line
+      - program_status::tests::ac8_gaps_ac2_a_bare_use_line_with_an_allowed_root_ends_at_its_root_line
+      - program_status::tests::ac8_gaps_ac2_a_bare_use_violation_is_reported_at_its_root_line_in_source_order
+      - program_status::tests::ac8_gaps_ac3_a_leading_attribute_does_not_hide_a_use_line
+      - program_status::tests::ac8_gaps_ac3_an_attributed_use_line_with_an_allowed_root_is_allowed
+      - program_status::tests::ac8_gaps_ac3_attributes_without_a_use_statement_are_allowed
+      - program_status::tests::ac8_gaps_ac4_a_character_outside_the_terminator_set_after_the_allowed_path_is_rejected
+      - program_status::tests::ac8_gaps_ac4_the_terminator_set_after_the_allowed_path_is_allowed
+      - program_status::tests::ac8_gaps_ac5_every_violation_for_a_closed_form_names_the_line_the_allowlist_and_the_invariant
+      - program_status::tests::ac8_forms_ac1_several_leading_attributes_before_an_allowed_root_are_allowed
+      - program_status::tests::ac8_forms_ac1_several_leading_attributes_do_not_hide_a_use_line
+      - program_status::tests::ac8_forms_ac2_a_use_directly_followed_by_a_path_separator_or_brace_is_rejected
+      - program_status::tests::ac8_forms_ac3_a_bracket_in_an_attribute_string_before_an_allowed_root_is_allowed
+      - program_status::tests::ac8_forms_ac3_a_bracket_in_an_attribute_string_does_not_hide_a_use_line
+      - program_status::tests::ac8_forms_ac4_a_multi_line_attribute_before_a_non_use_item_is_allowed
+      - program_status::tests::ac8_forms_ac4_a_multi_line_attribute_closing_on_an_allowed_use_line_is_allowed
+      - program_status::tests::ac8_forms_ac4_a_multi_line_attribute_closing_on_its_own_line_before_an_allowed_use_is_allowed
+      - program_status::tests::ac8_forms_ac4_a_multi_line_attribute_closing_on_the_use_line_is_reported_at_that_line
+      - program_status::tests::ac8_forms_ac4_the_use_line_after_a_closed_multi_line_attribute_is_scanned_again
+      - program_status::tests::ac8_forms_ac5_every_violation_names_the_line_the_allowlist_and_the_invariant
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing ac8 tests listed here detect a
+      behavior change of the checker in the existing sources; no red state occurred for this
+      change, because the criterion asks that they keep their names, inputs and results and pass
+      (all passed before and after). The change-scope part (only
+      src-tauri/src/program_status/tests.rs outside the test record) is checked by the branch diff
+      and the doc-comment part by reading the four doc comments; neither has an executable check
+      that can be made to fail.
