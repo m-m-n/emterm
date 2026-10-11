@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: 6673f82dfbee3cbe279a0871020fa4fe1c891c3f
 last_input_digest: sha256:347f6b07c75070c90c561f21a379557ac105c857862c6b6ec5b4d2f6c0b930cd
-active_request_id: create-spec-run-0002
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -70,14 +70,38 @@ answers:
       check --no-default-features.
     resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted:
       true; codex chose the analyst-recommended option; recorded as assumption'
+  create-spec.design-step:
+    packet_id: null
+    answered_at: '2026-10-11T18:40:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step skipped per analyst recommendation (test-only change,
+      no UI surface); also a reduced-tier subtraction
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-10-11T18:40:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: src-tauri/web-shared/settings/ui-theme-presets.ts
+      (top of 2 candidates)'
 worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:4b2f4ee349346583281046f63777393fb18156fe902ab3aa7412d05ddcad2934
   output_digest: null
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:347f6b07c75070c90c561f21a379557ac105c857862c6b6ec5b4d2f6c0b930cd
+  output_digest: null
+- request_id: create-spec-run-0003
+  status: dispatched
+  input_digest: null
   output_digest: null
 artifacts: []
 patches: []
