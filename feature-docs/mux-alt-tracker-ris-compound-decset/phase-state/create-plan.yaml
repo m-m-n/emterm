@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-alt-tracker-ris-compound-decset
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 8d83c7fa6a2d534237a32b1f089b57db02946230
+last_input_digest: sha256:b651607ab0da0a47b07bc32762150223614fc70545b7df28faf22df130a3151c
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:b651607ab0da0a47b07bc32762150223614fc70545b7df28faf22df130a3151c
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
