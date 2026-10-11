@@ -1,0 +1,21 @@
+schema_version: 1
+feature: program-status-ac8-block-comment-carry-test
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: a747f79e9451f1b1373f3e8bb2426c717087e19f
+last_input_digest: sha256:874dcff65ab31eec583b26d1cddac8dcbd7687752bb4fb3a4be5b2fcec839299
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:874dcff65ab31eec583b26d1cddac8dcbd7687752bb4fb3a4be5b2fcec839299
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
