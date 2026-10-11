@@ -1237,21 +1237,41 @@ impl NativeCallbacks {
     /// output pipeline confirms each feed's candidates against exactly those
     /// live marks front to back, so an alternate-screen candidate in either
     /// feed would consume a live mark that belongs to a later main-screen one.
-    /// An unrecognized kind pushes nothing to either feed.
+    ///
+    /// osc133-mark-token-exact-match FR1: a kind is recognized ONLY by an
+    /// exact first-token match — the payload's first `;`-separated segment
+    /// must be exactly the single character `A`, `B`, `C` or `D`, the same
+    /// criterion `term_core`'s `parse_osc133_mark` applies to its live marks
+    /// (see [`osc133_mark_kind`]). A malformed token such as `AB` is not a
+    /// mark there, so a candidate for it would consume the live mark that
+    /// belongs to a later well-formed one. An unrecognized kind pushes
+    /// nothing to either feed, on either screen.
     fn handle_semantic_prompt(&self, data: &str, alt_screen_active: bool) {
-        if !alt_screen_active
-            && let Some(kind) = data
-                .as_bytes()
-                .first()
-                .copied()
-                .and_then(crate::prompts::PromptMarkKind::from_byte)
-        {
+        if !alt_screen_active && let Some(kind) = osc133_mark_kind(data) {
             let mut s = self.state.lock();
             s.pending_latch_feed.push(LatchFeedEvent::PromptMark(kind));
             s.pending_program_status_feed
                 .push(ProgramStatusFeedItem::PromptMark(kind));
         }
         log::debug!("OSC 133 mark seen: {data}");
+    }
+}
+
+/// The prompt-mark kind of an OSC 133 payload (the text after `133;`), decided
+/// by an exact first-token match: `Some` if and only if the payload's first
+/// `;`-separated segment (the whole payload when it holds no `;`) is exactly
+/// one of the single characters `A`, `B`, `C`, `D`. Segments after the first
+/// never affect the result (`D;0`, `D;x`, `A;aid=1` are recognized); a longer
+/// first segment (`AB`, `D0`), an empty one (`""`, `;A`) and any other
+/// character yield `None`.
+///
+/// `term_core`'s `parse_osc133_mark` is private to `term_core`, so this
+/// mirrors its first-token criterion locally; the single-character-to-kind
+/// step is [`crate::prompts::PromptMarkKind::from_byte`].
+fn osc133_mark_kind(data: &str) -> Option<crate::prompts::PromptMarkKind> {
+    match data.split(';').next()?.as_bytes() {
+        [byte] => crate::prompts::PromptMarkKind::from_byte(*byte),
+        _ => None,
     }
 }
 

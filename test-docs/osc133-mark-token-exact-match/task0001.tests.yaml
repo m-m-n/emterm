@@ -1,0 +1,70 @@
+task_id: task0001
+# Before any edit: the src-tauri --lib suite (project test command) ran 4765 passed, 1 failed. The one
+# failure is a PTY timing test (panic "the reader must reach P2 on the main-buffer chunk: Timeout"),
+# observed while the worktree was still compiling for the first time; it passed in every later run.
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
+# Actually re-executed after the implementation: 4774 passed, 0 failed (4766 + 8 new tests). Also
+# passing after the implementation: the term_core --lib suite (895 passed) and
+# `cargo check --no-default-features`.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - tabs::tests::output_pipeline::osc7501_malformed_mark_token_does_not_consume_the_live_mark_of_a_later_a
+    red_confirmed: true
+    red_reason: >-
+      Observed before the callbacks.rs change: assertion `left == right` failed: the main-screen A after
+      the report discards its record, left 1, right 0. The `133;AB` candidate consumed the only live mark
+      (the trailing A), so the trailing A candidate found none and the `job` record survived.
+  AC-2:
+    tests:
+      - callbacks::tests::osc_133_malformed_first_token_on_the_main_screen_pushes_nothing_to_either_feed
+      - callbacks::tests::osc_133_malformed_first_token_on_the_alternate_screen_pushes_nothing_to_either_feed
+      - callbacks::tests::osc_133_malformed_first_token_through_the_existing_notification_pushes_nothing
+    red_confirmed: true
+    red_reason: >-
+      The main-screen test and the existing-notification test failed before the callbacks.rs change with
+      `"AB" main screen: the 7501 feed must stay empty` and `"AB" existing notification: the 7501 feed must
+      stay empty`. The alternate-screen test passed before the change (the screen rule already suppressed
+      alternate-screen candidates); it is a regression guard for FR3 with no red of its own.
+  AC-3:
+    tests:
+      - callbacks::tests::osc_133_well_formed_first_token_pushes_one_matching_candidate_to_each_feed
+    red_confirmed: false
+    red_reason: >-
+      The test passed before the change: the old first-byte rule already recognized every well-formed
+      token, so the behavior pre-existed. It is a regression guard that the exact-match rule keeps
+      A, B, C, D, D;0, D;x and A;aid=1 (FR3); no red state occurred.
+  AC-4:
+    tests:
+      - callbacks::tests::osc_133_empty_first_segment_pushes_nothing_on_either_screen
+      - callbacks::tests::osc_133_command_end_with_an_exit_code_on_the_main_screen_pushes_one_candidate
+      - callbacks::tests::osc_133_well_formed_first_token_with_segments_on_the_alternate_screen_pushes_nothing
+    red_confirmed: false
+    red_reason: >-
+      All three tests passed before the change: the old first-byte rule already gave nothing for "" and
+      ";A", one command-end candidate for D;42 on the main screen, and nothing on the alternate screen.
+      They are edge-case regression guards for the new exact-match rule; no red state occurred.
+  AC-5:
+    tests:
+      - callbacks::tests::osc_133_every_recognized_kind_follows_the_screen_rule_and_an_unrecognized_one_pushes_nothing
+      - callbacks::tests::program_status_feed_preserves_true_order_of_reports_marks_and_resets
+      - tabs::tests::output_pipeline::osc7501_prompt_start_on_the_main_screen_keeps_only_done_and_error
+    red_confirmed: false
+    red_reason: >-
+      The criterion is a diff constraint (no path under crates/term_core/, the named existing tests
+      unmodified, unrenamed and unremoved), checked with `git diff --stat` and `git diff`: the diff holds
+      only src-tauri/src/callbacks.rs, src-tauri/src/callbacks/tests.rs and
+      src-tauri/src/tabs/tests/output_pipeline.rs, and no test line is removed. A dedicated new module is
+      out of scope, but the existing tests listed here detect a regression of the recognized-kind and
+      ordering behavior of the changed callbacks.rs; no red state occurred for this change.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The verifiable outcome is the result of three commands: the src-tauri --lib suite (4774 passed, 0
+      failed after the change), the term_core --lib suite (895 passed, 0 failed) and
+      `cargo check --no-default-features` (compiles). Existing tests that exercise the changed files are
+      listed under AC-5; none of the three commands was observed failing before the change, so no red
+      state occurred.
