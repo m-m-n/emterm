@@ -114,7 +114,8 @@ workflow:
   - VERIFICATION.md
   - THREAT-MODEL.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: c102887ac9826c2a2e696afb707e9e15ae2e0c01
 - id: implement
   status: pending
 - id: review
@@ -125,7 +126,26 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Exact first-token match for plain-tab OSC 133 mark candidates
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - src-tauri/src/tabs/tests/output_pipeline.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: medium
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - NFR1
+    status: pending
+    notes: null
 review:
   status: pending
   rounds_completed: 0
@@ -135,26 +155,40 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-5
   FR2:
     title: Unrecognized kind pushes nothing to either feed
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-5
   FR3:
     title: Well-formed marks keep their current behavior
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+    - TS-4
+    - TS-5
   NFR1:
     title: term_core behavior unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
