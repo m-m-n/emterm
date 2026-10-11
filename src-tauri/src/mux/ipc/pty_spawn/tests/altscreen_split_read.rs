@@ -1011,12 +1011,33 @@ struct Walk {
 /// `(index, alt)` sets the screen right after the byte at `index`: it stands for
 /// the compound a detection read applies.
 fn client_walk(stream: &[u8], screen_after: Option<(usize, bool)>) -> Walk {
+    let points: Vec<(usize, bool)> = screen_after.into_iter().collect();
+    client_walk_points(stream, &points).walk
+}
+
+/// The result of [`client_walk_points`].
+struct PointWalk {
+    walk: Walk,
+    /// The screen under the client rule right after the walk has passed the
+    /// byte (`true`: the alternate screen). Inside a run of bytes the walk
+    /// takes as a unit (a switch pattern, `ESC c`, `ESC (` with its designator)
+    /// it is the screen before the run, until the run's last byte.
+    alt_after: Vec<bool>,
+}
+
+/// [`client_walk`] with any number of screen override points: for each
+/// `(index, alt)` of `points`, the screen is `alt` right after the byte at
+/// `index` (a point stands for the compound a detection read applies, or for the
+/// parser's state a cross-check read adopts). A point inside a run of bytes
+/// that the walk takes as a unit has no effect.
+fn client_walk_points(stream: &[u8], points: &[(usize, bool)]) -> PointWalk {
     let n = stream.len();
     let mut live = vec![false; n];
     let mut live_esc = vec![false; n];
+    let mut alt_after = vec![false; n];
     let mut alt = false;
     let set = |i: usize, alt: &mut bool| {
-        if let Some((at, to)) = screen_after {
+        for &(at, to) in points {
             if at == i {
                 *alt = to;
             }
@@ -1027,6 +1048,7 @@ fn client_walk(stream: &[u8], screen_after: Option<(usize, bool)>) -> Walk {
         if stream[i] != ESC {
             live[i] = !alt;
             set(i, &mut alt);
+            alt_after[i] = alt;
             i += 1;
             continue;
         }
@@ -1034,7 +1056,15 @@ fn client_walk(stream: &[u8], screen_after: Option<(usize, bool)>) -> Walk {
         if let Some(&(pattern, is_enter)) =
             PATTERNS.iter().find(|(p, _)| stream[i..].starts_with(p))
         {
+            let before = alt;
             alt = is_enter;
+            for k in i..i + pattern.len() {
+                alt_after[k] = if k + 1 == i + pattern.len() {
+                    alt
+                } else {
+                    before
+                };
+            }
             i += pattern.len();
             continue;
         }
@@ -1042,7 +1072,9 @@ fn client_walk(stream: &[u8], screen_after: Option<(usize, bool)>) -> Walk {
         match stream.get(i + 1) {
             Some(b'c') => {
                 live[i + 1] = !alt;
+                alt_after[i] = alt;
                 alt = false;
+                alt_after[i + 1] = alt;
                 i += 2;
             }
             Some(b'(' | b')') => {
@@ -1051,15 +1083,22 @@ fn client_walk(stream: &[u8], screen_after: Option<(usize, bool)>) -> Walk {
                 for k in i + 1..(i + 3).min(n) {
                     live[k] = !alt;
                 }
+                for k in i..(i + 3).min(n) {
+                    alt_after[k] = alt;
+                }
                 i += 3;
             }
             _ => {
                 set(i, &mut alt);
+                alt_after[i] = alt;
                 i += 1;
             }
         }
     }
-    Walk { live, live_esc }
+    PointWalk {
+        walk: Walk { live, live_esc },
+        alt_after,
+    }
 }
 
 /// The undecided tail of the read `lo..hi` under [`client_walk`]: the bytes of a
@@ -1530,10 +1569,12 @@ fn altmismatch_ac4_the_shadow_parser_follows_c1h_and_ignores_c7h() {
     assert!(alt_after(&mut parser, C7L), "C7l does not leave");
 }
 
-/// AC-4 (FR4; TM-2): a compound followed by a switch pattern in the same read,
-/// and a detection read that ends in a partial switch (which is cleared).
+/// AC-4 (FR4; TM-2; superseded in part by mux-alt-tracker-detection-read-boundary
+/// FR2/FR6): a compound followed by a switch pattern in the same read, and a
+/// detection read that ends in a partial switch (which is kept for the next
+/// read, because it comes from bytes after the last detected compound).
 #[test]
-fn altmismatch_ac4_a_detection_read_applies_later_switches_and_clears_the_carry() {
+fn altmismatch_ac4_a_detection_read_applies_later_switches_and_keeps_the_later_carry() {
     // M1 then `C1l E(1049)`: the compound returns to the main screen, the
     // switch pattern enters the alternate screen again: nothing is live.
     let mut rig = Rig::new();
@@ -1550,21 +1591,22 @@ fn altmismatch_ac4_a_detection_read_applies_later_switches_and_clears_the_carry(
     assert_eq!(rig.tracker.adoptions(), 1);
     assert_eq!(rig.read(&mark()), vec![0..8]);
 
-    // M1 then `C1l ESC [?10`: the partial switch is cleared with the rest.
+    // M1 then `C1l ESC [?10`: the partial switch after the compound is kept
+    // and the next read completes it as L(1049).
     let mut rig = Rig::new();
     rig.read(&m1());
     let second = cat(&[C1L, P2]);
     assert_eq!(rig.read(&second), vec![0..second.len()]);
     assert_eq!(rig.tracker.adoptions(), 1);
-    assert_eq!(rig.tracker.partial_len(), 0);
+    assert_eq!(rig.tracker.partial_len(), 5);
     let third = cat(&[b"49l", &mark()]);
-    assert_eq!(rig.read(&third), vec![0..third.len()], "`49l` is text now");
+    assert_eq!(rig.read(&third), vec![3..11], "`49l` completes L(1049)");
 
-    // M1 then `C1l ESC`: a lone ESC at the end is cleared too.
+    // M1 then `C1l ESC`: a lone ESC at the end is kept too.
     let mut rig = Rig::new();
     rig.read(&m1());
     assert_eq!(rig.read(&cat(&[C1L, &[ESC]])), vec![0..11]);
-    assert_eq!(rig.tracker.partial_len(), 0);
+    assert_eq!(rig.tracker.partial_len(), 1);
 }
 
 // ---- AC-5 ----
@@ -1898,6 +1940,764 @@ fn altmismatch_ac6_a_one_mib_stream_is_well_formed_in_64_kib_and_in_one_byte_rea
                     &spans,
                     rig.tracker.partial_len(),
                 );
+            }
+        }
+    }
+}
+
+// ---- mux-alt-tracker-detection-read-boundary task0001 (FR1-FR3, FR6-FR8, NFR1;
+// TM-1, TM-2, TM-3) ----
+//
+// A detection read detects every compound that follows the first detected one
+// in the same read, whatever its two screens say, and keeps the carried item
+// that the scan recorded after the last detected compound. Notation of the
+// task plan: M1, M2, C1h, C1l, Crh, C7h, C7l, C0h, Ceh, DS, DC, R, P1 and P2 are
+// the constants and helpers above; A BEL is `mark()`.
+//
+// Oracle (AC-3): `detect_oracle` walks the reads of one delivery in order and
+// keeps the tracker's two screens. The shadow-rule screen follows the shadow
+// rule (the ?1049 and ?47 patterns and RIS, also in a designator slot) and takes
+// the parser's state after every detection read and every cross-check read. The
+// client-rule screen is the walk of the whole stream under the client rule with
+// one override point for every detected compound and one for every cross-check
+// read ([`client_walk_points`]).
+
+/// A stream built from parts that remembers where each compound ends.
+struct DetectStream {
+    bytes: Vec<u8>,
+    /// The index of each compound's terminator, and whether it is an `h`.
+    compounds: Vec<(usize, bool)>,
+}
+
+impl DetectStream {
+    fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            compounds: Vec::new(),
+        }
+    }
+
+    /// Append bytes that hold no compound.
+    fn push(mut self, part: &[u8]) -> Self {
+        self.bytes.extend_from_slice(part);
+        self
+    }
+
+    /// Append one compound (its last byte is the terminator).
+    fn compound(mut self, part: &[u8]) -> Self {
+        self.bytes.extend_from_slice(part);
+        self.compounds.push((self.bytes.len() - 1, !leaves(part)));
+        self
+    }
+}
+
+/// The shadow rule's screen changes in a whole stream: `(index of the last byte,
+/// screen after)` for each ?1049 and ?47 pattern and each `ESC c` (a RIS), also
+/// in a designator slot (every `ESC` aborts what came before it).
+fn shadow_events(stream: &[u8]) -> Vec<(usize, bool)> {
+    let mut events = Vec::new();
+    for i in 0..stream.len() {
+        if stream[i] != ESC {
+            continue;
+        }
+        if let Some(&(pattern, is_enter)) =
+            PATTERNS.iter().find(|(p, _)| stream[i..].starts_with(p))
+        {
+            if !pattern.starts_with(b"\x1b[?1047") {
+                events.push((i + pattern.len() - 1, is_enter));
+            }
+        } else if stream.get(i + 1) == Some(&b'c') {
+            events.push((i + 1, false));
+        }
+    }
+    events
+}
+
+/// The shadow-rule screen right before the byte at `t`, for a read that starts
+/// at `lo` with the shadow-rule screen `start`.
+fn shadow_before(events: &[(usize, bool)], lo: usize, start: bool, t: usize) -> bool {
+    events
+        .iter()
+        .rev()
+        .find(|&&(last, _)| lo <= last && last < t)
+        .map_or(start, |&(_, screen)| screen)
+}
+
+/// The per-delivery oracle of the task plan (Test Notes): every read's spans and
+/// the number of adoptions of `stream` delivered cut at `offsets`.
+fn detect_oracle(stream: &DetectStream, offsets: &[usize]) -> (Vec<Vec<Range<usize>>>, u32) {
+    let bytes = &stream.bytes;
+    let events = shadow_events(bytes);
+    let mut parser = new_shadow_parser(24, 80);
+    // The override points of the client-rule walk.
+    let mut points: Vec<(usize, bool)> = Vec::new();
+    // The shadow-rule screen at the start of the read.
+    let mut shadow = false;
+    let mut adoptions = 0u32;
+    // Per read: its spans, or `None` for a read of rule 3, decided once every
+    // override point is known.
+    let mut reads: Vec<(usize, usize, Option<Vec<Range<usize>>>)> = Vec::new();
+    let mut lo = 0usize;
+    for &hi in offsets.iter().chain(std::iter::once(&bytes.len())) {
+        let before = parser.screen().alternate_screen();
+        parser.process(&bytes[lo..hi]);
+        let after = parser.screen().alternate_screen();
+
+        // Rule 1: the compounds the read detects.
+        let mut detected = false;
+        for &(t, enters) in stream.compounds.iter().filter(|&&(t, _)| lo <= t && t < hi) {
+            let client_alt = client_walk_points(bytes, &points).alt_after[t - 1];
+            if detected || client_alt != shadow_before(&events, lo, shadow, t) {
+                detected = true;
+                points.push((t, enters));
+            }
+        }
+        let shadow_end = shadow_before(&events, lo, shadow, hi);
+        let spans = if detected {
+            adoptions += 1;
+            let alt = client_walk_points(bytes, &points).alt_after[hi - 1];
+            Some(if alt { Vec::new() } else { vec![0..hi - lo] })
+        } else if shadow_end != after {
+            // Rule 2: the post-read cross-check.
+            adoptions += 1;
+            points.push((hi - 1, after));
+            Some(if !before && !after {
+                vec![0..hi - lo]
+            } else {
+                Vec::new()
+            })
+        } else {
+            // Rule 3.
+            None
+        };
+        shadow = if spans.is_some() { after } else { shadow_end };
+        reads.push((lo, hi, spans));
+        lo = hi;
+    }
+    let walk = client_walk_points(bytes, &points).walk;
+    let spans = reads
+        .into_iter()
+        .map(|(lo, hi, spans)| spans.unwrap_or_else(|| walk_spans(bytes, &walk, lo, hi)))
+        .collect();
+    (spans, adoptions)
+}
+
+/// Every delivery of `stream` (one read, every single cut, every pair of cuts,
+/// one byte per read) through a [`Rig`]: each read's spans and the adoption count
+/// equal the oracle's. Returns the mismatches.
+fn check_detect_deliveries(name: &str, stream: &DetectStream) -> Vec<String> {
+    let mut mismatches = Vec::new();
+    for offsets in deliveries(stream.bytes.len()) {
+        let (runs, adoptions) = run_tracker(&stream.bytes, &offsets);
+        let (want, want_adoptions) = detect_oracle(stream, &offsets);
+        if adoptions != want_adoptions {
+            mismatches.push(format!(
+                "{name} cut at {offsets:?}: {adoptions} adoption(s), expected {want_adoptions}"
+            ));
+        }
+        for (run, want) in runs.iter().zip(&want) {
+            if run.spans != *want {
+                mismatches.push(format!(
+                    "{name} cut at {offsets:?}: read {}..{}: spans {:?}, expected {want:?}",
+                    run.lo, run.hi, run.spans
+                ));
+            }
+        }
+    }
+    mismatches
+}
+
+/// The streams of AC-1 for AC-3: every pair of compounds after M1 (an l-form,
+/// then an h-form) and after M2 (an h-form, then an l-form), and the two triples,
+/// each followed by A BEL A BEL.
+fn detect_pair_streams() -> Vec<(String, DetectStream)> {
+    let marks = cat(&[&mark(), &mark()]);
+    let mut all = Vec::new();
+    for (setup_name, setup, first_leaves) in [("M1", m1(), true), ("M2", m2(), false)] {
+        for &(first_name, first) in COMPOUNDS
+            .iter()
+            .filter(|&&(_, c)| leaves(c) == first_leaves)
+        {
+            for &(second_name, second) in COMPOUNDS
+                .iter()
+                .filter(|&&(_, c)| leaves(c) != first_leaves)
+            {
+                all.push((
+                    format!("{setup_name} {first_name} {second_name}"),
+                    DetectStream::new()
+                        .push(&setup)
+                        .compound(first)
+                        .compound(second)
+                        .push(&marks),
+                ));
+            }
+        }
+    }
+    all.push((
+        "M1 C1l C1h C1l".into(),
+        DetectStream::new()
+            .push(&m1())
+            .compound(C1L)
+            .compound(C1H)
+            .compound(C1L)
+            .push(&marks),
+    ));
+    all.push((
+        "M2 C1h C1l C1h".into(),
+        DetectStream::new()
+            .push(&m2())
+            .compound(C1H)
+            .compound(C1L)
+            .compound(C1H)
+            .push(&marks),
+    ));
+    all
+}
+
+/// The AC-2 cases that hold no designator introducer, each written as one stream
+/// (the setup and both reads joined), followed by A BEL.
+fn detect_carry_streams() -> Vec<(String, DetectStream)> {
+    let marks = cat(&[&mark(), &mark()]);
+    vec![
+        (
+            "M1 C1l P2 47h A BEL".into(),
+            DetectStream::new()
+                .push(&m1())
+                .compound(C1L)
+                .push(P2)
+                .push(b"47h")
+                .push(&marks),
+        ),
+        (
+            "M1 C7h P2 49l A BEL".into(),
+            DetectStream::new()
+                .push(&m1())
+                .compound(C7H)
+                .push(P2)
+                .push(b"49l")
+                .push(&marks),
+        ),
+        (
+            "M1 C7h P1 49l A BEL".into(),
+            DetectStream::new()
+                .push(&m1())
+                .compound(C7H)
+                .compound(&cat(&[P1, b"49l"]))
+                .push(&marks),
+        ),
+        (
+            "M1 C7h ESC c A BEL".into(),
+            DetectStream::new()
+                .push(&m1())
+                .compound(C7H)
+                .push(R)
+                .push(&marks),
+        ),
+    ]
+}
+
+/// The AC-2 cases that hold a designator introducer (`slot`: DS or DC), each
+/// written as one stream, followed by A BEL.
+fn detect_slot_streams(slot_name: &str, slot: &[u8]) -> Vec<(String, DetectStream)> {
+    let marks = cat(&[&mark(), &mark()]);
+    vec![
+        (
+            format!("M1 C7h {slot_name} R A BEL"),
+            DetectStream::new()
+                .push(&m1())
+                .compound(C7H)
+                .push(slot)
+                .push(R)
+                .push(&marks),
+        ),
+        (
+            format!("M1 C7h {slot_name} P2 49h A BEL"),
+            DetectStream::new()
+                .push(&m1())
+                .compound(C7H)
+                .push(slot)
+                .push(P2)
+                .push(b"49h")
+                .push(&marks),
+        ),
+    ]
+}
+
+// ---- AC-1 ----
+
+/// AC-1 (FR1, FR3; TM-1), reproduction 1: M1, then `C1l C1h A BEL` in one read.
+/// The second read has no span and counts one adoption, and a third read of
+/// A BEL has no span.
+#[test]
+fn altdetect_ac1_reproduction_1_an_l_form_and_an_h_form_after_m1_are_both_detected() {
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    let second = cat(&[C1L, C1H, &mark()]);
+    assert!(none_live(&rig.read(&second)), "the second read");
+    assert_eq!(rig.tracker.adoptions(), 1);
+    assert!(none_live(&rig.read(&mark())), "the third read");
+    assert_eq!(rig.tracker.adoptions(), 1, "no further adoption");
+}
+
+/// AC-1 (FR1, FR3; TM-1), reverse: M2, then `C1h C1l A BEL` in one read. The
+/// second read is the whole read with one adoption, and a third read of A BEL
+/// gives 0..8.
+#[test]
+fn altdetect_ac1_the_reverse_an_h_form_and_an_l_form_after_m2_are_both_detected() {
+    let mut rig = Rig::new();
+    rig.read(&m2());
+    let second = cat(&[C1H, C1L, &mark()]);
+    assert_eq!(rig.read(&second), vec![0..second.len()], "the second read");
+    assert_eq!(rig.tracker.adoptions(), 1);
+    assert_eq!(rig.read(&mark()), vec![0..8], "the third read");
+    assert_eq!(rig.tracker.adoptions(), 1, "no further adoption");
+}
+
+/// AC-1 (FR1, FR3; TM-1): every pair of compounds in one read followed by A BEL
+/// counts one adoption. After M1, each l-form followed by each h-form gives no
+/// span and a later mark is not live; after M2, each h-form followed by each
+/// l-form gives the whole read and a later mark is live.
+#[test]
+fn altdetect_ac1_every_pair_of_compounds_in_one_read_counts_one_adoption() {
+    for (setup_name, setup, first_leaves) in [("M1", m1(), true), ("M2", m2(), false)] {
+        for &(first_name, first) in COMPOUNDS
+            .iter()
+            .filter(|&&(_, c)| leaves(c) == first_leaves)
+        {
+            for &(second_name, second) in COMPOUNDS
+                .iter()
+                .filter(|&&(_, c)| leaves(c) != first_leaves)
+            {
+                let ctx = format!("{setup_name} {first_name} {second_name}");
+                let mut rig = Rig::new();
+                rig.read(&setup);
+                let read = cat(&[first, second, &mark()]);
+                let spans = rig.read(&read);
+                let later = rig.read(&mark());
+                if first_leaves {
+                    assert!(none_live(&spans), "{ctx}: the pair's read");
+                    assert!(none_live(&later), "{ctx}: a later mark");
+                } else {
+                    assert_eq!(spans, vec![0..read.len()], "{ctx}: the pair's read");
+                    assert_eq!(later, vec![0..8], "{ctx}: a later mark");
+                }
+                assert_eq!(rig.tracker.adoptions(), 1, "{ctx}");
+            }
+        }
+    }
+}
+
+/// AC-1 (FR1, FR3; TM-1): three alternating compounds in one read count one
+/// adoption. After M1, `C1l C1h C1l A BEL` gives the whole read and a later mark
+/// is live; after M2, `C1h C1l C1h A BEL` gives no span and a later mark is not
+/// live.
+#[test]
+fn altdetect_ac1_three_alternating_compounds_in_one_read_count_one_adoption() {
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    let read = cat(&[C1L, C1H, C1L, &mark()]);
+    assert_eq!(rig.read(&read), vec![0..read.len()], "M1 C1l C1h C1l");
+    assert_eq!(rig.tracker.adoptions(), 1);
+    assert_eq!(rig.read(&mark()), vec![0..8], "a later mark is live");
+    assert_eq!(rig.tracker.adoptions(), 1);
+
+    let mut rig = Rig::new();
+    rig.read(&m2());
+    let read = cat(&[C1H, C1L, C1H, &mark()]);
+    assert!(none_live(&rig.read(&read)), "M2 C1h C1l C1h");
+    assert_eq!(rig.tracker.adoptions(), 1);
+    assert!(none_live(&rig.read(&mark())), "a later mark is not live");
+    assert_eq!(rig.tracker.adoptions(), 1);
+}
+
+// ---- AC-2 ----
+
+/// AC-2 (FR2, FR3; TM-1), reproduction 2: after M1, `C7h DS | R A BEL`. The
+/// second read has no span, the same as one read of the same bytes, and adds no
+/// adoption.
+#[test]
+fn altdetect_ac2_reproduction_2_the_designator_wait_after_a_detection_read_is_kept() {
+    let mut whole = Rig::new();
+    whole.read(&m1());
+    let one_read = whole.read(&cat(&[C7H, DS, R, &mark()]));
+    assert!(none_live(&one_read), "one read of the same bytes");
+    assert_eq!(whole.tracker.adoptions(), 1);
+
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    assert!(none_live(&rig.read(&cat(&[C7H, DS]))));
+    assert_eq!(rig.tracker.adoptions(), 1);
+    let second = rig.read(&cat(&[R, &mark()]));
+    assert!(
+        none_live(&second),
+        "the `ESC c` sits in the designator slot"
+    );
+    assert_eq!(second, one_read);
+    assert_eq!(rig.tracker.adoptions(), 1, "the second read adds none");
+    assert!(none_live(&rig.read(&mark())), "a later mark is not live");
+}
+
+/// AC-2 (FR2, FR3; TM-1): after M1, `C1l P2 | 47h A BEL`. The first read is the
+/// whole read with a partial length of 5. The partial completes ?1047h, so the
+/// second read has no span, and a later mark is not live.
+#[test]
+fn altdetect_ac2_a_kept_partial_completes_a_pattern_that_enters_the_alternate_screen() {
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    let first = cat(&[C1L, P2]);
+    assert_eq!(rig.read(&first), vec![0..first.len()]);
+    assert_eq!(rig.tracker.partial_len(), 5);
+    assert_eq!(rig.tracker.adoptions(), 1);
+    let second = cat(&[b"47h", &mark()]);
+    assert!(
+        none_live(&rig.read(&second)),
+        "the client is on the alternate screen"
+    );
+    assert_eq!(rig.tracker.partial_len(), 0);
+    assert!(none_live(&rig.read(&mark())), "a later mark is not live");
+    assert_eq!(rig.tracker.adoptions(), 1);
+}
+
+/// AC-2 (FR2, FR3; TM-1): after M1, `C7h P2 | 49l A BEL`. The partial completes
+/// L(1049), and the mark in the second read is live.
+#[test]
+fn altdetect_ac2_a_kept_partial_completes_a_pattern_that_leaves_the_alternate_screen() {
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    let first = cat(&[C7H, P2]);
+    assert!(none_live(&rig.read(&first)));
+    assert_eq!(rig.tracker.partial_len(), 5);
+    let second = cat(&[b"49l", &mark()]);
+    assert_eq!(rig.read(&second), vec![3..second.len()], "the mark is live");
+    assert_eq!(rig.tracker.partial_len(), 0);
+    assert_eq!(rig.read(&mark()), vec![0..8], "a later mark is live");
+    assert_eq!(rig.tracker.adoptions(), 1);
+}
+
+/// AC-2 (FR2, FR3; TM-1): after M1, `C7h P1 | 49l A BEL`. The carried CSI parse
+/// ends in a mismatched state and is detected in the second read. That read is
+/// the whole read, with two adoptions in total.
+#[test]
+fn altdetect_ac2_a_kept_csi_parse_is_detected_in_the_next_read() {
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    assert!(none_live(&rig.read(&cat(&[C7H, P1]))));
+    assert_eq!(rig.tracker.adoptions(), 1);
+    let second = cat(&[b"49l", &mark()]);
+    assert_eq!(rig.read(&second), vec![0..second.len()]);
+    assert_eq!(rig.tracker.adoptions(), 2);
+    assert_eq!(rig.read(&mark()), vec![0..8], "a later mark is live");
+    assert_eq!(rig.tracker.adoptions(), 2);
+}
+
+/// AC-2 (FR2, FR3; TM-1): after M1, `C7h ESC | c A BEL`. The partial length is 1
+/// after the first read. The second read is a RIS, and its mark is live.
+#[test]
+fn altdetect_ac2_a_kept_lone_esc_and_the_next_c_are_a_ris() {
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    assert!(none_live(&rig.read(&cat(&[C7H, &[ESC]]))));
+    assert_eq!(rig.tracker.partial_len(), 1);
+    let second = cat(&[b"c", &mark()]);
+    assert_eq!(rig.read(&second), vec![1..second.len()], "the mark is live");
+    assert_eq!(rig.tracker.partial_len(), 0);
+    assert_eq!(rig.read(&mark()), vec![0..8], "a later mark is live");
+    assert_eq!(rig.tracker.adoptions(), 1);
+}
+
+/// AC-2 (FR2, FR3; TM-1): after M1, `C7h DS P2 | 49h A BEL` (and with DC). The
+/// completed pattern sits in the designator slot. The second read has no span,
+/// and the total stays at one adoption.
+#[test]
+fn altdetect_ac2_a_kept_designator_partial_completes_in_the_slot() {
+    for (name, slot) in [("DS", DS), ("DC", DC)] {
+        let mut rig = Rig::new();
+        rig.read(&m1());
+        assert!(none_live(&rig.read(&cat(&[C7H, slot, P2]))), "{name}");
+        assert_eq!(rig.tracker.partial_len(), 5, "{name}");
+        let second = cat(&[b"49h", &mark()]);
+        assert!(none_live(&rig.read(&second)), "{name}: the second read");
+        assert_eq!(rig.tracker.adoptions(), 1, "{name}");
+        assert!(none_live(&rig.read(&mark())), "{name}: a later mark");
+        assert_eq!(rig.tracker.adoptions(), 1, "{name}");
+    }
+}
+
+// ---- AC-3 ----
+
+/// AC-3 (FR1, FR3; TM-1): the oracle is not vacuous. For `M1 C1l C1h A BEL A BEL`
+/// it gives no live byte and one adoption in one read, and two adoptions when a
+/// cut separates the compounds (the second one is judged in a matched state, and
+/// the post-read cross-check adopts the parser's alternate screen).
+#[test]
+fn altdetect_ac3_the_oracle_gives_the_literal_results_of_two_deliveries() {
+    let marks = cat(&[&mark(), &mark()]);
+    let stream = DetectStream::new()
+        .push(&m1())
+        .compound(C1L)
+        .compound(C1H)
+        .push(&marks);
+    assert_eq!(stream.bytes.len(), 44);
+
+    let (spans, adoptions) = detect_oracle(&stream, &[]);
+    assert_eq!(spans, vec![Vec::<Range<usize>>::new()]);
+    assert_eq!(adoptions, 1);
+
+    // M1 C1l | C1h A BEL A BEL.
+    let (spans, adoptions) = detect_oracle(&stream, &[18]);
+    assert_eq!(spans, vec![vec![0..18], Vec::<Range<usize>>::new()]);
+    assert_eq!(adoptions, 2);
+
+    // Three override points in one read: the walk ends on the main screen after
+    // M1 C1l C1h C1l, and on the alternate screen after M2 C1h C1l C1h.
+    let streams = detect_pair_streams();
+    for (name, whole_read) in [("M1 C1l C1h C1l", true), ("M2 C1h C1l C1h", false)] {
+        let (_, stream) = streams
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+            .expect(name);
+        let (spans, adoptions) = detect_oracle(stream, &[]);
+        let expected = if whole_read {
+            vec![vec![0..stream.bytes.len()]]
+        } else {
+            vec![Vec::<Range<usize>>::new()]
+        };
+        assert_eq!(spans, expected, "{name}");
+        assert_eq!(adoptions, 1, "{name}");
+    }
+}
+
+/// AC-3 (FR1, FR2, FR3; TM-1): the adoption count differs by delivery. `M1 C1l
+/// C1h A BEL` counts one adoption when both compounds share a read and two when
+/// a cut separates them.
+#[test]
+fn altdetect_ac3_the_adoption_count_differs_by_delivery() {
+    let stream = cat(&[&m1(), C1L, C1H, &mark()]);
+    let (_, adoptions) = run_tracker(&stream, &[]);
+    assert_eq!(adoptions, 1, "one read");
+    let (_, adoptions) = run_tracker(&stream, &[18]);
+    assert_eq!(adoptions, 2, "a cut between the compounds");
+}
+
+/// AC-3 (FR1, FR3; TM-1): every pair and triple of AC-1, each followed by A BEL
+/// A BEL, in every delivery (one read, every single cut, every pair of cuts, one
+/// byte per read): every read's spans and the adoption count equal the
+/// per-delivery oracle.
+#[test]
+fn altdetect_ac3_every_delivery_of_the_compound_pairs_and_triples_matches_the_oracle() {
+    let streams = detect_pair_streams();
+    assert_eq!(
+        streams.len(),
+        22,
+        "ten pairs after each setup and two triples"
+    );
+    let mut mismatches = Vec::new();
+    for (name, stream) in &streams {
+        mismatches.extend(check_detect_deliveries(name, stream));
+    }
+    assert_no_mismatches(&mismatches);
+}
+
+/// AC-3 (FR2, FR3; TM-1): every AC-2 case written as one stream followed by
+/// A BEL, and the designator cases again with DC, in every delivery: every
+/// read's spans and the adoption count equal the per-delivery oracle.
+#[test]
+fn altdetect_ac3_every_delivery_of_the_carry_streams_matches_the_oracle() {
+    let mut streams = detect_carry_streams();
+    streams.extend(detect_slot_streams("DS", DS));
+    streams.extend(detect_slot_streams("DC", DC));
+    assert_eq!(streams.len(), 8);
+    let mut mismatches = Vec::new();
+    for (name, stream) in &streams {
+        mismatches.extend(check_detect_deliveries(name, stream));
+    }
+    assert_no_mismatches(&mismatches);
+}
+
+// ---- AC-4 ----
+
+/// `text` with the comment markers of every line removed and the whitespace
+/// collapsed to single spaces.
+fn prose(text: &str) -> String {
+    let stripped: Vec<&str> = text
+        .lines()
+        .map(|line| {
+            line.trim_start()
+                .trim_start_matches("///")
+                .trim_start_matches("//")
+        })
+        .collect();
+    stripped
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The prose of `source` from the first occurrence of `from` up to the first
+/// occurrence of `to` after it.
+fn prose_between(source: &str, from: &str, to: &str) -> String {
+    let start = source
+        .find(from)
+        .unwrap_or_else(|| panic!("write_filter.rs has no {from:?}"));
+    let rest = &source[start..];
+    let end = rest
+        .find(to)
+        .unwrap_or_else(|| panic!("write_filter.rs has no {to:?} after {from:?}"));
+    prose(&rest[..end])
+}
+
+/// AC-4 (FR7): the three doc comments of Design section 5 (the tracker's own,
+/// the detection branch of the per-read entry point and the scan's) state that
+/// detection continues for every later compound in the same read and that only
+/// the state recorded after the last detected compound is carried. They no
+/// longer say that a detection clears every carried item or that the tracker
+/// acts on a compound only in a mismatched state.
+#[test]
+fn altdetect_ac4_the_doc_comments_state_the_new_behavior() {
+    let source = include_str!("../write_filter.rs");
+
+    let tracker = prose_between(
+        source,
+        "/// Split-aware live spans for the agent-status feed scanner.",
+        "pub(super) struct AltSpanTracker",
+    );
+    assert!(
+        tracker.contains("detection continues for every later compound of the read"),
+        "the tracker's doc comment: detection continues: {tracker}"
+    );
+    assert!(
+        tracker.contains("Only the state recorded after the last detected compound is carried"),
+        "the tracker's doc comment: the later state is carried: {tracker}"
+    );
+    assert!(
+        !tracker.contains("every carried item is cleared"),
+        "the tracker's doc comment no longer says a detection clears the carry: {tracker}"
+    );
+    assert!(
+        !tracker.contains("acts on it only in a mismatched state"),
+        "the tracker's doc comment no longer says it acts only in a mismatched state: {tracker}"
+    );
+
+    let entry = prose_between(
+        source,
+        "// A detection read: the spans are the fallback",
+        "self.shadow_alt = shadow_alt_after;",
+    );
+    assert!(
+        entry.contains("is kept for the next read"),
+        "the entry point's comment: the carried item is kept: {entry}"
+    );
+    assert!(
+        !entry.contains("nothing is carried"),
+        "the entry point's comment no longer says nothing is carried: {entry}"
+    );
+
+    let scan = prose_between(
+        source,
+        "/// Scan `read` from its start, resolving the carried item first.",
+        "fn scan(",
+    );
+    assert!(
+        scan.contains("so does every later one in the same read"),
+        "the scan's doc comment: every later compound is detected: {scan}"
+    );
+    assert!(
+        scan.contains("follows the last detected compound"),
+        "the scan's doc comment: the carried item follows the last compound: {scan}"
+    );
+    assert!(
+        !scan.contains("ended in a mismatched state)"),
+        "the scan's doc comment no longer ties detection to the first compound alone: {scan}"
+    );
+}
+
+/// AC-4 (FR6): the predecessor's record lists the renamed test under its new
+/// full name in AC-4, carries the supersede note as a YAML comment, and keeps
+/// its `red_reason`.
+#[test]
+fn altdetect_ac4_the_predecessor_record_carries_the_new_name_and_the_supersede_note() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../test-docs/mux-alt-tracker-ris-compound-decset/task0001.tests.yaml");
+    let record = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+    let start = record
+        .find("\n  AC-4:\n")
+        .expect("the record has an AC-4 block")
+        + 1;
+    let rest = &record[start..];
+    let end = rest
+        .find("\n  AC-5:\n")
+        .expect("the record has an AC-5 block");
+    let block = &rest[..end];
+
+    let tests: Vec<&str> = block
+        .lines()
+        .filter_map(|line| line.strip_prefix("      - "))
+        .collect();
+    let renamed = "mux::ipc::pty_spawn::tests::altscreen_split_read::\
+altmismatch_ac4_a_detection_read_applies_later_switches_and_keeps_the_later_carry";
+    assert!(
+        tests.contains(&renamed),
+        "AC-4 lists the new name: {tests:?}"
+    );
+    assert!(
+        !tests
+            .iter()
+            .any(|name| name.ends_with("_and_clears_the_carry")),
+        "AC-4 no longer lists the old name: {tests:?}"
+    );
+    assert_eq!(tests.len(), 5, "{tests:?}");
+
+    assert!(
+        block.contains(
+            "    # Superseded: the expectation \"a detection read clears its carried item\" \
+is replaced by feature-docs/mux-alt-tracker-detection-read-boundary/SPEC.md FR2/FR6.\n"
+        ),
+        "AC-4 carries the supersede note as a YAML comment: {block}"
+    );
+    assert!(block.contains("    red_confirmed: true\n"));
+    assert!(
+        block.contains(
+            "    red_reason: \"Against the unmodified tracker, \
+altmismatch_ac4_a_compound_after_a_mismatch_is_detected_in_its_read failed with"
+        ),
+        "AC-4 keeps its red_reason: {block}"
+    );
+}
+
+// ---- AC-6 ----
+
+/// AC-6 (NFR1; TM-2): after M1 and after M2, a read holding C1h, C1l, C7h or C7l
+/// followed by `ESC`, DS, DC, P2, P1 or DS P2, then a read of one byte (each of
+/// the 256 values), then A BEL: no panic, every result is well formed, and the
+/// carried partial switch never exceeds 7 bytes.
+#[test]
+fn altdetect_ac6_a_detection_read_followed_by_every_byte_value_is_well_formed() {
+    let tails: [(&str, Vec<u8>); 6] = [
+        ("ESC", vec![ESC]),
+        ("DS", DS.to_vec()),
+        ("DC", DC.to_vec()),
+        ("P2", P2.to_vec()),
+        ("P1", P1.to_vec()),
+        ("DS P2", cat(&[DS, P2])),
+    ];
+    for (setup_name, setup) in mismatched_setups() {
+        for (name, compound) in [("C1h", C1H), ("C1l", C1L), ("C7h", C7H), ("C7l", C7L)] {
+            for (tail_name, tail) in &tails {
+                let head = cat(&[compound, tail]);
+                for byte in 0..=u8::MAX {
+                    let ctx = format!("{setup_name} {name} {tail_name} then {byte:#04x}");
+                    let mut rig = Rig::new();
+                    let spans = rig.read(&setup);
+                    assert_well_formed(&ctx, setup.len(), &spans, rig.tracker.partial_len());
+                    let spans = rig.read(&head);
+                    assert_well_formed(&ctx, head.len(), &spans, rig.tracker.partial_len());
+                    let spans = rig.read(&[byte]);
+                    assert_well_formed(&ctx, 1, &spans, rig.tracker.partial_len());
+                    let last = mark();
+                    let spans = rig.read(&last);
+                    assert_well_formed(&ctx, last.len(), &spans, rig.tracker.partial_len());
+                }
             }
         }
     }

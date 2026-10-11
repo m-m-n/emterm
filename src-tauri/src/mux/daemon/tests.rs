@@ -4901,4 +4901,219 @@ mod leading_zero_length {
             mismatches.len()
         );
     }
+
+    // ---- mux-alt-tracker-detection-read-boundary task0001 AC-5 (FR4, FR5;
+    //      TM-1): the mux half of the SC-1z parity corpus (IMPLEMENTATION.md,
+    //      rows K58 to K64), through the real reader loop and the daemon
+    //      agent-status task. The K1 to K15, K16 to K37 and K38 to K57 lists
+    //      above and their tests are not edited ----
+
+    /// The rows K58 to K64 of SC-1z, each with the seed S-W (one root
+    /// `working` record).
+    fn sc1z_rows() -> Vec<Sc1Row> {
+        use ProgramState::Working;
+        let a = open_osc(b"133;A");
+        // M1: term_core on the alternate screen, the shadow parser on the main
+        // screen (it ignores ?1047). M2: the switch's `ESC` is the designator,
+        // so term_core stays on the main screen while the shadow parser enters
+        // the alternate screen.
+        let m1 = alt_enter(1047);
+        let m2 = cat(&[DS, &alt_enter(1049)]);
+
+        // The deliveries a row names: the whole stream in one read, "cuts
+        // a..b" (two reads cut at each offset; a row may list two ranges) and
+        // one byte per read.
+        let deliveries =
+            |cuts: Vec<std::ops::RangeInclusive<usize>>, len: usize| -> Vec<Vec<usize>> {
+                let mut all = vec![Vec::new()];
+                for range in cuts {
+                    all.extend(range.map(|o| vec![o]));
+                }
+                all.push((1..len).collect());
+                all
+            };
+        let row = |name: &'static str,
+                   stream: Vec<u8>,
+                   length: usize,
+                   cuts: Vec<std::ops::RangeInclusive<usize>>,
+                   final_table: Vec<(&'static str, ProgramState)>,
+                   table_changes: Option<usize>| {
+            assert_eq!(stream.len(), length, "{name}: stream length");
+            Sc1Row {
+                name,
+                seed: Seed::W,
+                deliveries: deliveries(cuts, length),
+                stream,
+                final_table,
+                final_osc777: None,
+                table_changes,
+            }
+        };
+        let root_working = || vec![("", Working)];
+
+        vec![
+            // Two compounds in one read after M1.
+            row(
+                "K58",
+                cat(&[&m1, C1L, C1H, &a, BEL]),
+                36,
+                vec![1..=35],
+                root_working(),
+                Some(0),
+            ),
+            row(
+                "K59",
+                cat(&[&m1, C7L, CRH, &a, BEL]),
+                36,
+                vec![1..=35],
+                root_working(),
+                Some(0),
+            ),
+            // Two compounds in one read after M2. The cuts 20 to 29 are not
+            // listed: the l-form's final byte would arrive in a read that
+            // starts with both screens on the alternate screen and detects
+            // nothing (IMPLEMENTATION.md, D5).
+            row(
+                "K60",
+                cat(&[&m2, C1H, C1L, &a, BEL]),
+                38,
+                vec![1..=19, 30..=37],
+                vec![],
+                None,
+            ),
+            row(
+                "K61",
+                cat(&[&m2, C7H, C1L, &a, BEL]),
+                38,
+                vec![1..=19, 30..=37],
+                vec![],
+                None,
+            ),
+            // A carried item after the compound.
+            row(
+                "K62",
+                cat(&[&m1, C7H, DS, RIS, &a, BEL]),
+                30,
+                vec![1..=29],
+                root_working(),
+                Some(0),
+            ),
+            row(
+                "K63",
+                cat(&[&m1, C7H, RIS, W, &a, BEL]),
+                49,
+                vec![1..=48],
+                vec![],
+                None,
+            ),
+            row(
+                "K64",
+                cat(&[&m1, C1L, &alt_enter(1047), &a, BEL]),
+                34,
+                vec![1..=33],
+                root_working(),
+                Some(0),
+            ),
+        ]
+    }
+
+    /// Feed every row of `rows`, with the row's seed and every mux delivery the
+    /// row names, through the real reader loop and the daemon task. Returns the
+    /// mismatches (each names its row and delivery) and the number of
+    /// deliveries run.
+    async fn run_sc1_rows(rows: Vec<Sc1Row>) -> (Vec<String>, usize) {
+        let mut mismatches: Vec<String> = Vec::new();
+        let mut deliveries_run = 0usize;
+        for row in rows {
+            let expected_table: Vec<(String, ProgramState)> = row
+                .final_table
+                .iter()
+                .map(|&(id, state)| (id.to_string(), state))
+                .collect();
+            for offsets in &row.deliveries {
+                deliveries_run += 1;
+                let label = format!("{} delivered as reads cut at {offsets:?}", row.name);
+                let seed = row.seed;
+                let driven = drive_reads(
+                    move |pane| seed.apply(pane),
+                    cut_into_reads(&row.stream, offsets),
+                )
+                .await;
+                if driven.records != expected_table {
+                    mismatches.push(format!(
+                        "{label}: table {:?}, expected {expected_table:?}",
+                        driven.records
+                    ));
+                }
+                if driven.osc777_state != row.final_osc777 {
+                    mismatches.push(format!(
+                        "{label}: OSC 777 state {:?}, expected {:?}",
+                        driven.osc777_state, row.final_osc777
+                    ));
+                }
+                if let Some(changes) = row.table_changes {
+                    if driven.updates.len() != changes {
+                        mismatches.push(format!(
+                            "{label}: {} broadcasts, expected {changes}",
+                            driven.updates.len()
+                        ));
+                    }
+                    if driven.revision != driven.revision_before + changes as u64 {
+                        mismatches.push(format!(
+                            "{label}: revision {} -> {}, expected {changes} step(s)",
+                            driven.revision_before, driven.revision
+                        ));
+                    }
+                }
+            }
+        }
+        (mismatches, deliveries_run)
+    }
+
+    /// AC-5 (FR4, FR5; TM-1): the rows K58 to K64 are a list of their own, and
+    /// each row lists the deliveries IMPLEMENTATION.md names for it.
+    #[test]
+    fn altdetect_ac5_the_sc1z_rows_are_a_list_of_their_own_with_the_listed_deliveries() {
+        let rows = sc1z_rows();
+        let names: Vec<&str> = rows.iter().map(|row| row.name).collect();
+        assert_eq!(names, ["K58", "K59", "K60", "K61", "K62", "K63", "K64"]);
+        // One read, the listed cuts and one byte per read.
+        let counts: Vec<usize> = rows.iter().map(|row| row.deliveries.len()).collect();
+        assert_eq!(counts, [37, 37, 29, 29, 31, 50, 35]);
+        for row in &rows {
+            assert!(
+                !sc1y_rows().iter().any(|old| old.name == row.name)
+                    && !sc1x_rows().iter().any(|old| old.name == row.name)
+                    && !sc1_rows().iter().any(|old| old.name == row.name),
+                "{}: not in an earlier list",
+                row.name
+            );
+        }
+        // K60 and K61 list no cut from 20 to 29.
+        for row in rows.iter().filter(|row| ["K60", "K61"].contains(&row.name)) {
+            assert!(
+                row.deliveries
+                    .iter()
+                    .all(|offsets| !matches!(offsets.as_slice(), [o] if (20..=29).contains(o))),
+                "{}",
+                row.name
+            );
+        }
+    }
+
+    /// AC-5: every SC-1z row K58 to K64, fed with the row's seed and every mux
+    /// delivery the row names, ends in the row's final OSC 7501 table and OSC
+    /// 777 state and, where the row gives one, its table-change count. Every
+    /// mismatch names its row and delivery.
+    #[tokio::test]
+    async fn altdetect_ac5_every_sc1z_row_ends_in_its_final_table_and_osc_777_state() {
+        let rows = sc1z_rows();
+        assert_eq!(rows.len(), 7, "K58 to K64");
+        let (mismatches, deliveries_run) = run_sc1_rows(rows).await;
+        assert!(
+            mismatches.is_empty(),
+            "{} of {deliveries_run} deliveries mismatched: {mismatches:#?}",
+            mismatches.len()
+        );
+    }
 }
