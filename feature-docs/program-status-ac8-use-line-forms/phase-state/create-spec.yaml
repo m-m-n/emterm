@@ -1,11 +1,11 @@
 schema_version: 1
 feature: program-status-ac8-use-line-forms
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: a7624f7098559113804b914b754f700d2847773c
-last_input_digest: sha256:76c47c425f258d5b0bf0a4b7a85869e623f2641439f2502714b11422c603212e
-active_request_id: null
+last_input_digest: sha256:42b1fb9078e4b9687d43af18386af45a3b7d3326b25b1b580d5240da80849ae0
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: answered
@@ -71,6 +71,10 @@ worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:76c47c425f258d5b0bf0a4b7a85869e623f2641439f2502714b11422c603212e
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:42b1fb9078e4b9687d43af18386af45a3b7d3326b25b1b580d5240da80849ae0
   output_digest: null
 artifacts: []
 patches: []
