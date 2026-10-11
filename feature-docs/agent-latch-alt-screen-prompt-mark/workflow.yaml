@@ -104,7 +104,7 @@ workflow:
   base_commit: b3436601d88e82d434eafdf35081136b5f608ade
   completed_at_commit: ca8c9dcf62b0f784961e8aa2ade9adea08418eb8
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -139,6 +139,13 @@ tasks:
 review:
   status: pending
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
 requirements:
   FR1:
     title: alt screen の候補を latch の照合から除外する
