@@ -1116,11 +1116,11 @@ fn find_osc_end(bytes: &[u8], from: usize) -> StringScanResult {
 }
 
 /// (pattern, is_enter) pairs for the alt-screen toggle CSI sequences.
-/// `h` enters the alternate screen, `l` returns to main. Shared with
-/// [`AgentStatusFeedScanner`] (below) so its own alt-screen tracking for
-/// OSC 133 mark gating (SPEC FR5) stays byte-for-byte consistent with this
-/// function's — both must agree on exactly which spans of a chunk count as
-/// "live main buffer".
+/// `h` enters the alternate screen, `l` returns to main. Shared by
+/// [`extract_main_buffer`] and [`AltSpanTracker`] (below), so the live spans
+/// the tracker gives [`AgentStatusFeedScanner`] for OSC 133 mark gating (SPEC
+/// FR5) stay byte-for-byte consistent with the extraction's — both must agree
+/// on exactly which spans of the stream count as "live main buffer".
 const ALT_SCREEN_TOGGLES: [(&[u8], bool); 6] = [
     (b"\x1b[?1049h", true),
     (b"\x1b[?1049l", false),
@@ -1376,6 +1376,423 @@ pub(super) fn extract_main_buffer<'a>(
     }
 }
 
+/// Longest proper prefix of a switch pattern a read can end in: the patterns of
+/// [`ALT_SCREEN_TOGGLES`] are at most 8 bytes.
+const SWITCH_PREFIX_CAP: usize = 7;
+
+/// What a carried partial switch sequence's `ESC` is to the client's parser.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PartialKind {
+    /// A live `ESC`: if the sequence completes, the client's parser switches
+    /// screens, so the sequence's bytes are not content.
+    Live,
+    /// An `ESC` in a charset-designator slot: the client's parser consumes it as
+    /// the designator, so its bytes are printed text whether or not the sequence
+    /// completes. A parser that treats every `ESC` as an abort (the shadow
+    /// parser) still switches when it completes.
+    Designator,
+}
+
+/// The at most [`SWITCH_PREFIX_CAP`] bytes of a proper prefix of a switch
+/// pattern the last read ended in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PartialSwitch {
+    kind: PartialKind,
+    len: u8,
+    bytes: [u8; SWITCH_PREFIX_CAP],
+}
+
+impl PartialSwitch {
+    fn new(kind: PartialKind, bytes: &[u8]) -> Self {
+        let len = bytes.len().min(SWITCH_PREFIX_CAP);
+        let mut held = [0u8; SWITCH_PREFIX_CAP];
+        held[..len].copy_from_slice(&bytes[..len]);
+        Self {
+            kind,
+            len: len as u8,
+            bytes: held,
+        }
+    }
+
+    fn held(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+}
+
+/// What [`AltSpanTracker`] carries from one read to the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrackerCarry {
+    /// Nothing that makes the next read's first bytes special.
+    Nothing,
+    /// The last read ended right after a live `ESC (` / `ESC )`: the first byte
+    /// of the next read is the charset designator.
+    Awaiting,
+    /// The last read ended inside a proper prefix of a switch pattern. A lone
+    /// live `ESC` is the shortest one: the next read decides whether it opens a
+    /// switch, a designator slot or neither.
+    Partial(PartialSwitch),
+}
+
+/// How a buffer that starts at an `ESC` relates to the switch patterns.
+enum SwitchMatch {
+    /// The buffer starts with the whole pattern.
+    Complete(&'static [u8], bool),
+    /// The buffer is a proper prefix of at least one pattern.
+    Prefix,
+    /// Neither.
+    Other,
+}
+
+fn match_switch(buf: &[u8]) -> SwitchMatch {
+    if let Some((pattern, is_enter)) = toggle_at(buf) {
+        return SwitchMatch::Complete(pattern, is_enter);
+    }
+    if buf.len() <= SWITCH_PREFIX_CAP
+        && ALT_SCREEN_TOGGLES
+            .iter()
+            .any(|(pattern, _)| pattern.starts_with(buf))
+    {
+        return SwitchMatch::Prefix;
+    }
+    SwitchMatch::Other
+}
+
+/// Whether the shadow parser (vt100 0.16) acts on a completed switch pattern:
+/// it enters and leaves the alternate screen on ?1049 and ?47 and ignores
+/// ?1047.
+fn shadow_follows(pattern: &[u8]) -> bool {
+    !pattern.starts_with(b"\x1b[?1047")
+}
+
+/// The live byte runs of one read, built as the scan moves along it. Only
+/// non-empty ranges are kept, ascending and non-overlapping.
+struct LiveRun {
+    open: Option<usize>,
+    spans: Vec<std::ops::Range<usize>>,
+}
+
+impl LiveRun {
+    fn new() -> Self {
+        Self {
+            open: None,
+            spans: Vec::new(),
+        }
+    }
+
+    /// Bytes from `at` on are live, unless a run is already open.
+    fn open_at(&mut self, at: usize) {
+        if self.open.is_none() {
+            self.open = Some(at);
+        }
+    }
+
+    /// Bytes from `at` on are not live.
+    fn close_at(&mut self, at: usize) {
+        if let Some(start) = self.open.take() {
+            if start < at {
+                self.spans.push(start..at);
+            }
+        }
+    }
+}
+
+/// Where a read's scan goes on after the carried partial is resolved.
+enum Resumed {
+    /// Scan from `at`; `designator` says the byte at `at` is a charset
+    /// designator.
+    Scan { at: usize, designator: bool },
+    /// The whole read extended the partial.
+    Consumed,
+}
+
+/// Split-aware live spans for the agent-status feed scanner.
+///
+/// The reader hands the scanner, for every read, the byte ranges eligible for
+/// OSC 133 marks. [`extract_main_buffer`] decides them one read at a time, so a
+/// switch sequence cut by a read boundary, or a switch completed by a read's
+/// first bytes, is placed wrongly. The tracker follows the screen across reads
+/// instead: it carries the partial state of a switch sequence (a proper prefix
+/// of a pattern, at most [`SWITCH_PREFIX_CAP`] bytes, and the designator-slot
+/// wait) and gives each read the spans the bulk extraction of the whole stream
+/// gives that read.
+///
+/// Two screens are followed. The client rule is `term_core`'s, which the
+/// extraction follows: every recognized pattern switches, except one whose `ESC`
+/// sits in the byte right after `ESC (` / `ESC )` (the designator plus printed
+/// text). The shadow rule is the shadow parser's: every `ESC` aborts what came
+/// before it, so a pattern in a designator slot switches too, and only ?1049 and
+/// ?47 switch ([`shadow_follows`]). The reader cross-checks the shadow rule with
+/// the parser's own state on every read.
+///
+/// The bytes of a live partial that lies on the main screen are the read's
+/// undecided tail and are not live: the sequence's bytes are not content if it
+/// completes in the next read, which is what the bulk extraction gives. The
+/// scanner decides liveness only at a `BEL` / `\` that commits a string, at the
+/// byte before an in-body `ESC`, and at a read's last byte inside an OSC body,
+/// and a partial holds none of those, so the scanner's items do not depend on
+/// that choice.
+///
+/// Per read, the tracker (1) adopts the parser's state when it differs from the
+/// shadow-rule screen the last read ended in (something rebuilt the parser),
+/// (2) resolves the carried partial against the read's first bytes, (3) scans the
+/// rest with the extraction's rules, (4) records a new partial, and (5) when its
+/// shadow-rule screen differs from the parser's state after the read (a switch
+/// form the tracker does not model, or a control byte inside a sequence), gives
+/// the conservative fallback spans and adopts the parser's state. The scrollback
+/// write path never sees these spans.
+pub(super) struct AltSpanTracker {
+    /// The screen under the client rule.
+    client_alt: bool,
+    /// The screen under the shadow rule.
+    shadow_alt: bool,
+    carry: TrackerCarry,
+    /// Times a check disagreed with the shadow parser and the parser's state
+    /// was adopted.
+    #[cfg(test)]
+    adoptions: u32,
+}
+
+impl AltSpanTracker {
+    pub(super) fn new() -> Self {
+        Self {
+            client_alt: false,
+            shadow_alt: false,
+            carry: TrackerCarry::Nothing,
+            #[cfg(test)]
+            adoptions: 0,
+        }
+    }
+
+    /// The live spans of `read` (read-relative, ascending, non-overlapping,
+    /// non-empty), given the shadow parser's alternate-screen state before and
+    /// after it. Reads must be advanced in order, every one the parser
+    /// processes.
+    pub(super) fn advance(
+        &mut self,
+        read: &[u8],
+        shadow_alt_before: bool,
+        shadow_alt_after: bool,
+    ) -> Vec<std::ops::Range<usize>> {
+        if self.shadow_alt != shadow_alt_before {
+            self.adopt(shadow_alt_before);
+        }
+        let mut live = LiveRun::new();
+        self.scan(read, &mut live);
+        if self.shadow_alt != shadow_alt_after {
+            self.adopt(shadow_alt_after);
+            // The fallback: the whole read when the parser stood on the main
+            // screen before and after it, no live byte otherwise.
+            return if !shadow_alt_before && !shadow_alt_after && !read.is_empty() {
+                vec![0..read.len()]
+            } else {
+                Vec::new()
+            };
+        }
+        live.spans
+    }
+
+    /// Both screens take the parser's state; no partial is carried.
+    fn adopt(&mut self, alt: bool) {
+        self.client_alt = alt;
+        self.shadow_alt = alt;
+        self.carry = TrackerCarry::Nothing;
+        #[cfg(test)]
+        {
+            self.adoptions += 1;
+        }
+    }
+
+    fn scan(&mut self, read: &[u8], live: &mut LiveRun) {
+        let n = read.len();
+        if !self.client_alt {
+            live.open_at(0);
+        }
+        let mut at = 0usize;
+        // Whether the byte at `at` is a charset designator (consumed whatever
+        // it is).
+        let mut designator = false;
+        match std::mem::replace(&mut self.carry, TrackerCarry::Nothing) {
+            TrackerCarry::Nothing => {}
+            TrackerCarry::Awaiting => designator = true,
+            TrackerCarry::Partial(partial) => match self.resume(partial, read, live) {
+                Resumed::Consumed => {
+                    live.close_at(n);
+                    return;
+                }
+                Resumed::Scan {
+                    at: next,
+                    designator: next_designator,
+                } => {
+                    at = next;
+                    designator = next_designator;
+                }
+            },
+        }
+
+        loop {
+            if designator {
+                designator = false;
+                if at >= n {
+                    self.carry = TrackerCarry::Awaiting;
+                    break;
+                }
+                // The byte is the designator. An `ESC` there is text for the
+                // client; the shadow parser still reads a switch from it.
+                if read[at] == 0x1b {
+                    match match_switch(&read[at..]) {
+                        SwitchMatch::Complete(pattern, is_enter) => {
+                            if shadow_follows(pattern) {
+                                self.shadow_alt = is_enter;
+                            }
+                            at += pattern.len();
+                        }
+                        SwitchMatch::Prefix => {
+                            self.carry = TrackerCarry::Partial(PartialSwitch::new(
+                                PartialKind::Designator,
+                                &read[at..],
+                            ));
+                            break;
+                        }
+                        SwitchMatch::Other => at += 1,
+                    }
+                } else {
+                    at += 1;
+                }
+                continue;
+            }
+
+            let Some(offset) = read[at.min(n)..].iter().position(|&b| b == 0x1b) else {
+                break;
+            };
+            let esc = at + offset;
+            match match_switch(&read[esc..]) {
+                SwitchMatch::Complete(pattern, is_enter) => {
+                    live.close_at(esc);
+                    self.client_alt = is_enter;
+                    if shadow_follows(pattern) {
+                        self.shadow_alt = is_enter;
+                    }
+                    at = esc + pattern.len();
+                    if !self.client_alt {
+                        live.open_at(at);
+                    }
+                }
+                SwitchMatch::Prefix => {
+                    // The read ends inside a proper prefix of a pattern: the
+                    // undecided tail.
+                    live.close_at(esc);
+                    self.carry =
+                        TrackerCarry::Partial(PartialSwitch::new(PartialKind::Live, &read[esc..]));
+                    break;
+                }
+                SwitchMatch::Other => {
+                    if matches!(read.get(esc + 1), Some(b'(' | b')')) {
+                        at = esc + 2;
+                        designator = true;
+                    } else {
+                        at = esc + 1;
+                    }
+                }
+            }
+        }
+        live.close_at(n);
+    }
+
+    /// Resolve the carried `partial` against the first bytes of `read`: the read
+    /// completes it, extends it (the whole read is still a proper prefix), or
+    /// diverges from it.
+    fn resume(&mut self, partial: PartialSwitch, read: &[u8], live: &mut LiveRun) -> Resumed {
+        let held = partial.held();
+        let have = held.len();
+        let mut completes: Option<(&'static [u8], bool)> = None;
+        let mut extends = false;
+        // How far the read agrees with the best-matching candidate pattern.
+        let mut agreed = 0usize;
+        for &(pattern, is_enter) in ALT_SCREEN_TOGGLES.iter() {
+            if pattern.len() <= have || !pattern.starts_with(held) {
+                continue;
+            }
+            let rest = &pattern[have..];
+            let common = rest.iter().zip(read).take_while(|(a, b)| a == b).count();
+            if common == rest.len() {
+                completes = Some((pattern, is_enter));
+            } else if common == read.len() {
+                extends = true;
+            }
+            agreed = agreed.max(common);
+        }
+
+        if let Some((pattern, is_enter)) = completes {
+            let consumed = pattern.len() - have;
+            match partial.kind {
+                PartialKind::Live => {
+                    live.close_at(0);
+                    self.client_alt = is_enter;
+                    if shadow_follows(pattern) {
+                        self.shadow_alt = is_enter;
+                    }
+                    if !self.client_alt {
+                        live.open_at(consumed);
+                    }
+                }
+                PartialKind::Designator => {
+                    if shadow_follows(pattern) {
+                        self.shadow_alt = is_enter;
+                    }
+                }
+            }
+            return Resumed::Scan {
+                at: consumed,
+                designator: false,
+            };
+        }
+
+        if extends {
+            let mut joined = [0u8; 2 * SWITCH_PREFIX_CAP];
+            let total = (have + read.len()).min(joined.len());
+            joined[..have].copy_from_slice(held);
+            joined[have..total].copy_from_slice(&read[..total - have]);
+            self.carry = TrackerCarry::Partial(PartialSwitch::new(partial.kind, &joined[..total]));
+            if partial.kind == PartialKind::Live {
+                live.close_at(0);
+            }
+            return Resumed::Consumed;
+        }
+
+        // The bytes the partial held were ordinary after all. A lone live `ESC`
+        // followed by `(` / `)` opens a designator slot; anything else resumes
+        // the scan at the diverging byte.
+        if partial.kind == PartialKind::Live
+            && have == 1
+            && matches!(read.first(), Some(b'(' | b')'))
+        {
+            return Resumed::Scan {
+                at: 1,
+                designator: true,
+            };
+        }
+        Resumed::Scan {
+            at: agreed,
+            designator: false,
+        }
+    }
+
+    /// The length of the carried partial switch sequence.
+    #[cfg(test)]
+    pub(super) fn partial_len(&self) -> usize {
+        match self.carry {
+            TrackerCarry::Partial(partial) => partial.len as usize,
+            _ => 0,
+        }
+    }
+
+    /// How many times a check disagreed with the shadow parser.
+    #[cfg(test)]
+    pub(super) fn adoptions(&self) -> u32 {
+        self.adoptions
+    }
+}
+
 /// Decode state for [`AgentStatusFeedScanner`] — structurally identical to
 /// the (separate) `AgentStatusOscScanner` / `Osc133MarkScanner` state
 /// machines in `scrollback_filter.rs`, but unified into ONE pass so an OSC
@@ -1445,11 +1862,12 @@ pub(super) const AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP: usize = 8 * 1024;
 ///
 /// FR5 (live-only, main-screen-only) is preserved exactly: the caller
 /// passes `live_spans`, the byte ranges of `chunk` already known to be live
-/// main-buffer content (the same spans [`extract_main_buffer_bytes`]
-/// computes for the scrollback-write path) — a mark is only emitted when
-/// its completing byte falls inside one of those spans. Reports remain
-/// unconditional (their validity never depended on screen content), and so
-/// do OSC 7501 sequences and RIS.
+/// main-buffer content — the reader hands it the spans of [`AltSpanTracker`],
+/// which follow the same rule as [`extract_main_buffer`] but carry a switch
+/// sequence cut by a read boundary from one read to the next — a mark is
+/// only emitted when its completing byte falls inside one of those spans.
+/// Reports remain unconditional (their validity never depended on screen
+/// content), and so do OSC 7501 sequences and RIS.
 ///
 /// An OSC 7501 body shares the bounded carry of every other body: one longer
 /// than [`AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP`], or one that never
