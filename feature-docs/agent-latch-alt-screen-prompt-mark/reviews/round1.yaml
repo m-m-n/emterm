@@ -1,0 +1,51 @@
+round: 1
+executed_at: "2026-10-11T17:17:13+09:00"
+scope:
+  review_mode: diff
+  base_commit: b3436601d88e82d434eafdf35081136b5f608ade
+  head_commit: 0ef6de0a878ec67b9b0c2e4ba17394c2f1697b54
+  changed_files:
+  - src-tauri/src/agent_status_model.rs
+  - src-tauri/src/agent_status_model/tests.rs
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - src-tauri/src/tabs/output_pipeline.rs
+  - src-tauri/src/tabs/tests/mux_link.rs
+  - test-docs/agent-latch-alt-screen-prompt-mark/task0001.tests.yaml
+  - test-docs/osc7501-alt-screen-prompt-mark/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "vulnerability#tool", perspective: vulnerability, role: tool, source: tool, status: skipped, skip_reason: "not selected (no dependency manifest or lockfile in diff)"}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "ラウンド1（diff モード、cross_validation=false）。security#0 / comprehensive#0 / spec#0 の 3 本はどれも指摘 0 件。evaluator も差分を読んで確認し、handle_semantic_prompt で !alt_screen_active のときだけ latch feed と 7501 feed に候補を積む変更が FR1〜FR3・NFR1/NFR2・AC-1〜AC-6 に対応していると判断。補足: (1) 差分外の既存不一致として、callbacks 側は先頭 1 バイトで kind を判定し term_core 側は ';' までの完全一致で判定するため、main screen の不正 payload（例 Ax）が live マークを早く消費しうる（対象範囲外のため指摘に入れず）。(2) 読み取り予算 10 ファイルを 1 つ超過（11 ファイル）。"
+  recommended_action: complete
+  action_rationale: "3 本のレビューはどれも medium 以上の指摘を出さず、evaluator の確認でも実装・テスト・test-docs レコード更新に問題なし。残る観察は差分外の既存不一致のみ。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-agent-latch-alt-screen-prompt-mark-20261011T081656Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
