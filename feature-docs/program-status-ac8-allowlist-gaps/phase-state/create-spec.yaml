@@ -1,7 +1,7 @@
 schema_version: 1
 feature: program-status-ac8-allowlist-gaps
 phase: create-spec
-status: in_progress
+status: completed
 generation: 1
 base_revision: 8253902d2deb2ff97ad9c7d55e69487ca132111f
 last_input_digest: sha256:8620571be82fe76cae597791dcaa9e35ba2235fc41bac208c48b9b678e306155
