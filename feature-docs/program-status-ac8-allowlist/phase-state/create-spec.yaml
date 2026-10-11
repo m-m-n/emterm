@@ -1,16 +1,78 @@
 schema_version: 1
 feature: program-status-ac8-allowlist
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: 6673f82dfbee3cbe279a0871020fa4fe1c891c3f
 last_input_digest: sha256:4b2f4ee349346583281046f63777393fb18156fe902ab3aa7412d05ddcad2934
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-11T18:28:00+09:00'
+    questions:
+    - question_id: requirement.ac8-scan-scope
+      status: answered
+    - question_id: requirement.ac8-test-name
+      status: answered
+    - question_id: requirement.ac8-checker-self-test
+      status: answered
+    - question_id: requirement.ac8-allowlist-gate-check
+      status: answered
+answers:
+  requirement.ac8-scan-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T18:32:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - all_paths
+    freeform: null
+    normalized_answer: 'Scan every crate::/super:: occurrence in program_status.rs;
+      only super::agent_status (segment boundary) passes; crate:: always rejected;
+      pub use treated as use.'
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted:
+      true; codex chose the analyst-recommended option; recorded as assumption'
+  requirement.ac8-test-name:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T18:32:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - keep_name
+    freeform: null
+    normalized_answer: Keep ac8_the_module_uses_only_always_built_crates; no test-docs
+      record update.
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted:
+      true; codex chose the analyst-recommended option; recorded as assumption'
+  requirement.ac8-checker-self-test:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T18:32:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - add_self_tests
+    freeform: null
+    normalized_answer: Extract the checker into a fn and add synthetic-source tests
+      for allow and reject cases (incl. super::agent_status_exit_latch prefix case,
+      pub use, non-use paths).
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted:
+      true; codex chose the analyst-recommended option; recorded as assumption'
+  requirement.ac8-allowlist-gate-check:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T18:32:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - out_of_scope
+    freeform: null
+    normalized_answer: Allowlist is fixed; gating regressions are caught by cargo
+      check --no-default-features.
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted:
+      true; codex chose the analyst-recommended option; recorded as assumption'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:4b2f4ee349346583281046f63777393fb18156fe902ab3aa7412d05ddcad2934
   output_digest: null
 artifacts: []
