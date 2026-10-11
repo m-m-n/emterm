@@ -5,7 +5,7 @@ status: in_progress
 generation: 1
 base_revision: 8253902d2deb2ff97ad9c7d55e69487ca132111f
 last_input_digest: sha256:8620571be82fe76cae597791dcaa9e35ba2235fc41bac208c48b9b678e306155
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -57,6 +57,16 @@ answers:
       no UI); batch policy create-spec.design-step=decide_autonomously accepts the
       recommendation
     resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-10-11T19:21:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: src-tauri/web-shared/settings/ui-theme-presets.ts
+      (top of 2 candidates)'
 worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
@@ -67,10 +77,13 @@ worker_runs:
   input_digest: sha256:8620571be82fe76cae597791dcaa9e35ba2235fc41bac208c48b9b678e306155
   output_digest: null
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:8620571be82fe76cae597791dcaa9e35ba2235fc41bac208c48b9b678e306155
-  output_digest: null
-artifacts: []
+  output_digest: sha256:d14c719e1e25db89865a1b8de5317a4d7677345bed93945860d53ec134d438df
+artifacts:
+- path: feature-docs/program-status-ac8-allowlist-gaps/SPEC.md
+  sha256: sha256:d14c719e1e25db89865a1b8de5317a4d7677345bed93945860d53ec134d438df
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
