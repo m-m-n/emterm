@@ -170,7 +170,7 @@ tasks:
     - FR5
     - FR8
     - NFR5
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-alt-tracker-detection-read-boundary/task0002
 review:
   status: pending
