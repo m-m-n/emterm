@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: 670ff311f2401df09836c6db78a4e5c0a610752c
 last_input_digest: sha256:ad6baf31fda372cfe32a99395dc25c1bd26e80eb4a602e89c845233fc25b6c3f
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -56,10 +56,16 @@ worker_runs:
   input_digest: sha256:4141c52d9a1b2f0afda55e39cf91fa7e21033be1137600b52a3d400aeec219ef
   output_digest: null
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:ad6baf31fda372cfe32a99395dc25c1bd26e80eb4a602e89c845233fc25b6c3f
   output_digest: null
-artifacts: []
+artifacts:
+- path: feature-docs/mux-alt-tracker-ris-compound-decset/REQUIREMENTS.md
+  sha256: sha256:4fb5286a449249f4727e0147469bdf35b3b0430a2a1a282bc9374d1583e06d5c
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-alt-tracker-ris-compound-decset/SPEC.md
+  sha256: sha256:83ba13ca4ad047058588c72bbdb19af09a1a9f1c5c54fa92dfc6c35172d7e3a7
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
