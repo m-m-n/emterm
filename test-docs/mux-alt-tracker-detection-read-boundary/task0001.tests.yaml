@@ -1,0 +1,68 @@
+task_id: task0001
+baseline_failures:             # full --lib run before any edit: 4735 passed, 1 failed, 3 ignored
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+final_failures: []             # full --lib run re-executed after the implementation, the formatting and this record (4755 passed, 0 failed, 3 ignored). Earlier full runs of the same tree: mux::inherited_pty::tests::dropping_the_adapter_closes_the_owned_descriptor failed once (a descriptor-number reuse race between parallel tests, outside this task) and passed in the other runs; the baseline test from_restored_pane_can_write_and_read_through_its_adopted_master failed in the baseline run and in one run made to observe red doc tests, and passed in the other runs including this one
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac1_reproduction_1_an_l_form_and_an_h_form_after_m1_are_both_detected
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac1_the_reverse_an_h_form_and_an_l_form_after_m2_are_both_detected
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac1_every_pair_of_compounds_in_one_read_counts_one_adoption
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac1_three_alternating_compounds_in_one_read_count_one_adoption
+    red_confirmed: true
+    red_reason: "Against the unmodified tracker (new tests only, no production change), altdetect_ac1_reproduction_1_an_l_form_and_an_h_form_after_m1_are_both_detected failed with 'the second read' (the h-form was not detected, so the mark after it stayed live), altdetect_ac1_the_reverse_an_h_form_and_an_l_form_after_m2_are_both_detected failed with 'the second read left: [] right: [0..28]' (the l-form was not detected, so the read ended on the alternate screen) and altdetect_ac1_every_pair_of_compounds_in_one_read_counts_one_adoption failed with 'M1 C1l C1h: the pair's read'. altdetect_ac1_three_alternating_compounds_in_one_read_count_one_adoption passed before the change: with three alternating compounds the first detection already leaves the screens where the later ones would put them, so spans and the adoption count are the same (no red state of its own; the every-delivery tests of AC-3 separate the two behaviors for the same streams)."
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac2_reproduction_2_the_designator_wait_after_a_detection_read_is_kept
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac2_a_kept_partial_completes_a_pattern_that_enters_the_alternate_screen
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac2_a_kept_partial_completes_a_pattern_that_leaves_the_alternate_screen
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac2_a_kept_csi_parse_is_detected_in_the_next_read
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac2_a_kept_lone_esc_and_the_next_c_are_a_ris
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac2_a_kept_designator_partial_completes_in_the_slot
+    red_confirmed: true
+    red_reason: "Against the unmodified tracker every one of the six tests failed: altdetect_ac2_reproduction_2_the_designator_wait_after_a_detection_read_is_kept with 'the ESC c sits in the designator slot' (the cleared designator wait made the ESC c a RIS and the mark live), the two partial-switch tests with 'left: 0 right: 5' (partial length), altdetect_ac2_a_kept_csi_parse_is_detected_in_the_next_read with 'left: [] right: [0..11]' (the cleared parse left 49l as text), altdetect_ac2_a_kept_lone_esc_and_the_next_c_are_a_ris with 'left: 0 right: 1' (partial length) and altdetect_ac2_a_kept_designator_partial_completes_in_the_slot with 'DS left: 0 right: 5'."
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac3_every_delivery_of_the_compound_pairs_and_triples_matches_the_oracle
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac3_every_delivery_of_the_carry_streams_matches_the_oracle
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac3_the_oracle_gives_the_literal_results_of_two_deliveries
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac3_the_adoption_count_differs_by_delivery
+    red_confirmed: true
+    red_reason: "Against the unmodified tracker altdetect_ac3_every_delivery_of_the_compound_pairs_and_triples_matches_the_oracle failed with '23559 mismatches', first 'M1 C1l C1h cut at []: read 0..44: spans [0..44], expected []', and altdetect_ac3_every_delivery_of_the_carry_streams_matches_the_oracle failed with '2341 mismatches', first 'M1 C1l P2 47h A BEL cut at [19]: read 19..42: spans [0..23], expected []'. altdetect_ac3_the_oracle_gives_the_literal_results_of_two_deliveries is a sanity check of the test-side oracle against literal results (it does not run the tracker) and altdetect_ac3_the_adoption_count_differs_by_delivery pins counts that the unmodified tracker also gives; both passed before the change (no red state of their own)."
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac4_a_detection_read_applies_later_switches_and_keeps_the_later_carry
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac4_the_doc_comments_state_the_new_behavior
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac4_the_predecessor_record_carries_the_new_name_and_the_supersede_note
+    red_confirmed: true
+    red_reason: "Against the unmodified tracker, with the old doc comments and the old predecessor record, the renamed test altmismatch_ac4_a_detection_read_applies_later_switches_and_keeps_the_later_carry failed with 'assertion left == right failed left: 0 right: 5' (the partial length after M1 then C1l ESC [?10), altdetect_ac4_the_doc_comments_state_the_new_behavior failed on the tracker's doc comment (it says every carried item is cleared and does not say that detection continues) and altdetect_ac4_the_predecessor_record_carries_the_new_name_and_the_supersede_note failed on 'AC-4 lists the new name'. That the old test name no longer exists and the new full name is a test line was checked in the --lib -- --list output (the new name appears, the old name does not), and that the predecessor's SPEC.md and REQUIREMENTS.md are unchanged was checked by git diff (feature-docs untouched); neither has a test that can fail beforehand."
+  AC-5:
+    tests:
+      - mux::daemon::tests::leading_zero_length::altdetect_ac5_every_sc1z_row_ends_in_its_final_table_and_osc_777_state
+      - mux::daemon::tests::leading_zero_length::altdetect_ac5_the_sc1z_rows_are_a_list_of_their_own_with_the_listed_deliveries
+    red_confirmed: true
+    red_reason: "Against the unmodified tracker altdetect_ac5_every_sc1z_row_ends_in_its_final_table_and_osc_777_state failed with '240 of 248 deliveries mismatched': 'K58 delivered as reads cut at []: table [], expected root working' (the second compound was not detected, so the mark was live and cleared the root) and 'K62 delivered as reads cut at [20]: table [], expected root working' (the cleared designator wait made the ESC c a RIS), also K64 at cut 23 (ESC [?10 | 47h) and K63 at cut 19 (ESC | c). altdetect_ac5_the_sc1z_rows_are_a_list_of_their_own_with_the_listed_deliveries checks the shape of the list (row names, delivery counts, no cut 20 to 29 in K60 and K61, names absent from the earlier lists) and passed before the change (no red state of its own)."
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altdetect_ac6_a_detection_read_followed_by_every_byte_value_is_well_formed
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac6_every_compound_prefix_followed_by_every_byte_value_is_well_formed
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac6_oversized_parameters_are_well_formed_and_never_read_as_1049
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac6_a_one_mib_stream_is_well_formed_in_64_kib_and_in_one_byte_reads
+    red_confirmed: false
+    red_reason: "The no-panic, well-formed-spans and 7-byte-bound properties hold on the unmodified tracker (a detection read there clears its carry, so no carried item meets the next read), so altdetect_ac6_a_detection_read_followed_by_every_byte_value_is_well_formed passed before the change; the three existing altmismatch_ac6_ tests detect any panic or malformed result on the changed paths and passed before and after, with no change to their code. No executable red exists for a robustness property that the unmodified code already satisfies; the new test guards the paths that a kept carry opens (a kept item meeting 256 byte values after each detection read)."
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac1_random_streams_and_cuts_match_the_oracle
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac1_every_delivery_of_the_corpus_gives_the_bulk_spans_of_each_read
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac4_k16_reads_leave_the_ring_and_the_delivered_chunks_as_they_were
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac4_a_compound_in_a_matched_state_keeps_todays_behavior
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac2_random_streams_with_ris_match_the_oracle
+      - mux::daemon::tests::leading_zero_length::altsplit_ac3_every_sc1x_row_ends_in_its_final_table_and_osc_777_state
+      - mux::daemon::tests::leading_zero_length::altmismatch_ac7_every_sc1y_row_ends_in_its_final_table_and_osc_777_state
+      - mux::daemon::tests::leading_zero_length::dblesc_ac6_every_sc1_row_ends_in_its_final_table_and_osc_777_state
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac5_every_split_of_the_cut_cases_yields_the_items_of_one_feed
+      - mux::ipc::pty_spawn::tests::round3_write_path::round3_195916fd_write_filter_output_is_split_invariant_across_a_designator_esc
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_outside_the_fallback_the_scan_equals_the_pre_change_results
+      - mux::ipc::pty_spawn::tests::fallback_path_keeps_the_whole_chunk_gate
+    red_confirmed: false
+    red_reason: "A dedicated new module is out of scope, but the existing altsplit_ac4_k16_reads_leave_the_ring_and_the_delivered_chunks_as_they_were detects any change to the scrollback ring and the delivered chunks, altsplit_ac1_random_streams_and_cuts_match_the_oracle, altsplit_ac1_every_delivery_of_the_corpus_gives_the_bulk_spans_of_each_read, altmismatch_ac2_random_streams_with_ris_match_the_oracle and the K1-K57 rows (altsplit_ac3, dblesc_ac6, altmismatch_ac7) detect any change to the tracker's spans and adoption counts in reads without a detection, altmismatch_ac4_a_compound_in_a_matched_state_keeps_todays_behavior pins predecessor A2, and the dblesc_ac5, round3_ and round4_ write-path tests and fallback_path_keeps_the_whole_chunk_gate detect any change to the scanner and the write path; no red state occurred for this change (the whole existing suite stays green with every existing assertion unchanged, except the one test renamed in AC-4). cargo check, cargo check --no-default-features, the term_core --lib suite and the diff conditions (no file under crates/term_core/, no log call, no platform gate, mod.rs and the entry point's signature untouched) have no failing executable check to observe beforehand; they were checked by running the checks and reading the diff."
