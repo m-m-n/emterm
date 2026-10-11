@@ -1,0 +1,73 @@
+feature: program-status-ac8-allowlist
+collected_at: '2026-10-11T19:00:00+09:00'
+session_ids:
+- 01a12a66-9cf4-71e6-9ef8-52c050bd602b.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: reduced
+    rationale: description_plus_code の最終読みでバケット1（ルール追加+テスト変更の小規模変更）が確率0.98となり reduced を採用
+    bases:
+    - basis: description_only
+      score:
+        type: score
+        score: 1.1
+        confidence: 0.88
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread across a few files
+            together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to
+            the architecture.'
+        probabilities:
+          '0': 0.01
+          '1': 0.88
+          '2': 0.11
+          '3': 0.0
+      observed_at: '2026-10-11T18:09:30+09:00'
+    - basis: description_plus_code
+      score:
+        type: score
+        score: 1.0
+        confidence: 0.98
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread across a few files
+            together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to
+            the architecture.'
+        probabilities:
+          '0': 0.01
+          '1': 0.98
+          '2': 0.01
+          '3': 0.0
+      observed_at: '2026-10-11T18:12:40+09:00'
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/program_status/tests.rs
+      changed_lines_approx: 15
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+      test_change_kind: extend_existing_one_to_one
+      added_test_cases_approx: 0
+      body_change_kind: wording_or_rule_addition
+      change_containment: single_function
+      caller_and_dependency_count: 1
+      changes_external_contract: false
+      changes_behavior: false
+      evidence: mainを確認済み。src-tauri/src/program_status.rs:28でsuper::agent_status::AgentStateを使用。src-tauri/src/program_status/tests.rs:1541の既存ac8は:1547でsuper全体を許可し、:1553でcrate::を文字列検査し、:1554で他のプロジェクトモジュールへの依存を禁止する旨を表示。src-tauri/src/lib.rs:163と:170でagent_statusとprogram_statusをgui条件なしで宣言。製品の動作変更は不要で、既存テストの判定規則と失敗メッセージの変更が必要
+follow_up_drafts: []
+lessons_candidates:
+- 'review round 1 の medium 2件（1efd012a5982dfcb: use 行の空白揺れ / 2912970a9817a6de: 結合文字の識別子判定）は unresolved
+  のまま残存'
