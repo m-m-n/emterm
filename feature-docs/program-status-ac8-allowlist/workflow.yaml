@@ -122,8 +122,9 @@ tasks:
     - NFR1
     - NFR2
     - NFR3
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/program-status-ac8-allowlist/task0001
 review:
   status: pending
 requirements:
