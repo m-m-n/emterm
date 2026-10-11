@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-alt-tracker-detection-read-boundary
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 572db4dfc926a0f989680aa7cb3f526d69a7eef7
+last_input_digest: sha256:3a489d69ffdc17fe9bd201e657fc89af57ddd5cbe318a6f7f97a5fd136dc71d6
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:3a489d69ffdc17fe9bd201e657fc89af57ddd5cbe318a6f7f97a5fd136dc71d6
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
