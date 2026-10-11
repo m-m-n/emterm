@@ -138,7 +138,8 @@ workflow:
     TS1-TS6: covered by the passing altsplit_* tests (pty_spawn tracker / daemon SC-1x / plain-tab output_pipeline / ring write path); TS7: no log call added; TS8: crates/term_core diff empty; TS9: no platform-gated code added
     manual M1 / M2 (release build, Windows): not executed in batch
 - id: retrospect
-  status: pending
+  status: completed
+  completed_at_commit: c7e5fbcc5cea14aa8fe3bb6f271e71a506ccaa5e
 tasks:
   task0001:
     title: Split-aware live spans for the mux feed scanner

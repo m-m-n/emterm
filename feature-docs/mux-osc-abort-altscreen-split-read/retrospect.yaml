@@ -1,0 +1,31 @@
+feature: mux-osc-abort-altscreen-split-read
+collected_at: "2026-10-11T11:49:06+09:00"
+session_ids:
+- 01a128dc-c67f-7308-bd2f-e480483914f4.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code の最終読みがバケット 2（新しいロジック・複数モジュールにまたがる変更）に 0.79 で寄った"
+    bases:
+    - basis: description_only
+      score: {score: 1.42, confidence: 0.58, probabilities: {'0': 0.0, '1': 0.58, '2': 0.42, '3': 0.0}}
+      observed_at: "2026-10-11T10:11:50+09:00"
+    - basis: description_plus_code
+      score: {score: 1.79, confidence: 0.79, probabilities: {'0': 0.0, '1': 0.21, '2': 0.79, '3': 0.0}}
+      observed_at: "2026-10-11T10:11:50+09:00"
+    pre_survey_estimate:
+      files_expected: 4
+      changed_lines_approx: 100
+      new_files_needed: 0
+      added_test_cases_approx: 3
+follow_up_drafts: []
+lessons_candidates:
+- "review round 1 の comprehensive#0（codex）がスキーマ不正（finding の余分なプロパティ）で失敗し fallback に回った"
+- "medium 2 件（4aef749bee51a717 RIS / b019b1bb35b07fc6 複合形式 ?1;1049h）は同一原因（client_alt と shadow_alt の食い違い状態）。resolution_reason は Notion 起票とあるが triage_filing.executed は false"
+- "予測ファイル 4 件に対し実際は 6 ファイル + test-docs 2 件（新規テストファイル altscreen_split_read.rs と plain-tab 側 output_pipeline.rs を事前調査は見込んでいなかった）"
