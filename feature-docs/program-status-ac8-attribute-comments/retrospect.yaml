@@ -1,0 +1,68 @@
+feature: program-status-ac8-attribute-comments
+collected_at: '2026-10-11T21:42:00+09:00'
+session_ids:
+- 01a12afa-3b8a-7194-8300-98c9b312ca01
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: reduced
+    rationale: description_plus_code の最終読みで bucket 1 が 0.94（score 1.06）、閾値行により reduced と決定
+    bases:
+    - basis: description_only
+      score:
+        type: score
+        score: 1.02
+        confidence: 0.98
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.98
+          '2': 0.02
+          '3': 0.0
+      observed_at: '2026-10-11T20:56:54+09:00'
+    - basis: description_plus_code
+      score:
+        type: score
+        score: 1.06
+        confidence: 0.94
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency, or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.94
+          '2': 0.06
+          '3': 0.0
+      observed_at: '2026-10-11T20:58:38+09:00'
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/program_status/tests.rs
+      changed_lines_approx: 80
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules: []
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 7
+      body_change_kind: new_logic
+      change_containment: single_module
+      caller_and_dependency_count: 11
+      changes_external_contract: false
+      changes_behavior: true
+      evidence: src-tauri/src/program_status/tests.rs:1557 の属性状態は深さと文字列内フラグのみ。:1579 の走査はコメントを識別せず、:1725 で未閉鎖状態を持ち越し、:1770 では末尾の未閉鎖を検査せず返す。:2237・:2280・:2308 に文字列・複数行属性の自己テストはあるが、属性内コメントと未閉鎖末尾の検証はない。:1710 の検査関数は直接呼出元7関数、内部依存4関数。src-tauri/src/program_status.rs:705 でテスト時のみ組み込まれる。行数・追加ケース数は概算
+follow_up_drafts: []
+lessons_candidates:
+- review round 1 で FR2（ブロックコメント深さの行またぎ持ち越し）を判別するテストの欠落が medium として残った（stable_id be2393610313debe）。実装者の test record の red_reason が変異に対する判別力を過大に主張していた
