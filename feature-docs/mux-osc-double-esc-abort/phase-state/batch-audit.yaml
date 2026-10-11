@@ -1,0 +1,26 @@
+schema_version: 1
+feature: mux-osc-double-esc-abort
+records:
+- gate_id: create-spec.requirement-clarification
+  question_id: requirement.abort-scope
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-11T09:06:17+09:00'
+  source: batch-decision-table
+  route: codex_consultation
+  options:
+  - all_osc_kinds
+  - osc7501_only
+  - all_and_align_unterminated
+  selected_option_ids:
+  - all_and_align_unterminated
+  codex_consulted: true
+  opus_escalation: false
+  resolution_note: 'Codex consulted (1 turn, codex harness). Facts: term_core dispatches
+    Unterminated for ESC+non-backslash (osc.rs:68) and still fires callbacks for OSC
+    777/133 (osc_handler.rs:202,275; callbacks.rs:1375); only OSC 7501 drops Unterminated
+    (callbacks.rs:1459). Chosen all_and_align_unterminated: abort on any non-backslash
+    byte after ESC for every OSC kind; 7501 cut strings are discarded, 777/133 cut
+    strings are applied as term_core does, then the byte is processed as an escape.
+    Not chosen: all_osc_kinds (would make mux drop 777/133 the plain tab applies =
+    new divergence), osc7501_only (leaves other Unterminated divergences). Opus escalation
+    not run. Recorded as assumption.'
