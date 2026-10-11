@@ -1,0 +1,61 @@
+task_id: task0002
+# Baseline run before any edit (src-tauri --lib, project test command): 4689 passed, 0 failed,
+# 3 ignored.
+baseline_failures: []
+# Actually re-executed after the implementation and this record were written (src-tauri --lib,
+# project test command): 4692 passed, 0 failed, 3 ignored (the baseline's 4689 + this task's 3
+# new tests).
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - tabs::tests::output_pipeline::altsplit_ac1_corpus_lists_rows_k16_to_k37_with_seed_s_w_one_call_and_the_listed_lengths
+    red_confirmed: true
+    red_reason: >-
+      The test was run before the K16-K37 list was filled in (the list function returned no
+      rows) and failed with "the list names K16 to K37 in order, left: [], right: ["K16", "K17",
+      ..., "K37"]"; it passed once the 22 rows were written.
+  AC-2:
+    tests:
+      - tabs::tests::output_pipeline::altsplit_ac2_rows_k16_to_k31_k35_and_k37_in_one_call_end_in_an_empty_table_and_no_osc777_state
+    red_confirmed: false
+    red_reason: >-
+      The plain tab already behaves as SC-1x expects (IMPLEMENTATION.md D1) and this task changes
+      no production file, so no behavioral red state occurred. Run with the row list still empty
+      the test failed only with "the K16-K37 list has no row K16", which is the rows being
+      absent, not the criterion's behavior. As a substitute for a red phase, K16's stream was
+      temporarily changed so its OSC 133;A lands on the alternate screen and the test then
+      failed with "row K16 delivered One: final OSC 7501 table, left: [("", Working)], right:
+      []"; the row was restored afterwards.
+  AC-3:
+    tests:
+      - tabs::tests::output_pipeline::altsplit_ac3_rows_k32_to_k34_and_k36_in_one_call_keep_only_the_root_working_record
+    red_confirmed: false
+    red_reason: >-
+      The plain tab already behaves as SC-1x expects (IMPLEMENTATION.md D1) and this task changes
+      no production file, so no behavioral red state occurred. Run with the row list still empty
+      the test failed only with "the K16-K37 list has no row K32", which is the rows being
+      absent, not the criterion's behavior. As a substitute for a red phase, K32's stream was
+      temporarily changed to a lone main-screen OSC 133;A and the test then failed with "row
+      K32 delivered One: final OSC 7501 table, left: [], right: [("", Working)]"; the row was
+      restored afterwards.
+  AC-4:
+    # Existing tests of the file named by the criterion (the SC-1 cut parity corpus, including
+    # the K1-K15 name test, and the SC-4 parity corpus); they were not edited.
+    tests:
+      - tabs::tests::output_pipeline::cut_parity_corpus_lists_rows_k1_to_k15_with_the_named_deliveries
+      - tabs::tests::output_pipeline::ac1_cut_rows_k1_to_k5_end_in_the_final_osc7501_table_without_summary_changes
+      - tabs::tests::output_pipeline::ac2_cut_rows_k6_and_k7_record_one_working_set_event_and_end_working
+      - tabs::tests::output_pipeline::ac3_cut_rows_k8_to_k10_end_in_the_final_osc777_state
+      - tabs::tests::output_pipeline::ac3_cut_rows_k11_to_k15_end_in_the_final_osc7501_table
+      - tabs::tests::output_pipeline::parity_corpus_rows_have_the_lengths_the_corpus_lists
+      - tabs::tests::output_pipeline::parity_every_corpus_row_ends_in_its_final_table_and_answer
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing tests listed here detect a change
+      to the K1-K15 list, the SC-1 rows' tables and OSC 777 states, and the SC-4 parity corpus
+      answers and tables; no red state occurred for this change, which only adds tests to the
+      file. That the task changes no file other than the declared test file (nothing under
+      crates/term_core/, nothing in src-tauri/src/callbacks.rs, no other production file) and
+      uses no platform-gated API is checked by `git diff --stat` against the parent branch, not
+      by a test that can be made to fail.

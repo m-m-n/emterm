@@ -3367,3 +3367,264 @@ fn ac3_cut_rows_k11_to_k15_end_in_the_final_osc7501_table() {
         }
     }
 }
+
+// ── mux-osc-abort-altscreen-split-read task0002: plain-tab half of the
+//    parity corpus extension, rows K16 to K37 (IMPLEMENTATION.md SC-1x) ───────
+//
+// The plain tab is the reference behavior (D1): `term_core` moves to the
+// alternate screen on `?1049` / `?1047` / `?47` `h` and back on the matching
+// `l`, treats a switch whose `ESC` sits right after `ESC (` as the charset
+// designator plus printed text, suppresses OSC 133 on the alternate screen,
+// and dispatches a cut OSC 133 string as unterminated, which the plain-tab
+// callbacks apply. Each row below starts from the seed S-W, delivers its
+// stream in ONE `process_combined` call (D3), and is checked by the SC-1 row
+// assertion (`assert_cut_row`): the final OSC 7501 table, the final OSC 777
+// state resolved from the tab's events and latch inputs, the table-change
+// count where the row gives it, and no OSC 7501 answer written. The mux half
+// asserts the same rows against the mux reader and scanner.
+//
+// The rows are kept in a list of their own: `cut_rows` holds K1 to K15 and a
+// test pins its names to exactly those.
+
+/// E(1049): `ESC [?1049h`, the switch to the alternate screen.
+const ALTSPLIT_E1049: &[u8] = b"\x1b[?1049h";
+/// L(1049): `ESC [?1049l`, the switch back to the main screen.
+const ALTSPLIT_L1049: &[u8] = b"\x1b[?1049l";
+/// E(1047): `ESC [?1047h`.
+const ALTSPLIT_E1047: &[u8] = b"\x1b[?1047h";
+/// L(1047): `ESC [?1047l`.
+const ALTSPLIT_L1047: &[u8] = b"\x1b[?1047l";
+/// E(47): `ESC [?47h` (6 bytes).
+const ALTSPLIT_E47: &[u8] = b"\x1b[?47h";
+/// L(47): `ESC [?47l` (6 bytes).
+const ALTSPLIT_L47: &[u8] = b"\x1b[?47l";
+/// A: `ESC ] 133;A` with no terminator (7 bytes).
+const ALTSPLIT_A: &[u8] = b"\x1b]133;A";
+/// Form BEL.
+const ALTSPLIT_BEL: &[u8] = b"\x07";
+/// Form ST: `ESC \`.
+const ALTSPLIT_ST: &[u8] = b"\x1b\\";
+/// DS: `ESC (`, after which the next byte is a charset designator.
+const ALTSPLIT_DS: &[u8] = b"\x1b(";
+/// X: `ESC [?104x`, a prefix of `?1047` / `?1049` followed by a byte that
+/// completes no switch (7 bytes).
+const ALTSPLIT_X: &[u8] = b"\x1b[?104x";
+
+/// The SC-1x parity corpus extension, rows K16 to K37.
+fn altsplit_rows() -> Vec<CutRow> {
+    use ProgramState::Working;
+    // Every row starts from S-W and takes the one-call delivery; no row has an
+    // OSC 777 string, so the final OSC 777 state is none.
+    let row =
+        |name, parts: &[&[u8]], table: Vec<(&'static str, ProgramState)>, table_changes| CutRow {
+            name,
+            seed: CutSeed::Working,
+            stream: concat(parts),
+            deliveries: vec![CutDelivery::One],
+            table,
+            osc777: None,
+            table_changes,
+        };
+    // The OSC 133;A lands on the main screen: it removes the seed's `working`
+    // record, so the table ends empty. The table-change count is not asserted.
+    let on_main = |name, parts: &[&[u8]]| row(name, parts, vec![], None);
+    // The OSC 133;A does not count (it lands on the alternate screen, or the
+    // switch before it is not one): the root `working` record stays and no
+    // summary change is recorded.
+    let kept = |name, parts: &[&[u8]]| row(name, parts, vec![("", Working)], Some(0));
+
+    let (a, bel, st, ee, ex) = (ALTSPLIT_A, ALTSPLIT_BEL, ALTSPLIT_ST, CUT_EE, CUT_EX);
+    let (e1049, l1049) = (ALTSPLIT_E1049, ALTSPLIT_L1049);
+    let (e1047, l1047) = (ALTSPLIT_E1047, ALTSPLIT_L1047);
+    let (e47, l47) = (ALTSPLIT_E47, ALTSPLIT_L47);
+
+    vec![
+        // SPEC AC1: the reproduction.
+        on_main("K16", &[e1049, l1049, a, ee]),
+        // SPEC AC2: the mark after a switch back to the main screen, with
+        // each form of the string's end.
+        on_main("K17", &[e1049, l1049, a, bel]),
+        on_main("K18", &[e1049, l1049, a, st]),
+        on_main("K19", &[e1049, l1049, a, ee]),
+        on_main("K20", &[e1049, l1049, a, ex]),
+        on_main("K21", &[e1047, l1047, a, bel]),
+        on_main("K22", &[e1047, l1047, a, st]),
+        on_main("K23", &[e1047, l1047, a, ee]),
+        on_main("K24", &[e1047, l1047, a, ex]),
+        on_main("K25", &[e47, l47, a, bel]),
+        on_main("K26", &[e47, l47, a, st]),
+        on_main("K27", &[e47, l47, a, ee]),
+        on_main("K28", &[e47, l47, a, ex]),
+        // SPEC AC3: back to the main screen and into the alternate screen
+        // again within one read.
+        on_main("K29", &[e1049, l1049, a, bel, e1049]),
+        on_main("K30", &[e1047, l1047, a, bel, e1047]),
+        on_main("K31", &[e47, l47, a, bel, e47]),
+        // SPEC AC4: the mark on the alternate screen after a switch into it.
+        kept("K32", &[e1049, a, bel, l1049]),
+        kept("K33", &[e1047, a, bel, l1047]),
+        kept("K34", &[e47, a, bel, l47]),
+        // SPEC AC5: a switch whose `ESC` is the designator after `ESC (` is
+        // the charset designator plus printed text, not a switch.
+        on_main("K35", &[ALTSPLIT_DS, e1049, a, bel]),
+        kept("K36", &[e1049, ALTSPLIT_DS, l1049, a, bel]),
+        // FR4: a prefix followed by a byte that completes no switch.
+        on_main("K37", &[ALTSPLIT_X, a, bel]),
+    ]
+}
+
+/// The `altsplit_rows` rows with the given names, in the given order. A name
+/// the list does not have fails the test instead of silently selecting fewer
+/// rows.
+fn altsplit_rows_named(names: &[&str]) -> Vec<CutRow> {
+    let mut all = altsplit_rows();
+    names
+        .iter()
+        .map(|name| {
+            let at = all
+                .iter()
+                .position(|row| row.name == *name)
+                .unwrap_or_else(|| panic!("the K16-K37 list has no row {name}"));
+            all.remove(at)
+        })
+        .collect()
+}
+
+/// AC-1 (FR7): the list names exactly K16 to K37 in order, each with seed S-W
+/// and the one-call delivery, and each stream has the length the SC-1x table
+/// lists (and is the byte string the SC-1x notation builds).
+#[test]
+fn altsplit_ac1_corpus_lists_rows_k16_to_k37_with_seed_s_w_one_call_and_the_listed_lengths() {
+    // (row, SC-1x length, the stream written out from the SC-1x notation)
+    let table: [(&str, usize, &[u8]); 22] = [
+        ("K16", 26, b"\x1b[?1049h\x1b[?1049l\x1b]133;A\x1b\x1b\\"),
+        ("K17", 24, b"\x1b[?1049h\x1b[?1049l\x1b]133;A\x07"),
+        ("K18", 25, b"\x1b[?1049h\x1b[?1049l\x1b]133;A\x1b\\"),
+        ("K19", 26, b"\x1b[?1049h\x1b[?1049l\x1b]133;A\x1b\x1b\\"),
+        ("K20", 27, b"\x1b[?1049h\x1b[?1049l\x1b]133;A\x1b[0m"),
+        ("K21", 24, b"\x1b[?1047h\x1b[?1047l\x1b]133;A\x07"),
+        ("K22", 25, b"\x1b[?1047h\x1b[?1047l\x1b]133;A\x1b\\"),
+        ("K23", 26, b"\x1b[?1047h\x1b[?1047l\x1b]133;A\x1b\x1b\\"),
+        ("K24", 27, b"\x1b[?1047h\x1b[?1047l\x1b]133;A\x1b[0m"),
+        ("K25", 20, b"\x1b[?47h\x1b[?47l\x1b]133;A\x07"),
+        ("K26", 21, b"\x1b[?47h\x1b[?47l\x1b]133;A\x1b\\"),
+        ("K27", 22, b"\x1b[?47h\x1b[?47l\x1b]133;A\x1b\x1b\\"),
+        ("K28", 23, b"\x1b[?47h\x1b[?47l\x1b]133;A\x1b[0m"),
+        (
+            "K29",
+            32,
+            b"\x1b[?1049h\x1b[?1049l\x1b]133;A\x07\x1b[?1049h",
+        ),
+        (
+            "K30",
+            32,
+            b"\x1b[?1047h\x1b[?1047l\x1b]133;A\x07\x1b[?1047h",
+        ),
+        ("K31", 26, b"\x1b[?47h\x1b[?47l\x1b]133;A\x07\x1b[?47h"),
+        ("K32", 24, b"\x1b[?1049h\x1b]133;A\x07\x1b[?1049l"),
+        ("K33", 24, b"\x1b[?1047h\x1b]133;A\x07\x1b[?1047l"),
+        ("K34", 20, b"\x1b[?47h\x1b]133;A\x07\x1b[?47l"),
+        ("K35", 18, b"\x1b(\x1b[?1049h\x1b]133;A\x07"),
+        ("K36", 26, b"\x1b[?1049h\x1b(\x1b[?1049l\x1b]133;A\x07"),
+        ("K37", 15, b"\x1b[?104x\x1b]133;A\x07"),
+    ];
+
+    let rows = altsplit_rows();
+    let names: Vec<&str> = rows.iter().map(|row| row.name).collect();
+    let expected: Vec<&str> = table.iter().map(|(name, _, _)| *name).collect();
+    assert_eq!(names, expected, "the list names K16 to K37 in order");
+
+    for (row, (name, length, literal)) in rows.iter().zip(table) {
+        assert_eq!(literal.len(), length, "row {name}: the notation's length");
+        assert_eq!(row.stream.len(), length, "row {name}: stream length");
+        assert_eq!(
+            row.stream, literal,
+            "row {name}: stream built from the notation"
+        );
+        assert!(
+            matches!(row.seed, CutSeed::Working),
+            "row {name}: seed S-W, got {:?}",
+            row.seed
+        );
+        assert_eq!(
+            row.deliveries,
+            vec![CutDelivery::One],
+            "row {name}: the one-call delivery"
+        );
+    }
+}
+
+/// AC-2 (FR6, FR7): K16 to K31, K35 and K37, each in one call, end in an empty
+/// OSC 7501 table and no OSC 777 state, with no OSC 7501 answer written.
+#[test]
+fn altsplit_ac2_rows_k16_to_k31_k35_and_k37_in_one_call_end_in_an_empty_table_and_no_osc777_state()
+{
+    let names: Vec<String> = (16..=31)
+        .map(|n| format!("K{n}"))
+        .chain(["K35".to_string(), "K37".to_string()])
+        .collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let rows = altsplit_rows_named(&names);
+    assert_eq!(rows.len(), 18);
+
+    for row in rows {
+        assert!(
+            row.table.is_empty() && row.osc777.is_none(),
+            "row {}: the row expects an empty table and no OSC 777 state",
+            row.name
+        );
+        for &delivery in &row.deliveries {
+            let outcome = assert_cut_row(&row, delivery);
+            assert_eq!(
+                table_records(&outcome.tab),
+                vec![],
+                "row {} delivered {delivery:?}: the table ends empty",
+                row.name
+            );
+            assert_eq!(
+                outcome.osc777, None,
+                "row {} delivered {delivery:?}: no OSC 777 state (events {:?})",
+                row.name, outcome.events
+            );
+        }
+    }
+}
+
+/// AC-3 (FR6, FR7; reference for TM-1): K32 to K34 and K36, each in one call,
+/// end with only the root `working` record, record no pending summary change,
+/// end in no OSC 777 state, and write no OSC 7501 answer.
+#[test]
+fn altsplit_ac3_rows_k32_to_k34_and_k36_in_one_call_keep_only_the_root_working_record() {
+    let rows = altsplit_rows_named(&["K32", "K33", "K34", "K36"]);
+
+    for row in rows {
+        assert_eq!(
+            row.table,
+            vec![("", ProgramState::Working)],
+            "row {}: the row expects only the root working record",
+            row.name
+        );
+        assert_eq!(row.table_changes, Some(0), "row {}", row.name);
+        assert!(row.osc777.is_none(), "row {}", row.name);
+        for &delivery in &row.deliveries {
+            let outcome = assert_cut_row(&row, delivery);
+            assert_eq!(
+                table_records(&outcome.tab),
+                vec![(String::new(), ProgramState::Working)],
+                "row {} delivered {delivery:?}: only the root working record",
+                row.name
+            );
+            assert!(
+                outcome.changes.is_empty(),
+                "row {} delivered {delivery:?}: pending summary changes {:?}",
+                row.name,
+                outcome.changes
+            );
+            assert_eq!(
+                outcome.osc777, None,
+                "row {} delivered {delivery:?}: no OSC 777 state (events {:?})",
+                row.name, outcome.events
+            );
+        }
+    }
+}
