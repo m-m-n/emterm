@@ -2,74 +2,41 @@ schema_version: 1
 feature: mux-osc-double-esc-abort
 created: '2026-10-11'
 base_branch: main
-goal: '# mux の AgentStatusFeedScanner が連続 ESC で打ち切られた OSC 7501 を ST 終端として取り込み、通常タブと記録が食い違う
-
+goal: |
+  # mux の AgentStatusFeedScanner が連続 ESC で打ち切られた OSC 7501 を ST 終端として取り込み、通常タブと記録が食い違う
 
   Notion task: https://www.notion.so/3f53509ec8ee814a8d66ff7c49400173 (種別: バグ)
 
-
   ## 現象
-
-  mux ペインのデーモン取り込み（`AgentStatusFeedScanner::step`）は、OSC 本文の途中で ESC を受けた後（`InsideOscPendingSt`）にもう一度
-  ESC が来ても何もせず状態を保つ。そのため `ESC ] 07501;state=clear ESC ESC \` の続く `\` で ST 終端の報告として取り込み、記録を削除する。
-
-  一方、通常タブの term_core（`osc_escape`）は ESC の直後が `\` でなければ Unterminated として打ち切り、その ESC
-  を新しいエスケープの開始として扱う。終端の無い報告は適用されない。
-
-  結果として、同じバイト列で通常タブと mux ペインの記録表が食い違う（osc7501-leading-zero-length SPEC の FR4 に反する）。正規の綴り
-  `ESC ] 7501;... ESC ESC \` でも以前から同じずれがあり、osc7501-leading-zero-length の変更で先頭ゼロ付きの綴りにも広がった。
-
-  em-workflow osc7501-leading-zero-length の review round 1 で medium として残った指摘（stable_id
-  f058cb65aba2c3a1）。
-
+  mux ペインのデーモン取り込み（`AgentStatusFeedScanner::step`）は、OSC 本文の途中で ESC を受けた後（`InsideOscPendingSt`）にもう一度 ESC が来ても何もせず状態を保つ。そのため `ESC ] 07501;state=clear ESC ESC \` の続く `\` で ST 終端の報告として取り込み、記録を削除する。
+  一方、通常タブの term_core（`osc_escape`）は ESC の直後が `\` でなければ Unterminated として打ち切り、その ESC を新しいエスケープの開始として扱う。終端の無い報告は適用されない。
+  結果として、同じバイト列で通常タブと mux ペインの記録表が食い違う（osc7501-leading-zero-length SPEC の FR4 に反する）。正規の綴り `ESC ] 7501;... ESC ESC \` でも以前から同じずれがあり、osc7501-leading-zero-length の変更で先頭ゼロ付きの綴りにも広がった。
+  em-workflow osc7501-leading-zero-length の review round 1 で medium として残った指摘（stable_id f058cb65aba2c3a1）。
 
   ## 再現手順
-
   1. 通常タブと mux ペインのそれぞれで `\x1b]7501;state=working\x07` を出力し、working の記録を作る
-
   2. 続けて `\x1b]07501;state=clear\x1b\x1b\\` を出力する
-
   3. 通常タブでは working が残り、mux ペインでは記録が消える（コード読みで確認。実行は未実施）
 
-
   ## 期待する挙動
-
   - mux の取り込みでも、OSC 本文中の連続 ESC で組み立て中の本文を破棄し、新しいエスケープ待ちへ移る
-
   - 通常タブと mux ペインで同じ記録表になる
 
-
   ## 完了の定義
-
   - [ ] 再現手順で現象が起きない
-
-  - [ ] 再発を検出するテストがある（`7501;` と `07501;` の両方、および 2 つの ESC の間で受信が分割される入力で、通常タブと mux
-  の記録表が一致する）
-
+  - [ ] 再発を検出するテストがある（`7501;` と `07501;` の両方、および 2 つの ESC の間で受信が分割される入力で、通常タブと mux の記録表が一致する）
 
   ## 該当箇所
-
-  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1556`（`InsideOscPendingSt` の
-  `0x1b => {}`）
-
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1556`（`InsideOscPendingSt` の `0x1b => {}`）
   - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1610`
-
   - `crates/term_core/src/parser/osc.rs:63`
 
-
   ## 実害・発生条件
-
   途中で打ち切られた報告（連続 ESC）を出力したときだけ、通常タブと mux の表示が分かれる。資源消費や権限の上積みは無い。
 
-
   ## 追加指示
-
-  - 完了後 integration ブランチを remote へ push し gh pr create で base_branch への PR を作成。integration
-  ブランチはローカル・リモートとも残す（自動マージしない）
-
+  - 完了後 integration ブランチを remote へ push し gh pr create で base_branch への PR を作成。integration ブランチはローカル・リモートとも残す（自動マージしない）
   - 不明点は Codex に相談して比較的良い案を採用し、その議論内容を Notion に記録する
-
-  '
 parent_branch: em-workflow/mux-osc-double-esc-abort/integration
 tier: full
 tier_decision:
@@ -95,17 +62,14 @@ project:
   components:
     src-tauri:
       language: rust
-      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
-        src-tauri/Cargo.toml
-      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
-        --lib
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
       format_command: ''
       e2e_test_command: ''
     term_core:
       language: rust
       build_command: ''
-      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml
-        --lib
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
       format_command: ''
       e2e_test_command: ''
 batch:
@@ -145,8 +109,7 @@ workflow:
   status: pending
 tasks:
   task0001:
-    title: 'Mux feed scanner: cut rule, unit tests and the mux half of the parity
-      corpus'
+    title: 'Mux feed scanner: cut rule, unit tests and the mux half of the parity corpus'
     plan: tasks/task0001.md
     files:
     - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
