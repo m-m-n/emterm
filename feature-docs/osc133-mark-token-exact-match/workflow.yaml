@@ -1,0 +1,160 @@
+schema_version: 1
+feature: osc133-mark-token-exact-match
+created: '2026-10-11'
+base_branch: main
+goal: '# OSC 133 の不正トークン（133;AB 等）が OSC 7501 の A 候補として後続の正規 A を消費する
+
+
+  Notion: https://www.notion.so/3f53509ec8ee8160a179d8708cf2e2c1
+
+
+  ## 現象
+
+  `handle_semantic_prompt` は OSC 133 のマーク種別を payload の先頭 1 バイトで判定する。一方 term_core の `parse_osc133_mark` は先頭トークンの完全一致で判定する。そのため `133;Ax` や `133;AB` のような不正トークンは term_core のライブマークにはならないのに、OSC 7501 の突き合わせ feed へ A 候補として入り、後続の正規の A を消費しうる。
+
+  em-workflow osc7501-alt-screen-prompt-mark（PR https://github.com/m-m-n/emterm/pull/132 ）の計画・レビューで見つかった範囲外の残件。差分前からの挙動。
+
+
+  ## 再現手順
+
+  1. 通常タブに `\x1b]133;AB\x07\x1b]7501;id=job:state=working\x07\x1b]133;A\x07` を一度に入力する
+
+  2. 最後の正規の A で消えるはずの job の記録が残る
+
+
+  ## 期待する挙動
+
+  マーク種別の判定を term_core と同じ基準（先頭トークン完全一致）に揃え、不正トークンを A 候補として扱わない。
+
+
+  ## 完了の定義
+
+  - [ ] 再現手順で現象が起きない
+
+  - [ ] 再発を検出するテストがある
+
+
+  ## 該当箇所
+
+  - `src-tauri/src/callbacks.rs:1232`（`handle_semantic_prompt`）
+
+
+  ## 実害・発生条件
+
+  不正な OSC 133 を出すプログラムがあるときだけ起きる。通常のシェル出力では起きない。
+
+  '
+parent_branch: em-workflow/osc133-mark-token-exact-match/integration
+tier: reduced
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.01
+      '1': 0.94
+      '2': 0.05
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.85
+      '2': 0.15
+      '3': 0.0
+  at: '2026-10-11T17:37:00+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - design step
+  - IMPLEMENTATION.md (kept with Shared Components when multiple tasks declare the same file)
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - src-tauri/web-shared/settings/ui-theme-presets.ts
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    term_core:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    src-tauri-cli:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      test_command: ''
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - SPEC.md
+  status: completed
+  completed_at_commit: 8704f1a9669cc6d08c873970d4ca1b773b33a843
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI 変更なし（requirements-analyst の推奨を batch 方針 decide_autonomously で採用）。reduced tier の削減対象でもある
+- id: create-plan
+  artifacts:
+  - VERIFICATION.md
+  - THREAT-MODEL.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: Mark kind decided by exact first-token match
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Unrecognized kind pushes nothing to either feed
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Well-formed marks keep their current behavior
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: term_core behavior unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []

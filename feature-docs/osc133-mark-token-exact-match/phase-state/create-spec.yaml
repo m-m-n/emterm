@@ -1,11 +1,11 @@
 schema_version: 1
 feature: osc133-mark-token-exact-match
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 089c74177aa533119c5fe84f27716a360a52f01a
 last_input_digest: sha256:03fce1ff49c1283d15385834e1d7e7aba91f5f41b656a4933ad18deab2d9c7a0
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
 answers:
   create-spec.design-step:
@@ -17,16 +17,29 @@ answers:
     - decide_autonomously
     freeform: null
     normalized_answer: design step skipped per analyst recommendation (no UI surface)
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-10-11T17:55:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: src-tauri/web-shared/settings/ui-theme-presets.ts
+      (top of 2 candidates)'
 worker_runs:
 - request_id: create-spec-run-0001
   status: completed
   input_digest: sha256:70b931f14bf7357c7bf1c243ac2b3984503c23e0c60ab3ca8c3283a8135089ad
   output_digest: sha256:6e762ea7e58c4652d60912e066d00c25279cd9f47a569528fffa349e6d218fee
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:03fce1ff49c1283d15385834e1d7e7aba91f5f41b656a4933ad18deab2d9c7a0
-  output_digest: null
-artifacts: []
+  output_digest: sha256:4fcc0dc560b0c5e814aa88a75ee12632eab595c5a2313b963064daaaf842352c
+artifacts:
+- path: feature-docs/osc133-mark-token-exact-match/SPEC.md
+  sha256: sha256:4fcc0dc560b0c5e814aa88a75ee12632eab595c5a2313b963064daaaf842352c
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
