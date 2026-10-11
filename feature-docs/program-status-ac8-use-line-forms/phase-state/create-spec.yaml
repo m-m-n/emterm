@@ -1,12 +1,22 @@
 schema_version: 1
 feature: program-status-ac8-use-line-forms
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: a7624f7098559113804b914b754f700d2847773c
 last_input_digest: sha256:76c47c425f258d5b0bf0a4b7a85869e623f2641439f2502714b11422c603212e
-active_request_id: create-spec-run-0001
-packets: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-11T20:08:00+09:00'
+    questions:
+    - question_id: requirement.form2.root-semantics
+      status: answered
+    - question_id: requirement.form3.literal-scope
+      status: answered
+    - question_id: design.step.recommendation
+      status: answered
 answers:
   create-spec.feature-identity:
     packet_id: null
@@ -17,9 +27,49 @@ answers:
     - derive_from_task_description
     freeform: null
     normalized_answer: 'feature name derived from the task description: program-status-ac8-use-line-forms'
+  requirement.form2.root-semantics:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T20:12:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - reject_any_leading_separator
+    freeform: null
+    normalized_answer: Recognize use lines whose `use` is followed directly by `::`
+      or `{` (no whitespace). Keep root extraction as is, so every `::`- or `{`-led
+      path is a violation (including `use ::std::fmt;` and `use {std::fmt};`). Self-tests
+      for form 2 assert rejection only.
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted:
+      true (1 turn, codex harness); codex chose the analyst-recommended option; recorded
+      as assumption; discussion posted to the Notion task page'
+  requirement.form3.literal-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T20:12:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - plain_strings_with_escapes
+    freeform: null
+    normalized_answer: Brackets inside plain string literals `".."` (with `\"` and
+      `\\` escapes) inside attributes are not counted; literal state carries across
+      lines of a multi-line attribute. Raw strings and char literals are out of scope.
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted:
+      true (1 turn, codex harness); codex chose the analyst-recommended option; recorded
+      as assumption; discussion posted to the Notion task page'
+  design.step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T20:12:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: design step skipped per analyst recommendation (test-only checker
+      change, no UI)
+    resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:76c47c425f258d5b0bf0a4b7a85869e623f2641439f2502714b11422c603212e
   output_digest: null
 artifacts: []
