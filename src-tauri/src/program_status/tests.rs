@@ -1537,22 +1537,313 @@ fn ac8_the_module_is_declared_without_a_gui_gate() {
     );
 }
 
+/// The only project-module path program_status may name.
+const AC8_ALLOWED_PROJECT_PATH: &str = "super::agent_status";
+
+/// First path segments a `use` line may start with.
+const AC8_ALLOWED_USE_ROOTS: [&str; 4] = ["std", "base64", "self", "super"];
+
+/// Whether `c` can continue a Rust identifier: letters, digits and `_`,
+/// non-ASCII ones included.
+fn ac8_continues_identifier(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// The text after the `use ` keyword when `line` (trimmed) is a use line,
+/// with or without a `pub` / `pub(..)` qualifier. A comment line is not one.
+fn ac8_use_path(line: &str) -> Option<&str> {
+    if let Some(path) = line.strip_prefix("use ") {
+        return Some(path);
+    }
+    let after_pub = line.strip_prefix("pub")?;
+    let after_qualifier = match after_pub.strip_prefix('(') {
+        Some(restriction) => &restriction[restriction.find(')')? + 1..],
+        None if after_pub.starts_with(char::is_whitespace) => after_pub,
+        None => return None,
+    };
+    after_qualifier.trim_start().strip_prefix("use ")
+}
+
+/// A violation description: the offending line, what is wrong with it, the
+/// allowlist, and the invariant the allowlist protects.
+fn ac8_violation(line: &str, problem: &str) -> String {
+    format!(
+        "`{line}`: {problem}; the only project-module path allowed is \
+         `{AC8_ALLOWED_PROJECT_PATH}`, because program_status must stay \
+         buildable without the `gui` feature"
+    )
+}
+
+/// Check one source text against the project-path allowlist and return the
+/// violations in source order (empty when the source satisfies every rule).
+///
+/// Rule A: every `crate::` is a violation; every `super::` is a violation
+/// unless it is `super::agent_status` ending at a path-segment boundary.
+/// Occurrences are found as plain text on every line (code, comments and
+/// string literals alike), with no boundary requirement before them.
+///
+/// Rule B: the first path segment of a `use` line is one of
+/// `AC8_ALLOWED_USE_ROOTS`.
+fn ac8_check_allowlist(source: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    for raw in source.lines() {
+        let line = raw.trim();
+
+        if let Some(path) = ac8_use_path(line) {
+            let root = path.trim_start().split("::").next().unwrap_or("");
+            if !AC8_ALLOWED_USE_ROOTS.contains(&root) {
+                let roots = AC8_ALLOWED_USE_ROOTS
+                    .map(|root| format!("`{root}`"))
+                    .join(", ");
+                violations.push(ac8_violation(
+                    line,
+                    &format!("use root `{root}` is not one of the external roots {roots}"),
+                ));
+            }
+        }
+
+        let mut occurrences: Vec<(usize, &str)> = ["crate::", "super::"]
+            .into_iter()
+            .flat_map(|marker| raw.match_indices(marker).map(move |(at, _)| (at, marker)))
+            .collect();
+        occurrences.sort_unstable();
+        for (at, marker) in occurrences {
+            let allowed = raw[at..]
+                .strip_prefix(AC8_ALLOWED_PROJECT_PATH)
+                .is_some_and(|after| !after.chars().next().is_some_and(ac8_continues_identifier));
+            if !allowed {
+                violations.push(ac8_violation(
+                    line,
+                    &format!("`{marker}` path is outside the allowlist"),
+                ));
+            }
+        }
+    }
+    violations
+}
+
 #[test]
 fn ac8_the_module_uses_only_always_built_crates() {
     let source = include_str!("../program_status.rs");
-    for line in source.lines().map(str::trim) {
-        if let Some(path) = line.strip_prefix("use ") {
-            let root = path.split("::").next().unwrap_or("");
+    let violations = ac8_check_allowlist(source);
+    assert!(
+        violations.is_empty(),
+        "program_status.rs breaks the project-path allowlist:\n{}",
+        violations.join("\n")
+    );
+}
+
+// ── program-status-ac8-allowlist: checker self-tests ──────────────────
+//
+// Names carry the `program-status-ac8-allowlist` task acceptance criterion they
+// prove (`ac8_allowlist_ac1_` .. `ac8_allowlist_ac6_`). They feed synthetic
+// sources to `ac8_check_allowlist`; tests.rs itself is never a scan target, so
+// the `crate::` / `super::` text in these snippets does not reach the ac8 test.
+
+/// Use lines that rule A rejects: a project path outside the allowlist.
+const AC8_REJECTED_PROJECT_PATH_USE_LINES: [&str; 6] = [
+    "use super::agent_status_exit_latch::X;",
+    "use crate::agent_status::AgentState;",
+    "use super::{agent_status::AgentState};",
+    "use super::super::agent_status::AgentState;",
+    "use super::tabs::X;",
+    "use super::agent_statusé::X;",
+];
+
+/// Visibility-qualified use lines and a use line with another external root.
+const AC8_REJECTED_QUALIFIED_AND_EXTERNAL_USE_LINES: [&str; 5] = [
+    "pub use super::tabs::X;",
+    "pub(crate) use super::tabs::X;",
+    "use winit::event::Event;",
+    "pub use winit::event::Event;",
+    "pub(crate) use winit::event::Event;",
+];
+
+/// Occurrences outside use lines: code, comments and string literals.
+const AC8_REJECTED_NON_USE_LINES: [&str; 5] = [
+    "let x = crate::foo::bar();",
+    "super::tabs::f();",
+    "// see crate::tabs",
+    "let s = \"super::tabs\";",
+    "let y = my_super::foo();",
+];
+
+fn ac8_assert_allowed(snippet: &str) {
+    let violations = ac8_check_allowlist(snippet);
+    assert!(
+        violations.is_empty(),
+        "expected no violation for {snippet:?}, got {violations:?}"
+    );
+}
+
+fn ac8_assert_rejected(snippet: &str) -> Vec<String> {
+    let violations = ac8_check_allowlist(snippet);
+    assert!(
+        !violations.is_empty(),
+        "expected at least one violation for {snippet:?}, got none"
+    );
+    violations
+}
+
+#[test]
+fn ac8_allowlist_ac1_violations_are_returned_in_source_order() {
+    let source = "use std::fmt;\nuse winit::event::Event;\nlet x = crate::foo::bar();\n";
+    let violations = ac8_check_allowlist(source);
+    assert_eq!(
+        violations.len(),
+        2,
+        "violations for {source:?}: {violations:?}"
+    );
+    assert!(
+        violations[0].contains("use winit::event::Event;"),
+        "first violation for {source:?}: {:?}",
+        violations[0]
+    );
+    assert!(
+        violations[1].contains("let x = crate::foo::bar();"),
+        "second violation for {source:?}: {:?}",
+        violations[1]
+    );
+}
+
+#[test]
+fn ac8_allowlist_ac1_one_offending_line_may_yield_more_than_one_violation() {
+    let snippet = "use crate::agent_status::AgentState;";
+    let violations = ac8_check_allowlist(snippet);
+    assert_eq!(
+        violations.len(),
+        2,
+        "violations for {snippet:?}: {violations:?}"
+    );
+}
+
+#[test]
+fn ac8_allowlist_ac2_allowed_sources_return_no_violation() {
+    for snippet in [
+        "use super::agent_status::AgentState;",
+        "use super::agent_status;",
+        "use std::fmt;",
+        "use base64::Engine as _;",
+        "pub(crate) use std::fmt;",
+    ] {
+        ac8_assert_allowed(snippet);
+    }
+}
+
+#[test]
+fn ac8_allowlist_ac2_the_path_end_and_surrounding_text_are_allowed() {
+    for snippet in [
+        // The allowlisted path is the last text of the source.
+        "use super::agent_status",
+        "let state = super::agent_status",
+        // The next character cannot continue an identifier.
+        "use super::agent_status;",
+        "f(super::agent_status, 1)",
+        "let s = super::agent_status::AgentState::Idle;",
+        // Indented, multi-line, trailing newline, CRLF and empty texts.
+        "    use super::agent_status::AgentState;\n",
+        "use std::fmt;\nuse super::agent_status::AgentState;\r\nuse base64::Engine as _;\n",
+        "pub use std::fmt;",
+        "use self::inner::X;",
+        "",
+        "\n\n",
+        // Non-ASCII text without a project path.
+        "let s = \"日本語 \u{1f600}\";",
+    ] {
+        ac8_assert_allowed(snippet);
+    }
+}
+
+#[test]
+fn ac8_allowlist_ac3_rejected_project_path_use_lines_return_a_violation() {
+    for snippet in AC8_REJECTED_PROJECT_PATH_USE_LINES {
+        ac8_assert_rejected(snippet);
+    }
+}
+
+#[test]
+fn ac8_allowlist_ac3_an_identifier_continuation_after_the_allowed_path_is_rejected() {
+    for snippet in [
+        "use super::agent_status_exit_latch::X;",
+        "use super::agent_status2::X;",
+        "use super::agent_status_;",
+        "use super::agent_statusé;",
+        "use super::agent_status日本;",
+        "use super::agent_status１;",
+    ] {
+        ac8_assert_rejected(snippet);
+    }
+}
+
+#[test]
+fn ac8_allowlist_ac4_qualified_and_external_root_use_lines_return_a_violation() {
+    for snippet in AC8_REJECTED_QUALIFIED_AND_EXTERNAL_USE_LINES {
+        ac8_assert_rejected(snippet);
+    }
+}
+
+#[test]
+fn ac8_allowlist_ac5_occurrences_outside_use_lines_return_a_violation() {
+    for snippet in AC8_REJECTED_NON_USE_LINES {
+        ac8_assert_rejected(snippet);
+    }
+}
+
+#[test]
+fn ac8_allowlist_ac5_continuation_lines_of_a_multi_line_use_statement_are_scanned() {
+    let source = "use super::{\n    agent_status::AgentState,\n};\n";
+    let violations = ac8_assert_rejected(source);
+    assert!(
+        violations.iter().all(|v| v.contains("use super::{")),
+        "violations for {source:?}: {violations:?}"
+    );
+
+    let source = "use std::{\n    fmt,\n    crate::tabs::X,\n};\n";
+    let violations = ac8_assert_rejected(source);
+    assert!(
+        violations.iter().any(|v| v.contains("crate::tabs::X,")),
+        "violations for {source:?}: {violations:?}"
+    );
+}
+
+#[test]
+fn ac8_allowlist_ac6_every_violation_states_the_gui_feature_invariant() {
+    let rejected = AC8_REJECTED_PROJECT_PATH_USE_LINES
+        .iter()
+        .chain(&AC8_REJECTED_QUALIFIED_AND_EXTERNAL_USE_LINES)
+        .chain(&AC8_REJECTED_NON_USE_LINES);
+    for snippet in rejected {
+        let line = snippet.trim();
+        for violation in ac8_assert_rejected(snippet) {
             assert!(
-                ["std", "base64", "self", "super"].contains(&root),
-                "unexpected dependency in `{line}`"
+                violation.contains(line),
+                "violation for {snippet:?} lacks the line text: {violation:?}"
+            );
+            assert!(
+                violation.contains("super::agent_status"),
+                "violation for {snippet:?} lacks the allowlist: {violation:?}"
+            );
+            assert!(
+                violation.contains("without the `gui` feature"),
+                "violation for {snippet:?} lacks the invariant: {violation:?}"
+            );
+            assert!(
+                !violation.contains("must not reach into other project modules"),
+                "violation for {snippet:?} keeps the old phrase: {violation:?}"
             );
         }
     }
-    assert!(
-        !source.contains("crate::"),
-        "the module must not reach into other project modules"
-    );
+}
+
+#[test]
+fn ac8_allowlist_ac6_an_external_root_violation_names_the_root_list() {
+    let snippet = "use winit::event::Event;";
+    for violation in ac8_assert_rejected(snippet) {
+        assert!(
+            violation.contains("`std`, `base64`, `self`, `super`"),
+            "violation for {snippet:?} lacks the external-root list: {violation:?}"
+        );
+    }
 }
 
 // ── pane-state-rank-unify: ProgramState::rank derives from compose_rank ──
