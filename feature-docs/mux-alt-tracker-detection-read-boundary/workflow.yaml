@@ -155,8 +155,8 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/mux-alt-tracker-detection-read-boundary/task0001
   task0002:
     title: Plain-tab half of the SC-1z parity corpus
     plan: tasks/task0002.md
@@ -170,8 +170,8 @@ tasks:
     - FR5
     - FR8
     - NFR5
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/mux-alt-tracker-detection-read-boundary/task0002
 review:
   status: pending
   rounds_completed: 0
