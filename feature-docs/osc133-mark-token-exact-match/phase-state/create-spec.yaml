@@ -1,0 +1,35 @@
+schema_version: 1
+feature: osc133-mark-token-exact-match
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 7ec6bdb6733642f01883a6bd355f6647be7e2d90
+last_input_digest: sha256:70b931f14bf7357c7bf1c243ac2b3984503c23e0c60ab3ca8c3283a8135089ad
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:70b931f14bf7357c7bf1c243ac2b3984503c23e0c60ab3ca8c3283a8135089ad
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    resolved_at_generation: 1
+    paths:
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+    truncated: false
+  reference_scan_targets:
+    resolved_at_generation: 1
+    paths:
+      - src-tauri/src/callbacks.rs
+      - src-tauri/src/callbacks/tests.rs
+      - src-tauri/src/tabs/tests/output_pipeline.rs
+      - crates/term_core/src/osc_handler.rs
+    truncated: false
+last_error: null
