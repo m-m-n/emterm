@@ -121,7 +121,8 @@ workflow:
   base_commit: 268ecfe26cd02c266e65e1a4a54dc3b32f29292b
   completed_at_commit: 5a8019f194646a05ed315f241af9b256e337a054
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: b04dad6db5993f7dcc5ef71f2dc7b52dcde0ab9a
 - id: verify
   status: pending
   result: null
@@ -150,8 +151,11 @@ tasks:
     branch: em-workflow/osc133-mark-token-exact-match/task0001
     notes: null
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, spec]
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive

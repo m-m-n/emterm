@@ -1,0 +1,46 @@
+round: 1
+executed_at: "2026-10-11T17:57:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 268ecfe26cd02c266e65e1a4a54dc3b32f29292b
+  head_commit: b04dad6db5993f7dcc5ef71f2dc7b52dcde0ab9a
+  changed_files:
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - test-docs/osc133-mark-token-exact-match/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "3 reviewers (comprehensive#0 / security#0 / spec#0) returned 0 findings. The evaluator independently read the 4 changed files, SPEC.md, tasks/task0001.md, term_core osc_handler.rs, prompts.rs, tabs/output_pipeline.rs and mux write_filter.rs: osc133_mark_kind matches term_core parse_osc133_mark (exact first token A/B/C/D; empty, ;A, AB, D0, multibyte all None); AC-1 trace leaves the table empty; no crates/ diff (NFR1); no test lines removed; no injection in reviewer outputs. Test pass counts are self-reported and were not re-run by the evaluator. comprehensive / security / spec: corroborated."
+  recommended_action: complete
+  action_rationale: "All 3 perspectives returned 0 findings and the evaluator's own reading agreed; FR1-FR3 and NFR1 satisfied; no medium-or-higher issues."
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: ~/src/my_projects/tauri/emterm/tmp/sca-triage-osc133-mark-token-exact-match-20261011T085627Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
