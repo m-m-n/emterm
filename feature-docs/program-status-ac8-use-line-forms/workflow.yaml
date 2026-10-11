@@ -133,7 +133,7 @@ tasks:
     - FR6
     - NFR1
     - NFR2
-    status: in_progress
+    status: merged
     branch: em-workflow/program-status-ac8-use-line-forms/task0001
 review:
   status: pending
