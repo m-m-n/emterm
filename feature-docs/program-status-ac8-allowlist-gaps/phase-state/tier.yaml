@@ -1,0 +1,55 @@
+schema_version: 2
+feature: program-status-ac8-allowlist-gaps
+tier: reduced
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.05
+    confidence: 0.93
+    probabilities:
+      '0': 0.01
+      '1': 0.93
+      '2': 0.06
+      '3': 0.0
+  observed_at: '2026-10-11T19:10:00+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.06
+    confidence: 0.93
+    probabilities:
+      '0': 0.01
+      '1': 0.93
+      '2': 0.06
+      '3': 0.0
+  observed_at: '2026-10-11T19:16:00+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/program_status/tests.rs
+  changed_lines_approx: 60
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  work_remaining_evidence: '現在のブランチは main で、作業ツリーに変更はない。2 件とも残っている。src-tauri/src/program_status/tests.rs:1555
+    は strip_prefix("use ")、1559 は after_pub.strip_prefix(''('')、1564 は trim_start().strip_prefix("use
+    ") を使っている。このため pub (crate) use winit::event::Event; と use\twinit::event::Event;
+    は認識されない。1589–1592 は行単位で raw.trim() を ac8_use_path に渡すため、use\nwinit::event::Event;
+    と属性を同じ行に置く形も認識されない。これらには crate::・super:: がなく、1605–1619 の検査でも違反にならない。1548–1549
+    の ac8_continues_identifier は c.is_alphanumeric() || c == ''_''、1611–1613 の許可条件は
+    .strip_prefix(AC8_ALLOWED_PROJECT_PATH).is_some_and(|after| !after.chars().next().is_some_and(ac8_continues_identifier))
+    であり、明示した終端だけを許可する条件になっていない。U+0301 はこの継続文字判定に該当せず、use super::agent_status\u{0301}::X;
+    が許可される。既存の自己テストは1654–1659、1765–1775、1779–1782にあるが、上記5入力を含まない。見積もりは既存検査関数の修正と既存自己テストへの5入力追加を対象とする。呼び出し・依存の数は、検査本体の直接呼び出し元5関数（1626、1671、1679、1689、1710）と違反文生成関数
+    ac8_violation（1569）の計6関数として数えた。program_status.rs:705–706 の #[cfg(test)] mod tests;
+    内に収まり、公開APIの変更は不要。ファイルは変更しておらず、テストや cargo check は実行していない'
+  test_change_kind: extend_existing_one_to_one
+  added_test_cases_approx: 5
+  body_change_kind: new_logic
+  change_containment: single_module
+  caller_and_dependency_count: 6
+  changes_external_contract: false
+  changes_behavior: true
+decided_at: '2026-10-11T19:16:30+09:00'
