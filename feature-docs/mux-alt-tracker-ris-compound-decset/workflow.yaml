@@ -132,7 +132,8 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-alt-tracker-ris-compound-decset/task0001
   task0002:
     title: Plain-tab half of the SC-1y parity corpus
     plan: tasks/task0002.md
@@ -146,7 +147,8 @@ tasks:
     - FR7
     - FR8
     - NFR5
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-alt-tracker-ris-compound-decset/task0002
 review:
   status: pending
   rounds_completed: 0
