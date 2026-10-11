@@ -3321,6 +3321,20 @@ fn ac3_cut_rows_k8_to_k10_end_in_the_final_osc777_state() {
     for row in cut_rows_named(&["K8", "K9", "K10"]) {
         for &delivery in &row.deliveries {
             let outcome = assert_cut_row(&row, delivery);
+            // R777 reported `working` first, so a final "none" can only come
+            // from the inferred clear of the D -> A pair.
+            assert!(
+                matches!(
+                    outcome.events.as_slice(),
+                    [crate::agent_status::AgentStatusEvent::Set {
+                        state: crate::agent_status::AgentState::Working,
+                        ..
+                    }]
+                ),
+                "row {} delivered {delivery:?}: events {:?}",
+                row.name,
+                outcome.events
+            );
             let expected = if row.name == "K10" {
                 Some(crate::agent_status::AgentState::Working)
             } else {
