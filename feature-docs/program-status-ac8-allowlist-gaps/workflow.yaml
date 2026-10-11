@@ -89,7 +89,8 @@ workflow:
   - VERIFICATION.md
   - THREAT-MODEL.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: 54c3ab3fb995f21f067e85fb6a8aef251afc803e
 - id: implement
   status: pending
 - id: review
@@ -98,7 +99,29 @@ workflow:
   status: pending
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Close the ac8 allowlist use-line and terminator gaps
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/program_status/tests.rs
+    skills: []
+    domains:
+    - input-handling
+    - config-infra
+    complexity: medium
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -111,68 +134,106 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-4
   FR2:
     title: pub(...)use with zero whitespace
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-3
   FR3:
     title: Bare use line
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+    - TS-9
   FR4:
     title: Leading attribute on the same line
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-10
+    - TS-11
   FR5:
     title: Fail-closed terminator after super::agent_status
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
+    - TS-6
+    - TS-7
   FR6:
     title: Rejection self-tests and preserved allowed set
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+    - TS-4
+    - TS-5
+    - TS-6
+    - TS-7
+    - TS-8
+    - TS-9
+    - TS-10
+    - TS-11
+    - TS-12
+    - TS-13
   NFR1:
     title: Test-only change
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-16
   NFR2:
     title: No new dependencies
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-17
   NFR3:
     title: Violation message contents
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-14
   NFR4:
     title: Verification commands
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-15
