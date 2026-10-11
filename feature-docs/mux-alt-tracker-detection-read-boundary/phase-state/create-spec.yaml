@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-alt-tracker-detection-read-boundary
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: f906e19a0563ffd101056436867e4141fa7049ae
-last_input_digest: sha256:c8043f21d4725048e561510d389c213de6c2e4b823d73cf046ef0f30c6136f9d
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:f6a4126c2090a62938515174bb27309a96d9f2e7f6dce7b912469bde3c74ffaa
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: answered
@@ -80,6 +80,10 @@ worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:c8043f21d4725048e561510d389c213de6c2e4b823d73cf046ef0f30c6136f9d
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:f6a4126c2090a62938515174bb27309a96d9f2e7f6dce7b912469bde3c74ffaa
   output_digest: null
 artifacts: []
 patches: []
