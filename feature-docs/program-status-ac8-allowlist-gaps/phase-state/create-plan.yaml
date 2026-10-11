@@ -1,20 +1,33 @@
 schema_version: 1
 feature: program-status-ac8-allowlist-gaps
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
-base_revision: 4675ca4615628fc48c8fa71ddaff3efeef2faf55
+base_revision: bee0005419cda927607878246024e0b32374812b
 last_input_digest: sha256:1f44b6960e72cbf78899b8a33d37b04a33b55c26ebd48fb9d4d53f88242a6eed
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
 - request_id: create-plan-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:1f44b6960e72cbf78899b8a33d37b04a33b55c26ebd48fb9d4d53f88242a6eed
   output_digest: null
-artifacts: []
-patches: []
+artifacts:
+- path: feature-docs/program-status-ac8-allowlist-gaps/tasks/task0001.md
+  sha256: sha256:b030f5b2902d09bf973f82c613926291d21bc49e48004a65a30b186237430ea8
+  produced_by: create-plan-run-0001
+- path: feature-docs/program-status-ac8-allowlist-gaps/THREAT-MODEL.md
+  sha256: sha256:e320ad2661f23cb06c9352a693e7cc018c1a002ca9ef89bd1dce142a0dab3aa9
+  produced_by: create-plan-run-0001
+- path: feature-docs/program-status-ac8-allowlist-gaps/VERIFICATION.md
+  sha256: sha256:285ae67dbb721317e23d8edbe28887887c8c4e5e9819cd026430566d577852e4
+  produced_by: create-plan-run-0001
+patches:
+- patch_id: create-plan-p0001
+  status: applied
+  base_input_digest: sha256:1f44b6960e72cbf78899b8a33d37b04a33b55c26ebd48fb9d4d53f88242a6eed
+  base_workflow_blob: 1f01255dc01e35ac288904b340aa42842513b1df
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
