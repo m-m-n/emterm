@@ -239,10 +239,11 @@ fn latch_feed_end_to_end_set_then_live_d_a_resolves_in_order() {
 
 #[test]
 fn latch_feed_end_to_end_drops_alt_screen_suppressed_candidate() {
-    // AC-5: a D mark emitted while on the alternate screen is captured
-    // by `on_osc` (candidate) but never reaches `take_prompt_marks()`
-    // (term_core's alt-screen gate) — so it must not resolve, while the
-    // later live D/A pair (after leaving the alt screen) still does.
+    // AC-5: a D mark emitted while on the alternate screen never reaches
+    // `take_prompt_marks()` (term_core's alt-screen gate) — and, since
+    // agent-latch-alt-screen-prompt-mark FR1, the callback does not add it to
+    // the latch feed either — so it must not resolve, while the later live
+    // D/A pair (after leaving the alt screen) still does.
     let mut tab = test_tab();
     let bytes = [
         b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\".as_slice(),
@@ -267,6 +268,218 @@ fn latch_feed_end_to_end_drops_alt_screen_suppressed_candidate() {
             ),
         ],
         "the alt-screen-suppressed D candidate is dropped; only the live pair resolves"
+    );
+}
+
+// ── agent-latch-alt-screen-prompt-mark task0001: alternate-screen OSC 133
+// marks never reach the latch feed, so one `process_combined` call that mixes
+// alternate-screen marks, OSC 777 reports and main-screen marks hands the
+// inferred-clear latch only the main-screen marks, each at its true position
+// relative to the reports. ──────────────────────────────────────────────
+
+const LATCH_SET: &[u8] = b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\";
+const LATCH_CLEAR: &[u8] = b"\x1b]777;emterm;agent-status;clear\x1b\\";
+const LATCH_D: &[u8] = b"\x1b]133;D;0\x07";
+const LATCH_A: &[u8] = b"\x1b]133;A\x07";
+
+fn latch_input_set() -> crate::agent_status_model::ResolvedLatchInput {
+    crate::agent_status_model::ResolvedLatchInput::Set
+}
+
+fn latch_input_clear() -> crate::agent_status_model::ResolvedLatchInput {
+    crate::agent_status_model::ResolvedLatchInput::Clear
+}
+
+fn latch_input_d() -> crate::agent_status_model::ResolvedLatchInput {
+    crate::agent_status_model::ResolvedLatchInput::Mark(crate::prompts::PromptMarkKind::CommandEnd)
+}
+
+fn latch_input_a() -> crate::agent_status_model::ResolvedLatchInput {
+    crate::agent_status_model::ResolvedLatchInput::Mark(crate::prompts::PromptMarkKind::PromptStart)
+}
+
+/// Feed `parts` (concatenated) to a fresh plain tab in one `process_combined`
+/// call and return the tab's pending resolved latch inputs plus its OSC 777
+/// state after the pending agent-status events and the latch inputs are applied
+/// to a fresh model in batch-apply order (each Set / Clear input applies the
+/// next pending event and then records the latch Set / Clear; each Mark records
+/// a live prompt mark).
+fn latch_inputs_and_osc777_state(
+    parts: &[&[u8]],
+) -> (
+    Vec<crate::agent_status_model::ResolvedLatchInput>,
+    Option<crate::agent_status::AgentState>,
+) {
+    use crate::agent_status_model::{AgentStatusModel, PaneKey, ResolvedLatchInput};
+
+    let mut tab = test_tab();
+    tab.test_process_combined(parts.concat());
+    let events = tab.take_pending_agent_status_events();
+    let inputs = tab.take_pending_latch_inputs();
+
+    let id = tab.stable_id;
+    let mut model = AgentStatusModel::new();
+    let mut pending: std::collections::VecDeque<_> = events.into();
+    for input in inputs.iter().copied() {
+        match input {
+            ResolvedLatchInput::Set | ResolvedLatchInput::Clear => {
+                if let Some(event) = pending.pop_front() {
+                    model.apply_plain_tab_event(id, event);
+                }
+                if matches!(input, ResolvedLatchInput::Set) {
+                    model.record_latch_set(id);
+                } else {
+                    model.record_latch_clear(id);
+                }
+            }
+            ResolvedLatchInput::Mark(kind) => model.record_live_prompt_mark(id, kind),
+        }
+    }
+    for event in pending {
+        model.apply_plain_tab_event(id, event);
+    }
+    let state = model
+        .status(&PaneKey::Tab(id))
+        .and_then(|status| status.osc777_state);
+    (inputs, state)
+}
+
+/// AC-1: alt `D`, alt `A`, leave the alternate screen, `Set`, main `D`, main
+/// `A` resolves to [Set, D, A] and the inferred clear fires.
+#[test]
+fn ac1_alt_marks_before_set_then_main_d_a_resolve_in_order_and_clear_the_state() {
+    let (inputs, state) = latch_inputs_and_osc777_state(&[
+        b"\x1b[?1049h",
+        LATCH_D,
+        LATCH_A,
+        b"\x1b[?1049l",
+        LATCH_SET,
+        LATCH_D,
+        LATCH_A,
+    ]);
+    assert_eq!(
+        inputs,
+        vec![latch_input_set(), latch_input_d(), latch_input_a()]
+    );
+    assert_eq!(
+        state, None,
+        "the main-screen D then A clears the armed latch"
+    );
+}
+
+/// Shared body of the AC-2 tests: AC-1's stream with the alternate screen
+/// entered and left through `enter` / `leave`.
+fn assert_alt_switch_gives_ac1_inputs_and_cleared_state(enter: &[u8], leave: &[u8]) {
+    let (inputs, state) = latch_inputs_and_osc777_state(&[
+        enter, LATCH_D, LATCH_A, leave, LATCH_SET, LATCH_D, LATCH_A,
+    ]);
+    assert_eq!(
+        inputs,
+        vec![latch_input_set(), latch_input_d(), latch_input_a()]
+    );
+    assert_eq!(
+        state, None,
+        "the main-screen D then A clears the armed latch"
+    );
+}
+
+/// AC-2: the same stream with the alternate screen entered and left through
+/// `?1047`.
+#[test]
+fn ac2_alt_screen_switch_through_1047_gives_the_same_inputs_and_state() {
+    assert_alt_switch_gives_ac1_inputs_and_cleared_state(b"\x1b[?1047h", b"\x1b[?1047l");
+}
+
+/// AC-2: the same stream with the alternate screen entered and left through
+/// `?47`.
+#[test]
+fn ac2_alt_screen_switch_through_47_gives_the_same_inputs_and_state() {
+    assert_alt_switch_gives_ac1_inputs_and_cleared_state(b"\x1b[?47h", b"\x1b[?47l");
+}
+
+/// Shared body of the AC-3 tests: `Set`, main `D`, an alternate-screen `A`,
+/// then `second` report and a main `A`.
+fn latch_inputs_with_alt_a_before_second_report(
+    second: &[u8],
+) -> Vec<crate::agent_status_model::ResolvedLatchInput> {
+    latch_inputs_and_osc777_state(&[
+        LATCH_SET,
+        LATCH_D,
+        b"\x1b[?1049h",
+        LATCH_A,
+        b"\x1b[?1049l",
+        second,
+        LATCH_A,
+    ])
+    .0
+}
+
+/// AC-3: an alternate-screen `A` between main `D` and a later `Clear` does not
+/// pull the main `A` ahead of the `Clear`.
+#[test]
+fn ac3_alt_a_before_a_clear_keeps_the_main_a_after_the_clear() {
+    assert_eq!(
+        latch_inputs_with_alt_a_before_second_report(LATCH_CLEAR),
+        vec![
+            latch_input_set(),
+            latch_input_d(),
+            latch_input_clear(),
+            latch_input_a()
+        ]
+    );
+}
+
+/// AC-3: the same with a second `Set` in place of the `Clear`.
+#[test]
+fn ac3_alt_a_before_a_second_set_keeps_the_main_a_after_the_set() {
+    assert_eq!(
+        latch_inputs_with_alt_a_before_second_report(LATCH_SET),
+        vec![
+            latch_input_set(),
+            latch_input_d(),
+            latch_input_set(),
+            latch_input_a()
+        ]
+    );
+}
+
+/// AC-4 (a): main marks followed by alternate-screen marks keep only the main
+/// marks, in order (passes before the change too; pins the existing order).
+#[test]
+fn ac4a_main_marks_followed_by_alt_marks_resolve_only_the_main_marks() {
+    let (inputs, _) = latch_inputs_and_osc777_state(&[
+        LATCH_SET,
+        LATCH_D,
+        LATCH_A,
+        b"\x1b[?1049h",
+        LATCH_D,
+        LATCH_A,
+        b"\x1b[?1049l",
+    ]);
+    assert_eq!(
+        inputs,
+        vec![latch_input_set(), latch_input_d(), latch_input_a()]
+    );
+}
+
+/// AC-4 (b): several alternate-screen marks ahead of the main marks do not
+/// consume the live marks.
+#[test]
+fn ac4b_several_alt_marks_before_the_main_marks_resolve_only_the_main_marks() {
+    let (inputs, _) = latch_inputs_and_osc777_state(&[
+        b"\x1b[?1049h",
+        LATCH_D,
+        LATCH_A,
+        LATCH_D,
+        LATCH_A,
+        b"\x1b[?1049l",
+        LATCH_SET,
+        LATCH_D,
+        LATCH_A,
+    ]);
+    assert_eq!(
+        inputs,
+        vec![latch_input_set(), latch_input_d(), latch_input_a()]
     );
 }
 

@@ -198,14 +198,23 @@ pub struct EmtermOscRequest {
 /// `crate::agent_status_exit_latch`) never has to reconstruct relative
 /// order from two independently-scheduled queues.
 ///
-/// "Candidate" because `on_osc(OSC_SEMANTIC_PROMPT, …)` fires
-/// unconditionally (see that match arm's doc), unlike
-/// `TerminalCore::push_pending_prompt_mark`, which suppresses marks
-/// observed on the alternate screen. `Tab::process_outer_via_core`
-/// cross-references this log against `take_prompt_marks()`'s
-/// alt-screen-filtered output (drained in the same pump) via
-/// `agent_status_model::reconcile_latch_feed` to keep only genuinely live
-/// candidates before feeding `AgentStatusModel`'s per-tab latch (FR5).
+/// Main-screen invariant (agent-latch-alt-screen-prompt-mark FR1): every
+/// mark candidate in this feed comes from an OSC 133 dispatched on the MAIN
+/// screen — the same rule the OSC 7501 feed ([`ProgramStatusFeedItem`])
+/// follows. The callback learns the screen from `term_core`'s screen-aware
+/// notification (`TerminalCallbacks::on_osc_with_screen`) and does not push an
+/// alternate-screen mark here; the existing `on_osc` notification, which
+/// carries no screen information, counts as the main screen. `Set` / `Clear`
+/// enter on either screen, in call order.
+///
+/// A mark is still a "candidate": `Tab::process_outer_via_core`
+/// cross-references this log against `take_prompt_marks()` (`term_core`'s
+/// main-screen live marks, drained in the same pump) via
+/// `agent_status_model::reconcile_latch_feed`, which keeps only the candidates
+/// the live marks confirm before feeding `AgentStatusModel`'s per-tab latch
+/// (FR5). Because the feed's candidates and the live marks are the same
+/// main-screen marks in the same order, each live mark is emitted at its own
+/// candidate's position relative to `Set` / `Clear`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LatchFeedEvent {
     /// An OSC 777 agent-status `Set` report (any state/name).
@@ -231,8 +240,9 @@ pub enum LatchFeedEvent {
 /// notification (`TerminalCallbacks::on_osc_with_screen`) and does not push
 /// an alternate-screen mark here; the existing `on_osc` notification, which
 /// carries no screen information, counts as the main screen. The agent-status
-/// latch feed ([`LatchFeedEvent`]) is outside this invariant and still gets
-/// one candidate per recognized OSC 133 on either screen.
+/// latch feed ([`LatchFeedEvent`]) follows the same rule
+/// (agent-latch-alt-screen-prompt-mark FR1): it too gets no candidate from an
+/// alternate-screen OSC 133.
 ///
 /// A prompt mark is still a candidate: the pipeline confirms it only when the
 /// same pump's live marks (`term_core`'s main-screen marks) match it, front to
@@ -1214,34 +1224,32 @@ impl NativeCallbacks {
     /// agent-exit-after-icon (task0002 deviation): ALSO record a mark
     /// CANDIDATE for the plain-tab inferred-clear latch feed (FR4) — see
     /// `LatchFeedEvent`'s doc for why this is a "candidate" (not yet
-    /// alt-screen-confirmed) and how the relative order versus OSC 777
-    /// Set/Clear is preserved by construction (both push into the SAME
-    /// `pending_latch_feed` from a single synchronous callback). The latch
-    /// feed keeps one candidate per recognized OSC 133 on either screen.
+    /// confirmed by the pump's live marks) and how the relative order versus
+    /// OSC 777 Set/Clear is preserved by construction (both push into the SAME
+    /// `pending_latch_feed` from a single synchronous callback).
     ///
-    /// osc7501-program-status D4 / osc7501-alt-screen-prompt-mark SC-2: the
-    /// plain tab's OSC 7501 feed gets the same candidate, in the same call
-    /// order as the reports the responder pushes, so a prompt start lands
-    /// between the reports around it — but ONLY for a mark dispatched on the
-    /// main screen. `term_core` suppresses alternate-screen OSC 133 marks
-    /// from its live marks, and the output pipeline confirms the feed's
-    /// candidates against exactly those live marks front to back, so an
-    /// alternate-screen candidate in the feed would consume a live mark that
-    /// belongs to a later main-screen one. An unrecognized kind pushes
-    /// nothing to either feed.
+    /// agent-latch-alt-screen-prompt-mark FR1 / osc7501-program-status D4 /
+    /// osc7501-alt-screen-prompt-mark SC-2: both plain-tab feeds (the latch
+    /// feed and the OSC 7501 feed) get the candidate, in the same call order as
+    /// the reports pushed beside it, so a mark lands between the reports around
+    /// it — but ONLY for a mark dispatched on the main screen. `term_core`
+    /// suppresses alternate-screen OSC 133 marks from its live marks, and the
+    /// output pipeline confirms each feed's candidates against exactly those
+    /// live marks front to back, so an alternate-screen candidate in either
+    /// feed would consume a live mark that belongs to a later main-screen one.
+    /// An unrecognized kind pushes nothing to either feed.
     fn handle_semantic_prompt(&self, data: &str, alt_screen_active: bool) {
-        if let Some(kind) = data
-            .as_bytes()
-            .first()
-            .copied()
-            .and_then(crate::prompts::PromptMarkKind::from_byte)
+        if !alt_screen_active
+            && let Some(kind) = data
+                .as_bytes()
+                .first()
+                .copied()
+                .and_then(crate::prompts::PromptMarkKind::from_byte)
         {
             let mut s = self.state.lock();
             s.pending_latch_feed.push(LatchFeedEvent::PromptMark(kind));
-            if !alt_screen_active {
-                s.pending_program_status_feed
-                    .push(ProgramStatusFeedItem::PromptMark(kind));
-            }
+            s.pending_program_status_feed
+                .push(ProgramStatusFeedItem::PromptMark(kind));
         }
         log::debug!("OSC 133 mark seen: {data}");
     }

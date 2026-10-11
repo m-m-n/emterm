@@ -50,8 +50,11 @@ acceptance_tests:
       own. The existing tests of crates/term_core/src/callbacks.rs and crates/term_core/src/osc_handler.rs
       kept their names and bodies and pass in the term_core suite.
   AC-3:
+    # Superseded: the alternate-screen OSC 133 candidate staying in the latch feed is replaced by
+    # feature-docs/agent-latch-alt-screen-prompt-mark/SPEC.md FR1 (the latch feed follows the same
+    # main-screen rule as the 7501 feed).
     tests:
-      - callbacks::tests::osc_133_a_on_the_alternate_screen_skips_the_7501_feed_and_keeps_the_latch_candidate
+      - callbacks::tests::osc_133_a_on_the_alternate_screen_skips_both_feeds
       - callbacks::tests::osc_133_a_on_the_main_screen_adds_exactly_one_item_to_each_feed
       - callbacks::tests::osc_133_a_through_the_existing_notification_counts_as_the_main_screen
       - callbacks::tests::osc_133_every_recognized_kind_follows_the_screen_rule_and_an_unrecognized_one_pushes_nothing
