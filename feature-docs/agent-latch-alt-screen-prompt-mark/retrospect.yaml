@@ -1,0 +1,87 @@
+feature: agent-latch-alt-screen-prompt-mark
+collected_at: '2026-10-11T17:23:00+09:00'
+session_ids:
+- 01a129f8-0ede-775d-988a-a0186e0e7b32
+- 01a12a0d-e521-7177-a367-259906a55a77
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: description_plus_code の最終読みが bucket 2（新規ロジック・複数モジュール）を 0.64 で示し、閾値表により
+      full を採用
+    bases:
+    - basis: description_only
+      score:
+        type: score
+        score: 1.04
+        confidence: 0.96
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread
+            across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to
+            an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+            or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.96
+          '2': 0.04
+          '3': 0.0
+      observed_at: '2026-10-11T16:31:30+09:00'
+    - basis: description_plus_code
+      score:
+        type: score
+        score: 1.64
+        confidence: 0.64
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread
+            across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to
+            an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+            or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.36
+          '2': 0.64
+          '3': 0.0
+      observed_at: '2026-10-11T16:35:30+09:00'
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/callbacks.rs
+      - src-tauri/src/callbacks/tests.rs
+      - src-tauri/src/agent_status_model.rs
+      - src-tauri/src/tabs/tests/output_pipeline.rs
+      changed_lines_approx: 120
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      spillover_modules:
+      - tabs
+      work_still_required: true
+      work_still_required_evidence: 静的確認では未修正。callbacks.rs:1240 は別画面のマークもラッチ feed
+        に追加し、別画面の除外は OSC 7501 feed だけに適用する。agent_status_model.rs:191 の照合は種類だけを比較するため、feed=[別画面A,Set,通常画面A]、live_marks=[A]
+        は [Mark(A),Set] となる。既存コミット b40ee400 もラッチ候補を残し、SPEC A4 はラッチを対象外としている。既存テストは同種マークの間に
+        Set/Clear を挟む誤照合を検出しない。ただし、現行ラッチの解除条件は Set 後の通常画面 D→A であり、記載された Set→A だけでは解除条件を満たさない。対象2関数の本番での直接呼出箇所は3か所、直接呼ぶリポジトリ内の関数は
+        PromptMarkKind::from_byte の1件。
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 4
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 4
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+- タスクの再現手順（Set の後に通常画面 A だけ）が既存のラッチ解除条件（Set → 通常画面 D → A）と食い違っていた。create-spec で Codex
+  相談のうえ解除条件は据え置き（batch-audit create-spec.latch-release-condition）。起票時に再現手順を既存仕様と突き合わせる余地あり
+- 'review evaluator 補足: callbacks 側は先頭 1 バイト、term_core 側は ; までの完全一致で kind 判定しており、通常画面の不正
+  payload（例 Ax）が live マークを早く消費しうる（差分外・未起票）'
