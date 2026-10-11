@@ -1,16 +1,52 @@
 schema_version: 1
 feature: mux-osc-abort-altscreen-split-read
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: b9191255afa13a2f295bc13af38a1f354bc0ea45
 last_input_digest: sha256:73d0ab0f92eca5728065b7239b224dd5740be5fbb84c8342e5b316db52e2e9f0
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-11T10:18:02+09:00'
+    questions:
+    - question_id: scope.fallback-coverage
+      status: answered
+    - question_id: design-step.decision
+      status: answered
+answers:
+  scope.fallback-coverage:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T10:18:02+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - exact_live_spans_feed_only
+    freeform: null
+    normalized_answer: 'Codex consulted (1 turn, codex harness). Codex chose exact_live_spans_feed_only:
+      cut_form_only leaves marks completed inside the same fallback read (e.g. `l\x1b]133;A\x07`)
+      dropped, failing the task''s expected behavior (same record table as plain tab
+      regardless of split position); feeding exact live spans only to the scanner
+      keeps the conservative scrollback write path and its existing test expectations;
+      risk = carried partial-switch state diverging from parser rules (charset designators),
+      so verify BEL/ST/cut forms per split position on the real read path. Not chosen:
+      cut_form_only (partial parity), exact_live_spans_and_scrollback (widens blast
+      radius beyond the record-loss fix). Orchestrator agreed. Opus escalation not
+      run. Recorded as assumption.'
+  design-step.decision:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T10:18:02+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: 'Batch policy create-spec.design-step: decide_autonomously
+      -> accept analyst recommendation (skip, no UI change).'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:73d0ab0f92eca5728065b7239b224dd5740be5fbb84c8342e5b316db52e2e9f0
   output_digest: null
 artifacts: []

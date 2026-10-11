@@ -1,0 +1,27 @@
+schema_version: 1
+feature: mux-osc-abort-altscreen-split-read
+records:
+- gate_id: create-spec.requirement-clarification
+  question_id: scope.fallback-coverage
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-11T10:18:02+09:00'
+  source: batch-codex-consultation
+  route: codex_consultation
+  options:
+  - cut_form_only
+  - exact_live_spans_feed_only
+  - exact_live_spans_and_scrollback
+  selected_option_ids:
+  - exact_live_spans_feed_only
+  codex_consulted: true
+  opus_escalation: false
+  resolution_note: 'Codex consulted (1 turn, codex harness). Codex chose exact_live_spans_feed_only:
+    cut_form_only leaves marks completed inside the same fallback read (e.g. `l\x1b]133;A\x07`)
+    dropped, failing the task''s expected behavior (same record table as plain tab
+    regardless of split position); feeding exact live spans only to the scanner keeps
+    the conservative scrollback write path and its existing test expectations; risk
+    = carried partial-switch state diverging from parser rules (charset designators),
+    so verify BEL/ST/cut forms per split position on the real read path. Not chosen:
+    cut_form_only (partial parity), exact_live_spans_and_scrollback (widens blast
+    radius beyond the record-loss fix). Orchestrator agreed. Opus escalation not run.
+    Recorded as assumption.'
