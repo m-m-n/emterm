@@ -97,7 +97,7 @@ workflow:
   base_commit: 9be4f537be832537d4462853d7019915741bc611
   completed_at_commit: f2569d09ed90bd65d182a246f1955f0e3712348b
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -128,6 +128,13 @@ tasks:
     branch: em-workflow/program-status-ac8-allowlist/task0001
 review:
   status: pending
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
 requirements:
   FR1:
     title: Scan every project-module path occurrence
