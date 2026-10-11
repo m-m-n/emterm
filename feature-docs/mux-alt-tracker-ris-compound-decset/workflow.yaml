@@ -102,9 +102,16 @@ workflow:
   status: completed
   completed_at_commit: 31c11d9cc288a54e5ba939d158c28401f58a3e64
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  completed_at_commit: d64cccfc8581c0c77a9e39a36b3a80095a3ddbbe
+  result: pass
   failed_items: []
+  summary: |
+    build: cargo check (default) ok / cargo check --no-default-features ok
+    test: src-tauri --lib 4736 passed, 0 failed, 3 ignored / term_core --lib 895 passed, 0 failed, 13 ignored
+    TS-1..TS-7: test-docs listed 48 tests all ok; altsplit_ac1 asserts compared > 2000
+    diff inspection: no change under crates/term_core (NFR5), no log call (NFR3), no platform gate (NFR4), write_filter.rs changes confined to AltSpanTracker region, no existing test line removed (FR8)
+    excluded requirements: none
 - id: retrospect
   status: pending
 tasks:
