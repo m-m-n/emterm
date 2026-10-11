@@ -1,0 +1,70 @@
+schema_version: 2
+feature: mux-alt-tracker-detection-read-boundary
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.2
+    confidence: 0.8
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.8
+      '2': 0.2
+      '3': 0.0
+  observed_at: '2026-10-11T13:57:03+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.78
+    confidence: 0.78
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.22
+      '2': 0.78
+      '3': 0.0
+  observed_at: '2026-10-11T13:59:32+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/altscreen_split_read.rs
+  - src-tauri/src/mux/daemon/tests.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - feature-docs/mux-alt-tracker-ris-compound-decset/SPEC.md
+  changed_lines_approx: 160
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules:
+  - mux::daemon::tests
+  - tabs::tests::output_pipeline
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 8
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 2
+  changes_external_contract: false
+  changes_behavior: true
+  evidence: main と origin/main は f1aa98b502da7f5d9933ec2ef9327a47e12a2e03 で一致。コード追跡で両件とも未修正：src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1814
+    は検出後も食い違いを要求し、再現1は [0..28]、次の印も [0..8] を返す。同ファイル:1679 は後続の carry を消し、再現2は [2..10]
+    を返す。src-tauri/src/mux/ipc/pty_spawn/tests/altscreen_split_read.rs:1553 は消去を期待している。advance
+    の直接呼出は同ファイル:192 と src-tauri/src/mux/ipc/pty_spawn/mod.rs:517 の2箇所。数値は既存関数・テスト表を拡張する修正案の概算で、8ケースはM1/M2と連続複合形・3種の境界の組合せ。実行とファイル変更は未実施
+decided_at: '2026-10-11T14:00:10+09:00'
