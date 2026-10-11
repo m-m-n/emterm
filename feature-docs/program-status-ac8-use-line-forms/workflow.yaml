@@ -110,7 +110,8 @@ workflow:
   completed_at_commit: db10ed51d385ed817593062f461bf377213cbd9b
   base_commit: c5761051cb0b2290514638bd7b391f78a71ae666
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 3913b6f044fe88d6704131ef33cfa4e0c93c0b83
 - id: verify
   status: pending
 - id: retrospect
@@ -137,8 +138,14 @@ tasks:
     status: merged
     branch: em-workflow/program-status-ac8-use-line-forms/task0001
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - spec
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive
