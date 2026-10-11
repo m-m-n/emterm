@@ -1,0 +1,37 @@
+schema_version: 1
+feature: program-status-ac8-allowlist-gaps
+phase: create-spec
+status: in_progress
+generation: 1
+base_revision: 8253902d2deb2ff97ad9c7d55e69487ca132111f
+last_input_digest: sha256:3fbb2092c07e481db04fd26638ce31f8722984ceab62e2db5ce8a630aec7948c
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:3fbb2092c07e481db04fd26638ce31f8722984ceab62e2db5ce8a630aec7948c
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    resolved_at_generation: 1
+    paths:
+    - src-tauri/web-shared/settings/markdown-theme-presets.ts
+    - src-tauri/web-shared/settings/ui-theme-presets.ts
+    truncated: false
+  reference_scan_targets:
+    resolved_at_generation: 1
+    paths:
+    - src-tauri/src/program_status.rs
+    - src-tauri/src/program_status/tests.rs
+    - src-tauri/src/lib.rs
+    - src-tauri/src/agent_status.rs
+    - test-docs/osc7501-program-status/task0001.tests.yaml
+    - test-docs/pane-state-rank-unify/task0001.tests.yaml
+    truncated: false
+last_error: null
