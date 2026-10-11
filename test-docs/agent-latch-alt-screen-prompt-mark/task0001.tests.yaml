@@ -1,0 +1,112 @@
+task_id: task0001
+# Before any edit: the src-tauri --lib suite (project test command) ran 4758 passed, 0 failed.
+baseline_failures: []
+# Actually re-executed after the implementation (4766 passed, 0 failed: 4758 + 8 new tests) and
+# again after this record was written. Both `cargo check` (default features) and
+# `cargo check --no-default-features` pass.
+# During the red-state runs (before the implementation) one unrelated test,
+# mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master,
+# failed twice on its PTY-echo assertion; it passed in the baseline and in every run with the
+# implementation in place, and no file it reads was touched.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - tabs::tests::mux_link::ac1_alt_marks_before_set_then_main_d_a_resolve_in_order_and_clear_the_state
+    red_confirmed: true
+    red_reason: >-
+      Observed before the callbacks.rs change: assertion `left == right` failed, left
+      [Mark(CommandEnd), Mark(PromptStart), Set], right [Set, Mark(CommandEnd), Mark(PromptStart)]. The
+      alternate-screen D and A candidates consumed the live marks ahead of the Set; the real main-screen D
+      and A found the live list exhausted and were dropped, so the Set stayed last and the state check
+      (OSC 777 state None after the batch-apply order) could not hold either.
+  AC-2:
+    tests:
+      - tabs::tests::mux_link::ac2_alt_screen_switch_through_1047_gives_the_same_inputs_and_state
+      - tabs::tests::mux_link::ac2_alt_screen_switch_through_47_gives_the_same_inputs_and_state
+    red_confirmed: true
+    red_reason: >-
+      Both failed before the callbacks.rs change with the AC-1 assertion: left
+      [Mark(CommandEnd), Mark(PromptStart), Set], right [Set, Mark(CommandEnd), Mark(PromptStart)].
+  AC-3:
+    tests:
+      - tabs::tests::mux_link::ac3_alt_a_before_a_clear_keeps_the_main_a_after_the_clear
+      - tabs::tests::mux_link::ac3_alt_a_before_a_second_set_keeps_the_main_a_after_the_set
+    red_confirmed: true
+    red_reason: >-
+      Observed before the callbacks.rs change. The Clear variant: left
+      [Set, Mark(CommandEnd), Mark(PromptStart), Clear], right [Set, Mark(CommandEnd), Clear, Mark(PromptStart)].
+      The second-Set variant: left [Set, Mark(CommandEnd), Mark(PromptStart), Set], right
+      [Set, Mark(CommandEnd), Set, Mark(PromptStart)]. The alternate-screen A candidate consumed the live A,
+      so the mark was emitted ahead of the second report.
+  AC-4:
+    tests:
+      - tabs::tests::mux_link::ac4a_main_marks_followed_by_alt_marks_resolve_only_the_main_marks
+      - tabs::tests::mux_link::ac4b_several_alt_marks_before_the_main_marks_resolve_only_the_main_marks
+    red_confirmed: true
+    red_reason: >-
+      Part (b) failed before the callbacks.rs change: left [Mark(CommandEnd), Mark(PromptStart), Set], right
+      [Set, Mark(CommandEnd), Mark(PromptStart)]. Part (a) passed before the change (the main marks precede
+      the alternate-screen marks, so the existing walk already assigned the live marks to the main
+      candidates); it pins that the existing order stays intact and has no red of its own.
+  AC-5:
+    tests:
+      - callbacks::tests::osc_133_a_on_the_alternate_screen_skips_both_feeds
+      - callbacks::tests::osc_133_every_recognized_kind_follows_the_screen_rule_and_an_unrecognized_one_pushes_nothing
+      - callbacks::tests::screen_aware_notifications_keep_true_order_in_both_feeds
+      - callbacks::tests::osc_133_alt_a_then_main_a_leaves_exactly_one_latch_candidate
+      - callbacks::tests::osc_133_a_on_the_main_screen_adds_exactly_one_item_to_each_feed
+      - callbacks::tests::osc_133_a_through_the_existing_notification_counts_as_the_main_screen
+    red_confirmed: true
+    red_reason: >-
+      Four tests failed before the callbacks.rs change:
+      osc_133_a_on_the_alternate_screen_skips_both_feeds ("an alternate-screen mark never enters the latch
+      feed"), osc_133_every_recognized_kind_follows_the_screen_rule_and_an_unrecognized_one_pushes_nothing
+      ("A: alternate screen, latch feed"), screen_aware_notifications_keep_true_order_in_both_feeds (left
+      [PromptMark(PromptStart), PromptMark(PromptStart)], right [PromptMark(PromptStart)]) and
+      osc_133_alt_a_then_main_a_leaves_exactly_one_latch_candidate (the same left / right). The other two
+      tests passed before the change: they pin the main-screen and the screen-less notification (exactly one
+      candidate per feed), which the change keeps.
+  AC-6:
+    tests:
+      - callbacks::tests::osc_133_a_on_the_alternate_screen_skips_both_feeds
+      - callbacks::tests::osc_133_every_recognized_kind_follows_the_screen_rule_and_an_unrecognized_one_pushes_nothing
+      - callbacks::tests::screen_aware_notifications_keep_true_order_in_both_feeds
+      - agent_status_model::tests::ac5_reconcile_latch_feed_drops_alt_screen_suppressed_candidates
+      - agent_status_model::tests::ac5_alt_screen_suppressed_d_a_pair_never_reaches_the_model
+    red_confirmed: true
+    red_reason: >-
+      The renamed test and the two inverted callback tests were observed failing before the change (see AC-5:
+      "an alternate-screen mark never enters the latch feed"). The two ac5_* model tests keep their names and
+      expectations (comments only changed) and passed before and after, so they have no red of their own. The
+      record-content parts of the criterion have no executable check that can fail: the new name in
+      test-docs/osc7501-alt-screen-prompt-mark/task0001.tests.yaml AC-3, the supersede note and the unchanged
+      red_reason were checked by reading the diff, and every test name in that record was matched against the
+      names the `--lib` run prints after the change.
+  AC-7:
+    tests:
+      - agent_status_model::tests::ac1_set_then_live_d_then_live_a_clears_via_existing_clear_path
+      - agent_status_model::tests::ac2_set_then_live_a_without_d_leaves_state_unchanged
+      - agent_status_model::tests::ac3_explicit_clear_then_live_d_a_does_not_duplicate_clear
+      - agent_status_model::tests::ac4_reconcile_latch_feed_drops_replay_equivalent_candidates
+      - agent_status_model::tests::ac6_discard_removes_latch_so_a_later_mark_cannot_resurrect_state
+      - agent_status_model::tests::ac7_tab_without_osc133_support_never_auto_clears
+      - agent_status_model::tests::reconcile_latch_feed_empty_feed_yields_empty_resolved
+      - agent_status_model::tests::reconcile_latch_feed_preserves_true_relative_order
+      - callbacks::tests::osc_133_a_and_d_push_prompt_mark_candidates_to_latch_feed
+      - callbacks::tests::set_and_live_133_marks_preserve_true_relative_order_in_latch_feed
+      - callbacks::tests::program_status_feed_preserves_true_order_of_reports_marks_and_resets
+      - callbacks::tests::screen_aware_notification_of_other_actions_matches_the_existing_notification
+      - tabs::tests::mux_link::latch_feed_end_to_end_set_then_live_d_a_resolves_in_order
+      - tabs::tests::mux_link::latch_feed_end_to_end_drops_alt_screen_suppressed_candidate
+      - tabs::tests::mux_link::mux_inner_agent_status_set_then_da_leaves_no_residual_plain_tab_status
+      - tabs::tests::mux_link::mux_inner_candidates_do_not_leak_into_same_pump_post_detach_tail
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing latch, reconcile_latch_feed_*,
+      program_status_feed and mux latch-feed discard tests listed here detect any change to the pre-existing
+      latch transitions, reconciliation, 7501 feed and mux-discard behavior; no red state occurred for this
+      change because they kept their names and expectations and passed before and after it. The remaining
+      parts of the criterion are suite and build outcomes, all observed passing after the change: the
+      src-tauri --lib suite (4766 passed, 0 failed), `cargo check` with default features and
+      `cargo check --no-default-features`.
