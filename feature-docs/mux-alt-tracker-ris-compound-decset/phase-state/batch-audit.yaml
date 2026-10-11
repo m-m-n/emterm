@@ -29,3 +29,35 @@ records:
     safely; verify every split position and byte-at-a-time delivery in the disagreement
     state. Not chosen: single_read_only (leaves the symptom for split forms). Orchestrator
     agreed. Opus escalation not run. Recorded as assumption.'
+- gate_id: create-plan.fr4-deviation
+  question_id: plan.fr4-literal-vs-parity
+  packet_id: null
+  answered_at: '2026-10-11T12:55:00+09:00'
+  source: batch-codex-consultation
+  route: codex_consultation
+  answer_mode: single_select
+  options:
+  - planner_deviation
+  - literal_fr4
+  - other
+  selected_option_ids:
+  - planner_deviation
+  freeform: null
+  normalized_answer: planner_deviation
+  codex_consulted: true
+  opus_escalation: false
+  resolution_note: 'Planner reported that FR4 taken literally (fallback judged on
+    shadow screen before/after the read, adopt parser state for both client_alt and
+    shadow_alt) breaks AC5/FR6 parity in 3 of 10 cases: M1 then ?1;1047h, M2 then
+    ?1;1047l, M2 then ?1;1049l with mark in same read. Planner design: judge fallback
+    on client-rule screen at read end, resync shadow_alt only to parser, set client_alt
+    from final byte (h=alt, l=main), count as one adoption. Codex consulted (1 turn,
+    readonly): verified all 3 failure claims true against write_filter.rs advance/adopt
+    and shadow_follows (excludes 1047) and term_core csi_dispatch/csi_modes; deviation
+    matches term_core in all 10 combinations by inspection (executable verification
+    unverified). Chose planner_deviation. Risks: SPEC FR4 wording left unchanged (literal
+    contradiction kept as recorded assumption); A3/A6 limits (earlier same-read marks
+    inexact, >32-param compound detected though term_core ignores it); trailing partial
+    cleared at detection. Not chosen: literal_fr4 (sacrifices AC5/FR6), other (unnecessary).
+    Orchestrator agreed. Opus escalation not run. Recorded as assumption; confirm
+    in review.'
