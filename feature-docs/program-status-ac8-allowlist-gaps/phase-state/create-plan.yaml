@@ -1,0 +1,21 @@
+schema_version: 1
+feature: program-status-ac8-allowlist-gaps
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 4675ca4615628fc48c8fa71ddaff3efeef2faf55
+last_input_digest: sha256:1f44b6960e72cbf78899b8a33d37b04a33b55c26ebd48fb9d4d53f88242a6eed
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:1f44b6960e72cbf78899b8a33d37b04a33b55c26ebd48fb9d4d53f88242a6eed
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
