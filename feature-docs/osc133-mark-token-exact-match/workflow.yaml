@@ -124,9 +124,11 @@ workflow:
   status: completed
   completed_at_commit: b04dad6db5993f7dcc5ef71f2dc7b52dcde0ab9a
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  result: pass
   failed_items: []
+  completed_at_commit: 25dacb0642b0df108fdf23f31b74d5bea598f560
+  summary: 'Build 3/3 pass (src-tauri check, term_core check, --no-default-features check). Tests: src-tauri --lib 4774 passed / 0 failed / 3 ignored; term_core --lib 895 passed / 0 failed / 13 ignored. TS-1..TS-5 covered by added tests in callbacks/tests.rs and tabs/tests/output_pipeline.rs. NFR1 term_core diff check: empty. Format/static analysis/E2E: not configured. Excluded requirements: none.'
 - id: retrospect
   status: pending
 tasks:
