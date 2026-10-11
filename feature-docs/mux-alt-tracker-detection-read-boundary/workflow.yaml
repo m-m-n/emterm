@@ -112,8 +112,10 @@ workflow:
   artifacts:
   - IMPLEMENTATION.md
   - VERIFICATION.md
+  - THREAT-MODEL.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: c6ef8d08ba71545d75fa12ea753828d200ed8429
 - id: implement
   status: pending
 - id: review
@@ -124,7 +126,51 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: A detection read detects every later compound and keeps the later carry (tracker, unit tests, mux half of SC-1z)
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/altscreen_split_read.rs
+    - src-tauri/src/mux/daemon/tests.rs
+    - test-docs/mux-alt-tracker-ris-compound-decset/task0001.tests.yaml
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - FR8
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
+    status: pending
+    branch: null
+  task0002:
+    title: Plain-tab half of the SC-1z parity corpus
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/tabs/tests/output_pipeline.rs
+    skills: []
+    domains: []
+    complexity: low
+    requirements:
+    - FR4
+    - FR5
+    - FR8
+    - NFR5
+    status: pending
+    branch: null
 review:
   status: pending
   rounds_completed: 0
@@ -134,89 +180,135 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-3
+    - TS-5
+    - TS-6
   FR2:
     title: 検出した読み取りの引き継ぎ状態
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-3
+    - TS-5
+    - TS-6
   FR3:
     title: 検出した読み取りの、ほかの扱い
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
   FR4:
     title: 通常タブとの一致
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-3
+    - TS-5
+    - TS-6
   FR5:
     title: 回帰テスト
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-1
+    - TS-2
+    - TS-3
+    - TS-5
+    - TS-6
   FR6:
     title: 既存テストの名前と期待値の更新
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   FR7:
     title: 前身 SPEC FR4/FR5 の上書き
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-9
   FR8:
     title: 変わらない挙動
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-8
+    - TS-9
   NFR1:
     title: 堅牢性
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-7
   NFR2:
     title: フィーチャーゲート
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-8
   NFR3:
     title: ログ
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-9
   NFR4:
     title: プラットフォーム
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-9
   NFR5:
     title: term_core 不変
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-8
+    - TS-9
