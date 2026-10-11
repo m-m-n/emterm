@@ -9446,4 +9446,496 @@ mod program_status_feed {
             );
         }
     }
+
+    // ---- mux-osc-double-esc-abort task0001 AC-1 to AC-5 (FR1-FR6, NFR1;
+    //      TM-1..TM-3): an in-body ESC followed by a byte other than `\`
+    //      cuts the OSC string the way term_core does ----
+
+    const WORKING_777: &str = "777;emterm;agent-status;v=1;state=working";
+
+    fn mark(kind: crate::prompts::PromptMarkKind) -> AgentStatusFeedItem {
+        AgentStatusFeedItem::Osc133Mark(kind)
+    }
+
+    fn prompt_start() -> AgentStatusFeedItem {
+        mark(crate::prompts::PromptMarkKind::PromptStart)
+    }
+
+    fn working_report() -> AgentStatusFeedItem {
+        AgentStatusFeedItem::Report("emterm;agent-status;v=1;state=working".to_string())
+    }
+
+    /// The cut forms of the SC-1 corpus, placed right after the bytes of an
+    /// OSC string: (name, bytes, whether the form holds an `ESC c`).
+    ///
+    /// - `ESC ESC \`: the second `ESC` cuts; the `\` ends nothing.
+    /// - `ESC [0m`: the `[` cuts and starts a harmless SGR reset.
+    /// - `ESC ] 0;t BEL`: the `]` cuts and opens a new OSC that yields nothing.
+    /// - `ESC c`: the `c` cuts and is a RIS.
+    const CUT_FORMS: [(&str, &[u8], bool); 4] = [
+        ("ESC ESC \\", b"\x1b\x1b\\", false),
+        ("ESC [0m", b"\x1b[0m", false),
+        ("ESC ] 0;t BEL", b"\x1b]0;t\x07", false),
+        ("ESC c", b"\x1bc", true),
+    ];
+
+    /// `ESC ] <osc string>` followed by `tail`, with no terminator of its own.
+    fn cut_stream(osc_string: &str, tail: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![ESC, b']'];
+        bytes.extend_from_slice(osc_string.as_bytes());
+        bytes.extend_from_slice(tail);
+        bytes
+    }
+
+    /// `items` plus the one Reset the `ESC c` form adds after them.
+    fn plus_form_reset(
+        mut items: Vec<AgentStatusFeedItem>,
+        form_has_reset: bool,
+    ) -> Vec<AgentStatusFeedItem> {
+        if form_has_reset {
+            items.push(AgentStatusFeedItem::Reset);
+        }
+        items
+    }
+
+    /// Feed `stream` in one call with the live spans of its main-buffer
+    /// extraction (what the reader hands the scanner for one read).
+    fn scan_with_extracted_spans(stream: &[u8]) -> Vec<AgentStatusFeedItem> {
+        let extraction = extract_main_buffer(stream, false, DesignatorSlot::Ground);
+        AgentStatusFeedScanner::new().feed(stream, &extraction.spans)
+    }
+
+    /// AC-1 (FR1; TM-1, TM-3): `\` after an in-body ESC still completes ST;
+    /// every other byte ends the string unterminated and is handled as the
+    /// byte after an ESC.
+    #[test]
+    fn dblesc_ac1_a_byte_other_than_a_backslash_after_an_in_body_esc_cuts_the_string() {
+        // `\` completes ST exactly as before.
+        assert_eq!(scan(b"\x1b]133;A\x1b\\"), vec![prompt_start()]);
+        assert_eq!(
+            scan(b"\x1b]7501;state=error\x1b\\"),
+            vec![ps("state=error", Terminator::St)]
+        );
+
+        // `ESC` cuts and waits for the next escape byte: `]` opens an OSC.
+        assert_eq!(scan(b"\x1b]0;t\x1b\x1b]133;A\x07"), vec![prompt_start()]);
+        // `]` cuts and opens a new OSC.
+        assert_eq!(scan(b"\x1b]0;t\x1b]133;A\x07"), vec![prompt_start()]);
+        // `c` cuts and is a RIS: exactly one Reset.
+        assert_eq!(scan(b"\x1b]0;t\x1bc"), vec![AgentStatusFeedItem::Reset]);
+        // Any other byte cuts and goes idle: the `]` after it opens nothing.
+        assert_eq!(scan(b"\x1b]0;t\x1bx]133;A\x07"), vec![]);
+    }
+
+    /// AC-1 (TM-3): the retained length is 0 right after every cut, whatever
+    /// the cutting byte is and however long the string's body was.
+    #[test]
+    fn dblesc_ac1_the_retained_length_is_zero_right_after_every_cut() {
+        let mut cutting_bytes: Vec<u8> = (0..=u8::MAX).collect();
+        cutting_bytes.retain(|&b| b != b'\\');
+        for body_len in [0usize, 3, 4000] {
+            let body = "x".repeat(body_len);
+            for &cutting in &cutting_bytes {
+                let mut scanner = AgentStatusFeedScanner::new();
+                let mut stream = vec![ESC, b']'];
+                stream.extend_from_slice(body.as_bytes());
+                stream.extend_from_slice(&[ESC, cutting]);
+                feed_live(&mut scanner, &stream);
+                assert_eq!(
+                    scanner.retained_len(),
+                    0,
+                    "body of {body_len} bytes cut by {cutting:#04x}"
+                );
+            }
+        }
+    }
+
+    /// AC-2 (FR2, FR3; TM-1): a cut OSC 7501 string yields no item, in every
+    /// spelling and for every cut form; the `ESC c` form still yields its Reset.
+    #[test]
+    fn dblesc_ac2_a_cut_osc_7501_string_yields_no_item() {
+        for body in [
+            "7501;state=clear",
+            "07501;state=clear",
+            "x7501;:state=clear",
+            "7501",
+        ] {
+            for (form, tail, has_reset) in CUT_FORMS {
+                assert_eq!(
+                    scan(&cut_stream(body, tail)),
+                    plus_form_reset(vec![], has_reset),
+                    "{body} cut by {form}"
+                );
+            }
+        }
+    }
+
+    /// AC-2 (FR2): a cut canonical OSC 777 agent-status string yields exactly
+    /// the one Report its BEL form yields; any other OSC 777 body yields none.
+    #[test]
+    fn dblesc_ac2_a_cut_osc_777_string_yields_the_report_of_its_bel_form_or_nothing() {
+        let bel_form = scan(&osc(WORKING_777, Terminator::Bel));
+        assert_eq!(bel_form, vec![working_report()]);
+        for (form, tail, has_reset) in CUT_FORMS {
+            assert_eq!(
+                scan(&cut_stream(WORKING_777, tail)),
+                plus_form_reset(bel_form.clone(), has_reset),
+                "report cut by {form}"
+            );
+        }
+
+        for body in [
+            "0777;emterm;agent-status;v=1;state=working",
+            "777x;emterm;agent-status;v=1;state=working",
+            "777;emterm;markdown;x",
+            "777;notify;title;body",
+        ] {
+            for (form, tail, has_reset) in CUT_FORMS {
+                assert_eq!(
+                    scan(&cut_stream(body, tail)),
+                    plus_form_reset(vec![], has_reset),
+                    "{body} cut by {form}"
+                );
+            }
+        }
+    }
+
+    /// AC-3 (FR4): a cut live OSC 133 string is classified as its BEL form is,
+    /// for every cut form.
+    #[test]
+    fn dblesc_ac3_a_cut_osc_133_string_is_classified_as_its_bel_form() {
+        use crate::prompts::PromptMarkKind::{CommandEnd, CommandExec, CommandStart};
+        let cases: Vec<(&str, Vec<AgentStatusFeedItem>)> = vec![
+            ("133;A", vec![prompt_start()]),
+            ("133;B", vec![mark(CommandStart)]),
+            ("133;C", vec![mark(CommandExec)]),
+            ("133;D", vec![mark(CommandEnd)]),
+            ("133;D;0", vec![mark(CommandEnd)]),
+            ("133;A;aid=1", vec![prompt_start()]),
+            ("0133;A", vec![AgentStatusFeedItem::NonCanonicalPromptStart]),
+            ("133A", vec![AgentStatusFeedItem::NonCanonicalPromptStart]),
+            ("133;E", vec![]),
+            ("0133;B", vec![]),
+            ("133;", vec![]),
+            ("134;A", vec![]),
+        ];
+        for (body, expected) in cases {
+            assert_eq!(
+                scan(&osc(body, Terminator::Bel)),
+                expected,
+                "{body}: the BEL form is the reference"
+            );
+            for (form, tail, has_reset) in CUT_FORMS {
+                assert_eq!(
+                    scan(&cut_stream(body, tail)),
+                    plus_form_reset(expected.clone(), has_reset),
+                    "{body} cut by {form}"
+                );
+            }
+        }
+    }
+
+    /// AC-3 (FR4; TM-2): a cut OSC 133 string yields its item only when the
+    /// string's own last byte lay in a live span. With the spans of the
+    /// main-buffer extraction, a cut string on the alternate screen yields
+    /// nothing; `ESC ] 133;A ESC [?1049h` yields the main-screen mark.
+    #[test]
+    fn dblesc_ac3_a_cut_osc_133_string_needs_its_own_last_byte_to_be_live() {
+        for (form, tail, has_reset) in CUT_FORMS {
+            // No live span at all.
+            assert_eq!(
+                AgentStatusFeedScanner::new().feed(&cut_stream("133;A", tail), &[]),
+                plus_form_reset(vec![], has_reset),
+                "{form}: outside every live span"
+            );
+
+            // Main screen: live.
+            assert_eq!(
+                scan_with_extracted_spans(&cut_stream("133;A", tail)),
+                plus_form_reset(vec![prompt_start()], has_reset),
+                "{form}: main screen"
+            );
+
+            // Alternate screen: nothing.
+            let mut alt = b"\x1b[?1049h".to_vec();
+            alt.extend_from_slice(&cut_stream("133;A", tail));
+            alt.extend_from_slice(b"\x1b[?1049l");
+            assert_eq!(
+                scan_with_extracted_spans(&alt),
+                plus_form_reset(vec![], has_reset),
+                "{form}: alternate screen"
+            );
+        }
+
+        // The ESC that cuts the string also starts the switch to the
+        // alternate screen: the string's own last byte was on the main screen.
+        assert_eq!(
+            scan_with_extracted_spans(b"\x1b]133;A\x1b[?1049h\x1b[?1049l"),
+            vec![prompt_start()]
+        );
+        // The ESC that cuts the string starts the switch back to the main
+        // screen: the string's own last byte was on the alternate screen.
+        assert_eq!(
+            scan_with_extracted_spans(b"\x1b[?1049h\x1b]133;A\x1b[?1049l"),
+            vec![]
+        );
+    }
+
+    /// AC-3 (FR4): for each canonical `133;A` case the scanner yields a mark
+    /// item exactly when term_core records a prompt mark for the same bytes.
+    #[test]
+    fn dblesc_ac3_the_scanner_yields_a_canonical_mark_exactly_when_term_core_records_one() {
+        let streams: &[(&str, &[u8], usize)] = &[
+            ("main screen, ESC [0m", b"\x1b]133;A\x1b[0m", 1),
+            ("main screen, ESC ESC \\", b"\x1b]133;A\x1b\x1b\\", 1),
+            ("alternate screen", b"\x1b[?1049h\x1b]133;A\x1b[0m", 0),
+            (
+                "alternate screen, ESC ESC \\",
+                b"\x1b[?1049h\x1b]133;A\x1b\x1b\\\x1b[?1049l",
+                0,
+            ),
+            ("cut by the switch to alt", b"\x1b]133;A\x1b[?1049h", 1),
+            (
+                "cut by the switch back to main",
+                b"\x1b[?1049h\x1b]133;A\x1b[?1049l",
+                0,
+            ),
+        ];
+        for &(label, stream, expected_marks) in streams {
+            let mut core = TerminalCore::new(80, 24, 100);
+            core.process_pty_data_fully(stream);
+            let recorded = core.take_prompt_marks().len();
+            assert_eq!(recorded, expected_marks, "{label}: term_core");
+
+            let marks = scan_with_extracted_spans(stream)
+                .iter()
+                .filter(|item| matches!(item, AgentStatusFeedItem::Osc133Mark(_)))
+                .count();
+            assert_eq!(marks, recorded, "{label}: scanner vs term_core");
+        }
+    }
+
+    /// AC-4 (FR5): the items of a cut string come before every item of the
+    /// cutting byte and of the later bytes.
+    #[test]
+    fn dblesc_ac4_the_items_of_a_cut_string_come_before_those_of_the_cutting_byte() {
+        // Report, then the Reset of the `ESC c` that cut it.
+        assert_eq!(
+            scan(&cut_stream(WORKING_777, b"\x1bc")),
+            vec![working_report(), AgentStatusFeedItem::Reset]
+        );
+        // The mark, then the OSC 7501 of the OSC the `]` opened.
+        assert_eq!(
+            scan(b"\x1b]133;A\x1b]7501;state=error\x07"),
+            vec![prompt_start(), ps("state=error", Terminator::Bel)]
+        );
+        // The cut 7501 string yields nothing; only the later one is an item.
+        assert_eq!(
+            scan(b"\x1b]7501;state=error\x1b\x1b]7501;state=clear\x07"),
+            vec![ps("state=clear", Terminator::Bel)]
+        );
+    }
+
+    /// One stream holding every case of AC-1 to AC-4, the alternate-screen
+    /// cases included.
+    fn every_cut_case_stream() -> Vec<u8> {
+        let mut stream = Vec::new();
+        // AC-1.
+        for case in [
+            &b"\x1b]0;t\x1b\x1b]133;A\x07"[..],
+            b"\x1b]0;t\x1b]133;A\x07",
+            b"\x1b]0;t\x1bc",
+            b"\x1b]0;t\x1bx]133;A\x07",
+            b"\x1b]133;A\x1b\\",
+        ] {
+            stream.extend_from_slice(case);
+        }
+        // AC-2 and AC-3: every body, every cut form.
+        for body in [
+            "7501;state=clear",
+            "07501;state=clear",
+            "x7501;:state=clear",
+            "7501",
+            WORKING_777,
+            "0777;emterm;agent-status;v=1;state=working",
+            "133;A",
+            "133;D",
+            "0133;A",
+            "133;E",
+            "0133;B",
+        ] {
+            for (_, tail, _) in CUT_FORMS {
+                stream.extend_from_slice(&cut_stream(body, tail));
+            }
+        }
+        // AC-3: the alternate-screen cases.
+        for (_, tail, _) in CUT_FORMS {
+            stream.extend_from_slice(b"\x1b[?1049h");
+            stream.extend_from_slice(&cut_stream("133;A", tail));
+            stream.extend_from_slice(b"\x1b[?1049l");
+        }
+        stream.extend_from_slice(b"\x1b]133;A\x1b[?1049h\x1b[?1049l");
+        stream.extend_from_slice(b"\x1b[?1049h\x1b]133;D\x1b[?1049l");
+        // AC-4.
+        stream.extend_from_slice(&cut_stream(WORKING_777, b"\x1bc"));
+        stream.extend_from_slice(b"\x1b]133;A\x1b]7501;state=error\x07");
+        stream.extend_from_slice(b"\x1b]7501;state=error\x1b\x1b]7501;state=clear\x07");
+        stream
+    }
+
+    /// The part of `spans` (ranges of a whole stream) that falls inside
+    /// `lo..hi`, rebased to start at `lo`.
+    fn spans_within(
+        spans: &[std::ops::Range<usize>],
+        lo: usize,
+        hi: usize,
+    ) -> Vec<std::ops::Range<usize>> {
+        spans
+            .iter()
+            .filter_map(|r| {
+                let (start, end) = (r.start.max(lo), r.end.min(hi));
+                (start < end).then(|| start - lo..end - lo)
+            })
+            .collect()
+    }
+
+    /// Feed `stream` cut at `offsets` (ascending), one `feed` per piece; each
+    /// piece gets the part of the whole stream's live `spans` inside it.
+    fn feed_split_at(
+        stream: &[u8],
+        spans: &[std::ops::Range<usize>],
+        offsets: &[usize],
+    ) -> Vec<AgentStatusFeedItem> {
+        let mut scanner = AgentStatusFeedScanner::new();
+        let mut items = Vec::new();
+        let mut lo = 0;
+        for &hi in offsets.iter().chain(std::iter::once(&stream.len())) {
+            items.extend(scanner.feed(&stream[lo..hi], &spans_within(spans, lo, hi)));
+            lo = hi;
+        }
+        items
+    }
+
+    /// AC-5 (FR6, NFR1; TM-2, TM-3): with each byte's liveness fixed by the
+    /// whole stream's live spans, cutting the stream into two feeds at any
+    /// single offset, and feeding it one byte at a time, yield the items of
+    /// one feed.
+    #[test]
+    fn dblesc_ac5_every_split_of_the_cut_cases_yields_the_items_of_one_feed() {
+        let stream = every_cut_case_stream();
+        let extraction = extract_main_buffer(&stream, false, DesignatorSlot::Ground);
+        let spans = extraction.spans;
+        assert!(spans.len() > 1, "the stream switches screens");
+
+        let expected = feed_split_at(&stream, &spans, &[]);
+        // The reference is not vacuous: marks, reports, resets and an OSC 7501
+        // item are all in it, and the alternate-screen strings are not (the
+        // four main-screen `133;D` strings are the only command ends).
+        let count = |item: &AgentStatusFeedItem| expected.iter().filter(|i| *i == item).count();
+        assert_eq!(count(&prompt_start()), 9);
+        assert_eq!(count(&mark(crate::prompts::PromptMarkKind::CommandEnd)), 4);
+        assert_eq!(count(&AgentStatusFeedItem::Reset), 14);
+        assert!(count(&working_report()) > 0);
+        assert_eq!(count(&ps("state=clear", Terminator::Bel)), 1);
+
+        for cut in 0..=stream.len() {
+            assert_eq!(
+                feed_split_at(&stream, &spans, &[cut]),
+                expected,
+                "cut at {cut}"
+            );
+        }
+        let every_offset: Vec<usize> = (1..stream.len()).collect();
+        assert_eq!(
+            feed_split_at(&stream, &spans, &every_offset),
+            expected,
+            "one byte at a time"
+        );
+    }
+
+    /// AC-5 (FR6; TM-2): a cut OSC 133 string whose last body byte, in-body
+    /// ESC and cutting byte arrive in three separate feeds is live when the
+    /// feed that carried its last body byte marked that byte live; the later
+    /// feeds' spans do not decide it.
+    #[test]
+    fn dblesc_ac5_the_liveness_of_the_last_body_byte_is_carried_across_feeds() {
+        let body = b"\x1b]133;A";
+        let live = |len: usize| vec![0..len];
+        let run = |spans: [Vec<std::ops::Range<usize>>; 3]| {
+            let mut scanner = AgentStatusFeedScanner::new();
+            let mut items = scanner.feed(body, &spans[0]);
+            items.extend(scanner.feed(b"\x1b", &spans[1]));
+            items.extend(scanner.feed(b"x", &spans[2]));
+            items
+        };
+
+        // Only the first feed marks its bytes live: the mark is yielded.
+        assert_eq!(
+            run([live(body.len()), vec![], vec![]]),
+            vec![prompt_start()]
+        );
+        // Only the later feeds mark their bytes live: nothing.
+        assert_eq!(run([vec![], live(1), live(1)]), vec![]);
+        // Only the last body byte is live in the first feed.
+        assert_eq!(
+            run([vec![body.len() - 1..body.len()], vec![], vec![]]),
+            vec![prompt_start()]
+        );
+        // Everything but the last body byte is live: nothing.
+        assert_eq!(run([vec![0..body.len() - 1], live(1), live(1)]), vec![]);
+
+        // The in-body ESC and the cutting byte in one feed, the last body
+        // byte in the feed before.
+        let mut scanner = AgentStatusFeedScanner::new();
+        let mut items = scanner.feed(body, &live(body.len()));
+        items.extend(scanner.feed(b"\x1bx", &[]));
+        assert_eq!(items, vec![prompt_start()]);
+        let mut scanner = AgentStatusFeedScanner::new();
+        let mut items = scanner.feed(body, &[]);
+        items.extend(scanner.feed(b"\x1bx", &live(2)));
+        assert_eq!(items, vec![]);
+    }
+
+    /// AC-5 (NFR1; TM-3): a stream of at least 1 MiB made of repeated cut
+    /// strings finishes within 2 seconds, panics nowhere and never retains
+    /// more than the carry bound.
+    #[test]
+    fn dblesc_ac5_a_large_stream_of_cut_strings_is_linear_and_bounded() {
+        let mut unit = Vec::new();
+        for body in ["7501;state=working", WORKING_777, "133;A"] {
+            for (_, tail, _) in CUT_FORMS {
+                unit.extend_from_slice(&cut_stream(body, tail));
+            }
+        }
+        // An over-long body, cut after the scanner dropped it at the bound.
+        let long_body = format!("7501;title={}", "A".repeat(9000));
+        unit.extend_from_slice(&cut_stream(&long_body, b"\x1bx"));
+
+        let mut one_unit = AgentStatusFeedScanner::new();
+        let unit_items = feed_live(&mut one_unit, &unit);
+        assert_eq!(one_unit.retained_len(), 0);
+        // OSC 7501: only the Reset of its `ESC c` form. OSC 777 and OSC 133:
+        // one item per form plus the Reset of the `ESC c` form.
+        assert_eq!(unit_items.len(), 1 + 5 + 5);
+
+        let reps = (1 << 20) / unit.len() + 1;
+        let stream = unit.repeat(reps);
+        assert!(stream.len() >= 1 << 20);
+
+        let mut scanner = AgentStatusFeedScanner::new();
+        let mut items = Vec::new();
+        let start = std::time::Instant::now();
+        for chunk in stream.chunks(8191) {
+            items.extend(feed_live(&mut scanner, chunk));
+            assert!(scanner.retained_len() <= AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP);
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "cut strings must scan in linear time; took {:?}",
+            start.elapsed()
+        );
+        let expected: Vec<AgentStatusFeedItem> =
+            (0..reps).flat_map(|_| unit_items.iter().cloned()).collect();
+        assert_eq!(items, expected);
+    }
 }

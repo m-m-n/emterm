@@ -1392,8 +1392,11 @@ enum AgentStatusFeedScanState {
     /// introducer itself is not stored).
     InsideOsc,
     /// The most recent body byte was ESC, not yet pushed into `body`,
-    /// pending disambiguation: `\` completes ST, `]` reopens as a fresh OSC
-    /// introducer, anything else aborts the in-flight OSC without emitting.
+    /// pending disambiguation: `\` completes ST; any other byte cuts the
+    /// string (it ends unterminated, as `term_core` ends it) and is then
+    /// handled as the byte after an ESC — `ESC` waits for the next escape
+    /// byte, `]` opens a fresh OSC with an empty body, anything else goes
+    /// idle.
     InsideOscPendingSt,
 }
 
@@ -1452,6 +1455,16 @@ pub(super) const AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP: usize = 8 * 1024;
 /// than [`AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP`], or one that never
 /// terminates, yields no item and the retained bytes never exceed the bound.
 ///
+/// An OSC string ends the way `term_core` ends it (mux-osc-double-esc-abort
+/// FR1 to FR6). BEL and `ESC \` complete it. An in-body `ESC` followed by any
+/// other byte cuts it: the string ends unterminated and that byte is handled
+/// as the byte after an `ESC`. A cut string yields what `term_core` and the
+/// plain-tab callbacks make of it — an OSC 7501 string is dropped (no item),
+/// a canonical OSC 777 agent-status string is a report, and an OSC 133 string
+/// is classified as its BEL form is, when the string's own last byte (the last
+/// body byte, before the in-body `ESC`) lay in a live span. The items of a cut
+/// string come before every item of the cutting byte and of the later bytes.
+///
 /// OSC 7501 and OSC 133 are recognized by the shared recognition rule
 /// ([`osc_body_number`]), so a leading-zero number or non-digit bytes before
 /// the first `;` name the same sequence the client's parser dispatches
@@ -1469,6 +1482,19 @@ pub(super) struct AgentStatusFeedScanner {
     /// RIS tracking, independent of the OSC decode state: it holds no bytes,
     /// so it adds nothing to the retained carry.
     ris: RisState,
+    /// Whether the last byte of the previous read lay in a live span, recorded
+    /// when a read ends inside an OSC string (`InsideOsc`) so that an in-body
+    /// `ESC` opening the next read can tell whether the string's last body
+    /// byte was live. Meaningful only while the state is `InsideOsc` at a
+    /// read boundary.
+    tail_live: bool,
+    /// Whether the in-flight string (state `InsideOscPendingSt`) is an OSC 133
+    /// string whose last body byte, the one right before its in-body `ESC`,
+    /// lay in a live span of the read that carried it: the string-end
+    /// liveness of a cut. It is decided at the in-body `ESC`, so the `ESC`
+    /// and the cutting byte (which a switch to the alternate screen may
+    /// exclude from the live spans) never decide it.
+    cut_live: bool,
 }
 
 impl AgentStatusFeedScanner {
@@ -1478,15 +1504,18 @@ impl AgentStatusFeedScanner {
             body: Vec::new(),
             overflow_warned: false,
             ris: RisState::Other,
+            tail_live: false,
+            cut_live: false,
         }
     }
 
     /// Feed one PTY read chunk. `live_spans` are the byte ranges of `chunk`
     /// eligible for OSC 133 marks (SPEC FR5); reports are recognized
     /// everywhere in `chunk`. Returns every complete report / mark detected
-    /// during this call, in the exact order their terminator appeared in
-    /// `chunk`. Any trailing incomplete OSC sequence is retained in `self`
-    /// and resumed on the next `feed` call.
+    /// during this call, in the exact order their terminator (or, for a cut
+    /// string, its cutting byte) appeared in `chunk`. Any trailing incomplete
+    /// OSC sequence is retained in `self` and resumed on the next `feed`
+    /// call.
     pub(super) fn feed(
         &mut self,
         chunk: &[u8],
@@ -1506,6 +1535,13 @@ impl AgentStatusFeedScanner {
                 self.reset();
             }
         }
+        if self.state == AgentStatusFeedScanState::InsideOsc && !chunk.is_empty() {
+            // The read ends inside a string, so its last byte is the string's
+            // last byte so far (the introducer or a body byte): an in-body
+            // `ESC` that opens the next read needs its liveness (a cut OSC 133
+            // string, FR4).
+            self.tail_live = is_live(live_spans, chunk.len() - 1);
+        }
         out
     }
 
@@ -1516,7 +1552,6 @@ impl AgentStatusFeedScanner {
         live_spans: &[std::ops::Range<usize>],
         out: &mut Vec<AgentStatusFeedItem>,
     ) {
-        self.step_ris(b, out);
         match self.state {
             AgentStatusFeedScanState::Idle => {
                 if b == 0x1b {
@@ -1540,6 +1575,9 @@ impl AgentStatusFeedScanner {
                 if b == 0x07 {
                     self.commit(idx, live_spans, Terminator::Bel, out);
                 } else if b == 0x1b {
+                    // Only an OSC 133 string needs the string-end liveness.
+                    self.cut_live = osc_body_number(&self.body) == Some(OSC_NUMBER_SEMANTIC_PROMPT)
+                        && self.preceding_byte_live(idx, live_spans);
                     self.state = AgentStatusFeedScanState::InsideOscPendingSt;
                 } else {
                     self.body.push(b);
@@ -1549,16 +1587,21 @@ impl AgentStatusFeedScanner {
                 b'\\' => {
                     self.commit(idx, live_spans, Terminator::St, out);
                 }
-                b']' => {
-                    self.body.clear();
-                    self.state = AgentStatusFeedScanState::InsideOsc;
-                }
-                0x1b => {}
                 _ => {
-                    self.reset();
+                    // Cut: the string ends unterminated, then `b` is the byte
+                    // after an `ESC`.
+                    self.cut(out);
+                    self.state = match b {
+                        b']' => AgentStatusFeedScanState::InsideOsc,
+                        0x1b => AgentStatusFeedScanState::SeenEsc,
+                        _ => AgentStatusFeedScanState::Idle,
+                    };
                 }
             },
         }
+        // After the OSC decode state, so the item of a string that `b` cuts is
+        // appended before the Reset of an `ESC c` whose `c` is `b` (FR5).
+        self.step_ris(b, out);
     }
 
     /// Advance the RIS tracking by one byte, emitting a reset item at the
@@ -1601,10 +1644,8 @@ impl AgentStatusFeedScanner {
         terminator: Terminator,
         out: &mut Vec<AgentStatusFeedItem>,
     ) {
-        if let Some(rest) = self.body.strip_prefix(b"777;emterm;agent-status;") {
-            let mut payload = String::from("emterm;agent-status;");
-            payload.push_str(&String::from_utf8_lossy(rest));
-            out.push(AgentStatusFeedItem::Report(payload));
+        if let Some(report) = agent_status_report(&self.body) {
+            out.push(report);
         } else {
             match osc_body_number(&self.body) {
                 Some(OSC_NUMBER_PROGRAM_STATUS) => {
@@ -1614,13 +1655,46 @@ impl AgentStatusFeedScanner {
                         terminator,
                     });
                 }
-                Some(OSC_NUMBER_SEMANTIC_PROMPT) if live_spans.iter().any(|r| r.contains(&idx)) => {
+                Some(OSC_NUMBER_SEMANTIC_PROMPT) if is_live(live_spans, idx) => {
                     out.extend(osc133_item(&self.body));
                 }
                 _ => {}
             }
         }
         self.reset();
+    }
+
+    /// Whether the byte right before position `idx` of the current read lay
+    /// in a live span of the read that carried it: the byte at `idx - 1`, or,
+    /// when `idx` opens the read, the last byte of the previous read (recorded
+    /// in [`Self::tail_live`]). Before an in-body `ESC` that byte is the
+    /// string's own last byte: the last body byte, or the introducer `]` of an
+    /// empty body.
+    fn preceding_byte_live(&self, idx: usize, live_spans: &[std::ops::Range<usize>]) -> bool {
+        match idx.checked_sub(1) {
+            Some(prev) => is_live(live_spans, prev),
+            None => self.tail_live,
+        }
+    }
+
+    /// End the in-flight OSC string unterminated, the way `term_core` ends it
+    /// when an in-body `ESC` is followed by a byte other than `\`, and clear
+    /// the body (the caller moves the state on). What the string yields:
+    ///
+    /// 1. A body that starts with the canonical OSC 777 agent-status prefix
+    ///    is the same report its BEL / ST form gives.
+    /// 2. An OSC 7501 string is dropped: no item, so no record change, no
+    ///    broadcast and no answer, whatever its spelling.
+    /// 3. An OSC 133 string is classified as its BEL form is ([`osc133_item`])
+    ///    when the string's own last byte was live ([`Self::cut_live`]).
+    /// 4. Anything else gives nothing.
+    fn cut(&mut self, out: &mut Vec<AgentStatusFeedItem>) {
+        if let Some(report) = agent_status_report(&self.body) {
+            out.push(report);
+        } else if self.cut_live {
+            out.extend(osc133_item(&self.body));
+        }
+        self.body.clear();
     }
 
     fn reset(&mut self) {
@@ -1633,6 +1707,20 @@ impl AgentStatusFeedScanner {
     pub(super) fn retained_len(&self) -> usize {
         self.body.len()
     }
+}
+
+/// Whether byte `idx` of a read lies in one of that read's `live_spans`.
+fn is_live(live_spans: &[std::ops::Range<usize>], idx: usize) -> bool {
+    live_spans.iter().any(|r| r.contains(&idx))
+}
+
+/// The OSC 777 agent-status report an OSC string body is, if it starts with
+/// the canonical prefix (canonical-only, osc7501-program-status FR18).
+fn agent_status_report(body: &[u8]) -> Option<AgentStatusFeedItem> {
+    let rest = body.strip_prefix(b"777;emterm;agent-status;")?;
+    let mut payload = String::from("emterm;agent-status;");
+    payload.push_str(&String::from_utf8_lossy(rest));
+    Some(AgentStatusFeedItem::Report(payload))
 }
 
 /// The item for a completed OSC string whose number is 133 and whose

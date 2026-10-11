@@ -3484,6 +3484,14 @@ mod leading_zero_length {
     /// Feed `bytes` through the real reader loop and the daemon's
     /// agent-status task of a Detached pane whose table the `seed` filled.
     async fn drive(seed: impl FnOnce(&MuxPane), bytes: Vec<u8>) -> Driven {
+        drive_with_reader(seed, Box::new(std::io::Cursor::new(bytes))).await
+    }
+
+    /// [`drive`] with the reader the PTY output arrives through.
+    async fn drive_with_reader(
+        seed: impl FnOnce(&MuxPane),
+        reader: Box<dyn std::io::Read + Send>,
+    ) -> Driven {
         use crate::mux::session::pane::{
             DetachReason, MuxPane, PaneOutputTarget, SharedOutputTarget,
         };
@@ -3529,7 +3537,6 @@ mod leading_zero_length {
         };
         let task = tokio::spawn(run_agent_status_task(mgr.clone(), rx));
 
-        let reader: Box<dyn std::io::Read + Send> = Box::new(std::io::Cursor::new(bytes));
         let slot = sender_slot.clone();
         tokio::task::spawn_blocking(move || {
             crate::mux::ipc::pty_spawn::pty_reader_loop(
@@ -3950,5 +3957,357 @@ mod leading_zero_length {
         // The canonical spelling of the same report does set it.
         let driven = drive(seed_no_records, working_report()).await;
         assert_eq!(driven.osc777_state, Some(AgentState::Working));
+    }
+
+    // ---- mux-osc-double-esc-abort task0001 AC-6 (FR7, FR9; TM-1, TM-2):
+    //      the mux half of the SC-1 cut parity corpus (IMPLEMENTATION.md),
+    //      through the real reader loop and the daemon agent-status task ----
+
+    /// A reader that hands out one chunk per `read` call (a chunk larger than
+    /// the caller's buffer takes as many reads as it needs), so the reads the
+    /// reader loop sees are exactly the deliveries a corpus row names.
+    struct ChunkedReader {
+        chunks: std::collections::VecDeque<Vec<u8>>,
+    }
+
+    impl std::io::Read for ChunkedReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let Some(chunk) = self.chunks.front_mut() else {
+                return Ok(0);
+            };
+            let n = chunk.len().min(buf.len());
+            buf[..n].copy_from_slice(&chunk[..n]);
+            chunk.drain(..n);
+            if chunk.is_empty() {
+                self.chunks.pop_front();
+            }
+            Ok(n)
+        }
+    }
+
+    /// Feed `reads` through the real reader loop, one read each, and the
+    /// daemon's agent-status task of a Detached pane the `seed` filled.
+    async fn drive_reads(seed: impl FnOnce(&MuxPane), reads: Vec<Vec<u8>>) -> Driven {
+        let chunks = reads.into_iter().filter(|read| !read.is_empty()).collect();
+        drive_with_reader(seed, Box::new(ChunkedReader { chunks })).await
+    }
+
+    /// The seeds of SC-1.
+    #[derive(Clone, Copy, Debug)]
+    enum Seed {
+        /// One root `working` record.
+        W,
+        /// Records `w` working, `b` blocked, `i` idle, `d` done, `e` error.
+        All,
+        /// No record.
+        Zero,
+    }
+
+    impl Seed {
+        fn apply(self, pane: &MuxPane) {
+            match self {
+                Seed::W => seed_root_working(pane),
+                Seed::All => seed_every_state(pane),
+                Seed::Zero => seed_no_records(pane),
+            }
+        }
+    }
+
+    /// One row of the SC-1 corpus.
+    struct Sc1Row {
+        name: &'static str,
+        seed: Seed,
+        stream: Vec<u8>,
+        /// The deliveries the row names: each entry is the offsets at which the
+        /// stream is cut into reads (empty: the whole stream in one read).
+        deliveries: Vec<Vec<usize>>,
+        /// The final OSC 7501 table as `(id, state)`; the root record has the
+        /// empty id.
+        final_table: Vec<(&'static str, ProgramState)>,
+        final_osc777: Option<AgentState>,
+        /// The number of table changes (broadcasts and the revision delta);
+        /// `None` where the row does not assert it.
+        table_changes: Option<usize>,
+    }
+
+    /// `EE`: the second ESC cuts the string; the `\` after it ends nothing.
+    const EE: &[u8] = b"\x1b\x1b\\";
+    /// `EX`: the `[` cuts the string and starts a harmless SGR reset.
+    const EX: &[u8] = b"\x1b[0m";
+    const ALT_ENTER: &[u8] = b"\x1b[?1049h";
+    const ALT_LEAVE: &[u8] = b"\x1b[?1049l";
+
+    /// `ESC ] <osc string>` with no terminator.
+    fn open_osc(osc_string: &[u8]) -> Vec<u8> {
+        cat(&[&[ESC, b']'], osc_string])
+    }
+
+    fn sc1_rows() -> Vec<Sc1Row> {
+        use ProgramState::{Blocked, Done, Error, Idle, Working};
+        let row = |name,
+                   seed,
+                   stream: Vec<u8>,
+                   deliveries: Vec<Vec<usize>>,
+                   final_table: Vec<(&'static str, ProgramState)>,
+                   final_osc777,
+                   table_changes| Sc1Row {
+            name,
+            seed,
+            stream,
+            deliveries,
+            final_table,
+            final_osc777,
+            table_changes,
+        };
+        let r777 = working_report();
+        let working = Some(AgentState::Working);
+        let finished = vec![("d", Done), ("e", Error)];
+        let every = vec![
+            ("b", Blocked),
+            ("d", Done),
+            ("e", Error),
+            ("i", Idle),
+            ("w", Working),
+        ];
+
+        // K1 to K4: a cut OSC 7501 string never changes the table.
+        let k1 = cat(&[&open_osc(b"07501;state=clear"), EE]);
+        let k2 = cat(&[&open_osc(b"7501;state=clear"), EE]);
+        // "between ESCs": the first read ends with the first ESC of EE.
+        let between = |stream: &[u8]| vec![vec![stream.len() - EE.len() + 1]];
+
+        // K14 / K15: the cut points are right after the string's last own
+        // byte, right after the in-body ESC and right after the cutting byte.
+        let k14_head = cat(&[ALT_ENTER, &open_osc(b"133;A")]);
+        let k14_after_a = k14_head.len();
+        let k14 = cat(&[&k14_head, EE, ALT_LEAVE]);
+        let k15_head = open_osc(b"133;A");
+        let k15_after_a = k15_head.len();
+        let k15 = cat(&[&k15_head, ALT_ENTER, ALT_LEAVE]);
+
+        vec![
+            row(
+                "K1",
+                Seed::W,
+                k1.clone(),
+                vec![vec![]],
+                vec![("", Working)],
+                None,
+                Some(0),
+            ),
+            row(
+                "K2",
+                Seed::W,
+                k2.clone(),
+                vec![vec![]],
+                vec![("", Working)],
+                None,
+                Some(0),
+            ),
+            row(
+                "K3",
+                Seed::W,
+                k1.clone(),
+                between(&k1),
+                vec![("", Working)],
+                None,
+                Some(0),
+            ),
+            row(
+                "K4",
+                Seed::W,
+                k2.clone(),
+                between(&k2),
+                vec![("", Working)],
+                None,
+                Some(0),
+            ),
+            row(
+                "K5",
+                Seed::W,
+                // `ESC ] 7501;state=error ESC ESC ] 7501;state=clear BEL`: the
+                // second ESC cuts the first string and opens the second.
+                cat(&[
+                    &open_osc(b"7501;state=error"),
+                    &[ESC],
+                    &osc_stream(b"7501;state=clear", Terminator::Bel),
+                ]),
+                vec![vec![]],
+                vec![],
+                None,
+                Some(1),
+            ),
+            row(
+                "K6",
+                Seed::Zero,
+                cat(&[&open_osc(b"777;emterm;agent-status;v=1;state=working"), EE]),
+                vec![vec![]],
+                vec![],
+                working,
+                None,
+            ),
+            row(
+                "K7",
+                Seed::Zero,
+                cat(&[&open_osc(b"777;emterm;agent-status;v=1;state=working"), EX]),
+                vec![vec![]],
+                vec![],
+                working,
+                None,
+            ),
+            row(
+                "K8",
+                Seed::Zero,
+                cat(&[&r777, &open_osc(b"133;D"), EE, &open_osc(b"133;A"), EE]),
+                vec![vec![]],
+                vec![],
+                None,
+                None,
+            ),
+            row(
+                "K9",
+                Seed::Zero,
+                cat(&[&r777, &open_osc(b"133;D"), EX, &open_osc(b"133;A"), EX]),
+                vec![vec![]],
+                vec![],
+                None,
+                None,
+            ),
+            row(
+                "K10",
+                Seed::Zero,
+                cat(&[
+                    &r777,
+                    ALT_ENTER,
+                    &open_osc(b"133;D"),
+                    EE,
+                    &open_osc(b"133;A"),
+                    EE,
+                    ALT_LEAVE,
+                ]),
+                vec![vec![]],
+                vec![],
+                working,
+                None,
+            ),
+            row(
+                "K11",
+                Seed::All,
+                cat(&[&open_osc(b"133;A"), EE]),
+                vec![vec![]],
+                finished.clone(),
+                None,
+                None,
+            ),
+            row(
+                "K12",
+                Seed::All,
+                cat(&[&open_osc(b"133;A"), EX]),
+                vec![vec![]],
+                finished.clone(),
+                None,
+                None,
+            ),
+            row(
+                "K13",
+                Seed::All,
+                cat(&[&open_osc(b"0133;A"), EE]),
+                vec![vec![]],
+                finished.clone(),
+                None,
+                None,
+            ),
+            row(
+                "K14",
+                Seed::All,
+                k14,
+                vec![
+                    vec![],
+                    vec![k14_after_a],
+                    vec![k14_after_a + 1],
+                    vec![k14_after_a + 2],
+                ],
+                every,
+                None,
+                None,
+            ),
+            row(
+                "K15",
+                Seed::All,
+                k15,
+                vec![
+                    vec![],
+                    vec![k15_after_a],
+                    vec![k15_after_a + 1],
+                    vec![k15_after_a + 2],
+                ],
+                finished,
+                None,
+                None,
+            ),
+        ]
+    }
+
+    /// `stream` cut into reads at the ascending `offsets`.
+    fn cut_into_reads(stream: &[u8], offsets: &[usize]) -> Vec<Vec<u8>> {
+        let mut reads = Vec::new();
+        let mut lo = 0;
+        for &hi in offsets.iter().chain(std::iter::once(&stream.len())) {
+            reads.push(stream[lo..hi].to_vec());
+            lo = hi;
+        }
+        reads
+    }
+
+    /// AC-6: every SC-1 row, fed with the row's seed and every delivery the
+    /// row names, ends in the row's final OSC 7501 table and OSC 777 state;
+    /// K1 to K4 cause no broadcast and leave the revision, K5 causes exactly
+    /// one broadcast and one revision step. Every mismatch names its row.
+    #[tokio::test]
+    async fn dblesc_ac6_every_sc1_row_ends_in_its_final_table_and_osc_777_state() {
+        let mut mismatches: Vec<String> = Vec::new();
+        for row in sc1_rows() {
+            let expected_table: Vec<(String, ProgramState)> = row
+                .final_table
+                .iter()
+                .map(|&(id, state)| (id.to_string(), state))
+                .collect();
+            for offsets in &row.deliveries {
+                let label = format!("{} delivered as reads cut at {offsets:?}", row.name);
+                let seed = row.seed;
+                let driven = drive_reads(
+                    move |pane| seed.apply(pane),
+                    cut_into_reads(&row.stream, offsets),
+                )
+                .await;
+                if driven.records != expected_table {
+                    mismatches.push(format!(
+                        "{label}: table {:?}, expected {expected_table:?}",
+                        driven.records
+                    ));
+                }
+                if driven.osc777_state != row.final_osc777 {
+                    mismatches.push(format!(
+                        "{label}: OSC 777 state {:?}, expected {:?}",
+                        driven.osc777_state, row.final_osc777
+                    ));
+                }
+                if let Some(changes) = row.table_changes {
+                    if driven.updates.len() != changes {
+                        mismatches.push(format!(
+                            "{label}: {} broadcasts, expected {changes}",
+                            driven.updates.len()
+                        ));
+                    }
+                    if driven.revision != driven.revision_before + changes as u64 {
+                        mismatches.push(format!(
+                            "{label}: revision {} -> {}, expected {changes} step(s)",
+                            driven.revision_before, driven.revision
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
     }
 }
