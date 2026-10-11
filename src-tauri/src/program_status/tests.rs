@@ -1552,42 +1552,103 @@ enum Ac8Use<'a> {
     Bare,
 }
 
-/// The text after a leading `#[..]` attribute, leading whitespace skipped.
-/// The attribute ends at the `]` that closes the opening `#[`, with square
-/// brackets nested inside it balanced (parentheses do not end it). A line
-/// that does not start with `#[` is returned unchanged; one whose attribute
-/// has no closing bracket on the line yields the empty string, which is not a
-/// use line.
-fn ac8_after_leading_attribute(line: &str) -> &str {
-    let Some(attribute) = line.strip_prefix("#[") else {
-        return line;
-    };
-    let mut depth = 1_usize;
-    for (at, c) in attribute.char_indices() {
-        match c {
-            '[' => depth += 1,
-            ']' => {
-                depth -= 1;
-                if depth == 0 {
-                    return attribute[at + 1..].trim_start();
-                }
-            }
-            _ => {}
-        }
-    }
-    ""
+/// An attribute opened on an earlier line that has not closed yet.
+#[derive(Clone, Copy)]
+struct Ac8OpenAttribute {
+    /// Square-bracket depth, at least one while the attribute is open.
+    depth: usize,
+    /// Whether the scan stopped inside a plain string literal.
+    in_string: bool,
 }
 
-/// Recognize a use line in `line` (trimmed): the `use` keyword, optionally
-/// preceded by `pub` or `pub(..)` and, on the same line, by a leading `#[..]`
-/// attribute. Any `char::is_whitespace` characters may separate `pub`, a
-/// parenthesized qualifier and `use`; none are needed between `)` and `use`.
-/// `use` must end the line (a bare use line) or be followed by whitespace, so
-/// a field named `user` is not a use line; neither is a comment line.
-fn ac8_use_path(line: &str) -> Option<Ac8Use<'_>> {
-    let rest = ac8_after_leading_attribute(line);
-    let after_visibility = match rest.strip_prefix("pub") {
-        None => rest,
+/// What scanning the text of an attribute found.
+enum Ac8AttributeScan<'a> {
+    /// The attribute closed; the text after its closing `]`.
+    Closed(&'a str),
+    /// The text ended with the attribute still open.
+    Open(Ac8OpenAttribute),
+}
+
+/// Scan `text`, the part of an attribute after `#[` (or the whole of a later
+/// line of it), starting from the state `open`. Outside a string literal `[`
+/// and `]` change the bracket depth and `"` opens a plain string literal; the
+/// attribute ends at the `]` that brings the depth back to zero. Inside a
+/// string literal brackets are ignored, a backslash makes the next character
+/// part of the literal and an unescaped `"` closes it. Raw strings and char
+/// literals get no special treatment.
+fn ac8_scan_attribute(text: &str, open: Ac8OpenAttribute) -> Ac8AttributeScan<'_> {
+    let Ac8OpenAttribute {
+        mut depth,
+        mut in_string,
+    } = open;
+    let mut chars = text.char_indices();
+    while let Some((at, c)) = chars.next() {
+        if in_string {
+            match c {
+                '\\' => {
+                    chars.next();
+                }
+                '"' => in_string = false,
+                _ => {}
+            }
+        } else {
+            match c {
+                '"' => in_string = true,
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ac8AttributeScan::Closed(&text[at + 1..]);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ac8AttributeScan::Open(Ac8OpenAttribute { depth, in_string })
+}
+
+/// The text of `line` (trimmed) after its leading `#[..]` attributes, leading
+/// whitespace skipped before each attribute and before the returned text. When
+/// `open` is set the line first continues that attribute from its first
+/// character. `Err` carries the attribute state when an attribute is still
+/// open at the end of the line: such a line is not a use line and the state
+/// carries to the next line.
+fn ac8_after_leading_attributes(
+    line: &str,
+    open: Option<Ac8OpenAttribute>,
+) -> Result<&str, Ac8OpenAttribute> {
+    let mut rest = line;
+    if let Some(open) = open {
+        match ac8_scan_attribute(rest, open) {
+            Ac8AttributeScan::Closed(after) => rest = after,
+            Ac8AttributeScan::Open(still_open) => return Err(still_open),
+        }
+    }
+    rest = rest.trim_start();
+    while let Some(attribute) = rest.strip_prefix("#[") {
+        let opened = Ac8OpenAttribute {
+            depth: 1,
+            in_string: false,
+        };
+        match ac8_scan_attribute(attribute, opened) {
+            Ac8AttributeScan::Closed(after) => rest = after.trim_start(),
+            Ac8AttributeScan::Open(still_open) => return Err(still_open),
+        }
+    }
+    Ok(rest)
+}
+
+/// Recognize a use line in `code`, a trimmed line with its leading attributes
+/// already removed (see `ac8_after_leading_attributes`): the `use` keyword,
+/// optionally preceded by `pub` or `pub(..)`. Any `char::is_whitespace`
+/// characters may separate `pub`, a parenthesized qualifier and `use`; none
+/// are needed between `)` and `use`. `use` must end the line (a bare use
+/// line) or be followed by whitespace, `::` or `{`, so a field named `user` is
+/// not a use line; neither is a comment line.
+fn ac8_use_path(code: &str) -> Option<Ac8Use<'_>> {
+    let after_visibility = match code.strip_prefix("pub") {
+        None => code,
         Some(after_pub) => {
             let spaced = after_pub.trim_start();
             if spaced.len() == after_pub.len() && !after_pub.starts_with('(') {
@@ -1604,7 +1665,7 @@ fn ac8_use_path(line: &str) -> Option<Ac8Use<'_>> {
     let path = after_use.trim_start();
     if path.is_empty() {
         Some(Ac8Use::Bare)
-    } else if path.len() < after_use.len() {
+    } else if path.len() < after_use.len() || path.starts_with("::") || path.starts_with('{') {
         Some(Ac8Use::Path(path))
     } else {
         // `use` begins a longer word, such as a field named `user`.
@@ -1640,12 +1701,16 @@ fn ac8_violation(line: &str, problem: &str) -> String {
 /// no requirement on the text before them.
 ///
 /// Rule B: the first path segment of a use line is one of
-/// `AC8_ALLOWED_USE_ROOTS`. Use lines are the forms `ac8_use_path`
-/// recognizes; for a bare use line the segment is the first one of the next
-/// non-blank line, and that line is the offending line.
+/// `AC8_ALLOWED_USE_ROOTS`. Use lines are the forms `ac8_use_path` recognizes
+/// after any leading `#[..]` attributes, including ones that open on an
+/// earlier line and close on the use line (the open-attribute state carries
+/// from line to line); the offending line is the physical line holding `use`.
+/// For a bare use line the segment is the first one of the next non-blank
+/// line, and that line is the offending line.
 fn ac8_check_allowlist(source: &str) -> Vec<String> {
     let mut violations = Vec::new();
     let mut bare_use_pending = false;
+    let mut open_attribute: Option<Ac8OpenAttribute> = None;
     for raw in source.lines() {
         let line = raw.trim();
 
@@ -1657,13 +1722,19 @@ fn ac8_check_allowlist(source: &str) -> Vec<String> {
                 Some(line)
             }
         } else {
-            match ac8_use_path(line) {
-                Some(Ac8Use::Path(path)) => Some(path),
-                Some(Ac8Use::Bare) => {
-                    bare_use_pending = true;
+            match ac8_after_leading_attributes(line, open_attribute.take()) {
+                Err(still_open) => {
+                    open_attribute = Some(still_open);
                     None
                 }
-                None => None,
+                Ok(code) => match ac8_use_path(code) {
+                    Some(Ac8Use::Path(path)) => Some(path),
+                    Some(Ac8Use::Bare) => {
+                        bare_use_pending = true;
+                        None
+                    }
+                    None => None,
+                },
             }
         };
         if let Some(path) = use_path {
@@ -2118,6 +2189,146 @@ fn ac8_gaps_ac5_every_violation_for_a_closed_form_names_the_line_the_allowlist_a
             (snippet, root_line)
         });
     for (snippet, line) in single_line.chain(bare) {
+        for violation in ac8_assert_rejected(snippet) {
+            assert!(
+                violation.contains(line),
+                "violation for {snippet:?} lacks the line text {line:?}: {violation:?}"
+            );
+            assert!(
+                violation.contains("super::agent_status"),
+                "violation for {snippet:?} lacks the allowlist: {violation:?}"
+            );
+            assert!(
+                violation.contains("without the `gui` feature"),
+                "violation for {snippet:?} lacks the invariant: {violation:?}"
+            );
+        }
+    }
+}
+
+// ── program-status-ac8-use-line-forms: attribute runs, glued paths, bracket strings ──
+//
+// Names carry the `program-status-ac8-use-line-forms` task acceptance criterion
+// they prove (`ac8_forms_ac1_` .. `ac8_forms_ac5_`). They feed synthetic sources
+// to `ac8_check_allowlist`; tests.rs itself is never a scan target, so the
+// `crate::` / `super::` text in these snippets does not reach the ac8 test.
+
+/// Use statements that follow several leading attributes on the same line, with
+/// and without whitespace between the attributes.
+const AC8_FORMS_REJECTED_ATTRIBUTE_RUN_USE_LINES: [&str; 3] = [
+    "#[cfg(a)] #[allow(b)] use winit::event::Event;",
+    "#[cfg(a)]#[allow(b)] pub use winit::event::Event;",
+    "#[cfg(a)] #[allow(b)] pub(crate) use winit::event::Event;",
+];
+
+/// `use` directly followed by `::` or `{` (rejection only: the reported root is
+/// not asserted), and the same shapes with whitespace after `use`.
+const AC8_FORMS_REJECTED_GLUED_USE_LINES: [&str; 6] = [
+    "use::winit::event::Event;",
+    "use{winit::event::Event};",
+    "pub use::winit::event::Event;",
+    "pub(crate)use{winit::event::Event};",
+    "use ::std::fmt;",
+    "use {std::fmt};",
+];
+
+/// Use statements that follow an attribute holding a square bracket (or an
+/// escaped quote and a bracket) inside a string literal.
+const AC8_FORMS_REJECTED_BRACKET_STRING_USE_LINES: [&str; 3] = [
+    r#"#[cfg(feature = "]")] use winit::event::Event;"#,
+    r#"#[cfg(feature = "[")] use winit::event::Event;"#,
+    r#"#[doc = "\"]"] use winit::event::Event;"#,
+];
+
+/// A multi-line attribute that closes on the line carrying the use statement
+/// (the fourth line).
+const AC8_FORMS_REJECTED_MULTI_LINE_ATTRIBUTE_SOURCE: &str =
+    "#[cfg(all(\nunix,\nfeature = \"gui\"\n))] use winit::event::Event;";
+
+#[test]
+fn ac8_forms_ac1_several_leading_attributes_do_not_hide_a_use_line() {
+    for snippet in AC8_FORMS_REJECTED_ATTRIBUTE_RUN_USE_LINES {
+        ac8_gaps_assert_rejected_with_root_winit(snippet);
+    }
+}
+
+#[test]
+fn ac8_forms_ac1_several_leading_attributes_before_an_allowed_root_are_allowed() {
+    ac8_assert_allowed("#[cfg(test)] #[allow(unused)] use std::fmt;");
+}
+
+#[test]
+fn ac8_forms_ac2_a_use_directly_followed_by_a_path_separator_or_brace_is_rejected() {
+    for snippet in AC8_FORMS_REJECTED_GLUED_USE_LINES {
+        ac8_assert_rejected(snippet);
+    }
+}
+
+#[test]
+fn ac8_forms_ac3_a_bracket_in_an_attribute_string_does_not_hide_a_use_line() {
+    for snippet in AC8_FORMS_REJECTED_BRACKET_STRING_USE_LINES {
+        ac8_gaps_assert_rejected_with_root_winit(snippet);
+    }
+}
+
+#[test]
+fn ac8_forms_ac3_a_bracket_in_an_attribute_string_before_an_allowed_root_is_allowed() {
+    ac8_assert_allowed(r#"#[cfg(feature = "]")] use std::fmt;"#);
+}
+
+#[test]
+fn ac8_forms_ac4_a_multi_line_attribute_closing_on_the_use_line_is_reported_at_that_line() {
+    let source = AC8_FORMS_REJECTED_MULTI_LINE_ATTRIBUTE_SOURCE;
+    ac8_gaps_assert_rejected_with_root_winit(source);
+    let offending_line = "))] use winit::event::Event;";
+    for violation in ac8_check_allowlist(source) {
+        assert!(
+            violation.starts_with(&format!("`{offending_line}`")),
+            "violation for {source:?} is not reported at the line {offending_line:?}: {violation:?}"
+        );
+    }
+}
+
+#[test]
+fn ac8_forms_ac4_a_multi_line_attribute_closing_on_an_allowed_use_line_is_allowed() {
+    ac8_assert_allowed("#[cfg(all(\nunix,\nfeature = \"gui\"\n))] use std::fmt;");
+}
+
+#[test]
+fn ac8_forms_ac4_a_multi_line_attribute_before_a_non_use_item_is_allowed() {
+    ac8_assert_allowed("#[derive(\nDebug,\n)]\npub struct X;");
+}
+
+#[test]
+fn ac8_forms_ac4_a_multi_line_attribute_closing_on_its_own_line_before_an_allowed_use_is_allowed() {
+    ac8_assert_allowed("#[cfg(all(\nunix,\nfeature = \"gui\"\n))]\nuse std::fmt;");
+}
+
+#[test]
+fn ac8_forms_ac4_the_use_line_after_a_closed_multi_line_attribute_is_scanned_again() {
+    for snippet in [
+        "#[cfg(all(\nunix,\nfeature = \"gui\"\n))] use std::fmt;\nuse winit::event::Event;",
+        "#[cfg(all(\nunix,\nfeature = \"gui\"\n))]\nuse winit::event::Event;",
+    ] {
+        ac8_gaps_assert_rejected_with_root_winit(snippet);
+    }
+}
+
+#[test]
+fn ac8_forms_ac5_every_violation_names_the_line_the_allowlist_and_the_invariant() {
+    let single_line = AC8_FORMS_REJECTED_ATTRIBUTE_RUN_USE_LINES
+        .iter()
+        .chain(&AC8_FORMS_REJECTED_BRACKET_STRING_USE_LINES)
+        .copied()
+        .map(|snippet| (snippet, snippet.trim()));
+    // The multi-line attribute is reported at the line that carries `use`.
+    let multi_line_source = AC8_FORMS_REJECTED_MULTI_LINE_ATTRIBUTE_SOURCE;
+    let multi_line_use_line = multi_line_source
+        .lines()
+        .nth(3)
+        .expect("the multi-line source has a fourth line");
+    let multi_line = std::iter::once((multi_line_source, multi_line_use_line));
+    for (snippet, line) in single_line.chain(multi_line) {
         for violation in ac8_assert_rejected(snippet) {
             assert!(
                 violation.contains(line),
