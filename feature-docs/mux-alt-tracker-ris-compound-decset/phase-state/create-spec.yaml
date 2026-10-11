@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-alt-tracker-ris-compound-decset
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 670ff311f2401df09836c6db78a4e5c0a610752c
 last_input_digest: sha256:ad6baf31fda372cfe32a99395dc25c1bd26e80eb4a602e89c845233fc25b6c3f
