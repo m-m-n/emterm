@@ -1,0 +1,31 @@
+schema_version: 1
+feature: mux-alt-tracker-ris-compound-decset
+records:
+- gate_id: create-spec.requirement-clarification
+  question_id: requirement.compound-decset-split
+  packet_id: create-spec-q0001
+  answered_at: '2026-10-11T12:12:28+09:00'
+  source: batch-codex-consultation
+  route: codex_consultation
+  answer_mode: single_select
+  options:
+  - carry_csi_state
+  - single_read_only
+  selected_option_ids:
+  - carry_csi_state
+  freeform: null
+  normalized_answer: carry_csi_state
+  codex_consulted: true
+  opus_escalation: false
+  resolution_note: 'Codex consulted (1 turn, codex harness). Codex chose carry_csi_state:
+    match_switch/resume only carry ALT_SCREEN_TOGGLES prefixes, so a split ESC [?1;10
+    | 49h loses its partial state and advance (which compares shadow_alt with the
+    real parser) misses a compound form that does not change the parser''s screen
+    state while client_alt disagrees; carrying O(1) CSI parse state and detecting
+    on the later h/l makes the planned fallback/adopt independent of read boundaries,
+    consistent with the RIS split handling and the predecessor''s split-position-independence
+    goal. Risks: more carried state must stay consistent with resume, the designator
+    slot and adopt-time clearing; numeric overflow and sequence abort must be handled
+    safely; verify every split position and byte-at-a-time delivery in the disagreement
+    state. Not chosen: single_read_only (leaves the symptom for split forms). Orchestrator
+    agreed. Opus escalation not run. Recorded as assumption.'
