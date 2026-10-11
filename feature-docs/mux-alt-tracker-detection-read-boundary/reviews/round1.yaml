@@ -1,0 +1,109 @@
+round: 1
+executed_at: '2026-10-11T16:11:00+09:00'
+scope:
+  review_mode: diff
+  base_commit: 75ef77fa9ac2b15b29fc296d0eea3944a151a5ca
+  head_commit: b4870dafefc5e2d64435ceb025d66f214333064f
+  changed_files:
+  - src-tauri/src/mux/daemon/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/altscreen_split_read.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - test-docs/mux-alt-tracker-detection-read-boundary/task0001.tests.yaml
+  - test-docs/mux-alt-tracker-detection-read-boundary/task0002.tests.yaml
+  - test-docs/mux-alt-tracker-ris-compound-decset/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  model: gpt-6-astra
+  status: completed
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: fb53bdf7f6eeaef3
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/daemon/tests.rs
+  line: 4977
+  title: K60/K61 omit single cuts 20-29, contrary to the literal FR4/AC3 'every single cut' requirement; IMPLEMENTATION.md D5 open question left unanswered
+  description: SPEC FR4 says the mux/plain-tab match holds in every delivery a row specifies, 'including every single-cut position and one-byte reads', and AC3 lists 'M2 + h-form + l-form' among the rows. The SC-1z rows K60 and K61 (sc1z_rows in daemon/tests.rs, M2 C1h|C7h C1l A BEL) deliberately leave out cuts 20..=29 (IMPLEMENTATION.md D5, whose Open Questions ask review to confirm this reading). With a cut at 20, read 1 is a detection read ending client_alt=true; read 2 (C1l A BEL) starts in a matched state so the l-form is not detected (FR1 keeps predecessor A2); the post-read cross-check adopts main, and the unchanged fallback (FR8) gives no live bytes, so the mark is dropped while the plain tab clears it. Cuts 21..29 reach the same result via the kept partial or CSI carry. Not a regression (base tracker behaves the same). It is an internal SPEC conflict (FR1/A2 + FR8 vs FR4/AC3/Objective) no SPEC-conforming tracker can satisfy. The second IMPLEMENTATION.md open question (M1 + l-form
+    | C7h and M2 + h-form | C7l) has the same cause.
+  suggestion: 'Explicit human decision rather than a code change: either (a) amend SPEC FR4/AC3 and the Objective to exclude deliveries where a later compound lands, in a matched state, in a read that has detected nothing, recording K60/K61 cuts 20..29 and the M1 l-form|C7h / M2 h-form|C7l splits as an accepted limitation; or (b) file a follow-up feature to close that gap. Do not change the tracker under the current FR1/FR8.'
+  reproduction: null
+  reproduction_alternates: []
+  reproduction_overflow: false
+  sources:
+  - claude:evaluator
+  confidence: 75
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix 対象外（critical/high のみ）。SPEC 内の矛盾で人の判断が要るため Notion に後続タスクとして起票'
+evaluation:
+  round_summary: 'Production change (AltSpanTracker::scan/advance) is narrow: adds `detected ||` to the compound-detection condition and stops clearing the carry after a detection read; matches FR1-FR3/FR7, carry stays O(1). Renamed test, predecessor record and K58-K64 mux/plain-tab rows are consistent. architecture#0 high ''test oracle duplicates tracker logic'' dismissed as false positive (SPEC TS1 requires extending the client_walk oracle; it uses the real ShadowParser over the whole stream). Three architecture#0 mediums demoted: each matches patterns already used in the project (include_str! comment-text tests, test-docs reads, K1-K57 split) and SPEC FR5 requires the separate lists. Evaluator''s own inspection found the unanswered IMPLEMENTATION.md D5 open question on K60/K61 cuts 20-29 vs FR4/AC3, carried as one medium. No injection attempts found. Coverage: security/comprehensive/architecture corroborated; spec findings.'
+  recommended_action: complete
+  action_rationale: No critical/high remain. The one carried medium is a SPEC-internal conflict needing a human decision (amend SPEC or follow-up), not auto-fix, another round or rework.
+dismissed_sites:
+- file: src-tauri/src/mux/ipc/pty_spawn/tests/altscreen_split_read.rs
+  line: 2010
+  run_id: architecture#0
+  reason: false positive
+- file: src-tauri/src/tabs/tests/output_pipeline.rs
+  line: 3981
+  run_id: architecture#0
+  reason: demoted
+- file: src-tauri/src/mux/ipc/pty_spawn/tests/altscreen_split_read.rs
+  line: 2240
+  run_id: architecture#0
+  reason: demoted
+- file: src-tauri/src/mux/ipc/pty_spawn/tests/altscreen_split_read.rs
+  line: 2302
+  run_id: architecture#0
+  reason: demoted
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-mux-alt-tracker-detection-read-boundary-20261011T071053Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
