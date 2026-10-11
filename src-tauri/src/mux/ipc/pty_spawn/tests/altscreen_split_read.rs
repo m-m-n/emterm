@@ -918,3 +918,987 @@ fn altsplit_ac6c_the_shadow_parser_follows_1049_and_47_and_ignores_1047() {
     );
     assert!(!alt_after(&mut parser, &leave(1049)));
 }
+
+// ===== mux-alt-tracker-ris-compound-decset task0001 (FR1-FR8, NFR1-NFR5) =====
+//
+// The tracker also follows RIS (`ESC c`) and, while its client-rule screen and
+// its shadow-rule screen disagree, a DEC private mode set or reset that carries
+// 47, 1047 or 1049 in a form outside the six switch patterns.
+//
+// Test identifiers (task plan): AC-1 RIS in one read, AC-2 split RIS, AC-3 an
+// `ESC c` in a designator slot, AC-4 a compound in one read, AC-5 a split
+// compound, AC-6 robustness. AC-7 lives in `daemon/tests.rs` (rows K38 to K57
+// through the real reader loop and the daemon task); AC-8 is the existing suite
+// running unchanged.
+//
+// Oracle: `extract_main_buffer` does not handle RIS, so the expected spans of
+// the RIS streams come from `client_walk` below, a test-side walk of the whole
+// stream under the client rule that follows the extraction's rules and treats
+// RIS as a return to the main screen whose own bytes keep the liveness of the
+// screen before it. It is restricted to each read without the read's undecided
+// tail, as the oracle above is.
+
+/// `ESC )`: the byte after it is a charset designator.
+const DC: &[u8] = b"\x1b)";
+/// RIS.
+const R: &[u8] = b"\x1bc";
+/// A CSI whose final byte is `c`. It is not RIS.
+const CC: &[u8] = b"\x1b[c";
+const C1H: &[u8] = b"\x1b[?1;1049h";
+const C1L: &[u8] = b"\x1b[?1;1049l";
+const CRH: &[u8] = b"\x1b[?1049;1h";
+const C7H: &[u8] = b"\x1b[?1;1047h";
+const C7L: &[u8] = b"\x1b[?1;1047l";
+const C0H: &[u8] = b"\x1b[?01049h";
+const CEH: &[u8] = b"\x1b[?;1049h";
+/// The start of a DEC private CSI that the RIS right after it interrupts.
+const P1: &[u8] = b"\x1b[?1;10";
+/// The start of a DEC private CSI (a proper prefix of a switch pattern) that
+/// the RIS right after it interrupts.
+const P2: &[u8] = b"\x1b[?10";
+
+/// The compound forms of SC-1y, by name.
+const COMPOUNDS: [(&str, &[u8]); 7] = [
+    ("C1h", C1H),
+    ("C1l", C1L),
+    ("Crh", CRH),
+    ("C7h", C7H),
+    ("C7l", C7L),
+    ("C0h", C0H),
+    ("Ceh", CEH),
+];
+
+/// An OSC 133 prompt start with its terminator.
+fn mark() -> Vec<u8> {
+    cat(&[A, BEL])
+}
+
+/// M1: the client rule on the alternate screen, the shadow parser on the main
+/// screen (it ignores ?1047).
+fn m1() -> Vec<u8> {
+    enter(1047)
+}
+
+/// M2: the client rule on the main screen (the switch's `ESC` is a
+/// designator), the shadow parser on the alternate screen.
+fn m2() -> Vec<u8> {
+    cat(&[DS, &enter(1049)])
+}
+
+/// The two mismatched starting states, by name.
+fn mismatched_setups() -> [(&'static str, Vec<u8>); 2] {
+    [("M1", m1()), ("M2", m2())]
+}
+
+/// Whether the compound ends with `l` (it returns to the main screen).
+fn leaves(compound: &[u8]) -> bool {
+    compound.last() == Some(&b'l')
+}
+
+/// The per-byte result of [`client_walk`].
+struct Walk {
+    /// Whether the byte is main-buffer content under the client rule.
+    live: Vec<bool>,
+    /// Whether the byte is an `ESC` outside a designator slot.
+    live_esc: Vec<bool>,
+}
+
+/// Walk a whole stream under the client rule: a recognized switch pattern
+/// switches screens (its bytes are not content) unless its `ESC` sits in the
+/// designator slot right after `ESC (` / `ESC )`; `ESC c` outside a slot is a
+/// RIS (back to the main screen, its own bytes keep the liveness of the screen
+/// before it). Compound forms are ordinary bytes, except that `screen_after`
+/// `(index, alt)` sets the screen right after the byte at `index`: it stands for
+/// the compound a detection read applies.
+fn client_walk(stream: &[u8], screen_after: Option<(usize, bool)>) -> Walk {
+    let n = stream.len();
+    let mut live = vec![false; n];
+    let mut live_esc = vec![false; n];
+    let mut alt = false;
+    let set = |i: usize, alt: &mut bool| {
+        if let Some((at, to)) = screen_after {
+            if at == i {
+                *alt = to;
+            }
+        }
+    };
+    let mut i = 0usize;
+    while i < n {
+        if stream[i] != ESC {
+            live[i] = !alt;
+            set(i, &mut alt);
+            i += 1;
+            continue;
+        }
+        live_esc[i] = true;
+        if let Some(&(pattern, is_enter)) =
+            PATTERNS.iter().find(|(p, _)| stream[i..].starts_with(p))
+        {
+            alt = is_enter;
+            i += pattern.len();
+            continue;
+        }
+        live[i] = !alt;
+        match stream.get(i + 1) {
+            Some(b'c') => {
+                live[i + 1] = !alt;
+                alt = false;
+                i += 2;
+            }
+            Some(b'(' | b')') => {
+                // The byte after the introducer is the designator, text
+                // whatever it is.
+                for k in i + 1..(i + 3).min(n) {
+                    live[k] = !alt;
+                }
+                i += 3;
+            }
+            _ => {
+                set(i, &mut alt);
+                i += 1;
+            }
+        }
+    }
+    Walk { live, live_esc }
+}
+
+/// The undecided tail of the read `lo..hi` under [`client_walk`]: the bytes of a
+/// proper prefix of a switch pattern the read ends in, when its `ESC` is not in
+/// a designator slot.
+fn walk_tail(stream: &[u8], walk: &Walk, lo: usize, hi: usize) -> Range<usize> {
+    let from = hi.saturating_sub(7);
+    let Some(rel) = stream[from..hi].iter().rposition(|&b| b == ESC) else {
+        return 0..0;
+    };
+    let start = from + rel;
+    if !walk.live_esc[start] {
+        return 0..0;
+    }
+    let suffix = &stream[start..hi];
+    if PATTERNS
+        .iter()
+        .any(|(p, _)| p.len() > suffix.len() && p.starts_with(suffix))
+    {
+        start.max(lo)..hi
+    } else {
+        0..0
+    }
+}
+
+/// What the tracker must return for the read `lo..hi`: the walk's live bytes
+/// restricted to it, without the read's undecided tail.
+fn walk_spans(stream: &[u8], walk: &Walk, lo: usize, hi: usize) -> Vec<Range<usize>> {
+    let mut live = walk.live[lo..hi].to_vec();
+    for k in walk_tail(stream, walk, lo, hi) {
+        live[k - lo] = false;
+    }
+    runs_of(&live)
+}
+
+/// Every delivery of `stream` through a [`Rig`]: for each, exactly
+/// `expected_adoptions` checks disagree with the shadow parser and each read's
+/// spans equal `expected(lo, hi)`. Returns the mismatches.
+fn check_deliveries(
+    name: &str,
+    stream: &[u8],
+    expected_adoptions: u32,
+    expected: &dyn Fn(usize, usize) -> Vec<Range<usize>>,
+) -> Vec<String> {
+    let mut mismatches = Vec::new();
+    for offsets in deliveries(stream.len()) {
+        let (runs, adoptions) = run_tracker(stream, &offsets);
+        if adoptions != expected_adoptions {
+            mismatches.push(format!(
+                "{name} cut at {offsets:?}: {adoptions} adoption(s), expected {expected_adoptions}"
+            ));
+        }
+        for run in &runs {
+            let want = expected(run.lo, run.hi);
+            if run.spans != want {
+                mismatches.push(format!(
+                    "{name} cut at {offsets:?}: read {}..{}: spans {:?}, expected {want:?}",
+                    run.lo, run.hi, run.spans
+                ));
+            }
+        }
+    }
+    mismatches
+}
+
+fn assert_no_mismatches(mismatches: &[String]) {
+    assert!(
+        mismatches.is_empty(),
+        "{} mismatches; first ones: {:#?}",
+        mismatches.len(),
+        &mismatches[..mismatches.len().min(20)]
+    );
+}
+
+/// Oracle sanity: where a stream holds no RIS in a position the bulk
+/// extraction cannot model, the walk's liveness equals the bulk extraction's
+/// for every stream of the tracker corpus.
+#[test]
+fn altmismatch_the_client_walk_agrees_with_the_bulk_extraction_on_the_corpus() {
+    for (name, stream) in tracker_corpus() {
+        let walk = client_walk(&stream, None);
+        let mut bulk_live = vec![false; stream.len()];
+        for r in bulk_spans(&stream) {
+            for k in r {
+                bulk_live[k] = true;
+            }
+        }
+        assert_eq!(walk.live, bulk_live, "{name}");
+    }
+}
+
+/// The AC-1 streams: a RIS and a mark after each starting state.
+fn ris_streams() -> Vec<(&'static str, Vec<u8>)> {
+    let mark = mark();
+    vec![
+        ("main", cat(&[R, &mark])),
+        ("E(1049)", cat(&[&enter(1049), R, &mark])),
+        ("M1", cat(&[&m1(), R, &mark])),
+        (
+            "E(1049) DS L(1049)",
+            cat(&[&enter(1049), DS, &leave(1049), R, &mark]),
+        ),
+        ("M2", cat(&[&m2(), R, &mark])),
+    ]
+}
+
+/// The streams in which a RIS interrupts a DEC private CSI or a carried partial
+/// switch.
+fn ris_interrupt_streams() -> Vec<(&'static str, Vec<u8>)> {
+    let mark = mark();
+    vec![
+        ("M1 P1 R", cat(&[&m1(), P1, R, &mark])),
+        ("M1 P2 R", cat(&[&m1(), P2, R, &mark])),
+        ("main P1 R", cat(&[P1, R, &mark])),
+        ("main P2 R", cat(&[P2, R, &mark])),
+        ("M2 P1 R", cat(&[&m2(), P1, R, &mark])),
+        ("M2 P2 R", cat(&[&m2(), P2, R, &mark])),
+    ]
+}
+
+// ---- AC-1 ----
+
+/// AC-1 (FR1; TM-2): a read of R followed by A BEL gives a live mark after
+/// each starting state, a mark in a later read is live, no check disagrees with
+/// the shadow parser, and on the main screen the live run is not interrupted at
+/// R.
+#[test]
+fn altmismatch_ac1_a_ris_in_one_read_gives_a_live_mark_in_every_starting_state() {
+    let expected: [(&str, Vec<Range<usize>>); 5] = [
+        ("main", vec![0..10]),
+        ("E(1049)", vec![10..18]),
+        ("M1", vec![10..18]),
+        ("E(1049) DS L(1049)", vec![20..28]),
+        ("M2", vec![0..20]),
+    ];
+    for ((name, stream), (expected_name, literal)) in ris_streams().into_iter().zip(expected) {
+        assert_eq!(name, expected_name);
+        let walk = client_walk(&stream, None);
+        let (runs, adoptions) = run_tracker(&stream, &[]);
+        assert_eq!(adoptions, 0, "{name}");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].spans, literal, "{name}: the read's spans");
+        assert_eq!(
+            runs[0].spans,
+            walk_spans(&stream, &walk, 0, stream.len()),
+            "{name}: the oracle"
+        );
+        assert!(
+            runs[0]
+                .spans
+                .iter()
+                .any(|r| r.contains(&(stream.len() - 1))),
+            "{name}: the mark's BEL is live"
+        );
+
+        // A mark in a later read is live and no adoption occurs.
+        let mut rig = Rig::new();
+        rig.read(&stream);
+        assert_eq!(rig.read(&mark()), vec![0..8], "{name}: a later mark");
+        assert_eq!(rig.tracker.adoptions(), 0, "{name}");
+    }
+}
+
+/// AC-1 (FR1; TM-2): the feed scanner fed the tracker's spans yields a reset
+/// and then the prompt-start mark for every starting state.
+#[test]
+fn altmismatch_ac1_the_scanner_yields_the_reset_and_a_live_mark() {
+    for (name, stream) in ris_streams() {
+        let (runs, _) = run_tracker(&stream, &[]);
+        let mut scanner = AgentStatusFeedScanner::new();
+        let items = scanner.feed(&stream, &runs[0].spans);
+        assert_eq!(
+            items,
+            vec![AgentStatusFeedItem::Reset, prompt_start()],
+            "{name}"
+        );
+    }
+}
+
+// ---- AC-2 ----
+
+/// AC-2 (FR2; TM-2): every AC-1 stream with every single cut, every pair of
+/// cuts and one byte per read gives the oracle's spans on each read, with no
+/// adoption.
+#[test]
+fn altmismatch_ac2_every_delivery_of_the_ris_streams_gives_the_oracle_spans() {
+    for (name, stream) in ris_streams().into_iter().chain(ris_interrupt_streams()) {
+        let walk = client_walk(&stream, None);
+        let mismatches = check_deliveries(name, &stream, 0, &|lo, hi| {
+            walk_spans(&stream, &walk, lo, hi)
+        });
+        assert_no_mismatches(&mismatches);
+    }
+}
+
+/// AC-2 (FR2; TM-2): the scanner fed the tracker's spans yields the same items
+/// as one fed the oracle's spans, in every delivery of the RIS streams.
+#[test]
+fn altmismatch_ac2_the_scanner_yields_the_items_of_the_oracle_spans() {
+    for (name, stream) in ris_streams().into_iter().chain(ris_interrupt_streams()) {
+        let walk = client_walk(&stream, None);
+        for offsets in deliveries(stream.len()) {
+            let (runs, _) = run_tracker(&stream, &offsets);
+            let mut with_tracker = AgentStatusFeedScanner::new();
+            let mut with_oracle = AgentStatusFeedScanner::new();
+            for run in &runs {
+                let read = &stream[run.lo..run.hi];
+                let got = with_tracker.feed(read, &run.spans);
+                let want = with_oracle.feed(read, &walk_spans(&stream, &walk, run.lo, run.hi));
+                assert_eq!(
+                    got, want,
+                    "{name} cut at {offsets:?}: read {}..{}",
+                    run.lo, run.hi
+                );
+            }
+        }
+    }
+}
+
+/// AC-2 (FR2; TM-2): a cut between `ESC` and `c` still gives a RIS.
+#[test]
+fn altmismatch_ac2_a_cut_between_esc_and_c_still_gives_a_ris() {
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    assert!(none_live(&rig.read(&[ESC])), "the lone ESC is undecided");
+    assert_eq!(rig.tracker.partial_len(), 1);
+    let second = cat(&[b"c", &mark()]);
+    assert_eq!(rig.read(&second), vec![1..second.len()]);
+    assert_eq!(rig.tracker.partial_len(), 0);
+    assert_eq!(rig.read(&mark()), vec![0..8], "a later mark is live");
+    assert_eq!(rig.tracker.adoptions(), 0);
+
+    // On the main screen the `c` itself stays live.
+    let mut rig = Rig::new();
+    assert!(none_live(&rig.read(&[ESC])));
+    let second = cat(&[b"c", &mark()]);
+    assert_eq!(rig.read(&second), vec![0..second.len()]);
+    assert_eq!(rig.tracker.adoptions(), 0);
+}
+
+/// AC-2 (FR2; TM-2): M1 CC A BEL cut at `ESC [ | c` gives no RIS: the mark
+/// stays not live, and a mark in a later read is not live either.
+#[test]
+fn altmismatch_ac2_a_csi_cut_between_the_bracket_and_c_is_not_a_ris() {
+    let stream = cat(&[&m1(), CC, &mark()]);
+    let mismatches = check_deliveries("M1 CC A BEL", &stream, 0, &|_, _| Vec::new());
+    assert_no_mismatches(&mismatches);
+
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    assert!(none_live(&rig.read(b"\x1b[")));
+    assert_eq!(rig.tracker.partial_len(), 2);
+    let second = cat(&[b"c", &mark()]);
+    assert!(
+        none_live(&rig.read(&second)),
+        "no RIS: the mark is not live"
+    );
+    assert!(none_live(&rig.read(&mark())), "a later mark is not live");
+    assert_eq!(rig.tracker.adoptions(), 0);
+}
+
+/// AC-2 (FR2; TM-2): `ESC [?10 | ESC c` and `ESC [?1;10 | ESC c`, each after
+/// M1, give a RIS: the mark after it is live.
+#[test]
+fn altmismatch_ac2_a_ris_after_a_carried_partial_or_parse_is_a_ris() {
+    for (name, head) in [("ESC [?10", P2), ("ESC [?1;10", P1)] {
+        let mut rig = Rig::new();
+        rig.read(&cat(&[&m1(), head]));
+        let second = cat(&[R, &mark()]);
+        assert_eq!(
+            rig.read(&second),
+            vec![2..second.len()],
+            "{name}: the mark after the RIS is live"
+        );
+        assert_eq!(rig.tracker.adoptions(), 0, "{name}");
+        assert_eq!(rig.read(&mark()), vec![0..8], "{name}: a later mark");
+    }
+}
+
+/// AC-2 (FR2, FR5; TM-2): a RIS ends a DEC private CSI parse: the bytes after
+/// it are text (no detection), and the screens are both the main screen.
+#[test]
+fn altmismatch_ac2_a_ris_clears_the_csi_parse() {
+    let mut rig = Rig::new();
+    rig.read(&cat(&[&m1(), P1]));
+    let second = cat(&[R, b"49h", &mark()]);
+    assert_eq!(rig.read(&second), vec![2..second.len()]);
+    assert_eq!(rig.tracker.adoptions(), 0);
+    assert_eq!(rig.tracker.partial_len(), 0);
+}
+
+// ---- AC-3 ----
+
+/// AC-3 (FR3; TM-2): an `ESC c` in a designator slot on the alternate screen
+/// (`E(1049) DS R A BEL`, `E(1049) DC R A BEL`), in one read and with every
+/// single cut, pair of cuts and one byte per read: the mark is not live, a
+/// mark in a later read is not live, and no adoption occurs.
+#[test]
+fn altmismatch_ac3_an_esc_c_in_a_designator_slot_is_not_a_ris_for_the_client() {
+    for (name, introducer) in [("DS", DS), ("DC", DC)] {
+        let stream = cat(&[&enter(1049), introducer, R, &mark()]);
+        let mismatches = check_deliveries(name, &stream, 0, &|_, _| Vec::new());
+        assert_no_mismatches(&mismatches);
+
+        let mut rig = Rig::new();
+        rig.read(&stream);
+        assert!(none_live(&rig.read(&mark())), "{name}: a later mark");
+        assert_eq!(rig.tracker.adoptions(), 0, "{name}");
+    }
+}
+
+/// AC-3 (FR3; TM-2): the cuts that matter most (`ESC ( | ESC c` and
+/// `ESC ( ESC | c`) keep the client on the alternate screen and the shadow-rule
+/// screen on the main screen, so the parser's state matches.
+#[test]
+fn altmismatch_ac3_the_slot_cuts_leave_the_client_on_the_alternate_screen() {
+    for cut_inside in [false, true] {
+        let mut rig = Rig::new();
+        rig.read(&cat(&[&enter(1049), DS]));
+        let third = if cut_inside {
+            // `ESC ( ESC | c`.
+            assert!(none_live(&rig.read(&[ESC])));
+            cat(&[b"c", &mark()])
+        } else {
+            // `ESC ( | ESC c`.
+            cat(&[R, &mark()])
+        };
+        assert!(none_live(&rig.read(&third)));
+        assert!(!rig.parser.screen().alternate_screen());
+        assert_eq!(rig.tracker.adoptions(), 0);
+        assert!(none_live(&rig.read(&mark())));
+    }
+}
+
+/// AC-3 (FR3; pin for SPEC A1): the shadow parser ends on the main screen after
+/// `E(1049) DS R`, and after a RIS in every other starting state.
+#[test]
+fn altmismatch_ac3_the_shadow_parser_ends_on_the_main_screen_after_a_ris() {
+    let alt_after = |bytes: &[u8]| {
+        let mut parser = new_shadow_parser(24, 80);
+        parser.process(bytes);
+        parser.screen().alternate_screen()
+    };
+    assert!(alt_after(&enter(1049)), "premise: E(1049) enters");
+    assert!(!alt_after(&cat(&[&enter(1049), DS, R])), "E(1049) DS R");
+    assert!(!alt_after(&cat(&[&enter(1049), DC, R])), "E(1049) DC R");
+    assert!(!alt_after(&cat(&[&enter(1049), R])), "E(1049) R");
+    assert!(alt_after(&m2()), "premise: M2 is on the alternate screen");
+    assert!(!alt_after(&cat(&[&m2(), R])), "M2 R");
+    assert!(!alt_after(&cat(&[&m1(), R])), "M1 R");
+}
+
+// ---- AC-4 ----
+
+/// AC-4 (FR4; TM-2): after a mismatched setup (M1, M2), each compound is
+/// delivered as three reads (the setup, a read holding the compound and A BEL,
+/// a read holding A BEL). The second read's spans are the whole read for a
+/// final `l` and none for a final `h`; exactly one adoption is counted; the
+/// third read's mark is live exactly when the final byte is `l`.
+#[test]
+fn altmismatch_ac4_a_compound_after_a_mismatch_is_detected_in_its_read() {
+    for (setup_name, setup) in mismatched_setups() {
+        for (name, compound) in COMPOUNDS {
+            let ctx = format!("{setup_name} {name}");
+            let mut rig = Rig::new();
+            rig.read(&setup);
+            assert_eq!(rig.tracker.adoptions(), 0, "{ctx}: the setup");
+
+            let second = cat(&[compound, &mark()]);
+            let spans = rig.read(&second);
+            let expected = if leaves(compound) {
+                vec![0..second.len()]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(spans, expected, "{ctx}: the detection read");
+            assert_eq!(rig.tracker.adoptions(), 1, "{ctx}");
+            assert_eq!(rig.tracker.partial_len(), 0, "{ctx}");
+
+            let third = rig.read(&mark());
+            let expected = if leaves(compound) {
+                vec![0..8]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(third, expected, "{ctx}: the third read");
+            assert_eq!(rig.tracker.adoptions(), 1, "{ctx}: no further adoption");
+        }
+    }
+}
+
+/// AC-4 (FR4, A2, FR8; TM-2): in a matched state (E(1049)) nothing is detected.
+/// C1l gives the existing fallback (no span) with one adoption and the third
+/// read's mark is live; every other compound gives no span, no adoption and a
+/// third-read mark that is not live.
+#[test]
+fn altmismatch_ac4_a_compound_in_a_matched_state_keeps_todays_behavior() {
+    for (name, compound) in COMPOUNDS {
+        let mut rig = Rig::new();
+        rig.read(&enter(1049));
+        let second = cat(&[compound, &mark()]);
+        assert!(none_live(&rig.read(&second)), "{name}: the second read");
+        let is_c1l = name == "C1l";
+        assert_eq!(rig.tracker.adoptions(), u32::from(is_c1l), "{name}");
+        let third = rig.read(&mark());
+        if is_c1l {
+            assert_eq!(third, vec![0..8], "{name}: the third read");
+        } else {
+            assert!(none_live(&third), "{name}: the third read");
+        }
+    }
+}
+
+/// AC-4 (FR4, A7; TM-2): a compound whose `ESC` sits in a designator slot is
+/// never detected: one adoption is counted exactly when the shadow parser
+/// changes screen (M1 then DS C1h, M2 then DS C1l), and the third read's mark is
+/// live exactly after M2.
+#[test]
+fn altmismatch_ac4_a_compound_in_a_designator_slot_is_not_detected() {
+    for (setup_name, setup) in mismatched_setups() {
+        for (name, compound) in [("C1h", C1H), ("C1l", C1L)] {
+            let ctx = format!("{setup_name} DS {name}");
+            let mut rig = Rig::new();
+            rig.read(&setup);
+            let second = cat(&[DS, compound, &mark()]);
+            let spans = rig.read(&second);
+            let parser_changes =
+                (setup_name == "M1" && name == "C1h") || (setup_name == "M2" && name == "C1l");
+            assert_eq!(rig.tracker.adoptions(), u32::from(parser_changes), "{ctx}");
+            let expected = if setup_name == "M2" && !parser_changes {
+                vec![0..second.len()]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(spans, expected, "{ctx}: the second read");
+            let third = rig.read(&mark());
+            if setup_name == "M2" {
+                assert_eq!(third, vec![0..8], "{ctx}: the third read");
+            } else {
+                assert!(none_live(&third), "{ctx}: the third read");
+            }
+        }
+    }
+}
+
+/// AC-4 (SPEC A1, TS3): the shadow parser follows C1h and ignores C7h (and the
+/// other forms the expectations rest on).
+#[test]
+fn altmismatch_ac4_the_shadow_parser_follows_c1h_and_ignores_c7h() {
+    let alt_after = |parser: &mut ShadowParser, bytes: &[u8]| {
+        parser.process(bytes);
+        parser.screen().alternate_screen()
+    };
+    for (name, compound, enters) in [
+        ("C1h", C1H, true),
+        ("Crh", CRH, true),
+        ("C0h", C0H, true),
+        ("Ceh", CEH, true),
+        ("C7h", C7H, false),
+    ] {
+        let mut parser = new_shadow_parser(24, 80);
+        assert_eq!(alt_after(&mut parser, compound), enters, "{name}");
+    }
+    let mut parser = new_shadow_parser(24, 80);
+    assert!(alt_after(&mut parser, &enter(1049)));
+    assert!(!alt_after(&mut parser, C1L), "C1l leaves");
+    assert!(alt_after(&mut parser, &enter(1049)));
+    assert!(alt_after(&mut parser, C7L), "C7l does not leave");
+}
+
+/// AC-4 (FR4; TM-2): a compound followed by a switch pattern in the same read,
+/// and a detection read that ends in a partial switch (which is cleared).
+#[test]
+fn altmismatch_ac4_a_detection_read_applies_later_switches_and_clears_the_carry() {
+    // M1 then `C1l E(1049)`: the compound returns to the main screen, the
+    // switch pattern enters the alternate screen again: nothing is live.
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    assert!(none_live(&rig.read(&cat(&[C1L, &enter(1049), &mark()]))));
+    assert_eq!(rig.tracker.adoptions(), 1);
+    assert!(none_live(&rig.read(&mark())));
+
+    // M1 then `C1h L(1049)`: the other way round, the read ends on main.
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    let second = cat(&[C1H, &leave(1049), &mark()]);
+    assert_eq!(rig.read(&second), vec![0..second.len()]);
+    assert_eq!(rig.tracker.adoptions(), 1);
+    assert_eq!(rig.read(&mark()), vec![0..8]);
+
+    // M1 then `C1l ESC [?10`: the partial switch is cleared with the rest.
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    let second = cat(&[C1L, P2]);
+    assert_eq!(rig.read(&second), vec![0..second.len()]);
+    assert_eq!(rig.tracker.adoptions(), 1);
+    assert_eq!(rig.tracker.partial_len(), 0);
+    let third = cat(&[b"49l", &mark()]);
+    assert_eq!(rig.read(&third), vec![0..third.len()], "`49l` is text now");
+
+    // M1 then `C1l ESC`: a lone ESC at the end is cleared too.
+    let mut rig = Rig::new();
+    rig.read(&m1());
+    assert_eq!(rig.read(&cat(&[C1L, &[ESC]])), vec![0..11]);
+    assert_eq!(rig.tracker.partial_len(), 0);
+}
+
+// ---- AC-5 ----
+
+/// AC-5 (FR5; TM-2): each mismatched AC-4 case as one stream (M1 or M2, the
+/// compound, A BEL, A BEL), with every single cut, every pair of cuts and one
+/// byte per read: exactly one adoption; the read that holds the compound's final
+/// byte gives the whole read for a final `l` and no span for a final `h`; the
+/// reads before it keep today's spans; every mark completed in a later read is
+/// live exactly when the final byte is `l`.
+#[test]
+fn altmismatch_ac5_every_delivery_of_a_split_compound_is_detected_once() {
+    for (setup_name, setup) in mismatched_setups() {
+        for (name, compound) in COMPOUNDS {
+            let ctx = format!("{setup_name} {name}");
+            let stream = cat(&[&setup, compound, &mark(), &mark()]);
+            let final_idx = setup.len() + compound.len() - 1;
+            let l = leaves(compound);
+            let walk = client_walk(&stream, Some((final_idx, !l)));
+            let mismatches = check_deliveries(&ctx, &stream, 1, &|lo, hi| {
+                if lo <= final_idx && final_idx < hi {
+                    if l { vec![0..hi - lo] } else { Vec::new() }
+                } else {
+                    walk_spans(&stream, &walk, lo, hi)
+                }
+            });
+            assert_no_mismatches(&mismatches);
+        }
+    }
+}
+
+/// AC-5 (FR5; TM-2): `ESC [?104 | 9;1h` and `ESC [?1049 | ;1h` are among the
+/// detected cuts, in both mismatched directions.
+#[test]
+fn altmismatch_ac5_a_partial_switch_that_turns_into_a_compound_is_detected() {
+    for (setup_name, setup) in mismatched_setups() {
+        for (head, tail) in [(&b"\x1b[?104"[..], &b"9;1h"[..]), (b"\x1b[?1049", b";1h")] {
+            let ctx = format!("{setup_name} {head:?} | {tail:?}");
+            let mut rig = Rig::new();
+            rig.read(&setup);
+            assert!(none_live(&rig.read(head)), "{ctx}: the undecided tail");
+            assert_eq!(rig.tracker.adoptions(), 0, "{ctx}: nothing yet");
+            let second = cat(&[tail, &mark()]);
+            assert!(none_live(&rig.read(&second)), "{ctx}: a final `h`");
+            assert_eq!(rig.tracker.adoptions(), 1, "{ctx}");
+            assert!(none_live(&rig.read(&mark())), "{ctx}: a later mark");
+        }
+    }
+}
+
+/// AC-5 (FR5; TM-2): after M1 and after M2, a DEC private CSI that is aborted
+/// or that is not a set or reset gives no detection and no adoption, and every
+/// read's spans are those of the tracker without the CSI parse (the oracle).
+#[test]
+fn altmismatch_ac5_aborted_or_other_csi_forms_are_not_detected() {
+    let inputs: Vec<(&str, Vec<u8>)> = vec![
+        ("?1;10 CAN 49h", cat(&[P1, &[0x18], b"49h"])),
+        ("?1;10 SUB 49h", cat(&[P1, &[0x1a], b"49h"])),
+        ("?1;10 ESC[0m 49h", cat(&[P1, EX, b"49h"])),
+        ("?1049$p", b"\x1b[?1049$p".to_vec()),
+        ("?1;1049m", b"\x1b[?1;1049m".to_vec()),
+    ];
+    for (setup_name, setup) in mismatched_setups() {
+        for (name, input) in &inputs {
+            let ctx = format!("{setup_name} {name}");
+            let stream = cat(&[&setup, input, &mark()]);
+            let walk = client_walk(&stream, None);
+            let mismatches = check_deliveries(&ctx, &stream, 0, &|lo, hi| {
+                walk_spans(&stream, &walk, lo, hi)
+            });
+            assert_no_mismatches(&mismatches);
+        }
+    }
+}
+
+// ---- differential test against the oracle ----
+
+/// Random streams over an alphabet that holds `c`, the designator introducers,
+/// the switch patterns' bytes and the mark's bytes, cut at random offsets:
+/// whenever no check disagreed with the shadow parser, every read's spans equal
+/// the oracle's (the walk handles RIS and designator slots; a detection counts
+/// as an adoption and is skipped, as the existing differential test skips it).
+#[test]
+fn altmismatch_ac2_random_streams_with_ris_match_the_oracle() {
+    const ALPHABET: &[u8] = b"\x1b\x1b\x1bcc[[?????1104947lhlh()]A3;\x07\\x";
+    let mut rng = Lcg(0x715_c0de);
+    let (mut compared, mut skipped, mut with_ris) = (0usize, 0usize, 0usize);
+    for case in 0..6000 {
+        let len = 1 + rng.below(40);
+        let mut stream: Vec<u8> = (0..len)
+            .map(|_| ALPHABET[rng.below(ALPHABET.len())])
+            .collect();
+        if rng.below(2) == 0 {
+            let (pattern, _) = PATTERNS[rng.below(PATTERNS.len())];
+            let at = rng.below(stream.len());
+            stream.splice(at..at, pattern.iter().copied());
+        }
+        if rng.below(2) == 0 {
+            let at = rng.below(stream.len());
+            stream.splice(at..at, R.iter().copied());
+        }
+        let mut offsets: Vec<usize> = (0..rng.below(4))
+            .map(|_| 1 + rng.below(stream.len().max(2) - 1))
+            .collect();
+        offsets.sort_unstable();
+        offsets.dedup();
+        offsets.retain(|&o| o < stream.len());
+
+        let walk = client_walk(&stream, None);
+        let (runs, adoptions) = run_tracker(&stream, &offsets);
+        if adoptions != 0 {
+            skipped += 1;
+            continue;
+        }
+        compared += 1;
+        if stream.windows(2).any(|w| w == R) {
+            with_ris += 1;
+        }
+        for run in &runs {
+            let expected = walk_spans(&stream, &walk, run.lo, run.hi);
+            assert_eq!(
+                run.spans, expected,
+                "case {case}: stream {stream:?} cut at {offsets:?}: read {}..{}",
+                run.lo, run.hi
+            );
+        }
+    }
+    assert!(
+        compared > 2000,
+        "too few comparable streams: {compared} compared, {skipped} skipped"
+    );
+    assert!(with_ris > 500, "too few streams with a RIS: {with_ris}");
+}
+
+// ---- AC-6 ----
+
+/// The starting states of AC-6: a matched state and both mismatched directions.
+fn robustness_setups() -> [(&'static str, Vec<u8>); 3] {
+    [("matched", enter(1049)), ("M1", m1()), ("M2", m2())]
+}
+
+/// AC-6 (NFR1; TM-1): in a matched state and in both mismatched directions,
+/// every prefix of C1h, Crh, C7l, C0h and Ceh followed by a read holding each of
+/// the 256 byte values, then the rest and A BEL: no panic, every result is well
+/// formed and the carried partial switch never exceeds 7 bytes.
+#[test]
+fn altmismatch_ac6_every_compound_prefix_followed_by_every_byte_value_is_well_formed() {
+    for (setup_name, setup) in robustness_setups() {
+        for (name, compound) in [
+            ("C1h", C1H),
+            ("Crh", CRH),
+            ("C7l", C7L),
+            ("C0h", C0H),
+            ("Ceh", CEH),
+        ] {
+            for len in 1..compound.len() {
+                let head = cat(&[&setup, &compound[..len]]);
+                for byte in 0..=u8::MAX {
+                    let ctx = format!("{setup_name} {name}[..{len}] then {byte:#04x}");
+                    let mut rig = Rig::new();
+                    let spans = rig.read(&head);
+                    assert_well_formed(&ctx, head.len(), &spans, rig.tracker.partial_len());
+                    let spans = rig.read(&[byte]);
+                    assert_well_formed(&ctx, 1, &spans, rig.tracker.partial_len());
+                    let third = cat(&[&compound[len..], A, BEL]);
+                    let spans = rig.read(&third);
+                    assert_well_formed(&ctx, third.len(), &spans, rig.tracker.partial_len());
+                }
+            }
+        }
+    }
+}
+
+/// `ESC [?` followed by `params` and `h`.
+fn dec_set(params: &str) -> Vec<u8> {
+    format!("\x1b[?{params}h").into_bytes()
+}
+
+/// AC-6 (NFR1; TM-1): oversized parameters. A parameter of more than 20 digits,
+/// parameters whose decimal value is 1049 plus a multiple of 65536 or of 2^32
+/// (none reads as 1049), and more than 1000 parameters give no panic and a well
+/// formed result, in every delivery shape (one read, every single cut, one byte
+/// per read), in a matched state and in both mismatched directions.
+#[test]
+fn altmismatch_ac6_oversized_parameters_are_well_formed_and_never_read_as_1049() {
+    let many_ones = "1;".repeat(1001);
+    let not_1049: Vec<(String, Vec<u8>)> = vec![
+        ("23 nines".into(), dec_set(&"9".repeat(23))),
+        ("60 digits".into(), dec_set(&"1".repeat(60))),
+        (
+            "1049 + 65536".into(),
+            dec_set(&(1049u64 + 65536).to_string()),
+        ),
+        (
+            "1049 + 3 * 65536".into(),
+            dec_set(&(1049u64 + 3 * 65536).to_string()),
+        ),
+        (
+            "1049 + 2^32".into(),
+            dec_set(&(1049u64 + (1 << 32)).to_string()),
+        ),
+        (
+            "1049 + 5 * 2^32".into(),
+            dec_set(&(1049u64 + 5 * (1 << 32)).to_string()),
+        ),
+        (
+            "1047 + 2^32 after 1".into(),
+            dec_set(&format!("1;{}", 1047u64 + (1 << 32))),
+        ),
+        ("1001 parameters".into(), dec_set(&format!("{many_ones}1"))),
+    ];
+    for (setup_name, setup) in robustness_setups() {
+        for (name, form) in &not_1049 {
+            let stream = cat(&[&setup, form, &mark()]);
+            for offsets in deliveries_sample(stream.len()) {
+                let ctx = format!("{setup_name} {name} cut at {offsets:?}");
+                let (runs, adoptions) = run_tracker(&stream, &offsets);
+                assert_eq!(adoptions, 0, "{ctx}: none of them reads as 1049");
+                for run in &runs {
+                    assert_well_formed(&ctx, run.hi - run.lo, &run.spans, run.partial_len);
+                }
+            }
+        }
+        // Leading zeros do not change the value: more than 20 digits that read
+        // as 1049 are detected after a mismatch and ignored otherwise; and a
+        // 1049 beyond the 1000th parameter is detected (SPEC A6).
+        let leading_zeros = dec_set(&format!("{}1049", "0".repeat(25)));
+        let beyond = dec_set(&format!("{many_ones}1049"));
+        for (name, form) in [
+            ("25 leading zeros", &leading_zeros),
+            ("1049 beyond 1000", &beyond),
+        ] {
+            let stream = cat(&[&setup, form, &mark()]);
+            for offsets in deliveries_sample(stream.len()) {
+                let ctx = format!("{setup_name} {name} cut at {offsets:?}");
+                let (runs, adoptions) = run_tracker(&stream, &offsets);
+                if setup_name != "matched" {
+                    assert_eq!(adoptions, 1, "{ctx}");
+                }
+                for run in &runs {
+                    assert_well_formed(&ctx, run.hi - run.lo, &run.spans, run.partial_len);
+                }
+            }
+        }
+    }
+}
+
+/// A few deliveries of a long stream: in one read, every cut of its first 40
+/// bytes, cuts across the rest in steps, and one byte per read.
+fn deliveries_sample(len: usize) -> Vec<Vec<usize>> {
+    let mut all = vec![Vec::new()];
+    for o in 1..len.min(40) {
+        all.push(vec![o]);
+    }
+    let step = (len / 23).max(1);
+    all.push((1..len).step_by(step).collect());
+    all.push((1..len).collect());
+    all
+}
+
+/// A repeating unit of the forms AC-6 names: compounds, their prefixes broken
+/// off by a junk byte, RIS in every position, designator slots, long and many
+/// parameters, aborting bytes, switch patterns and marks.
+fn robustness_unit() -> Vec<u8> {
+    let mut unit = Vec::new();
+    for (_, compound) in COMPOUNDS {
+        unit.extend_from_slice(compound);
+        unit.extend_from_slice(A);
+        unit.push(0x07);
+        for len in 1..compound.len() {
+            unit.extend_from_slice(&compound[..len]);
+            unit.extend_from_slice(b"ab");
+        }
+    }
+    for junk in [0x18u8, 0x1a, 0x1b, b'x', b'$', b':', b'<'] {
+        unit.extend_from_slice(P1);
+        unit.push(junk);
+        unit.extend_from_slice(b"49h");
+    }
+    unit.extend_from_slice(P1);
+    unit.extend_from_slice(R);
+    unit.extend_from_slice(P2);
+    unit.extend_from_slice(R);
+    unit.extend_from_slice(DS);
+    unit.extend_from_slice(R);
+    unit.extend_from_slice(DC);
+    unit.extend_from_slice(R);
+    unit.extend_from_slice(CC);
+    unit.extend_from_slice(&dec_set(&"1;".repeat(1001)));
+    unit.extend_from_slice(&dec_set(&"9".repeat(30)));
+    unit.extend_from_slice(&dec_set(&(1049u64 + 65536).to_string()));
+    unit.extend_from_slice(&dec_set(&(1049u64 + (1 << 32)).to_string()));
+    for (pattern, _) in PATTERNS {
+        for len in 1..pattern.len() {
+            unit.extend_from_slice(&pattern[..len]);
+            unit.extend_from_slice(b"ab");
+        }
+        unit.extend_from_slice(pattern);
+        unit.extend_from_slice(A);
+        unit.push(0x07);
+        unit.extend_from_slice(DS);
+        unit.extend_from_slice(pattern);
+    }
+    unit.extend_from_slice(b"\x1b\x1b\x1b(\x1b(\x1b\x1bc\x1b");
+    unit
+}
+
+/// AC-6 (NFR1; TM-1): a stream of at least 1 MiB of these forms, in 64 KiB
+/// reads and in 1-byte reads, with a real shadow parser, in a matched state and
+/// in both mismatched directions: no panic, every result is well formed, and the
+/// carried partial switch never exceeds 7 bytes.
+#[test]
+fn altmismatch_ac6_a_one_mib_stream_is_well_formed_in_64_kib_and_in_one_byte_reads() {
+    let unit = robustness_unit();
+    let mut stream = Vec::new();
+    while stream.len() < (1 << 20) + 17 {
+        stream.extend_from_slice(&unit);
+    }
+    assert!(stream.len() >= 1 << 20);
+
+    for (setup_name, setup) in robustness_setups() {
+        for read_len in [64 * 1024, 1] {
+            let mut rig = Rig::new();
+            let spans = rig.read(&setup);
+            assert_well_formed("setup", setup.len(), &spans, rig.tracker.partial_len());
+            for (idx, read) in stream.chunks(read_len).enumerate() {
+                let spans = rig.read(read);
+                assert_well_formed(
+                    &format!("{setup_name} {read_len}-byte reads, read {idx}"),
+                    read.len(),
+                    &spans,
+                    rig.tracker.partial_len(),
+                );
+            }
+        }
+    }
+}
