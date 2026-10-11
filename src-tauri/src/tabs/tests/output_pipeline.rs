@@ -2490,6 +2490,27 @@ fn osc7501_main_a_after_an_alt_screen_a_keeps_done_and_error_records() {
     );
 }
 
+// ── osc133-mark-token-exact-match task0001: a malformed mark token stays
+// out of the ordered feeds ──────────────────────────────────────────────
+//
+// `term_core` records a live mark only for a first token that is exactly
+// `A`, `B`, `C` or `D`. A malformed token (`AB`) must therefore add no
+// candidate to the feed either, or the forward walk that confirms the feed's
+// prompt starts against the live marks would spend the later well-formed
+// mark's live mark on it. ONE `process_combined` call, the processing unit
+// the defect needs.
+
+/// AC-1 (TS-1): a malformed `133;AB`, a report, and a well-formed `133;A` in
+/// one call: the `A` discards the record, so the table ends empty.
+#[test]
+fn osc7501_malformed_mark_token_does_not_consume_the_live_mark_of_a_later_a() {
+    let mut tab = test_tab();
+    tab.process_combined(
+        b"\x1b]133;AB\x07\x1b]7501;id=job:state=working\x07\x1b]133;A\x07".to_vec(),
+    );
+    assert_report_discarded_by_the_main_screen_prompt_start(&mut tab);
+}
+
 /// AC-4: RIS removes every record and honors byte order against reports in
 /// the same pump.
 #[test]
