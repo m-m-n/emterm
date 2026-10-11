@@ -124,7 +124,7 @@ workflow:
   completed_at_commit: 35e75b5258bf5d0316ebab8d6e09839c29e0315e
   base_commit: 1e3b4a657a10bddb0031b0c284f006d7ba29bb21
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -178,8 +178,16 @@ tasks:
     status: merged
     branch: em-workflow/mux-osc-abort-altscreen-split-read/task0002
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
 requirements:
   FR1:
     title: Carry the partial switch-sequence state across reads (scanner live spans)
