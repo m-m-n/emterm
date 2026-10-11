@@ -54,10 +54,16 @@ worker_runs:
   input_digest: sha256:85d8a07b4f3eef86cdef0d5277077ce1a668756700c1e7606eaab2ad70a8260f
   output_digest: null
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:85d8a07b4f3eef86cdef0d5277077ce1a668756700c1e7606eaab2ad70a8260f
   output_digest: null
-artifacts: []
+artifacts:
+- path: feature-docs/mux-osc-abort-altscreen-split-read/REQUIREMENTS.md
+  sha256: sha256:c4342acce434b941b797d65509557f4f27793c670f78263a2e30b072a8167ae9
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-osc-abort-altscreen-split-read/SPEC.md
+  sha256: sha256:29a4519049f738e7784faf90efd3c96e90ad414755dc268d533b416f9eb5db36
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
