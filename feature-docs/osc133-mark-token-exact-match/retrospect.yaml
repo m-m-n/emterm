@@ -1,0 +1,36 @@
+feature: osc133-mark-token-exact-match
+collected_at: "2026-10-11T18:20:00+09:00"
+session_ids: [01a12a31-6619-73b0-be9b-0a4807727d94.jsonl]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: reduced
+    rationale: "description_plus_code の最終読みがバケット 1（確率 0.85）で、少数ファイルの規則変更とテスト追加と判定された"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.05, confidence: 0.94, probabilities: {'0': 0.01, '1': 0.94, '2': 0.05, '3': 0.0}}
+        observed_at: "2026-10-11T17:28:00+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.15, confidence: 0.85, probabilities: {'0': 0.0, '1': 0.85, '2': 0.15, '3': 0.0}}
+        observed_at: "2026-10-11T17:36:00+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/callbacks.rs
+        - src-tauri/src/callbacks/tests.rs
+        - src-tauri/src/tabs/tests/output_pipeline.rs
+      changed_lines_approx: 30
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: false
+      work_still_required: true
+      change_containment: single_function
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates: []
