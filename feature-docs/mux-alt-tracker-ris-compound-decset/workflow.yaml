@@ -99,7 +99,7 @@ workflow:
   completed_at_commit: 1f3e88ceb7dfa2dfb6e68eaec245ae881512f034
   base_commit: 66485a8d0c8bbfcba3d487349ed061dbd18bf6b6
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -151,7 +151,7 @@ tasks:
     status: merged
     branch: em-workflow/mux-alt-tracker-ris-compound-decset/task0002
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
 requirements:
   FR1:
