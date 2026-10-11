@@ -129,7 +129,8 @@ workflow:
   failed_items: []
   completed_at_commit: e11b91d9c0b89c59c173828db6248c74adee3aff
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: bef49e36ad544c31ae0e509da0ea8ef727dc889a
 tasks:
   task0001:
     title: A detection read detects every later compound and keeps the later carry (tracker, unit tests, mux half of SC-1z)
