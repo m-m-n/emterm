@@ -145,7 +145,7 @@ tasks:
     - FR2
     - FR3
     - NFR1
-    status: in_progress
+    status: merged
     branch: em-workflow/osc133-mark-token-exact-match/task0001
     notes: null
 review:
