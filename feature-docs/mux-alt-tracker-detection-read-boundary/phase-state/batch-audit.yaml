@@ -1,0 +1,20 @@
+schema_version: 1
+feature: mux-alt-tracker-detection-read-boundary
+records:
+- gate_id: create-plan.fr4-deviation
+  question_id: plan.k60-k61-cut-exclusion
+  packet_id: null
+  answered_at: '2026-10-11T14:40:02+09:00'
+  source: batch-codex-consultation
+  route: codex_consultation
+  answer_mode: single_select
+  options:
+  - exclude_cuts_20_29_with_review
+  - revise_spec_include_all_cuts
+  selected_option_ids:
+  - exclude_cuts_20_29_with_review
+  freeform: null
+  normalized_answer: exclude_cuts_20_29_with_review
+  codex_consulted: true
+  opus_escalation: false
+  resolution_note: 'IMPLEMENTATION.md D5 excludes split positions 20-29 of SC-1z K60/K61 (M2 + h-form + l-form) from the delivery list, diverging from the literal wording of SPEC FR4/AC3 ("every single cut"). Codex consulted (2 turns). Turn 1: confirmed the planner claim against the code (write_filter.rs 1673-1688 detection branch adopts shadow_alt; 1731 detected resets per read; 1814-1820 matched-state compound not detected; 1690-1698 post-read fallback returns empty; the plain tab clears the seed working record on OSC 133;A) and recommended revising the SPEC (option B) for literal FR4/AC3 compliance. Turn 2 (orchestrator rebuttal: the Notion task scope is limited to detection reads in the mismatch state; the failing cuts put the l-form into a non-detected matched-state read, an existing predecessor-A2 limitation; option B would change A2 and conflict with FR8 / AC-6a / K1-K57; option B would stop the unattended run): Codex revised its recommendation to option A, because option B changes out-of-scope existing behavior. Conditions adopted: (1) state the exclusion and the existing limitation in the plan and verification results, never claim parity at every cut; (2) pin the existing behavior at the excluded cuts in unit tests while AC-6a and K1-K57 pass unchanged; (3) review explicitly judges the consistency of FR4/AC3 "every cut" with the exclusion and does not treat it as fully conforming while unresolved. Not chosen: revise_spec_include_all_cuts (route back to create-spec, changes predecessor A2). Opus escalation not run.'
