@@ -1,0 +1,47 @@
+task_id: task0001
+baseline_failures: []          # full --lib run before any edit: 4672 passed, 0 failed, 3 ignored
+final_failures: []             # full --lib run re-executed after the implementation and the record: 4684 passed, 0 failed, 3 ignored (4672 + the 12 new tests)
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac1_a_byte_other_than_a_backslash_after_an_in_body_esc_cuts_the_string
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac1_the_retained_length_is_zero_right_after_every_cut
+    red_confirmed: true
+    red_reason: "Run against the old scanner, dblesc_ac1_the_retained_length_is_zero_right_after_every_cut failed with 'body of 3 bytes cut by 0x1b: left: 3, right: 0' (an in-body ESC cut by ESC kept the body). The other test, dblesc_ac1_a_byte_other_than_a_backslash_after_an_in_body_esc_cuts_the_string, already passed on the old scanner: the four example streams' outcomes pre-existed, so only the retained-length test is the observed red of this criterion."
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac2_a_cut_osc_7501_string_yields_no_item
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac2_a_cut_osc_777_string_yields_the_report_of_its_bel_form_or_nothing
+    red_confirmed: true
+    red_reason: "Old scanner: the 7501 test failed with '7501;state=clear cut by ESC ESC \\: left: [ProgramStatus { body: \"state=clear\", ... terminator: St }], right: []' (ESC ESC \\ completed as ST); the 777 test failed with 'report cut by ESC [0m: left: [], right: [Report(...)]' (the cut string was dropped without a Report)."
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac3_a_cut_osc_133_string_is_classified_as_its_bel_form
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac3_a_cut_osc_133_string_needs_its_own_last_byte_to_be_live
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac3_the_scanner_yields_a_canonical_mark_exactly_when_term_core_records_one
+    red_confirmed: true
+    red_reason: "Old scanner: '133;A cut by ESC [0m: left: [], right: [Osc133Mark(PromptStart)]', 'ESC [0m: main screen: left: [], right: [Osc133Mark(PromptStart)]' and 'main screen, ESC [0m: scanner vs term_core: left: 0, right: 1' (term_core records the mark of the cut string, the old scanner yielded none)."
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac4_the_items_of_a_cut_string_come_before_those_of_the_cutting_byte
+    red_confirmed: true
+    red_reason: "Old scanner: left: [Reset], right: [Report(\"emterm;agent-status;v=1;state=working\"), Reset] for the OSC 777 string cut by ESC c (the Report was never produced)."
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac5_every_split_of_the_cut_cases_yields_the_items_of_one_feed
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac5_the_liveness_of_the_last_body_byte_is_carried_across_feeds
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac5_a_large_stream_of_cut_strings_is_linear_and_bounded
+    red_confirmed: true
+    red_reason: "Old scanner: the split-invariance test failed on its reference ('left: 4, right: 9' prompt starts in the one-feed result), the three-feed carry test failed with 'left: [], right: [Osc133Mark(PromptStart)]', and the 1 MiB test failed with 'left: 6, right: 11' items for one repeating unit."
+  AC-6:
+    tests:
+      - mux::daemon::tests::leading_zero_length::dblesc_ac6_every_sc1_row_ends_in_its_final_table_and_osc_777_state
+    red_confirmed: true
+    red_reason: "Old scanner, mismatches listed per row: K1-K4 'table [], expected [(\"\", Working)]' with 1 broadcast and a revision step (a cut OSC 7501 cleared the record), K7 'OSC 777 state None, expected Some(Working)', K9 'OSC 777 state Some(Working), expected None', K12 and K15 (every delivery) 'table [b, d, e, i, w], expected [d, e]'. Rows K5, K6, K8, K10, K11, K13 and K14 already held on the old scanner."
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::program_status_feed::ac1_a_reset_item_is_emitted_exactly_where_term_core_executes_ris
+      - mux::daemon::tests::leading_zero_length::leadzero_ac4_every_sc4_row_ends_in_its_final_table_and_strip_verdict
+      - mux::ipc::pty_spawn::tests::round4_designator_slot::a_mark_after_a_designator_slot_switch_is_live
+    red_confirmed: false
+    red_reason: "A dedicated new module is out of scope, but the existing program_status_feed RIS oracle test, the daemon leading_zero_length SC-4 test and the designator-slot mark test detect any change to the term_core-equivalent RIS items, the OSC 7501 table and the live-span marks; no red state occurred for this change (the whole existing suite stays green with its assertions unchanged). The --no-default-features check (cargo check --manifest-path src-tauri/Cargo.toml --no-default-features) and the diff conditions (no log call on a cut path, no platform-gated code, nothing under crates/term_core/) have no failing executable check to observe beforehand."
