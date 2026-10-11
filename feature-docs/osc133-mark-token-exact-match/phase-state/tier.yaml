@@ -1,0 +1,64 @@
+schema_version: 2
+feature: osc133-mark-token-exact-match
+tier: reduced
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.05
+    confidence: 0.94
+    legend:
+      '0': '0: Only a wording or rule-text change: no new logic, and no test change.'
+      '1': '1: A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.'
+      '2': '2: New logic, a change reaching across several modules, or a change to
+        an external contract.'
+      '3': '3: A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.01
+      '1': 0.94
+      '2': 0.05
+      '3': 0.0
+  observed_at: '2026-10-11T17:28:00+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.15
+    confidence: 0.85
+    legend:
+      '0': '0: Only a wording or rule-text change: no new logic, and no test change.'
+      '1': '1: A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.'
+      '2': '2: New logic, a change reaching across several modules, or a change to
+        an external contract.'
+      '3': '3: A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.85
+      '2': 0.15
+      '3': 0.0
+  observed_at: '2026-10-11T17:36:00+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  changed_lines_approx: 30
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules: []
+  work_still_required: true
+  work_still_required_evidence: callbacks.rs:1241 は先頭1バイトで判定し、AB/Ax を両方の候補列へ追加する。term_core/src/osc_handler.rs:288
+    は先頭トークン完全一致で拒否する。tabs/output_pipeline.rs の突き合わせは不正候補に後続の正規 A を消費する。確認した既存テストにはこの再現条件がない
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 2
+  body_change_kind: new_logic
+  change_containment: single_function
+  caller_and_dependency_count: 3
+  changes_external_contract: false
+  changes_behavior: true
+decided_at: '2026-10-11T17:37:00+09:00'
