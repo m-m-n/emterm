@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-osc-abort-altscreen-split-read
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 5aca59faabf74f33dc6c68e4608cacc61b4e7238
 last_input_digest: sha256:f7638234a2b212b5db1df6ddeac6e75bde160b7035dd0a636843d5b74fb50ce4
