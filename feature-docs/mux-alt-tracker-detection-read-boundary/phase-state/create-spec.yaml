@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: f906e19a0563ffd101056436867e4141fa7049ae
 last_input_digest: sha256:16a7d48c95ee34b31c25e7ed2cf068852697995460f2c9bdc1ed7f09e2a0d3eb
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -86,10 +86,16 @@ worker_runs:
   input_digest: sha256:f6a4126c2090a62938515174bb27309a96d9f2e7f6dce7b912469bde3c74ffaa
   output_digest: null
 - request_id: create-spec-run-0003
-  status: dispatched
+  status: completed
   input_digest: sha256:16a7d48c95ee34b31c25e7ed2cf068852697995460f2c9bdc1ed7f09e2a0d3eb
   output_digest: null
-artifacts: []
+artifacts:
+- path: feature-docs/mux-alt-tracker-detection-read-boundary/REQUIREMENTS.md
+  sha256: sha256:2e6d49b603262a2361df4cbf3e56b34a8f62ccb0eeadd1766ef93946b2c56a2f
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-alt-tracker-detection-read-boundary/SPEC.md
+  sha256: sha256:66a1c5e46dbd9031b4e75adae4c0407666b67ef8fa6cedc88991df99e7c8cf81
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
