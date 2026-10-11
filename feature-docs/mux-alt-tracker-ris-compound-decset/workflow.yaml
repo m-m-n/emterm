@@ -1,0 +1,201 @@
+schema_version: 1
+feature: mux-alt-tracker-ris-compound-decset
+created: '2026-10-11'
+base_branch: main
+goal: |
+  # mux: AltSpanTracker が client_alt / shadow_alt の食い違い状態で RIS と未対応の複合 DECSET を検知できず、OSC 133 の live 判定が通常タブとずれる
+
+  Notion task: https://www.notion.so/3f63509ec8ee81b6b29cecfe15ec42d4 (種別: バグ)
+
+  ## 現象 (必須)
+  mux ペインの `AltSpanTracker`（em-workflow mux-osc-abort-altscreen-split-read で追加）が、`client_alt` と `shadow_alt` が食い違った状態で、トラッカーが扱わない形の画面切り替えを検知できない。その結果、OSC 133 マークの live 判定が通常タブとずれ、OSC 7501 の working / blocked / idle の記録が通常タブと mux ペインで食い違う。
+  em-workflow mux-osc-abort-altscreen-split-read の review round 1 で medium として残った指摘 2 件（stable_id 4aef749bee51a717、b019b1bb35b07fc6）。原因が同じため 1 件にまとめた。
+  1. RIS（`ESC c`）を扱わない（4aef749bee51a717）: `?1047h` の後、または `ESC [?1049h ESC ( ESC [?1049l` の後（client_alt=true / shadow_alt=false）に RIS を受けると、client_alt が true のまま残り、以後メイン画面の OSC 133 マークを捨て続ける。term_core の RIS は `TerminalCore::reset` で代替画面を抜けるため、通常タブはメイン画面に戻る。変更前に対する退行。
+  2. 未対応の複合 DECSET（b019b1bb35b07fc6）: `ESC ( ESC [?1049h` の後（client_alt=false / shadow_alt=true）に `ESC [?1;1049h` で代替画面に入っても、パーサーとの照合が一致してフォールバックに入らず、代替画面上の OSC 133;A がライブとして渡る。SPEC A3（未対応の形は従来のフォールバック）に反する。
+  ## 再現手順 (必須)
+  1. RIS: mux ペインで `\x1b[?1047h` → `\x1bc` → OSC 7501 の working 報告 → `\x1b]133;A\x07` を順に渡す。通常タブは記録表が空、mux は working が残る（RIS の後に報告を置かないと Reset 項目が記録表を消して差が隠れる）
+  2. 複合 DECSET: `drive_reads` で `seed_root_working` を指定し、`\x1b(\x1b[?1049h` と `\x1b[?1;1049h\x1b]133;A\x07` を別々の読み取りとして渡す。通常タブは working が残るが、mux は PromptStart で working が消える
+  （どちらもコード読みで確認。実行は未実施）
+  ## 期待する挙動 (必須)
+  食い違い状態でも、通常タブの一括処理と同じ記録表になる。
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+  ## 該当箇所 (任意)
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1688`（scan が `ESC c` を Other として 1 バイト進めるだけ）
+  - `src-tauri/src/mux/ipc/pty_spawn/write_filter.rs:1581`（advance のパーサー照合）
+  対処案: scan で designator スロット以外の `ESC c` を RIS として扱い client_alt / shadow_alt を false に戻す（`ESC ( ESC c` は RIS にしない、読み込み境界での分割も扱う）。食い違い状態では引数列に 47 / 1047 / 1049 を含む未対応の DEC private mode set / reset を検出し、A3 の保守的フォールバックを返してパーサー状態を adopt する。tracker corpus と SC-1x デーモン行に回帰テストを追加する。
+  ## 実害・発生条件 (任意)
+  食い違い状態（`?1047` の使用、または designator スロットの切り替え）と、RIS または複合 DECSET の組み合わせが必要。ペイン内のプログラム自身が出すバイト列なので信頼境界は越えない。
+
+  ## 追加指示
+  - 完了後 integration ブランチを remote へ push し gh pr create で base_branch への PR を作成。integration ブランチはローカル・リモートとも残す（自動マージしない）
+  - 不明点は Codex に相談して比較的良い案を採用し、その議論内容を Notion に記録する
+parent_branch: em-workflow/mux-alt-tracker-ris-compound-decset/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.67
+      '2': 0.33
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.17
+      '2': 0.83
+      '3': 0.0
+  at: '2026-10-11T12:04:42+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    term_core:
+      language: rust
+      build_command: ''
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: d48beb898626fb1ef12256f0207ef5940221084e
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI 変更なし（requirements-analyst の推奨を batch 方針 decide_autonomously で採用）
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: RIS への追従
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: 読み込み境界で分割された RIS
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: 指示子スロットにある ESC c
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: 食い違い状態での未対応の画面切り替え形の検出
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: 読み込み境界で分割された FR4 の形の検出
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: 通常タブとの一致
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: 回帰テスト
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: 変わらない挙動
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: 堅牢性
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: フィーチャーゲート
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: ログ
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: プラットフォーム
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: term_core 不変
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
