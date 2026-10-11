@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-alt-tracker-detection-read-boundary
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: f906e19a0563ffd101056436867e4141fa7049ae
 last_input_digest: sha256:16a7d48c95ee34b31c25e7ed2cf068852697995460f2c9bdc1ed7f09e2a0d3eb
