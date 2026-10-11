@@ -1,0 +1,20 @@
+schema_version: 1
+feature: mux-osc-double-esc-abort
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 36385c4a1d41145099a54ded3d0b726f3b443327
+last_input_digest: sha256:db023f4deb97bc481349f1acc2d33cd0f6fbe4300f664074575b038d54016c35
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:db023f4deb97bc481349f1acc2d33cd0f6fbe4300f664074575b038d54016c35
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
