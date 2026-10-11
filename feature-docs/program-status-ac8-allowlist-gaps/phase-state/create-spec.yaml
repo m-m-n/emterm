@@ -6,11 +6,60 @@ generation: 1
 base_revision: 8253902d2deb2ff97ad9c7d55e69487ca132111f
 last_input_digest: sha256:3fbb2092c07e481db04fd26638ce31f8722984ceab62e2db5ce8a630aec7948c
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-10-11T19:14:00+09:00'
+    questions:
+    - question_id: req.use-line-forms
+      status: answered
+    - question_id: req.terminator-set
+      status: answered
+    - question_id: design.step
+      status: answered
+answers:
+  req.use-line-forms:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T19:22:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - all_listed_forms
+    freeform: null
+    normalized_answer: 'Close all four background forms (pub (crate) use, use<TAB>,
+      bare use line with root on next non-blank line, leading #[...] attribute on
+      same line) plus pub(...)use with zero whitespace; each gets a rejection self-test.'
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted:
+      true (1 turn, codex harness); codex chose the analyst-recommended option; recorded
+      as assumption'
+  req.terminator-set:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T19:22:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - minimal_terminators
+    freeform: null
+    normalized_answer: After super::agent_status allow only end of text, ::, ; and
+      , ; everything else (including U+0301 and other non-ASCII) is rejected.
+    resolution_note: 'gate: create-spec.requirement-clarification; codex_consulted:
+      true (1 turn, codex harness); codex chose the analyst-recommended option; recorded
+      as assumption'
+  design.step:
+    packet_id: create-spec-q0001
+    answered_at: '2026-10-11T19:22:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip_design_step
+    freeform: null
+    normalized_answer: design step skipped per analyst recommendation (test-only change,
+      no UI); batch policy create-spec.design-step=decide_autonomously accepts the
+      recommendation
+    resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:3fbb2092c07e481db04fd26638ce31f8722984ceab62e2db5ce8a630aec7948c
   output_digest: null
 artifacts: []
