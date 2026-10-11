@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-alt-tracker-ris-compound-decset
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 8d83c7fa6a2d534237a32b1f089b57db02946230
 last_input_digest: sha256:b651607ab0da0a47b07bc32762150223614fc70545b7df28faf22df130a3151c
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -31,7 +31,7 @@ artifacts:
   produced_by: create-plan-run-0001
 patches:
 - patch_id: create-plan-run-0001-p0001
-  status: validated
+  status: applied
   base_input_digest: sha256:b651607ab0da0a47b07bc32762150223614fc70545b7df28faf22df130a3151c
   base_workflow_blob: 8692a48074f13a816bcd3f41d3083cc91d7689de
 progress_fingerprint: null
