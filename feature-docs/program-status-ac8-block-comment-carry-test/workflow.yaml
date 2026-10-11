@@ -2,48 +2,30 @@ schema_version: 1
 feature: program-status-ac8-block-comment-carry-test
 created: '2026-10-11'
 base_branch: main
-goal: '# program_status の ac8 許可リスト検査で、ブロックコメント深さの行またぎ持ち越しを判別する自己テストが無い
-
+goal: |
+  # program_status の ac8 許可リスト検査で、ブロックコメント深さの行またぎ持ち越しを判別する自己テストが無い
 
   Notion: <redacted-notion-url>  (種別: 改善)
 
-
   ## やりたいこと (必須)
-
   `program_status` の ac8 許可リスト検査（`src-tauri/src/program_status/tests.rs`）に、ブロックコメント深さの行またぎ持ち越しを判別する自己テストを足す。
 
-
   ## 背景・なぜ (必須)
-
   em-workflow program-status-ac8-attribute-comments の review round 1 で残った medium 指摘（stable_id `be2393610313debe`、`src-tauri/src/program_status/tests.rs:2512` 付近）。
-
   `ac8_scan_attribute` は FR2 どおりブロックコメント深さを次の行へ持ち越している。ただし、持ち越しを落とした変異（`Open(Ac8OpenAttribute { depth, in_string, block_comment: 0 })`）でも新規テストが全部通る。
-
   - `ac8_comments_ac3_a_bracket_in_a_block_comment_spanning_lines_does_not_hide_a_use_line`: 変異版では 2 行目の先頭 `]` で属性が閉じ、3 行目が通常の use 行として winit 違反になるため通る
-
   - `ac8_comments_ac5_a_source_ending_inside_a_block_comment_returns_one_end_of_source_violation`: 2 行目に括弧も引用符も無く、変異版でも末尾違反が 1 件出て通る
-
   - ほかの `ac8_comments_*` は 1 行内のコメントだけを扱う
-
   `test-docs/program-status-ac8-attribute-comments/task0001.tests.yaml` の AC-3 red_reason と `feature-docs/program-status-ac8-attribute-comments/tasks/task0001.md` の Test Notes は「持ち越しを落とした実装への回帰ガード」と書いているが、実態と合わない。
 
-
   ## 受け入れ条件 / 完了の定義 (必須)
-
   - [ ] 持ち越しを落とした実装では落ちる判別テストがある（例: `#[cfg(all( /* ]` / `] */ unix))] use winit::event::Event;` の 2 行で、閉じ行の use が winit 違反として報告される）
-
   - [ ] 引用符版（例: `#[allow(x /*` / `" */)]` / `use winit::event::Event;`）も判別できる
-
   - [ ] `task0001.tests.yaml` の AC-3 の tests と red_reason が、実際に回帰ガードを担うテストを指す
-
   - [ ] 既存の許可リスト・自己テストの期待は変わらない
 
-
   ## 制約・前提 (任意)
-
   変更はテスト専用の検査（`src-tauri/src/program_status/tests.rs`）と、その test-docs 記録に限る。
-
-  '
 parent_branch: em-workflow/program-status-ac8-block-comment-carry-test/integration
 tier: reduced
 tier_decision:
