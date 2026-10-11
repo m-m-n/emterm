@@ -1,7 +1,7 @@
 schema_version: 1
 feature: agent-latch-alt-screen-prompt-mark
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: bec0e823c970c00677d6423105421f8a4600e7a9
 last_input_digest: sha256:5bf91680c4c59cc6b63a5121aab16430baf23450ada6ff0f82673ff0e3f732ee

@@ -1,0 +1,138 @@
+schema_version: 1
+feature: agent-latch-alt-screen-prompt-mark
+created: '2026-10-11'
+base_branch: main
+goal: '# エージェント状態ラッチ: 別画面の OSC 133 A が通常画面の A を消費し、ラッチの自動解除がずれる
+
+
+  Notion: https://www.notion.so/3f53509ec8ee817da2a7ed39b7421558
+
+
+  ## 現象 (必須)
+
+  エージェント状態ラッチの `reconcile_latch_feed` は、OSC 133 `A`（プロンプト開始候補）を種類だけで前から突き合わせる。同じ処理単位に「別画面の A → 別画面を出る → OSC 777 等の報告 → 通常画面の A」が並ぶと、別画面の A が通常画面の A として消費され、報告より後ろの本当の通常画面の A が無視される。ラッチの自動解除の時点がずれる。
+
+  OSC 7501 側の同型不具合は em-workflow osc7501-alt-screen-prompt-mark で修正済み（PR https://github.com/m-m-n/emterm/pull/132 ）。そこではラッチ側を範囲外とした（SPEC A4）。
+
+  ## 再現手順 (必須)
+
+  1. 通常タブで、別画面に入って OSC 133 `A` を出し、別画面を出てからエージェント状態の報告（Set）を行い、通常画面の OSC 133 `A` を出す出力を一度に入力する
+
+  2. 最後の通常画面の A で解除されるはずのラッチが残る
+
+  ## 期待する挙動 (必須)
+
+  別画面で発生した A を突き合わせから除外し、報告より後ろの通常画面の A でラッチが解除される。
+
+  ## 完了の定義 (必須)
+
+  - [ ] 再現手順で現象が起きない
+
+  - [ ] 再発を検出するテストがある（Set / Clear を挟む順序を含む）
+
+  ## 該当箇所 (任意)
+
+  - `src-tauri/src/agent_status_model.rs:181`（`reconcile_latch_feed`）
+
+  - `src-tauri/src/callbacks.rs:1232`（`handle_semantic_prompt` — 別画面の OSC 133 はラッチ feed に残している）
+
+  ## 実害・発生条件 (任意)
+
+  別画面と通常画面の A と報告が 1 回の出力処理単位にまとまったときだけ起きる。
+
+  '
+parent_branch: em-workflow/agent-latch-alt-screen-prompt-mark/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.96
+      '2': 0.04
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.36
+      '2': 0.64
+      '3': 0.0
+  at: '2026-10-11T16:35:50+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    src-tauri:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: f17c8acdacfde021d0eca9f013ad5378851bbf90
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI 変更なし（requirements-analyst の推奨を batch 方針 decide_autonomously で採用）
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - THREAT-MODEL.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+requirements:
+  FR1:
+    title: alt screen の候補を latch の照合から除外する
+    status: resolved
+    tasks: []
+    tests: []
+  FR2:
+    title: main screen のマークを真の順序で latch に渡す
+    status: resolved
+    tasks: []
+    tests: []
+  FR3:
+    title: 既存の振る舞いを維持する
+    status: resolved
+    tasks: []
+    tests: []
+  NFR1:
+    title: 処理コスト
+    status: resolved
+    tasks: []
+    tests: []
+  NFR2:
+    title: 他経路の維持
+    status: resolved
+    tasks: []
+    tests: []
