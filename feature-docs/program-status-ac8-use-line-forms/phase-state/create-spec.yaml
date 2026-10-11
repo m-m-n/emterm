@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: a7624f7098559113804b914b754f700d2847773c
 last_input_digest: sha256:42b1fb9078e4b9687d43af18386af45a3b7d3326b25b1b580d5240da80849ae0
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -67,16 +67,33 @@ answers:
     normalized_answer: design step skipped per analyst recommendation (test-only checker
       change, no UI)
     resolution_note: 'gate: create-spec.design-step; batch policy decide_autonomously'
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-10-11T20:20:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native: src-tauri/web-shared/settings/ui-theme-presets.ts
+      (top of 2 candidates)'
 worker_runs:
 - request_id: create-spec-run-0001
   status: needs_user_input
   input_digest: sha256:76c47c425f258d5b0bf0a4b7a85869e623f2641439f2502714b11422c603212e
   output_digest: null
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:42b1fb9078e4b9687d43af18386af45a3b7d3326b25b1b580d5240da80849ae0
   output_digest: null
-artifacts: []
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:9c26cd217b6b526a6bf561c4b4ac481d66f37437d83aaf3c0f48903193c04604
+  output_digest: sha256:86bf3cfeb1b8a8df7f9ebda6a950e60ad95d922aedbf929b0649997fd7585354
+artifacts:
+- path: feature-docs/program-status-ac8-use-line-forms/SPEC.md
+  sha256: sha256:86bf3cfeb1b8a8df7f9ebda6a950e60ad95d922aedbf929b0649997fd7585354
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
