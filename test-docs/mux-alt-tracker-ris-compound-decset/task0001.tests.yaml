@@ -1,0 +1,70 @@
+task_id: task0001
+baseline_failures: []          # full --lib run before any edit: 4707 passed, 0 failed, 3 ignored
+final_failures: []             # full --lib run re-executed after the implementation, the formatting and this record: 4732 passed, 0 failed, 3 ignored (4707 + 25 new tests). Two earlier runs of the same tree each hit host-load timeouts in tests outside this task (mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master, mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once) that passed in this run
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac1_a_ris_in_one_read_gives_a_live_mark_in_every_starting_state
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac1_the_scanner_yields_the_reset_and_a_live_mark
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_the_client_walk_agrees_with_the_bulk_extraction_on_the_corpus
+    red_confirmed: true
+    red_reason: "Run against the unmodified AltSpanTracker (new tests only, no production change), altmismatch_ac1_a_ris_in_one_read_gives_a_live_mark_in_every_starting_state failed with 'assertion left == right failed: E(1049) left: 1 right: 0' (the RIS on a matched alternate screen took the fallback and counted an adoption) and altmismatch_ac1_the_scanner_yields_the_reset_and_a_live_mark failed with 'M1: left: [Reset] right: [Reset, Osc133Mark(PromptStart)]' (the mark after the RIS got no live span). altmismatch_the_client_walk_agrees_with_the_bulk_extraction_on_the_corpus is a sanity check of the test-side oracle against extract_main_buffer and passed before the change (no red state of its own)."
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac2_every_delivery_of_the_ris_streams_gives_the_oracle_spans
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac2_the_scanner_yields_the_items_of_the_oracle_spans
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac2_a_cut_between_esc_and_c_still_gives_a_ris
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac2_a_csi_cut_between_the_bracket_and_c_is_not_a_ris
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac2_a_ris_after_a_carried_partial_or_parse_is_a_ris
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac2_a_ris_clears_the_csi_parse
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac2_random_streams_with_ris_match_the_oracle
+    red_confirmed: true
+    red_reason: "Against the unmodified tracker, altmismatch_ac2_every_delivery_of_the_ris_streams_gives_the_oracle_spans failed with '305 mismatches', first 'E(1049) cut at []: 1 adoption(s), expected 0' and 'E(1049) cut at [1]: read 1..18: spans [0..17], expected [9..17]'; altmismatch_ac2_a_cut_between_esc_and_c_still_gives_a_ris failed with 'left: [] right: [1..9]'; altmismatch_ac2_a_ris_after_a_carried_partial_or_parse_is_a_ris failed with 'ESC [?10: the mark after the RIS is live left: [] right: [2..10]'; altmismatch_ac2_the_scanner_yields_the_items_of_the_oracle_spans failed with 'E(1049) cut at [8]: read 8..18: left: [Reset] right: [Reset, Osc133Mark(PromptStart)]'; altmismatch_ac2_a_ris_clears_the_csi_parse and altmismatch_ac2_random_streams_with_ris_match_the_oracle failed too. altmismatch_ac2_a_csi_cut_between_the_bracket_and_c_is_not_a_ris is the negative case (ESC [ | c is no RIS) and passed on the unmodified tracker: the behavior pre-existed, no red state for that test."
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac3_an_esc_c_in_a_designator_slot_is_not_a_ris_for_the_client
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac3_the_slot_cuts_leave_the_client_on_the_alternate_screen
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac3_the_shadow_parser_ends_on_the_main_screen_after_a_ris
+    red_confirmed: true
+    red_reason: "Against the unmodified tracker, altmismatch_ac3_an_esc_c_in_a_designator_slot_is_not_a_ris_for_the_client failed with '471 mismatches', first 'DS cut at []: 1 adoption(s), expected 0' (the shadow parser executes the RIS, the tracker did not follow it and adopted), and altmismatch_ac3_the_slot_cuts_leave_the_client_on_the_alternate_screen failed with 'left: 1 right: 0' (adoptions). altmismatch_ac3_the_shadow_parser_ends_on_the_main_screen_after_a_ris pins the real vt100 behavior (SPEC A1) and passed before the change (no red state of its own)."
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac4_a_compound_after_a_mismatch_is_detected_in_its_read
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac4_a_compound_in_a_matched_state_keeps_todays_behavior
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac4_a_compound_in_a_designator_slot_is_not_detected
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac4_the_shadow_parser_follows_c1h_and_ignores_c7h
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac4_a_detection_read_applies_later_switches_and_clears_the_carry
+    red_confirmed: true
+    red_reason: "Against the unmodified tracker, altmismatch_ac4_a_compound_after_a_mismatch_is_detected_in_its_read failed with 'M1 C1l: the detection read left: [] right: [0..18]' and altmismatch_ac4_a_detection_read_applies_later_switches_and_clears_the_carry failed with 'left: 0 right: 1' (adoptions). The matched-state test, the designator-slot test and the vt100 pin (C1h followed, C7h ignored; SPEC A1 / TS3) describe behavior that pre-existed and passed before the change (no red state of their own)."
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac5_every_delivery_of_a_split_compound_is_detected_once
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac5_a_partial_switch_that_turns_into_a_compound_is_detected
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac5_aborted_or_other_csi_forms_are_not_detected
+    red_confirmed: true
+    red_reason: "Against the unmodified tracker, altmismatch_ac5_every_delivery_of_a_split_compound_is_detected_once failed with '1666 mismatches', first 'M1 C1l cut at []: 0 adoption(s), expected 1' and 'M1 C1l cut at [1]: read 1..34: spans [], expected [0..33]', and altmismatch_ac5_a_partial_switch_that_turns_into_a_compound_is_detected failed on 'M2 ESC [?104 | 9;1h: a final h' (the mark stayed live). altmismatch_ac5_aborted_or_other_csi_forms_are_not_detected (ESC [?1;10 then CAN / SUB / ESC [0m then 49h, ESC [?1049$p, ESC [?1;1049m: no detection, no adoption, today's spans) guards the abort rules and passed before the change (no red state of its own)."
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac6_every_compound_prefix_followed_by_every_byte_value_is_well_formed
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac6_oversized_parameters_are_well_formed_and_never_read_as_1049
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altmismatch_ac6_a_one_mib_stream_is_well_formed_in_64_kib_and_in_one_byte_reads
+    red_confirmed: false
+    red_reason: "The no-panic, well-formed-spans and 7-byte-bound properties hold trivially on the unmodified tracker (it carries no CSI state), so the prefix-times-256-bytes test and the 1 MiB test passed before the change and altmismatch_ac6_oversized_parameters_are_well_formed_and_never_read_as_1049 failed only on its detection assertion ('M1 1049 beyond 1000 cut at []: left: 0 right: 1': the form that is detected after the change), not on a robustness property. No executable red exists for the robustness properties themselves; the tests guard the new parse state's saturation, bound and abort rules."
+  AC-7:
+    tests:
+      - mux::daemon::tests::leading_zero_length::altmismatch_ac7_every_sc1y_row_ends_in_its_final_table_and_osc_777_state
+    red_confirmed: true
+    red_reason: "Against the unmodified tracker the test failed with '422 of 340 deliveries mismatched': 'K38 delivered as reads cut at []: table [(\"\", Working)], expected []' (reproduction 1: the root stays working) and 'K49 delivered as reads cut at [10]: table [], expected [(\"\", Working)]', 'K49 delivered as reads cut at [10]: 1 broadcasts, expected 0' and 'K49 delivered as reads cut at [10]: revision 1 -> 2, expected 0 step(s)' (reproduction 2: the table ends empty)."
+  AC-8:
+    tests:
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac4_k16_reads_leave_the_ring_and_the_delivered_chunks_as_they_were
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac1_random_streams_and_cuts_match_the_oracle
+      - mux::ipc::pty_spawn::tests::altscreen_split_read::altsplit_ac1_every_delivery_of_the_corpus_gives_the_bulk_spans_of_each_read
+      - mux::daemon::tests::leading_zero_length::altsplit_ac3_every_sc1x_row_ends_in_its_final_table_and_osc_777_state
+      - mux::daemon::tests::leading_zero_length::dblesc_ac6_every_sc1_row_ends_in_its_final_table_and_osc_777_state
+      - mux::ipc::pty_spawn::tests::program_status_feed::dblesc_ac5_every_split_of_the_cut_cases_yields_the_items_of_one_feed
+      - mux::ipc::pty_spawn::tests::round3_write_path::round3_195916fd_write_filter_output_is_split_invariant_across_a_designator_esc
+      - mux::ipc::pty_spawn::tests::round4_as05::round4_as05_outside_the_fallback_the_scan_equals_the_pre_change_results
+      - mux::ipc::pty_spawn::tests::fallback_path_keeps_the_whole_chunk_gate
+    red_confirmed: false
+    red_reason: "A dedicated new module is out of scope, but the existing altsplit_ac4_k16_reads_leave_the_ring_and_the_delivered_chunks_as_they_were detects any change to the scrollback ring and the delivered chunks, altsplit_ac1_random_streams_and_cuts_match_the_oracle (compared count above 2000), the altsplit_ac3 K16-K37 rows and the dblesc_ac6 K1-K15 rows detect any change to the tracker's spans, and the dblesc_ac5, round3_ and round4_ write-path tests and fallback_path_keeps_the_whole_chunk_gate detect any change to the scanner and the write path; no red state occurred for this change (the whole existing suite stays green with every existing assertion unchanged). cargo check, cargo check --no-default-features and the diff conditions (no file under crates/term_core/, no log call, no platform gate, Design section 6 items untouched) have no failing executable check to observe beforehand; they were checked by running the checks and reading the diff."

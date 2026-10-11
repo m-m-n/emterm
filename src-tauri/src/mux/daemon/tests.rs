@@ -4633,4 +4633,272 @@ mod leading_zero_length {
             mismatches.len()
         );
     }
+
+    // ---- mux-alt-tracker-ris-compound-decset task0001 AC-7 (FR6, FR7; TM-2):
+    //      the mux half of the SC-1y parity corpus (IMPLEMENTATION.md, rows
+    //      K38 to K57), through the real reader loop and the daemon
+    //      agent-status task. The K1 to K15 and K16 to K37 lists above and
+    //      their tests are not edited ----
+
+    /// `ESC )`: the byte after it is a charset designator.
+    const DC: &[u8] = b"\x1b)";
+    /// `R`: RIS.
+    const RIS: &[u8] = b"\x1bc";
+    /// `CC`: a CSI whose final byte is `c`. It is not RIS.
+    const CC: &[u8] = b"\x1b[c";
+    /// `W`: an OSC 7501 working report for the root.
+    const W: &[u8] = b"\x1b]7501;state=working\x07";
+    const C1H: &[u8] = b"\x1b[?1;1049h";
+    const C1L: &[u8] = b"\x1b[?1;1049l";
+    const CRH: &[u8] = b"\x1b[?1049;1h";
+    const C7H: &[u8] = b"\x1b[?1;1047h";
+    const C7L: &[u8] = b"\x1b[?1;1047l";
+    const C0H: &[u8] = b"\x1b[?01049h";
+    const CEH: &[u8] = b"\x1b[?;1049h";
+    /// `P1`: the start of a DEC private CSI that the RIS right after it
+    /// interrupts.
+    const P1: &[u8] = b"\x1b[?1;10";
+    /// `P2`: the start of a DEC private CSI that the RIS right after it
+    /// interrupts (a proper prefix of a switch pattern).
+    const P2: &[u8] = b"\x1b[?10";
+
+    /// The rows K38 to K57 of SC-1y, each with the seed S-W (one root
+    /// `working` record).
+    fn sc1y_rows() -> Vec<Sc1Row> {
+        use ProgramState::Working;
+        let a = open_osc(b"133;A");
+        let (e1049, l1049) = (alt_enter(1049), alt_leave(1049));
+        // M1: term_core on the alternate screen, the shadow parser on the main
+        // screen (it ignores ?1047). M2: the switch's `ESC` is the designator,
+        // so term_core stays on the main screen while the shadow parser enters
+        // the alternate screen.
+        let m1 = alt_enter(1047);
+        let m2 = cat(&[DS, &e1049]);
+
+        // The deliveries a row names: the whole stream in one read, "cuts
+        // a..b" (two reads cut at each offset) and one byte per read.
+        let deliveries = |cuts: std::ops::RangeInclusive<usize>, len: usize| -> Vec<Vec<usize>> {
+            let mut all = vec![Vec::new()];
+            all.extend(cuts.map(|o| vec![o]));
+            all.push((1..len).collect());
+            all
+        };
+        let row = |name: &'static str,
+                   stream: Vec<u8>,
+                   length: usize,
+                   cuts: std::ops::RangeInclusive<usize>,
+                   final_table: Vec<(&'static str, ProgramState)>,
+                   table_changes: Option<usize>| {
+            assert_eq!(stream.len(), length, "{name}: stream length");
+            Sc1Row {
+                name,
+                seed: Seed::W,
+                deliveries: deliveries(cuts, length),
+                stream,
+                final_table,
+                final_osc777: None,
+                table_changes,
+            }
+        };
+        let root_working = || vec![("", Working)];
+
+        vec![
+            // RIS.
+            row(
+                "K38",
+                cat(&[&m1, RIS, W, &a, BEL]),
+                39,
+                1..=38,
+                vec![],
+                None,
+            ),
+            row(
+                "K39",
+                cat(&[&e1049, DS, &l1049, RIS, W, &a, BEL]),
+                49,
+                1..=48,
+                vec![],
+                None,
+            ),
+            row(
+                "K40",
+                cat(&[&e1049, RIS, W, &a, BEL]),
+                39,
+                1..=38,
+                vec![],
+                None,
+            ),
+            row(
+                "K41",
+                cat(&[&m1, CC, W, &a, BEL]),
+                40,
+                8..=11,
+                root_working(),
+                None,
+            ),
+            row(
+                "K42",
+                cat(&[&e1049, DS, RIS, &a, BEL]),
+                20,
+                1..=19,
+                root_working(),
+                Some(0),
+            ),
+            row(
+                "K43",
+                cat(&[&e1049, DC, RIS, &a, BEL]),
+                20,
+                1..=19,
+                root_working(),
+                Some(0),
+            ),
+            // Compound forms after M1 (term_core on the alternate screen).
+            row(
+                "K44",
+                cat(&[&m1, C1H, &a, BEL]),
+                26,
+                8..=17,
+                root_working(),
+                Some(0),
+            ),
+            row("K45", cat(&[&m1, C1L, &a, BEL]), 26, 8..=17, vec![], None),
+            row(
+                "K46",
+                cat(&[&m1, CRH, &a, BEL]),
+                26,
+                8..=17,
+                root_working(),
+                Some(0),
+            ),
+            row(
+                "K47",
+                cat(&[&m1, C7H, &a, BEL]),
+                26,
+                8..=17,
+                root_working(),
+                Some(0),
+            ),
+            row("K48", cat(&[&m1, C7L, &a, BEL]), 26, 8..=17, vec![], None),
+            // Compound forms after M2 (the shadow parser on the alternate screen).
+            row(
+                "K49",
+                cat(&[&m2, C1H, &a, BEL]),
+                28,
+                10..=19,
+                root_working(),
+                Some(0),
+            ),
+            row("K50", cat(&[&m2, C1L, &a, BEL]), 28, 10..=19, vec![], None),
+            row(
+                "K51",
+                cat(&[&m2, CRH, &a, BEL]),
+                28,
+                10..=19,
+                root_working(),
+                Some(0),
+            ),
+            row(
+                "K52",
+                cat(&[&m2, C7H, &a, BEL]),
+                28,
+                10..=19,
+                root_working(),
+                Some(0),
+            ),
+            row("K53", cat(&[&m2, C7L, &a, BEL]), 28, 10..=19, vec![], None),
+            row(
+                "K54",
+                cat(&[&m2, C0H, &a, BEL]),
+                27,
+                10..=18,
+                root_working(),
+                Some(0),
+            ),
+            row(
+                "K55",
+                cat(&[&m2, CEH, &a, BEL]),
+                27,
+                10..=18,
+                root_working(),
+                Some(0),
+            ),
+            // RIS that interrupts a CSI.
+            row(
+                "K56",
+                cat(&[&m1, P1, RIS, W, &a, BEL]),
+                46,
+                9..=17,
+                vec![],
+                None,
+            ),
+            row(
+                "K57",
+                cat(&[&m1, P2, RIS, W, &a, BEL]),
+                44,
+                9..=15,
+                vec![],
+                None,
+            ),
+        ]
+    }
+
+    /// AC-7: every SC-1y row K38 to K57, fed with the row's seed and every mux
+    /// delivery the row names, ends in the row's final OSC 7501 table and OSC
+    /// 777 state and, where the row gives one, its table-change count. Every
+    /// mismatch names its row and delivery.
+    #[tokio::test]
+    async fn altmismatch_ac7_every_sc1y_row_ends_in_its_final_table_and_osc_777_state() {
+        let mut mismatches: Vec<String> = Vec::new();
+        let mut deliveries_run = 0usize;
+        let rows = sc1y_rows();
+        assert_eq!(rows.len(), 20, "K38 to K57");
+        for row in rows {
+            let expected_table: Vec<(String, ProgramState)> = row
+                .final_table
+                .iter()
+                .map(|&(id, state)| (id.to_string(), state))
+                .collect();
+            for offsets in &row.deliveries {
+                deliveries_run += 1;
+                let label = format!("{} delivered as reads cut at {offsets:?}", row.name);
+                let seed = row.seed;
+                let driven = drive_reads(
+                    move |pane| seed.apply(pane),
+                    cut_into_reads(&row.stream, offsets),
+                )
+                .await;
+                if driven.records != expected_table {
+                    mismatches.push(format!(
+                        "{label}: table {:?}, expected {expected_table:?}",
+                        driven.records
+                    ));
+                }
+                if driven.osc777_state != row.final_osc777 {
+                    mismatches.push(format!(
+                        "{label}: OSC 777 state {:?}, expected {:?}",
+                        driven.osc777_state, row.final_osc777
+                    ));
+                }
+                if let Some(changes) = row.table_changes {
+                    if driven.updates.len() != changes {
+                        mismatches.push(format!(
+                            "{label}: {} broadcasts, expected {changes}",
+                            driven.updates.len()
+                        ));
+                    }
+                    if driven.revision != driven.revision_before + changes as u64 {
+                        mismatches.push(format!(
+                            "{label}: revision {} -> {}, expected {changes} step(s)",
+                            driven.revision_before, driven.revision
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "{} of {deliveries_run} deliveries mismatched: {mismatches:#?}",
+            mismatches.len()
+        );
+    }
 }

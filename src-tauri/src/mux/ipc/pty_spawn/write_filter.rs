@@ -1419,6 +1419,67 @@ impl PartialSwitch {
     }
 }
 
+/// Cap on the value of a DEC private CSI parameter while it is read: the cap of
+/// `term_core`'s own parameter (9999). A value that has reached it is never 47,
+/// 1047 or 1049, so a digit run of any length can neither overflow nor read as
+/// one of them.
+const CSI_PARAM_CAP: u16 = 9999;
+
+/// Whether a finished DEC private mode number is one `term_core` switches
+/// screens on.
+fn is_screen_mode(value: u16) -> bool {
+    matches!(value, 47 | 1047 | 1049)
+}
+
+/// The O(1) state of a DEC private CSI (`ESC [ ?`, then parameters) the scan is
+/// inside of. Having the state at all means `ESC [ ?` has been seen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DecPrivateParse {
+    /// The value of the parameter being read, saturated at [`CSI_PARAM_CAP`].
+    value: u16,
+    /// Whether an earlier, finished parameter was 47, 1047 or 1049.
+    screen_mode_seen: bool,
+}
+
+impl DecPrivateParse {
+    /// Take the digit `byte` (an ASCII digit) into the parameter being read.
+    fn digit(&mut self, byte: u8) {
+        self.value = self
+            .value
+            .saturating_mul(10)
+            .saturating_add(u16::from(byte - b'0'))
+            .min(CSI_PARAM_CAP);
+    }
+
+    /// A `;` finishes the parameter being read (an empty one is 0).
+    fn separator(&mut self) {
+        self.screen_mode_seen |= is_screen_mode(self.value);
+        self.value = 0;
+    }
+
+    /// Whether, at the terminator, a finished parameter (the last one included)
+    /// is 47, 1047 or 1049.
+    fn names_a_screen_mode(&self) -> bool {
+        self.screen_mode_seen || is_screen_mode(self.value)
+    }
+}
+
+/// The parse state after the bytes `first` then `second`, which together are a
+/// prefix of a switch pattern (so `ESC [ ?` and then digits only): `None` while
+/// `ESC [ ?` is not complete.
+fn parse_after_prefix(first: &[u8], second: &[u8]) -> Option<DecPrivateParse> {
+    if first.len() + second.len() < 3 {
+        return None;
+    }
+    let mut parse = DecPrivateParse::default();
+    for &byte in first.iter().chain(second).skip(3) {
+        if byte.is_ascii_digit() {
+            parse.digit(byte);
+        }
+    }
+    Some(parse)
+}
+
 /// What [`AltSpanTracker`] carries from one read to the next.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TrackerCarry {
@@ -1429,8 +1490,11 @@ enum TrackerCarry {
     Awaiting,
     /// The last read ended inside a proper prefix of a switch pattern. A lone
     /// live `ESC` is the shortest one: the next read decides whether it opens a
-    /// switch, a designator slot or neither.
+    /// switch, a designator slot, a RIS or none of them.
     Partial(PartialSwitch),
+    /// The last read ended inside a DEC private CSI that is not a switch
+    /// pattern: the parse goes on with the next read's first bytes.
+    Csi(DecPrivateParse),
 }
 
 /// How a buffer that starts at an `ESC` relates to the switch patterns.
@@ -1499,8 +1563,13 @@ impl LiveRun {
 /// Where a read's scan goes on after the carried partial is resolved.
 enum Resumed {
     /// Scan from `at`; `designator` says the byte at `at` is a charset
-    /// designator.
-    Scan { at: usize, designator: bool },
+    /// designator, and `csi` is the DEC private CSI parse the bytes before `at`
+    /// left open.
+    Scan {
+        at: usize,
+        designator: bool,
+        csi: Option<DecPrivateParse>,
+    },
     /// The whole read extended the partial.
     Consumed,
 }
@@ -1522,7 +1591,30 @@ enum Resumed {
 /// text). The shadow rule is the shadow parser's: every `ESC` aborts what came
 /// before it, so a pattern in a designator slot switches too, and only ?1049 and
 /// ?47 switch ([`shadow_follows`]). The reader cross-checks the shadow rule with
-/// the parser's own state on every read.
+/// the parser's own state on every read. The tracker is in a mismatched state
+/// while its two screens differ.
+///
+/// Two screen changes beyond the switch patterns are followed, both in the
+/// tracker's own scan and never in the extraction (which the scrollback write
+/// path shares):
+///
+/// - RIS. A live `ESC` right before a `c` returns both screens to the main
+///   screen and clears every carried item; a lone live `ESC` at a read's end
+///   waits for the next read's first byte. An `ESC c` in a designator slot is
+///   not a RIS for the client: only the shadow-rule screen returns to the main
+///   screen (the shadow parser aborts the designator wait and executes it).
+/// - A DEC private mode set or reset (`ESC [ ?`, parameters, `h` / `l`) outside
+///   the six patterns whose parameters include 47, 1047 or 1049. The tracker
+///   parses every such sequence with O(1) state ([`DecPrivateParse`]) carried
+///   across reads, but acts on it only in a mismatched state, because the
+///   shadow parser cannot confirm it otherwise. There the read is a detection
+///   read: the client-rule screen takes the terminator's direction (`h` the
+///   alternate screen, `l` the main screen, as `term_core` has it), the scan
+///   goes on, and at the read's end the spans are the conservative fallback
+///   judged on the client-rule screen (the whole read on the main screen, none
+///   otherwise), the shadow-rule screen takes the parser's state, every carried
+///   item is cleared and one adoption is counted. The parse never changes a
+///   span by itself.
 ///
 /// The bytes of a live partial that lies on the main screen are the read's
 /// undecided tail and are not live: the sequence's bytes are not content if it
@@ -1534,12 +1626,13 @@ enum Resumed {
 ///
 /// Per read, the tracker (1) adopts the parser's state when it differs from the
 /// shadow-rule screen the last read ended in (something rebuilt the parser),
-/// (2) resolves the carried partial against the read's first bytes, (3) scans the
-/// rest with the extraction's rules, (4) records a new partial, and (5) when its
-/// shadow-rule screen differs from the parser's state after the read (a switch
-/// form the tracker does not model, or a control byte inside a sequence), gives
-/// the conservative fallback spans and adopts the parser's state. The scrollback
-/// write path never sees these spans.
+/// (2) resolves the carried item against the read's first bytes, (3) scans the
+/// rest with the extraction's rules plus the two screen changes above, (4)
+/// records the new carried item, and (5) when its shadow-rule screen differs
+/// from the parser's state after the read (a switch form the tracker does not
+/// model, or a control byte inside a sequence), gives the conservative fallback
+/// spans and adopts the parser's state. The scrollback write path never sees
+/// these spans.
 pub(super) struct AltSpanTracker {
     /// The screen under the client rule.
     client_alt: bool,
@@ -1547,7 +1640,7 @@ pub(super) struct AltSpanTracker {
     shadow_alt: bool,
     carry: TrackerCarry,
     /// Times a check disagreed with the shadow parser and the parser's state
-    /// was adopted.
+    /// was adopted, or a compound form was detected.
     #[cfg(test)]
     adoptions: u32,
 }
@@ -1577,7 +1670,23 @@ impl AltSpanTracker {
             self.adopt(shadow_alt_before);
         }
         let mut live = LiveRun::new();
-        self.scan(read, &mut live);
+        if self.scan(read, &mut live) {
+            // A detection read: the spans are the fallback judged on the
+            // client-rule screen the scan ended in, the shadow-rule screen takes
+            // the parser's state, and nothing is carried. The post-read
+            // cross-check does not apply to it.
+            self.shadow_alt = shadow_alt_after;
+            self.carry = TrackerCarry::Nothing;
+            #[cfg(test)]
+            {
+                self.adoptions += 1;
+            }
+            return if !self.client_alt && !read.is_empty() {
+                vec![0..read.len()]
+            } else {
+                Vec::new()
+            };
+        }
         if self.shadow_alt != shadow_alt_after {
             self.adopt(shadow_alt_after);
             // The fallback: the whole read when the parser stood on the main
@@ -1591,7 +1700,7 @@ impl AltSpanTracker {
         live.spans
     }
 
-    /// Both screens take the parser's state; no partial is carried.
+    /// Both screens take the parser's state; nothing is carried.
     fn adopt(&mut self, alt: bool) {
         self.client_alt = alt;
         self.shadow_alt = alt;
@@ -1602,29 +1711,47 @@ impl AltSpanTracker {
         }
     }
 
-    fn scan(&mut self, read: &[u8], live: &mut LiveRun) {
+    /// A RIS: both screens are the main screen. The live run goes on when the
+    /// client was on the main screen, and opens at `after` (the position right
+    /// behind the `c`) when it was on the alternate screen.
+    fn reset_screens(&mut self, live: &mut LiveRun, after: usize) {
+        self.client_alt = false;
+        self.shadow_alt = false;
+        live.open_at(after);
+    }
+
+    /// Scan `read` from its start, resolving the carried item first. Returns
+    /// whether the read is a detection read (a DEC private set or reset that
+    /// names 47, 1047 or 1049 ended in a mismatched state).
+    fn scan(&mut self, read: &[u8], live: &mut LiveRun) -> bool {
         let n = read.len();
         if !self.client_alt {
             live.open_at(0);
         }
+        let mut detected = false;
         let mut at = 0usize;
         // Whether the byte at `at` is a charset designator (consumed whatever
         // it is).
         let mut designator = false;
+        // The DEC private CSI parse open at `at`.
+        let mut csi: Option<DecPrivateParse> = None;
         match std::mem::replace(&mut self.carry, TrackerCarry::Nothing) {
             TrackerCarry::Nothing => {}
             TrackerCarry::Awaiting => designator = true,
+            TrackerCarry::Csi(parse) => csi = Some(parse),
             TrackerCarry::Partial(partial) => match self.resume(partial, read, live) {
                 Resumed::Consumed => {
                     live.close_at(n);
-                    return;
+                    return false;
                 }
                 Resumed::Scan {
                     at: next,
                     designator: next_designator,
+                    csi: next_csi,
                 } => {
                     at = next;
                     designator = next_designator;
+                    csi = next_csi;
                 }
             },
         }
@@ -1637,7 +1764,8 @@ impl AltSpanTracker {
                     break;
                 }
                 // The byte is the designator. An `ESC` there is text for the
-                // client; the shadow parser still reads a switch from it.
+                // client; the shadow parser still reads a switch from it, or a
+                // RIS (it aborts the designator wait and executes the `c`).
                 if read[at] == 0x1b {
                     match match_switch(&read[at..]) {
                         SwitchMatch::Complete(pattern, is_enter) => {
@@ -1653,10 +1781,70 @@ impl AltSpanTracker {
                             ));
                             break;
                         }
-                        SwitchMatch::Other => at += 1,
+                        SwitchMatch::Other => {
+                            if read.get(at + 1) == Some(&b'c') {
+                                self.shadow_alt = false;
+                                at += 2;
+                            } else {
+                                at += 1;
+                            }
+                        }
                     }
                 } else {
                     at += 1;
+                }
+                continue;
+            }
+
+            if let Some(mut parse) = csi.take() {
+                let mut finished = false;
+                while at < n {
+                    let byte = read[at];
+                    match byte {
+                        b'0'..=b'9' => {
+                            parse.digit(byte);
+                            at += 1;
+                        }
+                        b';' => {
+                            parse.separator();
+                            at += 1;
+                        }
+                        b'h' | b'l' => {
+                            at += 1;
+                            if parse.names_a_screen_mode() && self.client_alt != self.shadow_alt {
+                                // The shadow parser cannot confirm the form:
+                                // the client-rule screen takes the direction of
+                                // the terminator and the read is judged at its
+                                // end.
+                                detected = true;
+                                self.client_alt = byte == b'h';
+                                if self.client_alt {
+                                    live.close_at(at);
+                                } else {
+                                    live.open_at(at);
+                                }
+                            }
+                            finished = true;
+                            break;
+                        }
+                        // An `ESC` discards the parse without detection and is
+                        // handled below as any live `ESC` is.
+                        0x1b => {
+                            finished = true;
+                            break;
+                        }
+                        // CAN, SUB, `:`, an intermediate byte, a private marker
+                        // or any other final byte: no detection.
+                        _ => {
+                            at += 1;
+                            finished = true;
+                            break;
+                        }
+                    }
+                }
+                if !finished {
+                    self.carry = TrackerCarry::Csi(parse);
+                    break;
                 }
                 continue;
             }
@@ -1685,17 +1873,25 @@ impl AltSpanTracker {
                         TrackerCarry::Partial(PartialSwitch::new(PartialKind::Live, &read[esc..]));
                     break;
                 }
-                SwitchMatch::Other => {
-                    if matches!(read.get(esc + 1), Some(b'(' | b')')) {
+                SwitchMatch::Other => match read.get(esc + 1) {
+                    Some(b'(' | b')') => {
                         at = esc + 2;
                         designator = true;
-                    } else {
-                        at = esc + 1;
                     }
-                }
+                    Some(b'c') => {
+                        at = esc + 2;
+                        self.reset_screens(live, at);
+                    }
+                    Some(b'[') if read.get(esc + 2) == Some(&b'?') => {
+                        at = esc + 3;
+                        csi = Some(DecPrivateParse::default());
+                    }
+                    _ => at = esc + 1,
+                },
             }
         }
         live.close_at(n);
+        detected
     }
 
     /// Resolve the carried `partial` against the first bytes of `read`: the read
@@ -1744,6 +1940,7 @@ impl AltSpanTracker {
             return Resumed::Scan {
                 at: consumed,
                 designator: false,
+                csi: None,
             };
         }
 
@@ -1759,21 +1956,61 @@ impl AltSpanTracker {
             return Resumed::Consumed;
         }
 
-        // The bytes the partial held were ordinary after all. A lone live `ESC`
-        // followed by `(` / `)` opens a designator slot; anything else resumes
-        // the scan at the diverging byte.
-        if partial.kind == PartialKind::Live
-            && have == 1
-            && matches!(read.first(), Some(b'(' | b')'))
-        {
-            return Resumed::Scan {
-                at: 1,
-                designator: true,
-            };
-        }
-        Resumed::Scan {
-            at: agreed,
-            designator: false,
+        // The bytes the partial held were ordinary after all, or the start of
+        // something else.
+        match partial.kind {
+            PartialKind::Live => {
+                // A lone live `ESC` followed by `(` / `)` opens a designator
+                // slot, and followed by `c` it is a RIS (the `c` stays live
+                // when the client is on the main screen).
+                if have == 1 {
+                    match read.first() {
+                        Some(b'(' | b')') => {
+                            return Resumed::Scan {
+                                at: 1,
+                                designator: true,
+                                csi: None,
+                            };
+                        }
+                        Some(b'c') => {
+                            self.reset_screens(live, 1);
+                            return Resumed::Scan {
+                                at: 1,
+                                designator: false,
+                                csi: None,
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+                // The held bytes and the bytes the read agreed on are a prefix
+                // of a DEC private CSI when they hold `ESC [ ?`: the parse goes
+                // on from them. Anything else resumes the scan at the diverging
+                // byte.
+                Resumed::Scan {
+                    at: agreed,
+                    designator: false,
+                    csi: parse_after_prefix(held, &read[..agreed]),
+                }
+            }
+            PartialKind::Designator => {
+                // The partial's `ESC` was the designator. A lone `ESC` followed
+                // by `c` is a RIS for the shadow parser only; its CSI is text
+                // for the client, so a designator partial never starts a parse.
+                if have == 1 && read.first() == Some(&b'c') {
+                    self.shadow_alt = false;
+                    return Resumed::Scan {
+                        at: 1,
+                        designator: false,
+                        csi: None,
+                    };
+                }
+                Resumed::Scan {
+                    at: agreed,
+                    designator: false,
+                    csi: None,
+                }
+            }
         }
     }
 
