@@ -1604,17 +1604,25 @@ enum Resumed {
 ///   not a RIS for the client: only the shadow-rule screen returns to the main
 ///   screen (the shadow parser aborts the designator wait and executes it).
 /// - A DEC private mode set or reset (`ESC [ ?`, parameters, `h` / `l`) outside
-///   the six patterns whose parameters include 47, 1047 or 1049. The tracker
-///   parses every such sequence with O(1) state ([`DecPrivateParse`]) carried
-///   across reads, but acts on it only in a mismatched state, because the
-///   shadow parser cannot confirm it otherwise. There the read is a detection
-///   read: the client-rule screen takes the terminator's direction (`h` the
-///   alternate screen, `l` the main screen, as `term_core` has it), the scan
-///   goes on, and at the read's end the spans are the conservative fallback
-///   judged on the client-rule screen (the whole read on the main screen, none
-///   otherwise), the shadow-rule screen takes the parser's state, every carried
-///   item is cleared and one adoption is counted. The parse never changes a
-///   span by itself.
+///   the six patterns whose parameters include 47, 1047 or 1049 (a compound).
+///   The tracker parses every such sequence with O(1) state
+///   ([`DecPrivateParse`]) carried across reads. At its terminator the compound
+///   is detected when an earlier compound in the same read was already detected,
+///   or when the tracker is in a mismatched state (the shadow parser cannot
+///   confirm it then). A read that detected at least one compound is a
+///   detection read: every detected compound sets the client-rule screen to its
+///   terminator's direction (`h` the alternate screen, `l` the main screen, as
+///   `term_core` has it) and the scan goes on, so detection continues for every
+///   later compound of the read whatever its two screens say. At the read's end
+///   the spans are the conservative fallback judged on the client-rule screen
+///   (the whole read on the main screen, none otherwise), the shadow-rule
+///   screen takes the parser's state and one adoption is counted, however many
+///   compounds the read detected. Only the state recorded after the last
+///   detected compound is carried: the scan consumes the incoming carried item
+///   at its start and records a new one only where it stops at the read's end,
+///   so that item is kept for the next read, which resolves it as it resolves
+///   one carried from a read without detection. The parse never changes a span
+///   by itself.
 ///
 /// The bytes of a live partial that lies on the main screen are the read's
 /// undecided tail and are not live: the sequence's bytes are not content if it
@@ -1640,7 +1648,8 @@ pub(super) struct AltSpanTracker {
     shadow_alt: bool,
     carry: TrackerCarry,
     /// Times a check disagreed with the shadow parser and the parser's state
-    /// was adopted, or a compound form was detected.
+    /// was adopted, plus one for every read that detected a compound form
+    /// (however many it detected).
     #[cfg(test)]
     adoptions: u32,
 }
@@ -1672,11 +1681,11 @@ impl AltSpanTracker {
         let mut live = LiveRun::new();
         if self.scan(read, &mut live) {
             // A detection read: the spans are the fallback judged on the
-            // client-rule screen the scan ended in, the shadow-rule screen takes
-            // the parser's state, and nothing is carried. The post-read
-            // cross-check does not apply to it.
+            // client-rule screen the scan ended in, and the shadow-rule screen
+            // takes the parser's state. The carried item the scan recorded at the
+            // read's end (it follows the last detected compound) is kept for the
+            // next read. The post-read cross-check does not apply to it.
             self.shadow_alt = shadow_alt_after;
-            self.carry = TrackerCarry::Nothing;
             #[cfg(test)]
             {
                 self.adoptions += 1;
@@ -1721,8 +1730,11 @@ impl AltSpanTracker {
     }
 
     /// Scan `read` from its start, resolving the carried item first. Returns
-    /// whether the read is a detection read (a DEC private set or reset that
-    /// names 47, 1047 or 1049 ended in a mismatched state).
+    /// whether the read is a detection read: a DEC private set or reset that
+    /// names 47, 1047 or 1049 ended in a mismatched state, and so does every
+    /// later one in the same read, whatever its two screens say. The carried
+    /// item the scan records where it stops at the read's end follows the last
+    /// detected compound; the caller keeps it.
     fn scan(&mut self, read: &[u8], live: &mut LiveRun) -> bool {
         let n = read.len();
         if !self.client_alt {
@@ -1811,11 +1823,14 @@ impl AltSpanTracker {
                         }
                         b'h' | b'l' => {
                             at += 1;
-                            if parse.names_a_screen_mode() && self.client_alt != self.shadow_alt {
-                                // The shadow parser cannot confirm the form:
-                                // the client-rule screen takes the direction of
-                                // the terminator and the read is judged at its
-                                // end.
+                            if parse.names_a_screen_mode()
+                                && (detected || self.client_alt != self.shadow_alt)
+                            {
+                                // Either an earlier compound of this read was
+                                // detected, or the shadow parser cannot confirm
+                                // the form: the client-rule screen takes the
+                                // direction of the terminator and the read is
+                                // judged at its end.
                                 detected = true;
                                 self.client_alt = byte == b'h';
                                 if self.client_alt {
