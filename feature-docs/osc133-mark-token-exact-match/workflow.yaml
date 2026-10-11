@@ -121,7 +121,7 @@ workflow:
   base_commit: 268ecfe26cd02c266e65e1a4a54dc3b32f29292b
   completed_at_commit: 5a8019f194646a05ed315f241af9b256e337a054
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -152,6 +152,13 @@ tasks:
 review:
   status: pending
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: false
 requirements:
   FR1:
     title: Mark kind decided by exact first-token match
