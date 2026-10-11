@@ -1,0 +1,59 @@
+round: 1
+executed_at: "2026-10-11T21:34:18+09:00"
+scope:
+  review_mode: diff
+  base_commit: 1b497b0bedff82446f0a4fb4a9dee580bb7ca6a5
+  head_commit: 3784c86dfb6fdfce8ae6864f1a7947cac0ed5989
+  changed_files:
+  - src-tauri/src/program_status/tests.rs
+  - test-docs/program-status-ac8-attribute-comments/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+- stable_id: be2393610313debe
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/program_status/tests.rs
+  line: 2512
+  title: "FR2 の「ブロックコメント深さを次の行へ持ち越す」挙動を落とすテストが無く、test record の AC-3 red_reason の主張が誤っている"
+  description: "実装（ac8_scan_attribute が Open に block_comment を載せて返す箇所、1656-1660 行）は FR2 どおり深さを持ち越している。ただし、持ち越しを落とした変異（例: `Open(Ac8OpenAttribute { depth, in_string, block_comment: 0 })`）でも新規テストは全部通る。(1) ac8_comments_ac3_a_bracket_in_a_block_comment_spanning_lines_does_not_hide_a_use_line: 変異版では 2 行目の先頭 `]` で属性が閉じ、3 行目は通常の use 行として winit 違反になり、テストは通る。(2) ac8_comments_ac5_a_source_ending_inside_a_block_comment_returns_one_end_of_source_violation: 2 行目に括弧も引用符も無く、変異版でも末尾違反がちょうど 1 件出て通る。(3) ほかの ac8_comments_* は 1 行内のコメントだけを扱う。結果として FR2 の行またぎ持ち越しを固定しているテストが無い。task0001.tests.yaml の AC-3 red_reason と tasks/task0001.md の Test Notes の主張は事実と合わない。テスト専用チェッカーで本番挙動は正しいため medium。"
+  suggestion: "行またぎのブロックコメントに `]` を含め、閉じ行に use を置く判別テストを 1 本足す（例: `#[cfg(all( /* ]\\n] */ unix))] use winit::event::Event;` — 持ち越しありなら winit 違反、なしなら違反ゼロ）。引用符版 `#[allow(x /*\\n\\\" */)]\\nuse winit::event::Event;` も判別できる。合わせて task0001.tests.yaml の AC-3 tests に追加テスト名を加え、red_reason の記述を実際に回帰ガードを担うテストを指す形に直す。"
+  reproduction: null
+  reproduction_alternates: []
+  reproduction_overflow: false
+  sources: ["claude:evaluator"]
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: "medium（auto-fix 対象外の重大度）。評価者が絶対パスで返した file を project_root 相対へ正規化して記録した。後続タスクとして起票する"
+evaluation:
+  round_summary: "Round 1（diff モード）。3 本のレビュー（comprehensive#0 / security#0 / spec#0）はどれも空の findings を返した。critical/high の指摘は無く dismissed_sites も空。インジェクションの試みは無かった。評価者自身の点検（SPEC.md・tests.rs・task0001.tests.yaml・tasks/task0001.md・program_status.rs の 5 件）でスキャナ本体の挙動（文字列 > ブロックコメント > 属性コードの優先順位、2 文字トークンの一括消費、行コメントの扱い、末尾違反の行追跡と追加順序）が SPEC FR1-FR3 と一致することを確認。既存テストは変更されておらず（FR5）、record の 54 テスト名はすべて tests.rs に定義がある。見つけたのは FR2 の行またぎ持ち越しを判別するテストが無いという medium 1 件だけ。観点: comprehensive = findings、security = corroborated（テスト専用で攻撃面なし）、spec = corroborated。"
+  recommended_action: auto_fix
+  action_rationale: "指摘は medium 1 件で実装は正しい。修正は判別テスト 1 本追加と red_reason 修正のみ。ただし評価者発の finding なので扱いは review-phase に従う。"
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
