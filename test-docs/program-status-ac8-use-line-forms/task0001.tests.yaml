@@ -1,0 +1,114 @@
+task_id: task0001
+# Run before any change: 4797 passed, 1 failed, 3 ignored. The one failure depends on the HOME
+# environment of the run (it passed in the later runs of this task, no code of it was touched).
+baseline_failures:
+  - render::font::user_dir::tests::user_font_dir_falls_back_to_home_local_share
+# Last re-executed run after the implementation and this record: 4809 passed, 0 failed, 3 ignored
+# (the 11 new ac8_forms_* tests are the difference from the baseline's 4798 run tests).
+# Two earlier full runs each failed once on
+# mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+# (a PTY echo wait); the next full run passed with no change in between, so that test is flaky
+# under load and is not part of the final set.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - program_status::tests::ac8_forms_ac1_several_leading_attributes_do_not_hide_a_use_line
+      - program_status::tests::ac8_forms_ac1_several_leading_attributes_before_an_allowed_root_are_allowed
+    red_confirmed: true
+    red_reason: >-
+      Before the checker change the rejection test failed ("expected at least one violation for
+      \"#[cfg(a)] #[allow(b)] use winit::event::Event;\", got none"); its loop stops at the first
+      failing input, so the other two inputs were not observed one by one. The allowed-root test
+      (`#[cfg(test)] #[allow(unused)] use std::fmt;`) passed before and after as a regression
+      guard.
+  AC-2:
+    tests:
+      - program_status::tests::ac8_forms_ac2_a_use_directly_followed_by_a_path_separator_or_brace_is_rejected
+    red_confirmed: true
+    red_reason: >-
+      Before the checker change the test failed ("expected at least one violation for
+      \"use::winit::event::Event;\", got none"); its loop stops at the first failing input, so
+      the remaining five inputs were not observed one by one (the two with whitespace after `use`
+      are expected to hold already and pin the chosen semantics).
+  AC-3:
+    tests:
+      - program_status::tests::ac8_forms_ac3_a_bracket_in_an_attribute_string_does_not_hide_a_use_line
+      - program_status::tests::ac8_forms_ac3_a_bracket_in_an_attribute_string_before_an_allowed_root_is_allowed
+    red_confirmed: true
+    red_reason: >-
+      Before the checker change the rejection test failed ("expected at least one violation for
+      \"#[cfg(feature = \\\"]\\\")] use winit::event::Event;\", got none"); its loop stops at the
+      first failing input, so the other two inputs were not observed one by one. The allowed-root
+      test (`#[cfg(feature = "]")] use std::fmt;`) passed before and after as a regression guard.
+  AC-4:
+    tests:
+      - program_status::tests::ac8_forms_ac4_a_multi_line_attribute_closing_on_the_use_line_is_reported_at_that_line
+      - program_status::tests::ac8_forms_ac4_a_multi_line_attribute_closing_on_an_allowed_use_line_is_allowed
+      - program_status::tests::ac8_forms_ac4_a_multi_line_attribute_before_a_non_use_item_is_allowed
+      - program_status::tests::ac8_forms_ac4_a_multi_line_attribute_closing_on_its_own_line_before_an_allowed_use_is_allowed
+      - program_status::tests::ac8_forms_ac4_the_use_line_after_a_closed_multi_line_attribute_is_scanned_again
+    red_confirmed: true
+    red_reason: >-
+      Before the checker change the reported-at-that-line test failed ("expected at least one
+      violation for \"#[cfg(all(\\nunix,\\nfeature = \\\"gui\\\"\\n))] use winit::event::Event;\",
+      got none). The four other tests (the allowed `))] use std::fmt;` source, the `#[derive(`
+      source followed by `pub struct X;`, the attribute closing on its own line before
+      `use std::fmt;`, and the rejected use line after a closed multi-line attribute) passed
+      before and after as regression guards.
+  AC-5:
+    tests:
+      - program_status::tests::ac8_forms_ac5_every_violation_names_the_line_the_allowlist_and_the_invariant
+    red_confirmed: true
+    red_reason: >-
+      Before the checker change the test failed on its non-empty precondition ("expected at least
+      one violation for \"#[cfg(a)] #[allow(b)] use winit::event::Event;\", got none"); after the
+      change every violation for the rejected sources of AC-1, AC-3 and AC-4 contains the
+      offending line (for AC-4, the fourth line), `super::agent_status` and "without the `gui`
+      feature".
+  AC-6:
+    tests:
+      - program_status::tests::ac8_the_module_is_declared_without_a_gui_gate
+      - program_status::tests::ac8_the_module_uses_only_always_built_crates
+      - program_status::tests::ac8_allowlist_ac1_violations_are_returned_in_source_order
+      - program_status::tests::ac8_allowlist_ac1_one_offending_line_may_yield_more_than_one_violation
+      - program_status::tests::ac8_allowlist_ac2_allowed_sources_return_no_violation
+      - program_status::tests::ac8_allowlist_ac2_the_path_end_and_surrounding_text_are_allowed
+      - program_status::tests::ac8_allowlist_ac3_rejected_project_path_use_lines_return_a_violation
+      - program_status::tests::ac8_allowlist_ac3_an_identifier_continuation_after_the_allowed_path_is_rejected
+      - program_status::tests::ac8_allowlist_ac4_qualified_and_external_root_use_lines_return_a_violation
+      - program_status::tests::ac8_allowlist_ac5_occurrences_outside_use_lines_return_a_violation
+      - program_status::tests::ac8_allowlist_ac5_continuation_lines_of_a_multi_line_use_statement_are_scanned
+      - program_status::tests::ac8_allowlist_ac6_every_violation_states_the_gui_feature_invariant
+      - program_status::tests::ac8_allowlist_ac6_an_external_root_violation_names_the_root_list
+      - program_status::tests::ac8_gaps_ac1_whitespace_variants_of_a_use_line_are_rejected_with_root_winit
+      - program_status::tests::ac8_gaps_ac1_other_unicode_whitespace_separates_the_use_line_keywords
+      - program_status::tests::ac8_gaps_ac1_a_field_whose_name_begins_with_use_is_not_a_use_line
+      - program_status::tests::ac8_gaps_ac1_whitespace_variants_with_an_allowed_root_are_allowed
+      - program_status::tests::ac8_gaps_ac2_a_bare_use_line_takes_its_root_from_the_next_non_blank_line
+      - program_status::tests::ac8_gaps_ac2_a_bare_use_violation_is_reported_at_its_root_line_in_source_order
+      - program_status::tests::ac8_gaps_ac2_a_bare_use_line_with_an_allowed_root_ends_at_its_root_line
+      - program_status::tests::ac8_gaps_ac3_a_leading_attribute_does_not_hide_a_use_line
+      - program_status::tests::ac8_gaps_ac3_attributes_without_a_use_statement_are_allowed
+      - program_status::tests::ac8_gaps_ac3_an_attributed_use_line_with_an_allowed_root_is_allowed
+      - program_status::tests::ac8_gaps_ac4_a_character_outside_the_terminator_set_after_the_allowed_path_is_rejected
+      - program_status::tests::ac8_gaps_ac4_the_terminator_set_after_the_allowed_path_is_allowed
+      - program_status::tests::ac8_gaps_ac5_every_violation_for_a_closed_form_names_the_line_the_allowlist_and_the_invariant
+    red_confirmed: false
+    red_reason: >-
+      The criterion is a regression guard for behavior that pre-existed: a dedicated new module
+      is out of scope, but the existing tests above detect a gui gate on the program_status
+      declaration, a project path or a non-allowlisted use root in program_status.rs, and the
+      allowed and rejected snippets of the two previous ac8 features; they passed in the baseline
+      run and passed again after the change, so no red state occurred for this change.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The outcome is a check of the task's diff; no executable check of it can be made to fail
+      before the change. The search of src-tauri/src, src-tauri/tests, scripts and Makefile for
+      program_status/tests.rs by relative path and by the basename tests.rs found no test that
+      reads this file (the only basename hit that reads a tests.rs, src-tauri/src/mux/upgrade/tests.rs,
+      includes its own tests.rs). After the change the workflow build command (`cargo check`) and
+      test command passed, and the branch diff lists only src-tauri/src/program_status/tests.rs
+      outside this record (no Cargo manifest or lock file, no new dependency).
