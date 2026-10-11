@@ -1,0 +1,66 @@
+schema_version: 2
+feature: program-status-ac8-block-comment-carry-test
+tier: reduced
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 0.99
+    confidence: 0.99
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.01
+      '1': 0.99
+      '2': 0.0
+      '3': 0.0
+  observed_at: '2026-10-11T23:00:21+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.0
+    confidence: 0.98
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.01
+      '1': 0.98
+      '2': 0.01
+      '3': 0.0
+  observed_at: '2026-10-11T23:00:21+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/program_status/tests.rs
+  - test-docs/program-status-ac8-attribute-comments/task0001.tests.yaml
+  changed_lines_approx: 20
+  new_functions_needed: 2
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: false
+  spillover_modules: []
+  work_still_required: true
+  work_still_required_evidence: 静的確認では作業が必要。tests.rs:1656–1660 は block_comment を次行へ持ち越している。2512行の既存テストは
+    use が3行目に独立しているため、持ち越しを失って2行目の先頭 ] で属性が閉じても winit 違反になる。2580行の末尾検査も、2行目に括弧や引用符がなく、持ち越しの有無を判別できない。閉じ行の
+    use を検査する行またぎケースと、継続するブロックコメント内の引用符を検査するケースは存在しない。tests.yaml の AC-3 red_reason
+    と task0001.md:132–133 は既存テストが持ち越し欠落を検出すると記載している。数量は既存の7行程度のテスト形式で2関数を追加し、既存ヘルパーを再利用して
+    YAML を更新する場合の概算。変異版の実行確認とファイル変更は行っていない
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 2
+  body_change_kind: new_logic
+  change_containment: single_module
+  caller_and_dependency_count: 1
+  changes_external_contract: false
+  changes_behavior: false
+decided_at: '2026-10-11T23:00:21+09:00'
