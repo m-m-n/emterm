@@ -120,7 +120,8 @@ workflow:
   excluded_scenarios: []
   summary: build x2 ok (gui / --no-default-features); cargo test --lib 4809 passed 0 failed 3 ignored; TS-1..TS-6 pass; TS-7 diff scope = src-tauri/src/program_status/tests.rs only; SC-4 review residual_critical_high 0
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: 046481b5ecc2d11c8301fe3bd47e3cec3c39c86a
 tasks:
   task0001:
     title: Recognize the remaining use-line forms in the ac8 allowlist checker
