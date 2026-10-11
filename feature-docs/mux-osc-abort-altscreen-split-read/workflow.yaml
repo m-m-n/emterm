@@ -124,7 +124,8 @@ workflow:
   completed_at_commit: 35e75b5258bf5d0316ebab8d6e09839c29e0315e
   base_commit: 1e3b4a657a10bddb0031b0c284f006d7ba29bb21
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 19d0fa7174f6c128f4788268451718c4f5fd7d29
 - id: verify
   status: pending
 - id: retrospect
@@ -178,8 +179,15 @@ tasks:
     status: merged
     branch: em-workflow/mux-osc-abort-altscreen-split-read/task0002
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive

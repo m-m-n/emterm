@@ -1,0 +1,116 @@
+round: 1
+executed_at: '2026-10-11T11:43:07+09:00'
+scope:
+  review_mode: diff
+  base_commit: 1e3b4a657a10bddb0031b0c284f006d7ba29bb21
+  head_commit: 19d0fa7174f6c128f4788268451718c4f5fd7d29
+  changed_files:
+  - src-tauri/src/mux/daemon/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/mod.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/altscreen_split_read.rs
+  - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - test-docs/mux-osc-abort-altscreen-split-read/task0001.tests.yaml
+  - test-docs/mux-osc-abort-altscreen-split-read/task0002.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: failed
+  note: schema-invalid output (extra property in finding)
+- run_id: comprehensive#fallback
+  perspective: comprehensive
+  role: fallback
+  source: claude
+  status: completed
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  model: gpt-6-astra
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: 4aef749bee51a717
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  line: 1688
+  title: AltSpanTracker が RIS (ESC c) を扱わない。client_alt=true / shadow_alt=false の食い違い状態で RIS を受けると client_alt が true のまま残り、以後メイン画面の OSC 133 マークを捨て続ける
+  description: 'AltSpanTracker::scan は ESC c を SwitchMatch::Other として 1 バイト進めるだけで client_alt を変えない。term_core の RIS は TerminalCore::reset で MODE_ALT_SCREEN を外すため通常タブはメイン画面に戻る。食い違い状態（?1047h の後、または K36 形 ESC [?1049h ESC ( ESC [?1049l の後）で RIS を受けると、トラッカーが扱う形の leave が来るまで全読み込みが代替画面扱いになる。差が出るのは RIS の後に報告が来る場合（例: E(1047) → ESC c → OSC 7501 working → OSC 133;A BEL で通常タブは空、mux は working が残る）。変更前に対する退行。'
+  suggestion: scan で designator スロット以外の ESC c を RIS として扱い client_alt=false / shadow_alt=false にして c の直後から live を開く（ESC ( ESC c は RIS にしない）。読み込み境界で割れる場合は resume 分岐で同じ処理をする。tracker corpus と SC-1x デーモン行に RIS の後に報告を置く回帰テストを追加する。
+  reproduction: null
+  reproduction_alternates: []
+  reproduction_overflow: false
+  sources:
+  - claude:comprehensive
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix 対象外（critical/high のみ）。Notion に後続タスクとして起票'
+- stable_id: b019b1bb35b07fc6
+  severity: medium
+  category: security
+  file: src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+  line: 1581
+  title: 指示子スロットの切り替えで client_alt=false / shadow_alt=true に分かれた後、未対応の複合形式 ESC [?1;1049h で代替画面に入っても照合をすり抜け、代替画面上の OSC 133;A がライブとして渡る
+  description: ESC ( ESC [?1049h の後 client_alt=false / shadow_alt=true。続く ESC [?1;1049h ESC ] 133;A BEL ではパーサーの照合が一致しフォールバックに入らず spans=[0..18] となり PromptStart が出て working が消える。通常タブは代替画面上のマークとして抑止する。SPEC A3（未対応の形は従来のフォールバック）に反する。信頼境界は越えないため脆弱性ではなく一致崩れの不具合と評価。
+  suggestion: 食い違い状態では ALT_SCREEN_TOGGLES に無いが引数列に 47/1047/1049 を含む DEC private mode set/reset を検出し、A3 の保守的フォールバックを返してパーサー状態を adopt する。RIS の修正とまとめる。回帰テストを 2 つ追加する。
+  reproduction: 既存のdaemon/tests.rsのdrive_readsでseed_root_workingを指定し、b"\x1b(\x1b[?1049h"とb"\x1b[?1;1049h\x1b]133;A\x07"を別々のPTY読み取りとして渡す。最初の読み取り後はclient_alt=false、shadow_alt=trueとなり、次の読み取りではadvanceが全18バイトを有効範囲として返す。OSC 133;AがPromptStartになり、workingレコードが消去される。
+  reproduction_alternates: []
+  reproduction_overflow: false
+  sources:
+  - codex:security
+  confidence: 75
+  resolution: unresolved
+  resolution_reason: 'medium: auto-fix 対象外（critical/high のみ）。Notion に後続タスクとして起票'
+evaluation:
+  round_summary: Round 1 (diff, cross_validation=true)。指摘は medium の 2 件で、どちらも AltSpanTracker の同じ弱点（client_alt と shadow_alt が食い違う状態で client 側だけの未対応切り替えをパーサー照合で検知できない）から来ている。1 件目は RIS（comprehensive#fallback、スキーマ不正で不採用の comprehensive#0 も独立に同指摘）、2 件目は複合形式 ESC [?1;1049h（security#0、評価者がコード読みで再現確認）。critical/high なし、dismissed_sites 空、注入の試みなし。architecture・spec は corroborated。tabs/tests/output_pipeline.rs と test-docs は評価者の読み込み予算外で未読。
+  recommended_action: auto_fix
+  action_rationale: medium 2 件は同じ原因で修正は write_filter.rs の AltSpanTracker 内にとどまる。critical/high は無い。
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
+  note: vulnerability 観点は未選択（依存マニフェスト変更なし）のため対象 finding なし
