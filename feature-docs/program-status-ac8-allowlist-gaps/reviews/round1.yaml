@@ -1,0 +1,78 @@
+round: 1
+executed_at: '2026-10-11T19:48:39+09:00'
+scope:
+  review_mode: diff
+  base_commit: b571caad039f95f928a7c8c2b8ddcba8414316b7
+  head_commit: 07c03a4b95d262406abe1204d076950b96feb88f
+  changed_files:
+  - src-tauri/src/program_status/tests.rs
+  - test-docs/program-status-ac8-allowlist-gaps/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - spec
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  model: gpt-6-astra
+  status: completed
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark-contributor
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings: []
+evaluation:
+  round_summary: 'Round 1 (diff mode, cross_validation=false). All three dispatched
+    reviewer runs (security#0, comprehensive#0, spec#0) completed and returned no
+    findings at medium or above. No injection attempt found. Evaluator''s own reading
+    of SPEC.md, tests.rs, task0001.tests.yaml, program_status.rs, Cargo.toml, tasks/task0001.md
+    agrees: recognizer follows task0001 rules 1-4 (whitespace/Unicode whitespace after
+    use/pub/pub(..), pub(..)use, bare use fail-closed, one leading #[..] attribute);
+    ac8_allowed_path_terminator allows only EOL, ::, ; and , (U+0301, space, '')''
+    rejected per FR5); pre-existing allowlist snippets unchanged; red_reason claims
+    and 4785->4798 test count verified; diff limited to tests.rs, test record, workflow.yaml
+    (NFR1/NFR2). Remaining rare forms not caught (multiple leading attributes, use
+    followed directly by :: or {, '']'' inside string literal in attribute, multi-line
+    attribute) are explicitly Out of Scope in task0001 and not raised. Coverage: security,
+    comprehensive, spec corroborated.'
+  recommended_action: complete
+  action_rationale: No critical, high or medium finding was reported or found, and
+    nothing is left at critical/high. Evaluator confirmed FR1-FR6 and TS-1 to TS-13;
+    remaining checker gaps are explicitly out of scope in the task plan.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: false
+  branch: null
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
