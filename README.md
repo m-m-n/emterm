@@ -51,6 +51,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - `emterm mux script`: start daemon without attaching (for scripted workspace initialization)
   - `emterm mux kill`: gracefully terminate the daemon and all PTY sessions via IPC
   - Agent status: panes report AI-agent state (idle/working/blocked/done) via OSC 777 or `emterm agent-status`; shown as emoji badges (working ⚡, idle 💤, blocked ❓/❔, done ✅/💤) on tab/window badges and as OS notifications; badges auto-clear if the shell returns to its prompt without an explicit done/clear report (e.g. after Ctrl+C)
+  - Program Status Protocol (OSC 7501): agents that implement draft 0.3 are shown on the same badges and notifications without an eMterm-specific hook, including a new `error` state; the status bar template variable `{agent_status}` shows the active tab's state
   - Agent notification toggles in Settings > Agent: independent turn-end (done) and question-waiting (blocked) notification switches, plus a visible-pane switch (notify even for the focused window's active tab), all default on
   - `next-agent-window` (`prefix+Ctrl+A` by default) cycles the active mux window through only the windows with a reported agent status, skipping the rest
   - Agent-facing API: `emterm mux read` / `emterm mux send` / `emterm mux wait` let one pane read, write to, and wait on another pane's state
@@ -389,6 +390,7 @@ eMterm supports the following OSC (Operating System Command) sequences:
 | 133 | SemanticPrompt | Prompt/command/output zone markers (used for Ctrl+Up/Down jump, output folding) |
 | 777 | eMterm Extension | Inline Markdown rendering, file download, output folding, status bar control |
 | 1337 | iTerm2 Protocol | Inline image display, user variables |
+| 7501 | Program Status | Report agent state (idle/working/blocked/done/error/clear); shown on tab badges, notifications, and the status bar |
 
 ## Markdown Display
 
