@@ -51,6 +51,7 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
   - `emterm mux script`: デーモン起動のみ（アタッチなし）、スクリプトによるワークスペース初期化に使用
   - `emterm mux kill`: IPC経由でデーモンと全PTYセッションをgracefulに終了
   - エージェント状態: 各ペインがOSC 777または`emterm agent-status`でAIエージェントの状態（idle/working/blocked/done）を報告。絵文字バッジ（working ⚡、idle 💤、blocked ❓/❔、done ✅/💤）としてタブ/ウィンドウバッジとOS通知に反映。明示的なdone/clear報告がないままシェルがプロンプトに戻った場合（Ctrl+Cなど）はバッジが自動的にクリアされる
+  - Program Status Protocol（OSC 7501）: draft 0.3 対応エージェントを、eMterm専用のフックなしで同じバッジと通知に反映。新しい`error`状態に対応し、ステータスバーのテンプレート変数`{agent_status}`でアクティブタブの状態を表示
   - 設定 > エージェントカテゴリの通知トグル: ターン終了（done）・質問待ち（blocked）・可視ペイン通知（フォーカス中ウィンドウのアクティブタブでも通知）を個別にON/OFF可能（デフォルトすべてON）
   - `next-agent-window`（デフォルト`prefix+Ctrl+A`）: エージェント状態が報告されているウィンドウのみを順に切り替え
   - エージェント向けAPI: `emterm mux read` / `emterm mux send` / `emterm mux wait` で他のペインの読み取り・書き込み・状態待機が可能
@@ -367,6 +368,7 @@ eMtermがサポートするOSC（Operating System Command）シーケンス一�
 | 133 | SemanticPrompt | プロンプト/コマンド/出力のゾーンマーカー（Ctrl+上/下ジャンプ、出力折りたたみに使用） |
 | 777 | eMterm拡張 | インラインMarkdown描画、ファイルダウンロード、出力折りたたみ、ステータスバー制御 |
 | 1337 | iTerm2プロトコル | インライン画像表示、ユーザー変数 |
+| 7501 | Program Status | エージェント状態の報告（idle/working/blocked/done/error/clear）。タブのバッジ、通知、ステータスバーに表示 |
 
 ## プロジェクト構成
 

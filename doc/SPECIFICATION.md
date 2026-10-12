@@ -84,7 +84,7 @@ Full-featured VT100/VT220/xterm ANSI escape sequence parser implemented as a pur
 - C0 control codes: BEL, BS, HT, LF, VT, FF, CR, SI, SO
 - C1 sequences: ESC, CSI, OSC, DCS, APC, PM
 - CSI sequences: cursor movement (CUU/CUD/CUF/CUB/CUP/HVP), erase (ED/EL), insert/delete (ICH/DCH/IL/DL), scroll (SU/SD), SGR attributes, DECSTBM, DECSET/DECRST (private modes)
-- OSC sequences: OSC 0/2 (window title), OSC 8 (hyperlinks), OSC 52 (clipboard), OSC 133 (semantic prompts), OSC 777 (eMterm extensions)
+- OSC sequences: OSC 0/2 (window title), OSC 8 (hyperlinks), OSC 52 (clipboard), OSC 133 (semantic prompts), OSC 777 (eMterm extensions), OSC 7501 (program status)
 - DCS: SIXEL graphics data stream
 - APC: Kitty Graphics Protocol
 - SGR: 16-color, 256-color, 24-bit RGB, bold, italic, underline (single/double/curly/dashed/dotted), blink, reverse, invisible, strikethrough
@@ -1232,7 +1232,8 @@ Panes report the state of an AI agent running in them via an OSC 777 sequence; e
 - Agent-status OSC is stripped from scrollback/snapshot replay; states resync after reattach via replay-derived updates without firing a notification
 - Tab/window list badges aggregate per-pane state with priority: blocked > unseen done > working > seen done > idle; each state renders as an emoji badge — working ⚡, idle 💤, blocked ❓ (unseen) / ❔ (seen), done ✅ (unseen) / 💤 (seen, same badge as idle) — falling back to a plain circle indicator if the emoji texture fails to load
 - Badge auto-clear: if a pane's shell returns to an interactive prompt (detected via an OSC 133 command-end mark followed by a prompt-start mark) after a status was set without an explicit `clear`/`done` report, the badge clears automatically; applies to both plain tabs and mux panes; panes whose shell does not emit OSC 133 do not auto-clear
-- The status bar carries no agent-status summary; badges are the only always-visible surface
+- Badge auto-clear and OSC 7501 record expiry consider only live, main-screen OSC 133 marks; marks emitted on the alternate screen are ignored
+- The status bar carries no agent-status summary by default; the `{agent_status}` template variable can show the active tab's aggregate state
 - OS notification on real transitions to blocked/done; suppressed for same-state re-reports, name-only changes, and replay; rate-limited; gated by a dedicated agent-notification setting (default on) plus the global notification setting
 - Notifications for a visible pane (the focused window's active tab) fire by default (`agent_notify_visible_pane`, default on); turning it off restores suppression for visible panes while non-visible panes are unaffected
 - Settings > Agent category holds independent per-event notification toggles (`agent_notify_on_done`, `agent_notify_on_blocked`) and the visible-pane toggle (`agent_notify_visible_pane`), all default on; existing `settings.json` files without these keys deserialize with the defaults
@@ -1251,6 +1252,29 @@ emterm mux send --pane <id|current> (--text <text> | --stdin)
 emterm mux wait --pane <id|current> --state <state[,state...]> [--timeout <sec>] [--after <revision>]
   # Waits for a pane to reach one of the given states (level-triggered)
 ```
+
+---
+
+#### Program Status Protocol (OSC 7501)
+
+Panes also report agent state via OSC 7501 (Program Status Protocol draft 0.3), so agents that implement the protocol are shown without any eMterm-specific hook. The OSC 7501 state is composed with the OSC 777 state per pane; OSC 777 behavior is unchanged.
+
+**Key Functionality:**
+- Sequence: `OSC 7501 ; <body> BEL|ST`; the body is `key=value` pairs joined by `:` (key `[a-z]+`, value `[A-Za-z0-9_.,+/=-]*`). Malformed pairs are skipped, unknown keys ignored, duplicate keys resolved last-wins
+- State values: `idle`, `working`, `done`, `blocked`, `error`, `clear`. A non-clear report fully replaces the record of its `id`; `clear` removes the record and its descendants, or all records when no `id` is given
+- Optional keys: `id` (hierarchical, segments `[A-Za-z0-9_.+-]{1,32}`, up to 8 levels, 128 bytes), `kind` (`permission|question|auth`, kept only for `blocked`), `progress` (0-100, kept only for `working`/`blocked`), `app`, `title` and `msg` (base64 UTF-8). A record without `app` inherits the nearest ancestor's `app`. `kind`, `progress` and `msg` are parsed but not displayed
+- Discard rules: reports over 4096 bytes, `title` over 256 encoded / 192 decoded bytes, `msg` over 2732 encoded / 2048 decoded bytes, invalid base64, non-UTF-8 or control characters in decoded text are rejected as a whole. Missing/unknown `state` or invalid `id` is ignored
+- Up to 256 records per tab or mux pane; the least recently updated record is evicted first
+- Lifetime: a live, main-screen OSC 133 `A` removes `working`/`blocked`/`idle` records; `done` and `error` remain until `clear`, RIS, or tab/pane close. RIS removes all records; DECSTR and alternate-screen switches keep them
+- Query: `OSC 7501 ; ? ST` is answered with `OSC 7501 ; ?` using the same terminator; queries do not change records
+- Composition: the pane state shown by badges, the mux sidebar, notifications, the status bar and the mux agent API is the OSC 777 state composed with the aggregate of all OSC 7501 records
+- New `error` state: unseen/seen handling follows `done`; aggregate priority is blocked > unseen error > unseen done > working > seen error > seen done > idle; badge uses U+274C (unseen) or the idle badge (seen) with the md3 error color
+- Notifications fire on transitions to blocked/done/error; `error` is controlled by `agent_notify_on_done` (no new setting). The notification name is the sanitized `title` of the deciding record (control and invisible characters removed, truncated to 80 characters), else the inherited `app`, else the OSC 777 name, else the default name
+- Status bar template variable `{agent_status}`: the active tab's aggregate state word (`idle|working|blocked|done|error`), empty when no state; not part of the default templates
+- Mux: the daemon parses OSC 7501 in the same ordered feed as OSC 777 and OSC 133 and keeps records regardless of GUI connection; OSC 7501 reports and queries are stripped from scrollback/snapshot replay (resync via replay-derived updates without notification); the GUI discards OSC 7501 found in mux inner content; the daemon clears a pane's records on RIS
+- `emterm mux wait` accepts `error`; `WaitAgentState` targets the composed pane state; no API for querying OSC 7501 records is provided
+- mux daemon hot-upgrade hands off every pane's OSC 7501 records and their update order
+- The parser and record table do not depend on the `gui` feature and build under `--no-default-features`
 
 ---
 
@@ -1492,7 +1516,7 @@ A configurable status bar displayed at the bottom of the application window, out
 - Three-layer structure: OSC layer, Application line 1, Application line 2 — each hidden when its resolved content is empty
 - Each layer has left and right sections; maximum 3 lines total
 - When all three layers are empty, the status-bar panel occupies zero height and the terminal grid regains the full height
-- Template variables: `{time}`, `{cwd}`, `{git_branch}`, `{cmd:name}`
+- Template variables: `{time}`, `{cwd}`, `{git_branch}`, `{cmd:name}`, `{agent_status}`
 - Default display: Application line 1 left = `{time}`, right = `{cwd}`
 - Custom commands: user-defined executables with `interval_ms` refresh rate, referenced as `{cmd:name}`
 - Git branch color: clean (green), dirty (yellow), untracked only (dim)
