@@ -1,0 +1,60 @@
+schema_version: 2
+feature: pty-reattach-timeout-investigation
+tier: minimal
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 0.22
+    confidence: 0.79
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.82
+      '1': 0.15
+      '2': 0.03
+      '3': 0.0
+  observed_at: '2026-10-27T23:42:56+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 0.21
+    confidence: 0.8
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.85
+      '1': 0.1
+      '2': 0.05
+      '3': 0.0
+  observed_at: '2026-10-27T23:42:56+09:00'
+pre_survey_estimate:
+  files_expected: []
+  changed_lines_approx: 0
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  test_change_kind: none
+  added_test_cases_approx: 0
+  body_change_kind: wording_or_rule_addition
+  change_containment: single_function
+  caller_and_dependency_count: 0
+  changes_external_contract: false
+  changes_behavior: false
+  evidence: コード変更は調査範囲外。対象は最初の停止解除後に次の停止を設定し、到着を5秒待つ（src-tauri/src/mux/ipc/pty_spawn/tests.rs:5137、:5142、:5144）。停止処理は設定を取り出して消費し、未設定なら通過する（src-tauri/src/mux/session/pane/output_capture.rs:414）。同じ順序による停止点の取り逃がしとタイムアウトは別テストで記録・修正済み（src-tauri/src/mux/ipc/pty_spawn/tests.rs:1885）。対象の失敗・成功記録はあるが、負荷と待ち合わせ設計の切り分け結果は確認できない（test-docs/test-notify-dbus-isolation/task0001.tests.yaml:2、test-docs/test-notify-dbus-isolation/task0002.tests.yaml:2）。
+decided_at: '2026-10-27T23:42:56+09:00'
