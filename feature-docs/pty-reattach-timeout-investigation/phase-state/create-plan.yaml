@@ -1,7 +1,7 @@
 schema_version: 1
 feature: pty-reattach-timeout-investigation
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 mode: batch
 base_revision: b8396933b69e8ee8e3b05c2c2c4df9e83ae247e6
