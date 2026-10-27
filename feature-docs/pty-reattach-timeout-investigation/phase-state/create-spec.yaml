@@ -1,18 +1,54 @@
 schema_version: 1
 feature: pty-reattach-timeout-investigation
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: 1d1a4c3fc1207ccbb089f815ded4ee4de15ff7e1
+base_revision: 86072c9628d8db7bb1f2bb841350fd69e789fb0a
 last_input_digest: sha256:2c2a5aef433d8e5294e7a7eb54a6e0ba6b63b177a5ddd147f1101abcf2acaca9
-active_request_id: create-spec-run-0001
+active_request_id: null
 packets: {}
-answers: {}
+answers:
+  assumption.a1:
+    packet_id: null
+    answered_at: '2026-10-27T23:46:41+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: 「コードは変更しない」は、計測のための一時的な計装（ログ追加など）も含めて、追跡ファイルを一切変更しないことを意味する。計測は既存のテストを無変更のまま実行し、テストの出力と外部からの計時で行う。
+    normalized_answer: 「コードは変更しない」は、計測のための一時的な計装（ログ追加など）も含めて、追跡ファイルを一切変更しないことを意味する。計測は既存のテストを無変更のまま実行し、テストの出力と外部からの計時で行う。
+  assumption.a2:
+    packet_id: null
+    answered_at: '2026-10-27T23:46:41+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: 条件ごとの実行回数は、間欠的な失敗の有無を区別できる回数にする（目安として単体 20 回以上、--lib 全体と負荷下は数回以上）。実際の回数は計測記録に明記する。
+    normalized_answer: 条件ごとの実行回数は、間欠的な失敗の有無を区別できる回数にする（目安として単体 20 回以上、--lib 全体と負荷下は数回以上）。実際の回数は計測記録に明記する。
+  assumption.a3:
+    packet_id: null
+    answered_at: '2026-10-27T23:46:41+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: 「別タスクとして起票」は、この作業の成果物に修正候補として記載することで満たす。外部のタスク管理システムへの実際の登録は、この作業の範囲に含めない。
+    normalized_answer: 「別タスクとして起票」は、この作業の成果物に修正候補として記載することで満たす。外部のタスク管理システムへの実際の登録は、この作業の範囲に含めない。
+  assumption.a4:
+    packet_id: null
+    answered_at: '2026-10-27T23:46:41+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: 対象テストは pty_spawn モジュールのテスト群（`src-tauri/src/mux/ipc/pty_spawn/tests/`
+      配下）にある。このテスト群には、負荷に強くするための先行対応（lib-budget-tests-load-tolerance の task0001 で入ったスレッド
+      CPU 時間の補助関数 `thread_cpu_time.rs`）がある。
+    normalized_answer: 対象テストは pty_spawn モジュールのテスト群（`src-tauri/src/mux/ipc/pty_spawn/tests/`
+      配下）にある。このテスト群には、負荷に強くするための先行対応（lib-budget-tests-load-tolerance の task0001 で入ったスレッド
+      CPU 時間の補助関数 `thread_cpu_time.rs`）がある。
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:2c2a5aef433d8e5294e7a7eb54a6e0ba6b63b177a5ddd147f1101abcf2acaca9
-  output_digest: null
+  output_digest: sha256:b7938cb5be58cd6a0ad1b9e0e0f5424f869577445209df754ff54631beed4c44
   dispatch_digest_inputs:
     CLAUDE.md: sha256:05afe1b23d63c1c48dc84ed05626a2b75917462ef9345d314fc009cf6c948386
     Cargo.toml: sha256:2298e42884286bdb7d80b31bade40fdcbcad1007e7be5f1f069b2880a6aeabfc
@@ -21,7 +57,11 @@ worker_runs:
     src-tauri/Cargo.toml: sha256:3d706f97e6003a3e4a6f4fdf5af2a2eee676c6054568a688d44b762b47bf63c0
     test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
     '{plugins}/em-workflow/references/contracts/analyst-contract.md': sha256:2f4394c4ef60bca84df8001158a691707e200124e264a1fc5e28b38a73dd13e9
-artifacts: []
+  self_write_set: []
+artifacts:
+- path: feature-docs/pty-reattach-timeout-investigation/TASK.md
+  sha256: sha256:8df3075156e9e207942c7cc9f6405c6cdbfb95c9f9302f6952033985ac1f2f69
+  produced_by: orchestrator
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0

@@ -1,0 +1,107 @@
+schema_version: 1
+feature: pty-reattach-timeout-investigation
+created: '2026-10-27'
+base_branch: main
+goal: |
+  # mux::ipc::pty_spawn の visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once が負荷下で読み取りタイムアウトにより失敗することがある
+
+  種別: 調査
+
+  ## 知りたいこと
+  `mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once` の読み取りタイムアウト失敗が、負荷由来の一時的なものか、テスト側のタイムアウト設計の問題か。
+
+  ## なぜ知りたいか
+  `--lib` 全体の実行で間欠的に失敗すると、無関係な変更の検証結果が読めなくなる。
+
+  ## 調査範囲
+  対象: 上記テストと、その待ち合わせ・タイムアウトの設計。対象外: mux 本体の挙動変更。
+
+  ## 完了の定義
+  - 問いに結論が出ている
+  - 根拠が file:line や実測値で示されている
+  - コードは変更しない（直すべき点は別タスクとして起票）
+
+  ## 手がかり
+  - test-notify-dbus-isolation の implement（task0001 の基準計測）で、変更前後とも同じ読み取りタイムアウト失敗が出た
+  - 同じ feature の task0002 の計測では全件成功
+  - 並行ビルドの負荷が原因の可能性
+parent_branch: em-workflow/pty-reattach-timeout-investigation/integration
+tier: minimal
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.82
+      '1': 0.15
+      '2': 0.03
+      '3': 0.0
+    description_plus_code:
+      '0': 0.85
+      '1': 0.1
+      '2': 0.05
+      '3': 0.0
+  at: '2026-10-27T23:42:56+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - IMPLEMENTATION.md
+  - design step
+  - SPEC.md (replaced by TASK.md)
+  - task split
+  - VERIFICATION.md
+  - task-level parallelism
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - TASK.md
+  status: completed
+  completed_at_commit: 86072c9628d8db7bb1f2bb841350fd69e789fb0a
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: tier minimal subtracts the design step; no UI deliverable in this investigation task
+- id: create-plan
+  artifacts:
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: 1f1af98f90a2c2573c2f746cb5ef649f4ed52e9c
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements: {}
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
