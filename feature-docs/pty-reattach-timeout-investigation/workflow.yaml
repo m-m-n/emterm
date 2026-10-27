@@ -88,7 +88,18 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: reattach カラー照会テストの読み取りタイムアウト調査
+    plan: TASK.md
+    files:
+    - feature-docs/pty-reattach-timeout-investigation/INVESTIGATION.md
+    skills: []
+    domains:
+    - concurrency
+    complexity: medium
+    requirements: []
+    status: pending
 review:
   status: pending
   rounds_completed: 0
