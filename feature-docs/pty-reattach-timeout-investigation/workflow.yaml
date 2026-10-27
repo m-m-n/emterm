@@ -100,7 +100,7 @@ tasks:
     - concurrency
     complexity: medium
     requirements: []
-    status: in_progress
+    status: failed
     branch: em-workflow/pty-reattach-timeout-investigation/task0001
     notes: 'batch retry consumed: 1 (prior run stopped via TaskStop at 2026-10-28T00:12:45+09:00; retried on kept worktree)'
 review:
