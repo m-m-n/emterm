@@ -84,7 +84,7 @@ workflow:
   completed_at_commit: 443d85e1b1c92825048894204135dd296e64d939
   base_commit: 1f1af98f90a2c2573c2f746cb5ef649f4ed52e9c
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -106,9 +106,18 @@ tasks:
     branch: em-workflow/pty-reattach-timeout-investigation/task0001
     notes: 'batch retry consumed: 1 (prior run stopped via TaskStop at 2026-10-28T00:12:45+09:00; retried on kept worktree); batch retry granted: 1 on resume 2026-10-29T00:23:08+09:00 after human cleared implement failed status following the implementer cwd fix (Codex-consulted, see phase-state/batch-audit.yaml); a further failure aborts implement'
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    discretionary: []
+    cross_validation: false
+    skipped:
+    - perspective: spec
+      reason: spec_available false (tier minimal, no SPEC.md)
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
