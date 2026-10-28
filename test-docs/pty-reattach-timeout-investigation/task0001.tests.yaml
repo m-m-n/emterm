@@ -1,0 +1,86 @@
+task_id: task0001
+# Baseline run before any edit (src-tauri --lib, project test command): 4828 passed, 0 failed,
+# 3 ignored. This task changes no file under src-tauri/ or crates/.
+baseline_failures: []
+# Actually re-executed after INVESTIGATION.md and this record were written (src-tauri --lib,
+# project test command), three times in a row: the first two runs each failed one or two
+# timing-dependent tests that this task does not touch (run 1: 4827 passed, 1 failed,
+# strip_open_string_body_closure::open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal,
+# a 10 s wall-time budget test that took 10.3 s while the machine was loaded; run 2: 4826 passed,
+# 2 failed, the same test plus
+# mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master);
+# run 3: 4828 passed, 0 failed, 3 ignored. No file under src-tauri/ or crates/ changed, and no
+# test reads the two added files, so those failures are load-dependent flakiness, not a
+# regression from this task (INVESTIGATION.md section 5 lists the same
+# from_restored_pane_can_write_and_read_through_its_adopted_master flake in 11 of 51 runs).
+final_failures: []
+# TASK.md has no numbered criteria; AC-1..AC-5 follow the order of its Expected Result bullets
+# (AC-1 conclusion, AC-2 wait-point list, AC-3 run counts, AC-4 follow-up candidates, AC-5 no
+# diff under src-tauri/ and crates/), and TM-1 is its TM-1 line.
+#
+# Existing-test search for every entry below: no test reads or names the changed files. A
+# search of src-tauri/, crates/ and scripts/ by the path
+# feature-docs/pty-reattach-timeout-investigation/INVESTIGATION.md, by the basename
+# INVESTIGATION.md, and by the feature name pty-reattach-timeout-investigation found no
+# reference outside feature-docs/ and test-docs/, and no test enumerates feature-docs/ (the
+# document-contract tests in src-tauri/src name individual files of other features). The
+# deliverable is a prose document, so no new Rust or TypeScript test was added (a Rust test would
+# also violate AC-5).
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists for the conclusion; it is a judgement. Verification was reading
+      the document against the sources: the cited lines in
+      src-tauri/src/mux/ipc/pty_spawn/tests.rs (5121-5153),
+      src-tauri/src/mux/session/pane/output_capture.rs (399-419) and
+      src-tauri/src/mux/ipc/pty_spawn/mod.rs (610) were re-read, and the measured values quoted
+      in the document come from the retained per-run logs (3 failures of the target test in 51
+      full --lib runs, all at tests.rs:5145:10, 5.087 s and 5.081 s where elapsed time was
+      printed). No red state occurred because the document did not exist before this task.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the wait-point table was checked by reading each cited line
+      (the two 5 s recv_timeout calls at tests.rs:5126-5128 and 5143-5145 are the only timeouts
+      in the test, the other waits are unbounded awaits, a join and the hook's release.recv).
+      No red state occurred because the document did not exist before this task.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the counts are the recorded results of the runs themselves:
+      30 single runs through cargo (30 passed), 21 full --lib runs through cargo (1 failure of
+      the target test), 30 full --lib runs of the same test binary with --report-time (2
+      failures of the target test). The counts in the document were compared with the per-run
+      index files kept in the untracked tmp/runs/ directory of the worktree. No red state
+      occurred because the document did not exist before this task.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the follow-up candidates (re-arm order in two tests, a second
+      flaky test, optional PauseHook hardening) were checked against the cited lines and against
+      the sibling tests that already arm before releasing. No red state occurred because the
+      document did not exist before this task.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The criterion is "git diff -- src-tauri crates is empty before and after the work". The
+      command printed nothing before the first edit and prints nothing after the last edit
+      (checked with git diff --stat -- src-tauri crates, and git status shows only the two
+      added files). It passed in the starting state, so no failing run was observed; this is an
+      invariant guard rather than a red-to-green criterion.
+  TM-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The check is a search of INVESTIGATION.md for absolute paths under the home directory
+      (a grep for the Linux home, macOS Users and root directory prefixes), which finds none. It passed on the first version of
+      the document and again after the final edit. No failing run of the check was observed
+      against the document; the raw cargo logs kept in tmp/runs/ do contain such a path (the
+      Compiling line), which is why command output was summarised or rewritten before being
+      written.
