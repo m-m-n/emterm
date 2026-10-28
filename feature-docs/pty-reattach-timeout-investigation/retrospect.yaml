@@ -1,0 +1,40 @@
+feature: pty-reattach-timeout-investigation
+collected_at: "2026-10-29T01:49:27+09:00"
+session_ids: [01a18369-bc9a-7318-9a6f-37ed9f8cbe90.jsonl]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: minimal
+    rationale: "description_plus_code の最終読みで bucket 0 が 0.85（score 0.21, confidence 0.8）。コード変更を伴わない調査タスクとして minimal を採用"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 0.22, confidence: 0.79, probabilities: {'0': 0.82, '1': 0.15, '2': 0.03, '3': 0.0}}
+        observed_at: "2026-10-27T23:42:56+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 0.21, confidence: 0.8, probabilities: {'0': 0.85, '1': 0.1, '2': 0.05, '3': 0.0}}
+        observed_at: "2026-10-27T23:42:56+09:00"
+    pre_survey_estimate:
+      files_expected: []
+      changed_lines_approx: 0
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+      test_change_kind: none
+      added_test_cases_approx: 0
+      body_change_kind: wording_or_rule_addition
+      change_containment: single_function
+      caller_and_dependency_count: 0
+      changes_external_contract: false
+      changes_behavior: false
+follow_up_drafts: []
+lessons_candidates:
+  - "task0001 は implementer が 2 回停止（TaskStop による停止、merged 無しの停止）し、implementer がタスク worktree を作業ディレクトリにしてコマンドを実行できない問題の修正後の 3 回目で merged に到達した"
+  - "TASK.md の計測条件から CPU 負荷を同時にかけた実行を外す修正が、途中でユーザー指示により入った"
