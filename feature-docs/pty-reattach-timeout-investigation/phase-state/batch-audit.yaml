@@ -10,3 +10,12 @@ records:
     freeform: "grant one additional retry of task0001 on the kept worktree"
     normalized_answer: "retry task0001 once more on the kept worktree; a further failure aborts implement with failed_kind decision"
     resolution_note: "gate: implement.failed-task on resume entry; task0001 already carried 'batch retry consumed: 1'; implement status had been cleared from failed to pending by a human after the implementer cwd gap was fixed in em-workflow 0.3.92; options: (A) grant one retry for this re-entry, (B) abort immediately per the retry-consumed marker; chosen: A; not chosen: B; key points: the human reset plus the note that the kept worktree and branch can be reused express intent to retry, the retry stays bounded to one, the consumed history is kept; codex_consulted: true (chose A); opus_escalation: not run"
+  - question_id: verify.test-command-preexisting-failure
+    packet_id: null
+    answered_at: "2026-10-29T01:36:52+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "record verify as pass and keep the test-command failure on record"
+    normalized_answer: "verify result pass; the one --lib failure is the pre-existing flake recorded in INVESTIGATION.md section 5 and follow-up candidate 2"
+    resolution_note: "gate: verify pass/fail judgement when the project test command failed 1 of 4828 (mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master, pane/tests.rs:3284) on a branch with no src-tauri/crates diff; options: (A) pass with the failure noted, (B) fail and rework implement, (C) re-run once and pass only if green; chosen: A; not chosen: B, C; key points: the TASK.md Expected Result is met, the branch changes documents only, the same test failed 11 of 51 runs in the investigation and is follow-up candidate 2, rework cannot fix it because the task forbids code changes, a green re-run would not remove the flake; codex_consulted: true (chose A); opus_escalation: not run"
