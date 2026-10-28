@@ -1,0 +1,12 @@
+schema_version: 1
+feature: pty-reattach-timeout-investigation
+records:
+  - question_id: implement.failed-task
+    packet_id: null
+    answered_at: "2026-10-29T00:23:08+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "grant one additional retry of task0001 on the kept worktree"
+    normalized_answer: "retry task0001 once more on the kept worktree; a further failure aborts implement with failed_kind decision"
+    resolution_note: "gate: implement.failed-task on resume entry; task0001 already carried 'batch retry consumed: 1'; implement status had been cleared from failed to pending by a human after the implementer cwd gap was fixed in em-workflow 0.3.92; options: (A) grant one retry for this re-entry, (B) abort immediately per the retry-consumed marker; chosen: A; not chosen: B; key points: the human reset plus the note that the kept worktree and branch can be reused express intent to retry, the retry stays bounded to one, the consumed history is kept; codex_consulted: true (chose A); opus_escalation: not run"
