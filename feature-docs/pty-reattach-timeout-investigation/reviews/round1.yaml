@@ -1,0 +1,63 @@
+round: 1
+executed_at: "2026-10-29T01:30:14+09:00"
+scope:
+  review_mode: diff
+  base_commit: 1f1af98f90a2c2573c2f746cb5ef649f4ed52e9c
+  head_commit: bb06f3784966b6aaed2d68f110281bbd27042bfd
+  changed_files:
+  - test-docs/pty-reattach-timeout-investigation/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance]
+  discretionary: []
+  cross_validation: false
+  skipped:
+  - perspective: spec
+    reason: spec_available false (tier minimal, no SPEC.md)
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    Round 1, diff mode. The only changed file is the new task0001 test record for a docs-only
+    investigation task. All three runs returned no findings and no reviewer output looked like
+    an injection attempt. The evaluator read the record against TASK.md, INVESTIGATION.md and
+    the cited source lines: the AC-1..AC-5 / TM-1 mapping matches TASK.md, the two 5 s
+    recv_timeout calls are at tests.rs:5127 and 5144 (panic site 5145:10), P2 hit() is at
+    pty_spawn/mod.rs:610, PauseHook arm/hit at output_capture.rs:399-419, and the 10_000
+    argument to collect_reattach_data is probe_capacity rather than a timeout. Run counts agree
+    with INVESTIGATION.md section 5 (51 full --lib runs, 3 failures, 5.087 s / 5.081 s, 11 of 51
+    for the from_restored_pane flake). Both cited flaky test names exist. No absolute
+    home-directory path is present, so TM-1 holds. tests: [] with red_confirmed: false matches
+    sibling docs-only records. One low-severity nit not carried: the baseline comment names one
+    flaky test with a partial module path and the other with a full path; it is a YAML comment
+    outside acceptance_tests[].tests. Coverage: comprehensive#0, security#0, performance#0 all
+    corroborated.
+  recommended_action: complete
+  action_rationale: >-
+    No run reported a finding and the evaluator's own reading found no medium-or-higher issue;
+    the remaining low-severity naming nit in a comment does not justify another round or an
+    auto-fix.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-pty-reattach-timeout-investigation-20261028T162957Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
