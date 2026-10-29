@@ -5,12 +5,67 @@ status: in_progress
 generation: 1
 base_revision: faf01f8708279922df26f1d13ff3b1f2db083209
 last_input_digest: sha256:7062040d916a8d196c29da698c61119340b13478d9bc99af4f861339a37c08cd
-active_request_id: create-spec-run-0001
+active_request_id: null
 packets: {}
-answers: {}
+answers:
+  assumption.a1:
+    packet_id: null
+    answered_at: '2026-10-29T09:08:59+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: 成果物は feature-docs/restored-pane-read-flake-investigation/INVESTIGATION.md
+      の 1 文書とし、pty-reattach-timeout-investigation の INVESTIGATION.md と同じ構成にする。
+    normalized_answer: 成果物は feature-docs/restored-pane-read-flake-investigation/INVESTIGATION.md
+      の 1 文書とし、pty-reattach-timeout-investigation の INVESTIGATION.md と同じ構成にする。
+  assumption.a2:
+    packet_id: null
+    answered_at: '2026-10-29T09:08:59+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: '「コードは変更しない」は、計測のための一時的な計装も含めて追跡ファイルを一切変更しないことを意味する。追加の観測はリポジトリ外の一時的な再現プログラムで行い、対象テストでの観測と区別して記録する（Codex
+      相談で選択肢 A を採用。選ばなかった選択肢 B: 一時編集を戻して記録）。'
+    normalized_answer: '「コードは変更しない」は、計測のための一時的な計装も含めて追跡ファイルを一切変更しないことを意味する。追加の観測はリポジトリ外の一時的な再現プログラムで行い、対象テストでの観測と区別して記録する（Codex
+      相談で選択肢 A を採用。選ばなかった選択肢 B: 一時編集を戻して記録）。'
+  assumption.a3:
+    packet_id: null
+    answered_at: '2026-10-29T09:08:59+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: 「別タスクとして起票」は、この作業の成果物に修正候補として記載することで満たす。外部のタスク管理システムへの登録はオーケストレーターが行い、この作業の範囲に含めない。
+    normalized_answer: 「別タスクとして起票」は、この作業の成果物に修正候補として記載することで満たす。外部のタスク管理システムへの登録はオーケストレーターが行い、この作業の範囲に含めない。
+  assumption.a4:
+    packet_id: null
+    answered_at: '2026-10-29T09:08:59+09:00'
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: '実行回数は単体 20 回以上、--lib 全体 10 回以上とし、テストバイナリの直接実行を許す。既存の 51 回中 11 回の結果は分けて引用し、成功だけを根拠に原因候補を否定しない（Codex
+      相談で選択肢 B を採用。選ばなかった選択肢 A: 全体 30 回以上 + 単体 30 回以上）。'
+    normalized_answer: '実行回数は単体 20 回以上、--lib 全体 10 回以上とし、テストバイナリの直接実行を許す。既存の 51 回中
+      11 回の結果は分けて引用し、成功だけを根拠に原因候補を否定しない（Codex 相談で選択肢 B を採用。選ばなかった選択肢 A: 全体 30 回以上
+      + 単体 30 回以上）。'
+  assumption.a5:
+    packet_id: null
+    answered_at: '2026-10-29T09:08:59+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: '調査は Linux に限る（対象テストは #[cfg(unix)]）。'
+    normalized_answer: '調査は Linux に限る（対象テストは #[cfg(unix)]）。'
+  assumption.a6:
+    packet_id: null
+    answered_at: '2026-10-29T09:08:59+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: INVESTIGATION.md は前回と同じく英語で書く。
+    normalized_answer: INVESTIGATION.md は前回と同じく英語で書く。
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:7062040d916a8d196c29da698c61119340b13478d9bc99af4f861339a37c08cd
   output_digest: null
   dispatch_digest_inputs:
@@ -22,7 +77,10 @@ worker_runs:
     test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
     '{plugins}/em-workflow/references/contracts/analyst-contract.md': sha256:2f4394c4ef60bca84df8001158a691707e200124e264a1fc5e28b38a73dd13e9
   self_write_set: []
-artifacts: []
+artifacts:
+- path: feature-docs/restored-pane-read-flake-investigation/TASK.md
+  sha256: sha256:626cb8de33a9557d5e260a4a051ea191f86b54f0fffa6092b43a7201e8836336
+  produced_by: orchestrator
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
