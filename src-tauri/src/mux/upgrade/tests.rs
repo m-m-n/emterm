@@ -39,9 +39,9 @@ fn has_cloexec(fd: RawFd) -> bool {
 /// asserting a descriptor was closed stays correct even when `cargo
 /// test`'s parallel threads — sharing one process-wide fd table — hand
 /// that freed NUMBER to an unrelated descriptor from a concurrently
-/// running test before the assertion runs (mirrors
-/// `inherited_pty.rs::tests::stat_rdev`'s identical rationale, adapted to
-/// regular files via device+inode identity instead of a device's rdev).
+/// running test before the assertion runs: a regular file's identity is its
+/// device and inode, so a descriptor that reuses the freed number can only
+/// refer to a different file.
 fn stat_dev_ino(fd: RawFd) -> Option<(u64, u64)> {
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     let rc = unsafe { libc::fstat(fd, &mut st) };
