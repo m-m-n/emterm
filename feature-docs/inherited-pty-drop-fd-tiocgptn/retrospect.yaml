@@ -1,0 +1,31 @@
+feature: inherited-pty-drop-fd-tiocgptn
+collected_at: "2026-10-30T00:51:30+09:00"
+session_ids: [01a1885a-f0f8-759a-8d65-7a4675d4c380]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code の最終読みでバケット 1 が 0.76（confidence 0.76）となり、評価器の閾値規則で full に決まった"
+    bases:
+      - basis: description_only
+        score: {type: score, score: 1.15, confidence: 0.83, probabilities: {'0': 0.01, '1': 0.84, '2': 0.14, '3': 0.01}}
+        observed_at: "2026-10-30T00:05:00+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 1.24, confidence: 0.76, probabilities: {'0': 0.0, '1': 0.76, '2': 0.24, '3': 0.0}}
+        observed_at: "2026-10-30T00:09:30+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/mux/inherited_pty.rs
+        - src-tauri/src/mux/upgrade/tests.rs
+      changed_lines_approx: 75
+      work_still_required: true
+      change_containment: multiple_modules
+      changes_external_contract: false
+      changes_behavior: false
+follow_up_drafts: []
+lessons_candidates: []

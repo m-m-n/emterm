@@ -100,7 +100,8 @@ workflow:
   failed_items: []
   completed_at_commit: 2237352b1a07a86597cf2854054eb61236445143
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: 30f1da8f78c25b7fd8b73662fc340bb08a5081b6
 tasks:
   task0001:
     title: Replace the st_rdev closure check with a TIOCGPTN pts-number check
