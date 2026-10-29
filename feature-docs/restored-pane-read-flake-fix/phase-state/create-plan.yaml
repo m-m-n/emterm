@@ -1,11 +1,11 @@
 schema_version: 1
 feature: restored-pane-read-flake-fix
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
-base_revision: 039181e56a430d1714cbf0a5d09996daf888c3f9
+base_revision: 2585166979a9aafb27fd350c44e616bc1d163123
 last_input_digest: sha256:5ead7646489e18786119c3b36ca86f2c60d37090a17cbbaffce0d7a46031f18b
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -49,7 +49,7 @@ artifacts:
   produced_by: create-plan-run-0001
 patches:
 - patch_id: create-plan-p0001
-  status: validated
+  status: applied
   base_input_digest: sha256:5ead7646489e18786119c3b36ca86f2c60d37090a17cbbaffce0d7a46031f18b
   base_workflow_blob: 2964390b49ada9b8b92c26be02d3416c6cb35a81
 progress_fingerprint: null
