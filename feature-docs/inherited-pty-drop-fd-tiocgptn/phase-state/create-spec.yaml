@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: 910b65112c34dd527d34a985a92f535f9109031d
 last_input_digest: sha256:470bb868f127cf5da68c4c7f75b3bf03a458f1b1f9e253d51fe27c52c9ee2407
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -15,10 +15,19 @@ worker_runs:
   output_digest: sha256:07a5398ad484c009336e836c2a2d7d6e7a61888fbc9a1494a3b3a9083c7c6abe
   self_write_set: []
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:470bb868f127cf5da68c4c7f75b3bf03a458f1b1f9e253d51fe27c52c9ee2407
   output_digest: null
-artifacts: []
+  self_write_set:
+  - feature-docs/inherited-pty-drop-fd-tiocgptn/REQUIREMENTS.md
+  - feature-docs/inherited-pty-drop-fd-tiocgptn/SPEC.md
+artifacts:
+- path: feature-docs/inherited-pty-drop-fd-tiocgptn/REQUIREMENTS.md
+  sha256: sha256:0c2c4ea81489fb61c9f725948be148d77fd2d056636a3237f31d81292bdd44c9
+  produced_by: create-spec-run-0002
+- path: feature-docs/inherited-pty-drop-fd-tiocgptn/SPEC.md
+  sha256: sha256:cb51d7ab1aa3d3811a9acecbaa37fe260147180008527fdef10216b8e9fe83b1
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
