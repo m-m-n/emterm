@@ -88,7 +88,8 @@ workflow:
   failed_kind: null
   base_commit: b33db274447dd8fcbdf3ecce02d88e85f054163c
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 7334b2249130a64ce8105d11c40414e3947c7ce0
 - id: verify
   status: pending
   result: null
@@ -116,7 +117,7 @@ tasks:
     status: merged
     branch: em-workflow/restored-pane-echo-deadline-start-delay/task0001
 review:
-  status: pending
+  status: completed
   plan:
     floor:
     - comprehensive
@@ -126,8 +127,13 @@ review:
     - spec
     discretionary: []
     cross_validation: true
-  rounds_completed: 0
-  perspectives: {}
+  rounds_completed: 1
+  perspectives:
+    security: completed
+    comprehensive: completed
+    performance: completed
+    architecture: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 requirements:

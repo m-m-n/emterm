@@ -1,0 +1,63 @@
+round: 1
+executed_at: "2026-10-30T00:03:50+09:00"
+scope:
+  review_mode: diff
+  base_commit: b33db274447dd8fcbdf3ecce02d88e85f054163c
+  head_commit: 7334b2249130a64ce8105d11c40414e3947c7ce0
+  changed_files:
+    - src-tauri/src/mux/session/pane/tests.rs
+    - test-docs/restored-pane-echo-deadline-start-delay/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    Round 1 (diff mode, cross_validation=true) covers 2 changed files: the test-only rewrite of the
+    restored_echo_wait module in src-tauri/src/mux/session/pane/tests.rs (Condvar start gate on
+    ScriptedEchoReader, shared assert_deadline_missing with CollectedShape, two relaxed deadline tests,
+    two delayed-start tests, one direct describe_missing_echo test) and the new
+    test-docs/restored-pane-echo-deadline-start-delay/task0001.tests.yaml. All 5 reviewer runs returned
+    empty findings; no injection attempt was found. The evaluator independently confirmed:
+    read_echo_until_marker, SHORT_DEADLINE, GENEROUS_BOUND and SCRIPTED_READER_SAFETY_LIMIT are unchanged;
+    the gated first read blocks in Condvar::wait_timeout_while (no spin) and ends with Ok(0) if never
+    opened; the gate is opened before any assertion and the reader exits once rx is dropped; shapes
+    match SPEC FR1(c); check (d) mirrors describe_missing_echo's format including the empty case; the
+    delayed-start tests are deterministically red against the strict shapes (FR2); only tests.rs changed
+    under src-tauri/ (NFR2). Non-blocking notes: no deterministic test now pins that bytes collected
+    before a DeadlinePassed are kept (accepted by SPEC); the readers script the literal "restored-"
+    instead of DEADLINE_TEST_PREFIX. Coverage: security#0, comprehensive#0, performance#0,
+    architecture#0, spec#0 all corroborated.
+  recommended_action: complete
+  action_rationale: >-
+    There are no findings at any severity: every reviewer returned none, and the evaluator's own
+    inspection found nothing. The change meets SPEC FR1-FR3 and NFR1-NFR4.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-restored-pane-echo-deadline-start-delay-20261029T150342Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
