@@ -1,0 +1,119 @@
+task_id: task0001
+# Baseline run before any repository file was created or edited (src-tauri --lib, project test
+# command, one run): 4835 passed, 1 failed, 3 ignored. The one failure is the test below, at
+# src-tauri/src/mux/ipc/pty_spawn/tests.rs:5145:10 (Timeout); it is outside this investigation and
+# was not analysed. The investigation's own target test passed in that run.
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
+# Not re-run; baseline inherited. The task changes only two added files, feature-docs/
+# inherited-pty-drop-fd-flake-investigation/INVESTIGATION.md and this record; no file under
+# src-tauri/ or crates/ changed (git diff -- src-tauri crates is empty). A search of src-tauri/src,
+# src-tauri/tests, crates, scripts, test and the root *.test.ts by the full path, by the basename
+# INVESTIGATION.md and by the feature name found no test that reads or names either added file, and
+# no test enumerates feature-docs/ or test-docs/ (the document-contract tests name individual files
+# of other features). The task also forbids repeating the whole --lib suite, so no second run was made.
+final_failures:
+  - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
+# TASK.md has no numbered criteria; AC-1..AC-9 follow the order of the bullets of its Expected
+# Result (AC-1 conclusion, AC-2 st_rdev measurements, AC-3 ordered reproduction kept apart from the
+# target-test observations, AC-4 candidates (a)(b)(c), AC-5 code locations that open PTY masters or
+# duplicates, AC-6 quoted earlier measurement, AC-7 follow-up candidates, AC-8 no CPU-load commands,
+# AC-9 "git diff -- src-tauri crates is empty before and after"), and TM-1 is its TM-1 line.
+#
+# Existing-test search for every entry below: no test reads or names the changed files. The search
+# covered src-tauri/src, src-tauri/tests, crates, scripts, test and the root *.test.ts, by the path
+# feature-docs/inherited-pty-drop-fd-flake-investigation/INVESTIGATION.md, by the basename
+# INVESTIGATION.md, by the basename task0001.tests.yaml and by the feature name. The two files that
+# name task0001.tests.yaml (src-tauri/src/mux/ipc/pty_spawn/tests/strip_open_string_body_closure.rs
+# and altscreen_split_read.rs) name records of other features. The deliverable is a prose document,
+# so no new Rust or TypeScript test was added (a Rust test would also violate AC-9).
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists for the conclusion; it is a judgement. Verification was reading
+      the document against the sources: the cited lines in src-tauri/src/mux/inherited_pty.rs
+      (456-479, 57-65, 193-213, 257-273, 466-471) and the syscall trace of the unmodified target
+      test (dup(3) = 5, fstat(5) st_rdev 5:2, close(5), fstat(5) EBADF). No red state occurred
+      because the document did not exist before this task.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the values are the recorded output of a small C program kept
+      outside the repository (survey of four separately opened PTY pairs, their dups and slaves,
+      the /dev/ptmx stat, TIOCGPTN). The values for the master dup were also seen in the syscall
+      trace of the target test (st_rdev 5:2). No red state occurred because the document did not
+      exist before this task.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the ordered reproduction is the recorded output of the C program
+      (12 scenarios, run twice with identical results apart from pts numbers). The observations in
+      the target test are kept apart: 2 unmodified runs (cargo filter run, strace run), and 2 runs
+      with an LD_PRELOAD injection kept outside the repository (open /dev/ptmx after the close:
+      failed at inherited_pty.rs:474:27 with both sides 1282; open /dev/null: passed). No red state
+      occurred because the document did not exist before this task.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the adoption or rejection of (a), (b), (c) was checked against
+      the cited lines and the measured values. The existing inherited_pty tests do not detect the
+      cause: the target test is the one that fails intermittently. No red state occurred because
+      the document did not exist before this task.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the file:line list was produced by searching src-tauri/src for
+      openpty, try_clone_reader, take_writer, dup_cloexec and libc::dup and checking the cited
+      lines, and by reading portable-pty 0.8.1 and filedescriptor 0.8.3 at the cited lines. No red
+      state occurred because the document did not exist before this task.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the quoted figures (1 of 25 in each of two conditions,
+      inherited_pty.rs:474:27, both sides 1282) were compared with the table in
+      feature-docs/restored-pane-read-flake-investigation/INVESTIGATION.md and are kept apart from
+      this task's measurements. No red state occurred because the document did not exist before
+      this task.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the follow-up candidate (replace the st_rdev comparison with an
+      identity that differs between PTY masters) was checked against the measured TIOCGPTN values,
+      and the second item records that the (st_dev, st_ino) comparison in
+      src-tauri/src/mux/upgrade/tests.rs has no PTY master involved. No red state occurred because
+      the document did not exist before this task.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The criterion is that no recorded measurement command applies CPU load or uses CPU contention
+      as the reproduction method. Every recorded command is a single-threaded, single run:
+      the C program modes, one cargo filter run, one strace run, two single injected runs, and the
+      one baseline --lib run. No whole-suite repetition and no busy loop were run. This is an
+      invariant of how the work was done; no failing run of a check was observed.
+  AC-9:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The criterion is "git diff -- src-tauri crates is empty before and after the work". The
+      command printed nothing before the first edit and prints nothing after the last edit
+      (checked with git diff --stat -- src-tauri crates, and git status shows only the two added
+      files). It passed in the starting state, so no failing run was observed; this is an
+      invariant guard rather than a red-to-green criterion.
+  TM-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The check is a search of INVESTIGATION.md for absolute paths under the home directory (a
+      grep for the Linux home, macOS Users and scratch-directory prefixes), which finds none. It
+      passed on the complete document and again after the final edit. No failing run of the check
+      was observed against the document; the scratch directory and registry paths that did appear
+      in raw command output were rewritten before being written.
