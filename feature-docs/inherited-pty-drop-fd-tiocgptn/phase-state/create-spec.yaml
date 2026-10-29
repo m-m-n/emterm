@@ -3,16 +3,21 @@ feature: inherited-pty-drop-fd-tiocgptn
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: 3cfb40b0156eb7a5ee37fb5f20b82929b88c77f0
-last_input_digest: sha256:3ad72f54e962158cb11357858f800f3c88c9cfd9a4fe007d504a7f55b91cca78
-active_request_id: create-spec-run-0001
+base_revision: 910b65112c34dd527d34a985a92f535f9109031d
+last_input_digest: sha256:470bb868f127cf5da68c4c7f75b3bf03a458f1b1f9e253d51fe27c52c9ee2407
+active_request_id: create-spec-run-0002
 packets: {}
 answers: {}
 worker_runs:
-  - request_id: create-spec-run-0001
-    status: dispatched
-    input_digest: sha256:3ad72f54e962158cb11357858f800f3c88c9cfd9a4fe007d504a7f55b91cca78
-    output_digest: null
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:3ad72f54e962158cb11357858f800f3c88c9cfd9a4fe007d504a7f55b91cca78
+  output_digest: sha256:07a5398ad484c009336e836c2a2d7d6e7a61888fbc9a1494a3b3a9083c7c6abe
+  self_write_set: []
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:470bb868f127cf5da68c4c7f75b3bf03a458f1b1f9e253d51fe27c52c9ee2407
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
