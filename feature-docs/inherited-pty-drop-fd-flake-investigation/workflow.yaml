@@ -93,7 +93,7 @@ workflow:
   completed_at_commit: 73417b2e4ca41541177def1f941856f70ade568b
   base_commit: 0dcc6574990cf0c8aa4f94a2aca9099fb3c095ec
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -116,7 +116,14 @@ tasks:
     status: merged
     branch: em-workflow/inherited-pty-drop-fd-flake-investigation/task0001
 review:
-  status: pending
+  status: in_progress
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    discretionary: []
+    cross_validation: false
   rounds_completed: 0
   residual_critical_high: 0
   needs_rework: false
