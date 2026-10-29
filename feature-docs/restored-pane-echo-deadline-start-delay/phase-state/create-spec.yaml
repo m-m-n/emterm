@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: f49ac68a7f5e56b850f44368ef39f87c65b21058
 last_input_digest: sha256:53e98955ae56e81ffeb4c1127bf2d8f17d3f081c0d4f1e7e5e3e2843fae557f6
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
 answers:
   assumption.a1:
@@ -96,16 +96,21 @@ worker_runs:
   input_digest: sha256:5c9ceca037fa1ae7279fd9941d12a92a8132711a22bbfdc0d99a24df9c04b811
   output_digest: sha256:0dae86910176064c8878f5a851bb53a232d92442f9703be98d1f0e14401878c9
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:53e98955ae56e81ffeb4c1127bf2d8f17d3f081c0d4f1e7e5e3e2843fae557f6
   output_digest: null
   dispatch_digest_inputs:
     ~/src/my_projects/em-claude-plugins/em-workflow/references/contracts/spec-writer-contract.md: sha256:9032c6287d75f4a88e556bd3962c32ab8b4905cf3b6ececa895206788bcd0b63
     ~/src/my_projects/em-claude-plugins/em-workflow/references/templates/spec-document.md: sha256:203dfcddbe507886ce861694fccd20ae25e5af0bd1b0efa5e935991add950cbd
     <scratchpad>/analyst-result.json: sha256:d9ccd31176bbc1e77aa7fb88ef54635b5c283e8b2a5d21599f0e168a285ee584
-artifacts: []
+  self_write_set:
+  - feature-docs/restored-pane-echo-deadline-start-delay/SPEC.md
+artifacts:
+- path: feature-docs/restored-pane-echo-deadline-start-delay/SPEC.md
+  sha256: sha256:25a7f150b36c95ec540f89bd2c3e3f0767f6aaea673cff6fbf5511b753e2eb8e
+  produced_by: create-spec-run-0002
 patches: []
-progress_fingerprint: null
+progress_fingerprint: sha256:3d6815a64c7cb7f639bec0666b574318ee80529ed703877b1cf08961e6640066
 stale_redispatch_count: 0
 resolved_input_cache: {}
 last_error: null
