@@ -1,0 +1,66 @@
+task_id: task0001
+# Baseline run before any file was created or edited (src-tauri --lib, project test command):
+# 4835 passed, 1 failed, 3 ignored. The one failure is unrelated to this task
+# (render::font::user_dir::tests::user_font_dir_prefers_xdg_data_home: left/right path assertion
+# in src-tauri/src/render/font/user_dir.rs) and is carried forward untouched.
+baseline_failures:
+  - render::font::user_dir::tests::user_font_dir_prefers_xdg_data_home
+# Actually re-executed after the implementation (src-tauri --lib, project test command):
+# 4839 passed, 0 failed, 3 ignored (the baseline's 4835 passed, the 1 baseline failure which
+# passed in this run, and the 3 new tests listed below). The baseline failure is not asserted to
+# be fixed; it simply did not fail in this run.
+final_failures: []
+# Red observation (project test command with the restored_echo_wait name filter appended, nothing
+# else was run): the gated reader, the shared deadline check and the delayed-start tests were
+# written with the strict pre-change collected-bytes rules in the shared check (withheld data:
+# collected == "restored-"; trickle: collected starts with "restored-"). The two delayed-start
+# tests failed on the collected-bytes check and the other 9 restored_echo_wait tests passed.
+# After the shapes were relaxed (empty also accepted; trickle: prefix followed only by '.'
+# bytes) all 11 passed.
+#
+# Existing-test search for AC-6 (path src-tauri/src/mux/session/pane/tests.rs and basename
+# tests.rs over src-tauri/src and src-tauri/tests): no test reads the pane tests file. The only
+# include_str!("tests.rs") hits are the sibling files of other modules (mux/upgrade,
+# mux/ipc/pty_spawn), not this file, so none counts as coverage.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_reports_the_deadline_with_the_collected_bytes
+    red_confirmed: false
+    red_reason: "The test passed against the strict shapes (run before the shapes were relaxed) and passes against the relaxed ones: under normal scheduling the reader thread delivers the prefix before the deadline, and the ungated reader gives the test no way to make the thread start late. The relaxation itself is pinned by the delayed-start tests (AC-3 / AC-4), which went red against the strict shape. No red state occurred for this test."
+  AC-2:
+    tests:
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_deadline_is_absolute_while_non_marker_bytes_trickle_in
+    red_confirmed: false
+    red_reason: "The test passed against the strict shapes (run before the shapes were relaxed) and passes against the relaxed ones: under normal scheduling the reader thread delivers the prefix before the deadline, and the ungated reader gives the test no way to make the thread start late. The relaxation itself is pinned by the delayed-start tests (AC-3 / AC-4), which went red against the strict shape. No red state occurred for this test."
+  AC-3:
+    tests:
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_deadline_holds_with_a_delayed_reader_start_and_withheld_data
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_deadline_holds_with_a_delayed_reader_start_and_trickling_bytes
+    red_confirmed: true
+    red_reason: "Run with the strict pre-change shapes in the shared check: both failed with 'deadline check (c): collected bytes \"\" do not match the WithheldData shape' and '... the Trickle shape'. Both passed once the shapes were relaxed. The never-released path (a 6 s wait) has no dedicated test; it is checked by inspection that the gated wait uses the construction-relative SCRIPTED_READER_SAFETY_LIMIT and blocks on a Condvar timed wait, without spinning."
+  AC-4:
+    tests:
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_deadline_holds_with_a_delayed_reader_start_and_withheld_data
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_deadline_holds_with_a_delayed_reader_start_and_trickling_bytes
+    red_confirmed: true
+    red_reason: "Same run as AC-3: with the strict pre-change collected-bytes rules (collected == restored-; collected unconditionally starting with restored-) the delayed-start tests failed on the collected-bytes check (c) with empty collected bytes, and passed after the shapes were relaxed."
+  AC-5:
+    tests:
+      - mux::session::pane::tests::restored_echo_wait::describe_missing_echo_for_a_passed_deadline_shows_the_collected_bytes_and_the_deadline
+    red_confirmed: false
+    red_reason: "describe_missing_echo already rendered the collected bytes, the word deadline and 200ms, so the test passed on its first run; no red state occurred. It is a pure unit test with no reader or thread and replaces the coverage that the two deadline tests used to give for the quoted prefix, which depended on scheduling."
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: "The verifiable outcome is the build command (cargo check, finished successfully) and the diff, which touches only src-tauri/src/mux/session/pane/tests.rs under src-tauri/ (Cargo.toml and Cargo.lock untouched; read_echo_until_marker body, SHORT_DEADLINE, GENEROUS_BOUND and SCRIPTED_READER_SAFETY_LIMIT unchanged; scripted_reader keeps its signature and builds an ungated reader). No existing test reads that file (see the search note above), and no failure of the check was observed before the implementation, so no red state occurred."
+  AC-7:
+    tests:
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_finds_the_marker_after_a_prefix_only_first_read
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_finds_the_marker_across_three_or_more_chunks
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_reports_end_of_data_with_the_collected_bytes
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_reports_a_read_error_with_the_collected_bytes
+      - mux::session::pane::tests::restored_echo_wait::describe_missing_echo_shows_collected_control_characters_escaped
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_returns_as_soon_as_the_marker_is_complete
+    red_confirmed: false
+    red_reason: "The verifiable outcome is the full --lib run passing with every restored_echo_wait test passing and no busy-loop thread, spin loop, stress tool or core-count parallel work in the new or changed tests (checked by reading the diff). The listed unchanged scripted-reader tests detect a change in the ungated default; no red state occurred for this change. The other restored_echo_wait tests are listed under AC-1 to AC-5."

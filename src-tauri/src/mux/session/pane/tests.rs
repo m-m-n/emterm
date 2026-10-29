@@ -3256,7 +3256,7 @@ mod restored_echo_wait {
     use std::collections::VecDeque;
     use std::io::Read;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, mpsc};
+    use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
     use std::time::{Duration, Instant};
 
     /// Why the marker did not show up.
@@ -3405,6 +3405,46 @@ mod restored_echo_wait {
     /// assertion instead of hanging the suite.
     const SCRIPTED_READER_SAFETY_LIMIT: Duration = Duration::from_secs(6);
 
+    /// A gate in front of the first read of a [`ScriptedEchoReader`]: the
+    /// reader's first read waits on it, and the test opens it. It models a
+    /// helper thread that gets to run its first read late, without loading
+    /// the CPU.
+    struct StartGate {
+        opened: Mutex<bool>,
+        changed: Condvar,
+    }
+
+    impl StartGate {
+        /// Open the gate and wake the waiting reader. Opening again does nothing.
+        fn open(&self) {
+            *self.opened.lock().unwrap_or_else(PoisonError::into_inner) = true;
+            self.changed.notify_all();
+        }
+
+        /// Block (no spinning) until the gate is open or `limit` has elapsed.
+        /// True when the gate is open.
+        fn wait_open(&self, limit: Duration) -> bool {
+            let opened = self.opened.lock().unwrap_or_else(PoisonError::into_inner);
+            let (opened, _timed_out) = self
+                .changed
+                .wait_timeout_while(opened, limit, |opened| !*opened)
+                .unwrap_or_else(PoisonError::into_inner);
+            *opened
+        }
+    }
+
+    /// The test's handle on the start gate of a reader built by
+    /// [`gated_scripted_reader`].
+    struct StartRelease(Arc<StartGate>);
+
+    impl StartRelease {
+        /// Let the reader's first read proceed. Idempotent; opening before the
+        /// first read makes that read proceed without waiting.
+        fn open(&self) {
+            self.0.open();
+        }
+    }
+
     /// A reader built from a list of chunks. Each read returns the next chunk
     /// (a chunk larger than the caller's buffer is handed out in pieces).
     pub(super) struct ScriptedEchoReader {
@@ -3412,6 +3452,9 @@ mod restored_echo_wait {
         after: AfterChunks,
         released: Arc<AtomicBool>,
         created: Instant,
+        /// Held back until the first read has passed it; `None` for an
+        /// ungated reader and once the gate has been passed.
+        start_gate: Option<Arc<StartGate>>,
     }
 
     impl ScriptedEchoReader {
@@ -3421,10 +3464,10 @@ mod restored_echo_wait {
         }
     }
 
-    /// Build a scripted reader and the flag that releases it.
-    pub(super) fn scripted_reader(
+    fn build_scripted_reader(
         chunks: &[&[u8]],
         after: AfterChunks,
+        start_gate: Option<Arc<StartGate>>,
     ) -> (ScriptedEchoReader, Arc<AtomicBool>) {
         let released = Arc::new(AtomicBool::new(false));
         let reader = ScriptedEchoReader {
@@ -3432,12 +3475,50 @@ mod restored_echo_wait {
             after,
             released: Arc::clone(&released),
             created: Instant::now(),
+            start_gate,
         };
         (reader, released)
     }
 
+    /// Build a scripted reader and the flag that releases it.
+    pub(super) fn scripted_reader(
+        chunks: &[&[u8]],
+        after: AfterChunks,
+    ) -> (ScriptedEchoReader, Arc<AtomicBool>) {
+        build_scripted_reader(chunks, after, None)
+    }
+
+    /// Build a scripted reader whose first read is held back until the
+    /// returned [`StartRelease`] is opened (or until
+    /// `SCRIPTED_READER_SAFETY_LIMIT` after construction, when the reader ends
+    /// like the safety limit ends any scripted reader). Once opened, the reader
+    /// follows its script unchanged. Also returns the flag that releases the
+    /// `after` behavior, as [`scripted_reader`] does.
+    fn gated_scripted_reader(
+        chunks: &[&[u8]],
+        after: AfterChunks,
+    ) -> (ScriptedEchoReader, Arc<AtomicBool>, StartRelease) {
+        let gate = Arc::new(StartGate {
+            opened: Mutex::new(false),
+            changed: Condvar::new(),
+        });
+        let (reader, released) = build_scripted_reader(chunks, after, Some(Arc::clone(&gate)));
+        (reader, released, StartRelease(gate))
+    }
+
     impl Read for ScriptedEchoReader {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if let Some(gate) = self.start_gate.take() {
+                let time_left = SCRIPTED_READER_SAFETY_LIMIT.saturating_sub(self.created.elapsed());
+                if !gate.wait_open(time_left) {
+                    // Never opened: end here, as the safety limit ends the
+                    // reader, so a broken helper fails an assertion
+                    // instead of hanging the suite.
+                    self.chunks.clear();
+                    self.after = AfterChunks::EndOfData;
+                    return Ok(0);
+                }
+            }
             if let Some(mut chunk) = self.chunks.pop_front() {
                 let n = chunk.len().min(buf.len());
                 buf[..n].copy_from_slice(&chunk[..n]);
@@ -3476,6 +3557,90 @@ mod restored_echo_wait {
     /// Generous upper bound for a call that should return at
     /// `SHORT_DEADLINE`. Only upper bounds are asserted, never lower ones.
     const GENEROUS_BOUND: Duration = Duration::from_secs(3);
+
+    /// The chunk the deadline tests script before the reader goes quiet.
+    const DEADLINE_TEST_PREFIX: &[u8] = b"restored-";
+
+    /// Which bytes a deadline test may have collected when the deadline
+    /// passes. The reader thread may run its first read before the deadline
+    /// (the scripted chunk was collected) or after it (nothing collected), so
+    /// the shapes accept both.
+    #[derive(Clone, Copy, Debug)]
+    enum CollectedShape {
+        /// Chunk, then `Withhold`: nothing, or exactly the chunk.
+        WithheldData,
+        /// Chunk, then `Trickle`: nothing, or the chunk followed only by `.`
+        /// bytes.
+        Trickle,
+    }
+
+    impl CollectedShape {
+        fn accepts(self, collected: &[u8]) -> bool {
+            if collected.is_empty() {
+                return true;
+            }
+            match self {
+                CollectedShape::WithheldData => collected == DEADLINE_TEST_PREFIX,
+                CollectedShape::Trickle => collected
+                    .strip_prefix(DEADLINE_TEST_PREFIX)
+                    .is_some_and(|rest| rest.iter().all(|&byte| byte == b'.')),
+            }
+        }
+    }
+
+    /// The checks every deadline test runs on a call that must have ended at
+    /// `SHORT_DEADLINE`, given the outcome, the measured elapsed time of the
+    /// call, and the shape of the script used:
+    ///
+    /// - (a) the outcome is Missing with reason `DeadlinePassed(SHORT_DEADLINE)`;
+    /// - (b) the elapsed time is below `GENEROUS_BOUND` (no lower bound);
+    /// - (c) the collected bytes match `shape`;
+    /// - (d) the failure text contains `deadline`, `200ms` and the rendering of
+    ///   the bytes actually collected.
+    ///
+    /// Returns the collected bytes so a caller can add a stricter assertion.
+    /// Every failing check names itself and shows the collected bytes.
+    fn assert_deadline_missing(
+        outcome: EchoOutcome,
+        elapsed: Duration,
+        shape: CollectedShape,
+    ) -> Vec<u8> {
+        let missing = match outcome {
+            EchoOutcome::Missing(missing) => missing,
+            EchoOutcome::Found(collected) => panic!(
+                "deadline check (a): the outcome must be Missing, got Found with \
+                 collected bytes {:?}",
+                String::from_utf8_lossy(&collected)
+            ),
+        };
+        let shown = String::from_utf8_lossy(&missing.collected).into_owned();
+        assert_eq!(
+            missing.reason,
+            MissingReason::DeadlinePassed(SHORT_DEADLINE),
+            "deadline check (a): the reason must be the {SHORT_DEADLINE:?} deadline \
+             (collected bytes {shown:?})"
+        );
+        assert!(
+            elapsed < GENEROUS_BOUND,
+            "deadline check (b): a {SHORT_DEADLINE:?} deadline must end the wait \
+             well within {GENEROUS_BOUND:?}, took {elapsed:?} (collected bytes {shown:?})"
+        );
+        assert!(
+            shape.accepts(&missing.collected),
+            "deadline check (c): collected bytes {shown:?} do not match the {shape:?} shape"
+        );
+        let text = describe_missing_echo(MARKER, &missing);
+        let collected_rendering =
+            format!("collected {} byte(s): {:?}", missing.collected.len(), shown);
+        for expected in ["deadline", "200ms", collected_rendering.as_str()] {
+            assert!(
+                text.contains(expected),
+                "deadline check (d): the failure text must contain {expected:?} \
+                 (collected bytes {shown:?}), got: {text}"
+            );
+        }
+        missing.collected
+    }
 
     /// AC-1: the first read returns only `rest`; the marker completes with a
     /// later read. A check that stops after its first read sees `rest` only.
@@ -3601,7 +3766,9 @@ mod restored_echo_wait {
     }
 
     /// AC-4 (withheld data): a prefix and then nothing until released. The
-    /// short deadline passes and the prefix is reported.
+    /// short deadline passes. The reader thread may have run its first read
+    /// before the deadline (the prefix is reported) or after it (nothing is
+    /// reported), so both are accepted.
     #[test]
     fn read_echo_until_marker_reports_the_deadline_with_the_collected_bytes() {
         let (reader, release) = scripted_reader(&[b"restored-"], AfterChunks::Withhold);
@@ -3611,30 +3778,12 @@ mod restored_echo_wait {
         let elapsed = started.elapsed();
         release.store(true, Ordering::SeqCst);
 
-        let EchoOutcome::Missing(missing) = outcome else {
-            panic!("AC-4: withheld data must not count as found");
-        };
-        assert_eq!(
-            missing,
-            MissingEcho {
-                reason: MissingReason::DeadlinePassed(SHORT_DEADLINE),
-                collected: b"restored-".to_vec(),
-            },
-            "AC-4: reason must be the deadline and the prefix must be kept"
-        );
-        assert!(
-            elapsed < GENEROUS_BOUND,
-            "AC-4: a {SHORT_DEADLINE:?} deadline must end the wait well within \
-             {GENEROUS_BOUND:?}, took {elapsed:?}"
-        );
-        let text = describe_missing_echo(MARKER, &missing);
-        assert!(text.contains("\"restored-\""), "AC-4: {text}");
-        assert!(text.contains("deadline"), "AC-4: {text}");
-        assert!(text.contains("200ms"), "AC-4: {text}");
+        assert_deadline_missing(outcome, elapsed, CollectedShape::WithheldData);
     }
 
     /// AC-4 (trickle): non-marker bytes keep arriving, yet the deadline is
-    /// absolute and still ends the wait.
+    /// absolute and still ends the wait. As above, the reader thread may not
+    /// have collected anything yet when the deadline passes.
     #[test]
     fn read_echo_until_marker_deadline_is_absolute_while_non_marker_bytes_trickle_in() {
         let (reader, release) = scripted_reader(&[b"restored-"], AfterChunks::Trickle);
@@ -3644,26 +3793,66 @@ mod restored_echo_wait {
         let elapsed = started.elapsed();
         release.store(true, Ordering::SeqCst);
 
-        let EchoOutcome::Missing(missing) = outcome else {
-            panic!("AC-4: trickling non-marker bytes must not count as found");
+        assert_deadline_missing(outcome, elapsed, CollectedShape::Trickle);
+    }
+
+    /// Run the deadline checks against a reader whose first read cannot happen
+    /// before the call has returned: the gate is opened only afterwards.
+    /// Nothing can be collected, so the outcome is the one a reader thread that
+    /// starts after the deadline produces.
+    fn assert_deadline_with_delayed_reader_start(after: AfterChunks, shape: CollectedShape) {
+        let (reader, release, start) = gated_scripted_reader(&[b"restored-"], after);
+
+        let started = Instant::now();
+        let outcome = read_echo_until_marker(reader, MARKER, SHORT_DEADLINE);
+        let elapsed = started.elapsed();
+        // Before any assertion, so a failing assertion never leaves the
+        // reader gated.
+        start.open();
+        release.store(true, Ordering::SeqCst);
+
+        let collected = assert_deadline_missing(outcome, elapsed, shape);
+        assert!(
+            collected.is_empty(),
+            "the reader's first read was held back until after the call returned, \
+             so nothing can have been collected, got {:?}",
+            String::from_utf8_lossy(&collected)
+        );
+    }
+
+    /// FR2 (withheld data): the reader thread's first read happens only after
+    /// the deadline has passed. The deadline checks still hold.
+    #[test]
+    fn read_echo_until_marker_deadline_holds_with_a_delayed_reader_start_and_withheld_data() {
+        assert_deadline_with_delayed_reader_start(
+            AfterChunks::Withhold,
+            CollectedShape::WithheldData,
+        );
+    }
+
+    /// FR2 (trickle): the reader thread's first read happens only after the
+    /// deadline has passed. The deadline checks still hold.
+    #[test]
+    fn read_echo_until_marker_deadline_holds_with_a_delayed_reader_start_and_trickling_bytes() {
+        assert_deadline_with_delayed_reader_start(AfterChunks::Trickle, CollectedShape::Trickle);
+    }
+
+    /// FR3: the failure text of a missed deadline shows the collected bytes
+    /// with their quotes, the word `deadline` and the deadline's duration.
+    /// Built directly (no reader, no thread), so it does not depend on
+    /// scheduling.
+    #[test]
+    fn describe_missing_echo_for_a_passed_deadline_shows_the_collected_bytes_and_the_deadline() {
+        let missing = MissingEcho {
+            reason: MissingReason::DeadlinePassed(SHORT_DEADLINE),
+            collected: b"restored-".to_vec(),
         };
-        assert_eq!(
-            missing.reason,
-            MissingReason::DeadlinePassed(SHORT_DEADLINE),
-            "AC-4: reason must be the deadline"
-        );
-        assert!(
-            missing.collected.starts_with(b"restored-"),
-            "AC-4: collected bytes must start with the prefix, got {:?}",
-            missing.collected
-        );
-        assert!(
-            elapsed < GENEROUS_BOUND,
-            "AC-4: arriving bytes must not extend a {SHORT_DEADLINE:?} deadline \
-             past {GENEROUS_BOUND:?}, took {elapsed:?}"
-        );
+
         let text = describe_missing_echo(MARKER, &missing);
-        assert!(text.contains("\"restored-"), "AC-4: {text}");
+
+        assert!(text.contains("\"restored-\""), "FR3: {text}");
+        assert!(text.contains("deadline"), "FR3: {text}");
+        assert!(text.contains("200ms"), "FR3: {text}");
     }
 
     /// AC-5: with the complete echo delivered and the reader then withholding
