@@ -299,8 +299,6 @@ mention the same read-back failure without bytes, for example
      no timeout, so the deadline needs `poll` on the master fd or a helper thread. The repository
      already has the accumulate-until-deadline shape and a message that prints the collected text in
      `src-tauri/src/pty/mod.rs:680-703`.
-   - Verification suggestion: the (d1) condition (alone under 24 busy threads, 150 runs; 28 failures
-     before) and repeated full `--lib` runs.
 2. Check the other tests that make one PTY `read` and compare the exact bytes.
    - Target: `src-tauri/src/mux/inherited_pty.rs:322-340`, `:345-368` and `:373-401` (assertions at
      `:339`, `:367` and `:400`), which write in raw mode and make one `read` on the other end of
