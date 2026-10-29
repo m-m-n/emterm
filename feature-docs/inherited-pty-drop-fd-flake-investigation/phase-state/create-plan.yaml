@@ -1,7 +1,7 @@
 schema_version: 1
 feature: inherited-pty-drop-fd-flake-investigation
 phase: create-plan
-status: in_progress
+status: completed
 generation: 1
 mode: batch
 base_revision: 9f6e87a404a6456adc00c2cbacee771292e60d7b
