@@ -1,0 +1,59 @@
+task_id: task0001
+# Baseline run before any file was created or edited (src-tauri --lib, project test command):
+# 4828 passed, 0 failed, 3 ignored.
+baseline_failures: []
+# Actually re-executed after the implementation and this record were written (src-tauri --lib,
+# project test command): 4836 passed, 0 failed, 3 ignored (the baseline's 4828 plus the 8 new
+# tests listed below).
+final_failures: []
+# Red observations (all with the project test command, nothing else was run):
+#  - Run 1, helper body = the old shape (ONE read of up to 64 bytes, then look for the marker),
+#    everything else final: 6 failures: AC-1, AC-2, the read-error half of AC-3, both AC-4 tests,
+#    and the real-PTY test of AC-6 (it failed once under full-suite load with the renderer's text:
+#    "collected 2 byte(s): "re"").
+#  - Run 2, helper = the final reader-thread / channel implementation plus a temporary sleep that
+#    held a found marker back until the deadline (the shape "never returns early"): 1 failure,
+#    AC-5 ("took 10.012352897s" against a 10s deadline). The sleep was removed afterwards.
+#
+# Existing-test search for AC-7 (path src-tauri/src/mux/session/pane/tests.rs and basename
+# tests.rs over src-tauri/src and src-tauri/tests): the only hit is include_str!("tests.rs") in
+# src-tauri/src/mux/upgrade/tests.rs, which reads the upgrade module's own sibling file, not the
+# pane tests file, so it does not count as coverage.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_finds_the_marker_after_a_prefix_only_first_read
+    red_confirmed: true
+    red_reason: "Run 1 (first-read-only helper): assertion `left == right` failed: AC-1 ... left: Missing(MissingEcho { reason: EndOfData, collected: [114, 101, 115, 116] }) ('rest'), right: Found(<16-byte echo>)"
+  AC-2:
+    tests:
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_finds_the_marker_across_three_or_more_chunks
+    red_confirmed: true
+    red_reason: "Run 1 (first-read-only helper): AC-2 (one-byte first chunk): the marker \"restored-write\" did not show up: the reader reported end of data before the marker was complete; collected 1 byte(s): \"r\""
+  AC-3:
+    tests:
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_reports_end_of_data_with_the_collected_bytes
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_reports_a_read_error_with_the_collected_bytes
+      - mux::session::pane::tests::restored_echo_wait::describe_missing_echo_shows_collected_control_characters_escaped
+    red_confirmed: true
+    red_reason: "Run 1 (first-read-only helper): the read-error test failed, reason was EndOfData instead of ReadError(\"simulated read failure\"). The end-of-data test and the control-character rendering test already passed against that helper (it reported end of data with the prefix and the renderer was final), so they did not go red; the criterion as a whole went red through the read-error half."
+  AC-4:
+    tests:
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_reports_the_deadline_with_the_collected_bytes
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_deadline_is_absolute_while_non_marker_bytes_trickle_in
+    red_confirmed: true
+    red_reason: "Run 1 (first-read-only helper): both failed with reason EndOfData where DeadlinePassed(200ms) was expected (left: EndOfData, right: DeadlinePassed(200ms))"
+  AC-5:
+    tests:
+      - mux::session::pane::tests::restored_echo_wait::read_echo_until_marker_returns_as_soon_as_the_marker_is_complete
+    red_confirmed: true
+    red_reason: "Run 2 (helper that holds a found marker back until the deadline): AC-5: a found marker must end the wait long before the 10s deadline, took 10.012352897s. It passed against the first-read-only helper of run 1, which returns at once, so that run was not the red for this criterion."
+  AC-6:
+    tests:
+      - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+    red_confirmed: true
+    red_reason: "Run 1 (first-read-only helper behind the rewritten test): failed once under full-suite load with the renderer's text, \"the reader reported end of data before the marker was complete; collected 2 byte(s): \\\"re\\\"\". The failure is intermittent by nature (the first read size depends on scheduling), so a green run of the same test proves little; the scripted-reader tests of AC-1 and AC-2 are the repeatable check of the same shape."
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "The verifiable outcome is the build command (cargo check, passed) and the diff, which touches only src-tauri/src/mux/session/pane/tests.rs under src-tauri/ (Cargo.toml and Cargo.lock untouched). No existing test reads that file (see the search note above), and no failure of the check was observed before the implementation, so no red state occurred. The --no-default-features variant is not among the approved project commands and was not run; the new helpers use only std and the pane tests module is test-only code."
