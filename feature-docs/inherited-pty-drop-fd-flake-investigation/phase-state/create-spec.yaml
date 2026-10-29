@@ -2,16 +2,28 @@ schema_version: 1
 feature: inherited-pty-drop-fd-flake-investigation
 phase: create-spec
 status: dispatching
-generation: 1
+generation: 2
 base_revision: ec80117cd8b6b44c2f1efd35d4c036bdd409cda3
-last_input_digest: sha256:ee7cf41f8354dd4770f52f0be278c5ad284c9ab8b2b8ddcd14ea13bf156bb530
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:bf59cf7858cd95bccd6599c288a66816e2ed93445f1bb1b52acf7498d31e1055
+active_request_id: create-spec-run-0002
 packets: {}
 answers: {}
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: failed
   input_digest: sha256:ee7cf41f8354dd4770f52f0be278c5ad284c9ab8b2b8ddcd14ea13bf156bb530
+  output_digest: null
+  dispatch_digest_inputs:
+    CLAUDE.md: sha256:05afe1b23d63c1c48dc84ed05626a2b75917462ef9345d314fc009cf6c948386
+    Cargo.toml: sha256:2298e42884286bdb7d80b31bade40fdcbcad1007e7be5f1f069b2880a6aeabfc
+    LICENSE: sha256:a8987fee7d477add12050301baac10d48ae16a56355dd778efbe17975fad40e4
+    package.json: sha256:f74901f5ef1ce2fac35341bb4ce14201d3c633f2e95c54c8f3d664cd6df559e2
+    src-tauri/Cargo.toml: sha256:3d706f97e6003a3e4a6f4fdf5af2a2eee676c6054568a688d44b762b47bf63c0
+    test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
+    '{plugins}/em-workflow/references/contracts/analyst-contract.md': sha256:2f4394c4ef60bca84df8001158a691707e200124e264a1fc5e28b38a73dd13e9
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:bf59cf7858cd95bccd6599c288a66816e2ed93445f1bb1b52acf7498d31e1055
   output_digest: null
   dispatch_digest_inputs:
     CLAUDE.md: sha256:05afe1b23d63c1c48dc84ed05626a2b75917462ef9345d314fc009cf6c948386
@@ -26,4 +38,5 @@ patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
-last_error: null
+last_error: create-spec-run-0001 never returned (previous session interrupted); re-dispatched
+  as create-spec-run-0002 with a recomputed input_digest
