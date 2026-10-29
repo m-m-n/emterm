@@ -1,0 +1,65 @@
+schema_version: 2
+feature: inherited-pty-drop-fd-flake-investigation
+tier: minimal
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 0.12
+    confidence: 0.88
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.91
+      '1': 0.06
+      '2': 0.03
+      '3': 0.0
+  observed_at: '2026-10-29T21:29:06+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 0.14
+    confidence: 0.88
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.91
+      '1': 0.07
+      '2': 0.01
+      '3': 0.01
+  observed_at: '2026-10-29T21:29:06+09:00'
+pre_survey_estimate:
+  files_expected:
+  - feature-docs/inherited-pty-fd-reuse-investigation/INVESTIGATION.md
+  changed_lines_approx: 60
+  new_functions_needed: 0
+  new_files_needed: 1
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  work_still_required_evidence: 関連する既存報告は feature-docs/restored-pane-read-flake-investigation/INVESTIGATION.md:223
+    にあり、2条件でそれぞれ25回中1回の失敗を記録している。同ファイル:311-319 は別テストの PTY master なら比較が等しくなる点を挙げつつ、原因は未確定と明記している。src-tauri/src/mux/inherited_pty.rs:266-272
+    は fstat の st_rdev だけを返し、同ファイル:458-477 の対象テストは drop 後に同じ fd 番号の st_rdev を比較している。tmp/restored-pane-read-flake-investigation-runs/c-bin-20.log:4848-4851
+    と d-shim-24.log:4850-4853 は両辺1282での失敗を記録しているが、これらの失敗出力には再利用先の所有テストを示す情報がない。tmp/ntd-body-inherited-pty-fd-reuse.md:15-17
+    の完了条件も未チェックであり、結論を確定した調査報告書の作成が残っている。
+  test_change_kind: none
+  added_test_cases_approx: 0
+  body_change_kind: wording_or_rule_addition
+  change_containment: single_module
+  caller_and_dependency_count: 0
+  changes_external_contract: false
+  changes_behavior: false
+decided_at: '2026-10-29T21:29:06+09:00'
