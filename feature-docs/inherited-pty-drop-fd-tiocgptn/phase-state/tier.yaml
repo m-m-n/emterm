@@ -1,0 +1,52 @@
+schema_version: 2
+feature: inherited-pty-drop-fd-tiocgptn
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.15
+    confidence: 0.83
+    probabilities:
+      '0': 0.01
+      '1': 0.84
+      '2': 0.14
+      '3': 0.01
+  observed_at: '2026-10-30T00:05:00+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.24
+    confidence: 0.76
+    probabilities:
+      '0': 0.0
+      '1': 0.76
+      '2': 0.24
+      '3': 0.0
+  observed_at: '2026-10-30T00:09:30+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/inherited_pty.rs
+  - src-tauri/src/mux/upgrade/tests.rs
+  changed_lines_approx: 75
+  new_functions_needed:
+  - stat_rdev を置き換え、TIOCGPTN の取得結果を返すテスト用関数
+  - 別の PTY master による fd 番号の再利用を検証する回帰テスト
+  new_files_needed: []
+  new_dependencies_needed: []
+  covering_tests_exist: true
+  spillover_modules:
+  - mux::upgrade::tests
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 1
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 2
+  changes_external_contract: false
+  changes_behavior: false
+  evidence: src-tauri/src/mux/inherited_pty.rs:266 の stat_rdev は st_rdev を返し、呼び出し元は同ファイル:458
+    の既存テスト1つ（:461、:472）のみ。:474 は drop 前後の値を比較する。feature-docs/inherited-pty-drop-fd-flake-investigation/INVESTIGATION.md:224
+    に別 master の注入による失敗記録がある。TIOCGPTN は inherited_pty.rs:222 で使用済みで、libc は src-tauri/Cargo.toml:220
+    に既存依存としてある。src-tauri/src/mux/upgrade/tests.rs:43-44 に置換対象の関数名と st_rdev へのコメント参照がある
+decided_at: '2026-10-30T00:10:00+09:00'
