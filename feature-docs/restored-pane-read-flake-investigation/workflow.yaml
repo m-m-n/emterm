@@ -92,7 +92,7 @@ workflow:
   base_commit: 1cdb5e0141c18170dcb56359fcea3adee89df9f2
   completed_at_commit: 717013086e259aa9398fcf3a6a00c70f959c6f6a
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -112,8 +112,18 @@ tasks:
     status: merged
     branch: em-workflow/restored-pane-read-flake-investigation/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    discretionary: []
+    cross_validation: false
+    skipped:
+    - perspective: spec
+      reason: SPEC.md absent (tier minimal uses TASK.md); spec_available false
 requirements: {}
 batch:
   review_rework_count: 0
