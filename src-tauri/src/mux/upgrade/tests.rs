@@ -293,10 +293,12 @@ fn snapshot_then_restore_round_trips_scrollback_and_the_restored_pane_is_writabl
         b"hello from before the upgrade"
     );
     // AC-5: the restored pane is still writable through its adopted
-    // master (the dedicated pane-level test
+    // master. The dedicated pane-level test
     // `from_restored_pane_can_write_and_read_through_its_adopted_master`
-    // additionally proves the read side deterministically, without a
-    // background reader thread in the way).
+    // additionally checks the read side: with no pane reader thread
+    // competing for the echo, it reads the echo back through a reader
+    // cloned from the master before hand-off, accumulating chunks until
+    // the marker arrives or a bounded deadline passes.
     restored_pane
         .write_input(b"after-restore\n")
         .expect("restored pane must remain writable through its adopted master");
