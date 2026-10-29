@@ -91,9 +91,16 @@ workflow:
   status: completed
   completed_at_commit: 7334b2249130a64ce8105d11c40414e3947c7ce0
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  result: pass
   failed_items: []
+  completed_at_commit: b4f9b604a1fb6009402dbdb97149b1c35ecdf5d9
+  summary: |
+    Build: cargo check exit 0. Tests: --lib 4839 passed, 0 failed, 3 ignored; all 11 restored_echo_wait tests pass (TS-1..TS-4).
+    TS-5: only src-tauri/src/mux/session/pane/tests.rs changed under src-tauri/ since base_commit; Cargo.toml / Cargo.lock unchanged.
+    TS-3 red check recorded (test-docs task0001 red_confirmed: true).
+    Diff inspection: start gate blocks on Condvar::wait_timeout_while (no spinning, no load); gated first read is bounded by SCRIPTED_READER_SAFETY_LIMIT measured from reader construction.
+    Excluded scenarios: none.
 - id: retrospect
   status: pending
 tasks:
