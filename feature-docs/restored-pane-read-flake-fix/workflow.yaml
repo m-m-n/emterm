@@ -144,9 +144,9 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/restored-pane-read-flake-fix/task0001
   task0002:
     title: Reword the upgrade test comment about the pane-level read check
     plan: tasks/task0002.md
@@ -159,9 +159,9 @@ tasks:
     requirements:
     - FR5
     - NFR1
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/restored-pane-read-flake-fix/task0002
 review:
   status: pending
   rounds_completed: 0
