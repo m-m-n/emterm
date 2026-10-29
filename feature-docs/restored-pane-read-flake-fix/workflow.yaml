@@ -120,7 +120,7 @@ workflow:
   base_commit: cdfb49e8cc730bbef8f367912398354470f546c8
   completed_at_commit: 3194a641e28e60fb18640e3f0e8fbff54e38457c
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
 - id: retrospect
@@ -166,6 +166,15 @@ tasks:
 review:
   status: pending
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
 requirements:
   FR1:
     title: Read until the marker arrives or a deadline passes
