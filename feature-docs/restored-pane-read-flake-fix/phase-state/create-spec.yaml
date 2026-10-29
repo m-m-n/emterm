@@ -117,7 +117,18 @@ worker_runs:
     test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
     '{plugins}/em-workflow/references/contracts/analyst-contract.md': sha256:2f4394c4ef60bca84df8001158a691707e200124e264a1fc5e28b38a73dd13e9
   self_write_set: []
-artifacts: []
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:c9657bcc3c66adb27119c549dd426e723a2dad9feeee074121ec00f69ae5ea71
+  output_digest: null
+  self_write_set: []
+artifacts:
+- path: feature-docs/restored-pane-read-flake-fix/REQUIREMENTS.md
+  sha256: sha256:c85de2284fa8322449cf927e22e201bba0e27047429593fa6681fbed407dd47a
+  produced_by: create-spec-run-0002
+- path: feature-docs/restored-pane-read-flake-fix/SPEC.md
+  sha256: sha256:467ae29e71741fdd3113ef224e32d6648b0d23325b764e57658077f82e246d6d
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
