@@ -84,7 +84,8 @@ workflow:
 - id: create-plan
   artifacts:
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: 9b33eb9d4ca1cae9e1cc20dd6328f00cc60575df
 - id: implement
   status: pending
   failed_kind: null

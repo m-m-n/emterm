@@ -1,12 +1,12 @@
 schema_version: 1
 feature: restored-pane-read-flake-investigation
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 mode: batch
 base_revision: de7c3fcf6bceef430129dd69ba410828f0fd07f0
 last_input_digest: sha256:281ab3dbd214568f58e8d8d2a0f63c3c63fc0845f605d421d0ff8a7744888459
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
