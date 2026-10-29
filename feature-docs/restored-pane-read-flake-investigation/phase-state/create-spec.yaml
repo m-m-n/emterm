@@ -1,7 +1,7 @@
 schema_version: 1
 feature: restored-pane-read-flake-investigation
 phase: create-spec
-status: in_progress
+status: completed
 generation: 1
 base_revision: faf01f8708279922df26f1d13ff3b1f2db083209
 last_input_digest: sha256:7062040d916a8d196c29da698c61119340b13478d9bc99af4f861339a37c08cd
