@@ -1,0 +1,75 @@
+feature: restored-pane-echo-deadline-start-delay
+collected_at: '2026-10-30T00:09:55+09:00'
+session_ids:
+- 01a18834-c982-7792-a209-40322ee16c78
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: reduced
+    rationale: 'Final read (description plus code) put the change in bucket 1 (score
+      1.14, confidence 0.86): a single test file with added test cases and no external
+      contract change.'
+    bases:
+    - basis: description_only
+      score:
+        type: score
+        score: 1.01
+        confidence: 0.98
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread
+            across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to
+            an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+            or a change to the architecture.'
+        probabilities:
+          '0': 0.01
+          '1': 0.98
+          '2': 0.01
+          '3': 0.0
+      observed_at: '2026-10-29T22:27:00+09:00'
+    - basis: description_plus_code
+      score:
+        type: score
+        score: 1.14
+        confidence: 0.86
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread
+            across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to
+            an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+            or a change to the architecture.'
+        probabilities:
+          '0': 0.0
+          '1': 0.86
+          '2': 0.14
+          '3': 0.0
+      observed_at: '2026-10-29T22:34:00+09:00'
+    pre_survey_estimate:
+      files_expected:
+      - src-tauri/src/mux/session/pane/tests.rs
+      changed_lines_approx: 60
+      new_functions_needed: false
+      new_files_needed: false
+      new_dependencies_needed: false
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+      test_change_kind: new_behavior_tests
+      added_test_cases_approx: 2
+      body_change_kind: new_logic
+      change_containment: single_module
+      caller_and_dependency_count: 9
+      changes_external_contract: false
+      changes_behavior: true
+      evidence: 3312行で期限を計算し、3314行でスレッドを起動する。期限は3475行で200ms。既存2テストは収集した接頭辞と表示を要求し、開始遅延の注入処理はない。呼出元は8関数、内部関数依存はcontains_markerの1関数。概算は既存テストとScriptedEchoReaderを拡張し、空の収集結果を許容して期限後まで読取りを保留する2条件を追加する場合。挙動変更はテストの判定に限定する。ファイル変更、テスト実行、負荷試験は行っていない
+follow_up_drafts: []
+lessons_candidates: []
