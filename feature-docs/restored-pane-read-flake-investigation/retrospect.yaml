@@ -1,0 +1,75 @@
+feature: restored-pane-read-flake-investigation
+collected_at: '2026-10-29T11:56:00+09:00'
+session_ids:
+- 01a18594-96a7-735c-8dae-17a17fa3cfb1
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: minimal
+    rationale: description_plus_code reading put 0.92 on bucket 0 (wording/rule-text
+      only, no code change), mapping to tier minimal
+    bases:
+    - basis: description_only
+      score:
+        type: score
+        score: 0.17
+        confidence: 0.85
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread
+            across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to
+            an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+            or a change to the architecture.'
+        probabilities:
+          '0': 0.89
+          '1': 0.07
+          '2': 0.04
+          '3': 0.0
+      observed_at: '2026-10-29T09:05:24+09:00'
+    - basis: description_plus_code
+      score:
+        type: score
+        score: 0.13
+        confidence: 0.89
+        legend:
+          '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+          '1': A rule addition combined with a test addition, or a small change spread
+            across a few files together with a small test change.
+          '2': New logic, a change reaching across several modules, or a change to
+            an external contract.
+          '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+            or a change to the architecture.'
+        probabilities:
+          '0': 0.92
+          '1': 0.05
+          '2': 0.03
+          '3': 0.0
+      observed_at: '2026-10-29T09:05:24+09:00'
+    pre_survey_estimate:
+      files_expected: []
+      changed_lines_approx: 0
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+      test_change_kind: none
+      added_test_cases_approx: 0
+      body_change_kind: wording_or_rule_addition
+      change_containment: single_module
+      caller_and_dependency_count: 0
+      changes_external_contract: false
+      changes_behavior: false
+      evidence: src-tauri/src/mux/session/pane/tests.rs:3278で書き込み、3282で一度だけreadし、3284で検証しており、読み足しや期限付き待機はない。src-tauri/src/mux/session/pane/handles.rs:321ではwrite_all、322ではflushを実行する。feature-docs/pty-reattach-timeout-investigation/INVESTIGATION.md:177に51回中11回の失敗を記録し、239-241では短いread・順序などの原因は未調査と明記している。原因の特定は未完了で、今回はファイル変更もテスト実行もしていない
+follow_up_drafts: []
+lessons_candidates:
+- review comprehensive#0 (codex) returned non-JSON output; coverage relied on evaluator
+  inspection
