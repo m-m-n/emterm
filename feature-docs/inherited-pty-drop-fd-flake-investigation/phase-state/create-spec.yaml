@@ -22,9 +22,9 @@ worker_runs:
     test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
     '{plugins}/em-workflow/references/contracts/analyst-contract.md': sha256:2f4394c4ef60bca84df8001158a691707e200124e264a1fc5e28b38a73dd13e9
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:bf59cf7858cd95bccd6599c288a66816e2ed93445f1bb1b52acf7498d31e1055
-  output_digest: null
+  output_digest: sha256:500d835c8870cfe7c20d4846eb7d147eb7e9f9681954deeafb103a2d56d18f8d
   dispatch_digest_inputs:
     CLAUDE.md: sha256:05afe1b23d63c1c48dc84ed05626a2b75917462ef9345d314fc009cf6c948386
     Cargo.toml: sha256:2298e42884286bdb7d80b31bade40fdcbcad1007e7be5f1f069b2880a6aeabfc
@@ -33,10 +33,13 @@ worker_runs:
     src-tauri/Cargo.toml: sha256:3d706f97e6003a3e4a6f4fdf5af2a2eee676c6054568a688d44b762b47bf63c0
     test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
     '{plugins}/em-workflow/references/contracts/analyst-contract.md': sha256:2f4394c4ef60bca84df8001158a691707e200124e264a1fc5e28b38a73dd13e9
-artifacts: []
+  self_write_set: []
+artifacts:
+- path: feature-docs/inherited-pty-drop-fd-flake-investigation/TASK.md
+  sha256: sha256:b980a2532ee0acab48741bbd7268779195b1c38adf8ffd76bc604a6bc6b57d01
+  produced_by: orchestrator
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
-last_error: create-spec-run-0001 never returned (previous session interrupted); re-dispatched
-  as create-spec-run-0002 with a recomputed input_digest
+last_error: null
