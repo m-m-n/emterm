@@ -92,7 +92,8 @@ workflow:
   base_commit: 1cdb5e0141c18170dcb56359fcea3adee89df9f2
   completed_at_commit: 717013086e259aa9398fcf3a6a00c70f959c6f6a
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 28c457596bd7d3c780280728f6aaf4edc9576900
 - id: verify
   status: pending
 - id: retrospect
@@ -112,8 +113,14 @@ tasks:
     status: merged
     branch: em-workflow/restored-pane-read-flake-investigation/task0001
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - performance
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive

@@ -1,0 +1,56 @@
+round: 1
+executed_at: "2026-10-29T11:52:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 1cdb5e0141c18170dcb56359fcea3adee89df9f2
+  head_commit: 28c457596bd7d3c780280728f6aaf4edc9576900
+  changed_files:
+    - test-docs/restored-pane-read-flake-investigation/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance]
+  discretionary: []
+  cross_validation: false
+  skipped:
+    - perspective: spec
+      reason: "SPEC.md absent (tier minimal uses TASK.md); spec_available false"
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed, note: "reviewer summary: codex returned non-JSON output; empty findings carry no reviewer signal, covered by evaluator inspection"}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    Round 1, diff mode, one changed file (test-docs/restored-pane-read-flake-investigation/task0001.tests.yaml,
+    new 82-line test record for a prose-only investigation task). All three runs returned empty findings; no
+    critical/high site reported; no injection attempt found. The comprehensive#0 run's harness output was not
+    parsed, so coverage for that perspective comes from the evaluator's own inspection. The evaluator checked
+    the AC mapping against TASK.md, the quoted counts against INVESTIGATION.md section 5.3, the cited test
+    lines (pane/tests.rs 3253-3291, read 3281-3283, assert 3284), the empty git diff for src-tauri and crates,
+    and the absence of home-directory absolute paths (TM-1). Per-perspective coverage: comprehensive
+    corroborated (evaluator inspection only), security corroborated, performance corroborated.
+  recommended_action: complete
+  action_rationale: >-
+    No findings from any run; the evaluator's full read of the single changed record found it accurate against
+    TASK.md, INVESTIGATION.md, the cited test source and git history.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-restored-pane-read-flake-investigation-20261029T024956Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []
