@@ -112,7 +112,8 @@ tasks:
     - external-io
     complexity: medium
     requirements: []
-    status: pending
+    status: in_progress
+    branch: em-workflow/inherited-pty-drop-fd-flake-investigation/task0001
 review:
   status: pending
   rounds_completed: 0
