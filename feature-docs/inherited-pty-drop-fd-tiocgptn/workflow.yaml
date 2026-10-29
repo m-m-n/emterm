@@ -97,7 +97,31 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Replace the st_rdev closure check with a TIOCGPTN pts-number check
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/inherited_pty.rs
+    - src-tauri/src/mux/upgrade/tests.rs
+    - test-docs/inherited-pty-drop-fd-tiocgptn/task0001.tests.yaml
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    status: pending
+    branch: null
 review:
   status: pending
   rounds_completed: 0
@@ -107,7 +131,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-1
   FR2:
@@ -115,7 +140,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-4
   FR3:
@@ -123,7 +149,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-2
     - TS-3
@@ -132,7 +159,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-5
   FR5:
@@ -140,7 +168,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-1
   NFR1:
@@ -148,28 +177,35 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-7
   NFR2:
     title: 決定性
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-8
   NFR3:
     title: テスト名の維持
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
   NFR4:
     title: ビルドとテスト
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-6
 batch:

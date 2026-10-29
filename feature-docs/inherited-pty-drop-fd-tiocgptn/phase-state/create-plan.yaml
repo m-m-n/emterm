@@ -1,7 +1,7 @@
 schema_version: 1
 feature: inherited-pty-drop-fd-tiocgptn
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 mode: batch
 base_revision: 52a5b6d969ea0a9c7eabfd70bbca56bcee7a229d
@@ -27,7 +27,7 @@ worker_runs:
     '{plugins}/em-workflow/references/workflow-schema.md': sha256:7d6fcf022e4409981ec5b23e0b77865d2aad25813afc615d2a42f462a5fa690a
     '{plugins}/em-workflow/skills/plan-writing/SKILL.md': sha256:880bd01ad6c60af5695495e0a6784de7fe98e1ea9463dc6703164f8ffffdbccb
   patch_id: create-plan-run-0001-p0001
-  patch_applied: false
+  patch_applied: true
   validated: true
   validator_exit: 0
   self_write_set:
@@ -50,7 +50,7 @@ artifacts:
   produced_by: create-plan-run-0001
 patches:
 - patch_id: create-plan-run-0001-p0001
-  status: pending
+  status: applied
   base_input_digest: sha256:b8ee7bbdfa19c5107ec9152f8e8bbec6f6c1e3d92c28309de4f1616c94ed836c
   base_workflow_blob: 2c383fc78c7aa2c8e2e9d3d3495bfcd014011bce
 progress_fingerprint: null
