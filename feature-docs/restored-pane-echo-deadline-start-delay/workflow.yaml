@@ -117,6 +117,15 @@ tasks:
     branch: em-workflow/restored-pane-echo-deadline-start-delay/task0001
 review:
   status: pending
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
   rounds_completed: 0
   perspectives: {}
   residual_critical_high: 0
