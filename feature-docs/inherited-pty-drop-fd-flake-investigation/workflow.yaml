@@ -2,33 +2,52 @@ schema_version: 1
 feature: inherited-pty-drop-fd-flake-investigation
 created: '2026-10-29'
 base_branch: main
-goal: |
-  mux inherited_pty の dropping_the_adapter_closes_the_owned_descriptor が間欠的に失敗する原因を調べる
+goal: 'mux inherited_pty の dropping_the_adapter_closes_the_owned_descriptor が間欠的に失敗する原因を調べる
+
 
   ## 知りたいこと (必須)
 
-  `mux::inherited_pty::tests::dropping_the_adapter_closes_the_owned_descriptor` が間欠的に失敗する原因は何か。再利用された fd 番号が別テストの PTY master を指しているのか。
+
+  `mux::inherited_pty::tests::dropping_the_adapter_closes_the_owned_descriptor` が間欠的に失敗する原因は何か。再利用された
+  fd 番号が別テストの PTY master を指しているのか。
+
 
   ## なぜ知りたいか (必須)
 
+
   `--lib` 全体の実行でこのテストも間欠的に失敗し、無関係な変更の検証結果が読めなくなる。
+
 
   ## 調査範囲 (必須)
 
+
   対象: 上記テストと、その fd 再利用の比較設計。対象外: mux 本体の挙動変更。
+
 
   ## 完了の定義 (必須)
 
+
   - [ ] 問いに結論が出ている
+
   - [ ] 根拠が file:line や実測値で示されている
+
   - [ ] コードは変更しない（直すべき点は別タスクとして起票）
+
 
   ## 手がかり (任意)
 
-  - 該当箇所: `src-tauri/src/mux/inherited_pty.rs:456-479`（失敗は `inherited_pty.rs:474:27`、両辺とも 1282）
+
+  - 該当箇所: `src-tauri/src/mux/inherited_pty.rs:456-479`（失敗は `inherited_pty.rs:474:27`、両辺とも
+  1282）
+
   - restored-pane-read-flake-investigation の計測で、2 つの条件それぞれ 25 回中 1 回失敗
-  - 1282 はこの環境の `/dev/ptmx` のデバイス番号。テストは再利用された fd 番号のデバイス番号を比較しており、別テストの PTY master を指すと等しくなる
+
+  - 1282 はこの環境の `/dev/ptmx` のデバイス番号。テストは再利用された fd 番号のデバイス番号を比較しており、別テストの PTY master
+  を指すと等しくなる
+
   - `inherited_pty.rs:466-471` のコメントは再利用された記述子が「必ず別のデバイスを指す」と仮定しているが、計測値と矛盾する。原因は未確定
+
+  '
 parent_branch: em-workflow/inherited-pty-drop-fd-flake-investigation/integration
 tier: minimal
 tier_decision:
@@ -61,8 +80,10 @@ project:
   components:
     rust:
       language: rust
-      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
-      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+        src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
       format_command: ''
       e2e_test_command: ''
     webview-ts:
@@ -82,7 +103,8 @@ workflow:
   - DESIGN.md
   - design/
   status: skipped
-  skipped_reason: tier minimal subtracts the design step; investigation-only feature with no UI
+  skipped_reason: tier minimal subtracts the design step; investigation-only feature
+    with no UI
 - id: create-plan
   artifacts:
   - tasks/
@@ -98,7 +120,20 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: inherited_pty の drop 後 fd 比較テストの間欠失敗調査
+    plan: TASK.md
+    files:
+    - feature-docs/inherited-pty-drop-fd-flake-investigation/INVESTIGATION.md
+    - test-docs/inherited-pty-drop-fd-flake-investigation/task0001.tests.yaml
+    skills: []
+    domains:
+    - concurrency
+    - external-io
+    complexity: medium
+    requirements: []
+    status: pending
 review:
   status: pending
   rounds_completed: 0
