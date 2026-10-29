@@ -4,15 +4,105 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: f49ac68a7f5e56b850f44368ef39f87c65b21058
-last_input_digest: sha256:5c9ceca037fa1ae7279fd9941d12a92a8132711a22bbfdc0d99a24df9c04b811
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:53e98955ae56e81ffeb4c1127bf2d8f17d3f081c0d4f1e7e5e3e2843fae557f6
+active_request_id: create-spec-run-0002
 packets: {}
-answers: {}
+answers:
+  assumption.a1:
+    packet_id: null
+    answered_at: '2026-10-29T22:52:00+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: 'Of the two remedies the task offers (relax the collected-bytes assertion, or raise SHORT_DEADLINE),
+      this feature relaxes the assertion. Raising SHORT_DEADLINE only moves the scheduling threshold and
+      cannot be checked deterministically for any delay. SHORT_DEADLINE stays 200 ms, and the `200ms`
+      text check stays. (Codex consulted at the orchestrator''s request: chose relax_assertion over raise_deadline
+      / hybrid; raise_deadline cannot remove scheduling delay and lengthens normal waits, hybrid would
+      change the absolute-deadline semantics.)'
+    normalized_answer: 'Of the two remedies the task offers (relax the collected-bytes assertion, or raise
+      SHORT_DEADLINE), this feature relaxes the assertion. Raising SHORT_DEADLINE only moves the scheduling
+      threshold and cannot be checked deterministically for any delay. SHORT_DEADLINE stays 200 ms, and
+      the `200ms` text check stays. (Codex consulted at the orchestrator''s request: chose relax_assertion
+      over raise_deadline / hybrid; raise_deadline cannot remove scheduling delay and lengthens normal
+      waits, hybrid would change the absolute-deadline semantics.)'
+  assumption.a2:
+    packet_id: null
+    answered_at: '2026-10-29T22:52:00+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: The body and semantics of `read_echo_until_marker` stay unchanged, including the absolute
+      deadline measured from the start of the call (predecessor FR2). Moving the deadline after `thread::spawn`
+      would not remove the dependence, because `spawn` returns before the thread runs. The fix lives in
+      the tests and their scripted reader.
+    normalized_answer: The body and semantics of `read_echo_until_marker` stay unchanged, including the
+      absolute deadline measured from the start of the call (predecessor FR2). Moving the deadline after
+      `thread::spawn` would not remove the dependence, because `spawn` returns before the thread runs.
+      The fix lives in the tests and their scripted reader.
+  assumption.a3:
+    packet_id: null
+    answered_at: '2026-10-29T22:52:00+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: The task's reproduction step 1 (busy-loop threads on every logical CPU) is not carried out.
+      Per the user's no-intentional-CPU-load rule, the completion item 'the reproduction no longer triggers
+      the symptom' is verified by the deterministic start-delay test (FR2 / AC-3).
+    normalized_answer: The task's reproduction step 1 (busy-loop threads on every logical CPU) is not
+      carried out. Per the user's no-intentional-CPU-load rule, the completion item 'the reproduction
+      no longer triggers the symptom' is verified by the deterministic start-delay test (FR2 / AC-3).
+  assumption.a4:
+    packet_id: null
+    answered_at: '2026-10-29T22:52:00+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: The two existing test names stay unchanged, so the test-docs-records rename rule does not
+      apply and `test-docs/restored-pane-read-flake-fix/task0001.tests.yaml` (AC-4 lines 42-43) needs
+      no update. If planning renames either test, that record's `acceptance_tests[].tests` entries must
+      be updated to the new names in this feature, per `.claude/rules/test-docs-records.md`.
+    normalized_answer: The two existing test names stay unchanged, so the test-docs-records rename rule
+      does not apply and `test-docs/restored-pane-read-flake-fix/task0001.tests.yaml` (AC-4 lines 42-43)
+      needs no update. If planning renames either test, that record's `acceptance_tests[].tests` entries
+      must be updated to the new names in this feature, per `.claude/rules/test-docs-records.md`.
+  assumption.a5:
+    packet_id: null
+    answered_at: '2026-10-29T22:52:00+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: 'Planning chooses how the start delay is injected: a new gate before the first chunk on
+      `ScriptedEchoReader`, or a separate gated reader. Planning also chooses whether the deadline checks
+      are factored into a shared helper. The only requirement is that the FR2 test uses the same deadline
+      checks as the FR1 tests.'
+    normalized_answer: 'Planning chooses how the start delay is injected: a new gate before the first
+      chunk on `ScriptedEchoReader`, or a separate gated reader. Planning also chooses whether the deadline
+      checks are factored into a shared helper. The only requirement is that the FR2 test uses the same
+      deadline checks as the FR1 tests.'
+  assumption.a6:
+    packet_id: null
+    answered_at: '2026-10-29T22:52:00+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: The predecessor feature's prose (`feature-docs/restored-pane-read-flake-fix/SPEC.md`, including
+      its busy-loop AC-4 / TS-4 / A4) stays as written.
+    normalized_answer: The predecessor feature's prose (`feature-docs/restored-pane-read-flake-fix/SPEC.md`,
+      including its busy-loop AC-4 / TS-4 / A4) stays as written.
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:5c9ceca037fa1ae7279fd9941d12a92a8132711a22bbfdc0d99a24df9c04b811
+  output_digest: sha256:0dae86910176064c8878f5a851bb53a232d92442f9703be98d1f0e14401878c9
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:53e98955ae56e81ffeb4c1127bf2d8f17d3f081c0d4f1e7e5e3e2843fae557f6
   output_digest: null
+  dispatch_digest_inputs:
+    ~/src/my_projects/em-claude-plugins/em-workflow/references/contracts/spec-writer-contract.md: sha256:9032c6287d75f4a88e556bd3962c32ab8b4905cf3b6ececa895206788bcd0b63
+    ~/src/my_projects/em-claude-plugins/em-workflow/references/templates/spec-document.md: sha256:203dfcddbe507886ce861694fccd20ae25e5af0bd1b0efa5e935991add950cbd
+    <scratchpad>/analyst-result.json: sha256:d9ccd31176bbc1e77aa7fb88ef54635b5c283e8b2a5d21599f0e168a285ee584
 artifacts: []
 patches: []
 progress_fingerprint: null
