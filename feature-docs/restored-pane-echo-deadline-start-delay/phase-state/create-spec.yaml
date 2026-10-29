@@ -1,0 +1,21 @@
+schema_version: 1
+feature: restored-pane-echo-deadline-start-delay
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: f49ac68a7f5e56b850f44368ef39f87c65b21058
+last_input_digest: sha256:5c9ceca037fa1ae7279fd9941d12a92a8132711a22bbfdc0d99a24df9c04b811
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:5c9ceca037fa1ae7279fd9941d12a92a8132711a22bbfdc0d99a24df9c04b811
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
