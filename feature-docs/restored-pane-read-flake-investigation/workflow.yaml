@@ -94,7 +94,19 @@ workflow:
   status: pending
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: 復元 pane の書き込み・読み戻しテストの間欠失敗調査
+    plan: TASK.md
+    files:
+    - feature-docs/restored-pane-read-flake-investigation/INVESTIGATION.md
+    - test-docs/restored-pane-read-flake-investigation/task0001.tests.yaml
+    skills: []
+    domains:
+    - concurrency
+    complexity: medium
+    requirements: []
+    status: pending
 review:
   status: pending
   rounds_completed: 0
