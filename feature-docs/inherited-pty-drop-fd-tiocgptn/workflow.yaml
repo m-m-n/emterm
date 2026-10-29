@@ -92,7 +92,8 @@ workflow:
   completed_at_commit: 8130bcd079684d17fdea3b6b356b3b3b19b87908
   base_commit: b33db274447dd8fcbdf3ecce02d88e85f054163c
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: cf6e5b66005076beffa06dbba949a154235d74cd
 - id: verify
   status: pending
   result: null
@@ -125,8 +126,16 @@ tasks:
     status: merged
     branch: em-workflow/inherited-pty-drop-fd-tiocgptn/task0001
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive
