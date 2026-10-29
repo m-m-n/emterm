@@ -1,0 +1,52 @@
+task_id: task0002
+# Baseline run before any file was created or edited (src-tauri --lib, project test command):
+# 4827 passed, 1 failed, 3 ignored. The one failure is
+# pty::tests::reader_routes_to_ring_buffer_when_paused (pty/mod.rs:789:9, left: [] right: PAUSED
+# bytes), a test of another area that this comment-only task does not touch.
+baseline_failures:
+  - pty::tests::reader_routes_to_ring_buffer_when_paused
+# Actually re-executed after the comment change (src-tauri --lib, project test command):
+# 4828 passed, 0 failed, 3 ignored. The baseline failure did not recur in this run, so it is
+# intermittent; final_failures is a subset of baseline_failures.
+final_failures: []
+# Existing-test search for the changed file src-tauri/src/mux/upgrade/tests.rs (by path and by
+# basename): the only test that reads the file's text is
+# mux::upgrade::tests::agent_exit_after_icon_task0006_record_lists_only_defined_upgrade_test_names
+# (include_str!("tests.rs")). It looks only for `fn <name>(` definitions of the names listed in
+# a different feature's record, so it does not detect the wording of the AC-5 comment. No test
+# checks that comment, and the task plan says no new test is written (comment-only change).
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists for comment wording, and the task plan writes no new test. The
+      criterion was verified by inspection: the comment block just before the after-restore
+      write in src-tauri/src/mux/upgrade/tests.rs (lines 295-301 after the change) was searched
+      for "determin" (case-insensitive) and has no match, and it describes the read as
+      accumulating chunks until the marker arrives or a bounded deadline passes, not as a single
+      read. Before the change the block contained "deterministically" (line 298); that
+      observation was made by reading the file, which is not an executed failing check.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists for comment wording, and the task plan writes no new test. The
+      criterion was verified by reading the reworded comment: it states the restored pane is
+      still writable through its adopted master, still names
+      from_restored_pane_can_write_and_read_through_its_adopted_master, describes its read side
+      as reading the echo back through a reader cloned from the master before hand-off and
+      accumulating until the marker arrives or a bounded deadline passes, and says only that no
+      pane reader thread competes for the echo (it makes no claim that the pane-level test has no
+      background reader thread).
+  AC-3:
+    tests:
+      - mux::upgrade::tests::snapshot_then_restore_round_trips_scrollback_and_the_restored_pane_is_writable
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing upgrade test detects a break of
+      the restore-then-write behaviour the comment sits in; no red state occurred for this
+      change because the test passed before the comment edit and passes after it (4828 passed
+      in the re-run). The "diff touches only comment lines" half was checked by reading the diff
+      and by filtering every added or removed line of git diff -U0 for lines that are not `//`
+      comments, which left none.
