@@ -1,0 +1,53 @@
+round: 1
+executed_at: "2026-10-29T21:10:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: cdfb49e8cc730bbef8f367912398354470f546c8
+  head_commit: 1c357d469a45cae6f5b7d4e8a1074ea16c715f92
+  changed_files:
+  - src-tauri/src/mux/session/pane/tests.rs
+  - src-tauri/src/mux/upgrade/tests.rs
+  - test-docs/restored-pane-read-flake-fix/task0001.tests.yaml
+  - test-docs/restored-pane-read-flake-fix/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+# The evaluator returned one medium finding (category comprehensive,
+# src-tauri/src/mux/session/pane/tests.rs:3606, "Deadline tests need the helper
+# thread to run within 200 ms, which brings back a timing dependency"). Its
+# `file` value was an absolute path, so Phase R3b step 1 rejected it and it is
+# not carried as a finding. Its content is kept in evaluation.round_summary.
+evaluation:
+  round_summary: "All 5 reviewer runs returned no findings. Evaluator independently read the diff, SPEC.md and pane/mod.rs; NFR1/NFR2 (test-only, no new deps), NFR3 (unix gating) and FR5 (reworded upgrade comment accurate) hold. One medium evaluator-originated finding: read_echo_until_marker computes deadline_at before spawning the helper reader thread, so read_echo_until_marker_reports_the_deadline_with_the_collected_bytes (pane/tests.rs:3606, exact collected == b\"restored-\" at :3621) and read_echo_until_marker_deadline_is_absolute_while_non_marker_bytes_trickle_in (:3639, starts_with at :3656) depend on the helper thread being scheduled within SHORT_DEADLINE = 200 ms; suggested relaxing those collected-bytes assertions or raising SHORT_DEADLINE. Dropped at R3b step 1 (absolute file path). Note for verify: task0001 record says the --no-default-features check (AC-7/NFR3) was not run; verify TS-5 should run it. Coverage: security corroborated; comprehensive 1 medium (evaluator-originated); performance corroborated; architecture corroborated; spec corroborated."
+  recommended_action: complete
+  action_rationale: "No critical/high findings; residual critical/high is 0. The only finding is medium and evaluator-originated, outside auto-fix scope."
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-restored-pane-read-flake-fix-20261029T120836Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []

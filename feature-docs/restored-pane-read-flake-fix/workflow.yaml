@@ -120,7 +120,8 @@ workflow:
   base_commit: cdfb49e8cc730bbef8f367912398354470f546c8
   completed_at_commit: 3194a641e28e60fb18640e3f0e8fbff54e38457c
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 1c357d469a45cae6f5b7d4e8a1074ea16c715f92
 - id: verify
   status: pending
 - id: retrospect
@@ -164,8 +165,11 @@ tasks:
     notes: null
     branch: em-workflow/restored-pane-read-flake-fix/task0002
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, performance, architecture, spec]
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor:
     - comprehensive
