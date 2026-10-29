@@ -1,7 +1,7 @@
 schema_version: 1
 feature: restored-pane-echo-deadline-start-delay
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: f49ac68a7f5e56b850f44368ef39f87c65b21058
 last_input_digest: sha256:53e98955ae56e81ffeb4c1127bf2d8f17d3f081c0d4f1e7e5e3e2843fae557f6

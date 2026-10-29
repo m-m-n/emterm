@@ -1,0 +1,160 @@
+schema_version: 1
+feature: restored-pane-echo-deadline-start-delay
+created: '2026-10-29'
+base_branch: main
+goal: |
+  # restored pane の read_echo_until_marker 期限テストが補助スレッドのスケジューリング遅延に依存している
+
+  種別: バグ
+
+  ## 現象
+  test-only helper `read_echo_until_marker`（`src-tauri/src/mux/session/pane/tests.rs`）は期限 `deadline_at` を補助 reader スレッドを起動する前に計算する。そのため次の 2 テストは、補助スレッドが `SHORT_DEADLINE`（200 ms）以内にスケジュールされることに依存している。
+
+  - `read_echo_until_marker_reports_the_deadline_with_the_collected_bytes`（収集バイト列が `b"restored-"` と完全一致することを assert）
+  - `read_echo_until_marker_deadline_is_absolute_while_non_marker_bytes_trickle_in`（収集バイト列の `starts_with` を assert）
+
+  CPU 競合下で補助スレッドの起動が 200 ms を超えて遅れると、期限切れまでに想定のバイト列を集められず失敗しうる。restored-pane-read-flake-fix の review round 1 で evaluator が出した medium 指摘。
+
+  ## 再現手順
+  1. 論理 CPU 数と同数の busy-loop スレッドで全 CPU を埋める
+  2. 上記 2 テストを単体で繰り返し実行する
+
+  ## 期待する挙動
+  補助スレッドのスケジューリングが遅れても、上記 2 テストが期限の挙動と失敗メッセージを検証でき、間欠失敗しない。対処案は、収集バイト列の assert を緩める、または `SHORT_DEADLINE` を上げる。
+
+  ## 完了の定義
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所
+  - `src-tauri/src/mux/session/pane/tests.rs` の `read_echo_until_marker` と上記 2 テスト
+
+  ## 実害・発生条件
+  高負荷環境で `--lib` 全体の検証結果に新たな間欠失敗が混ざる可能性がある。未観測（verify フェーズの負荷試験では対象テストの 150 回中 0 失敗）。
+parent_branch: em-workflow/restored-pane-echo-deadline-start-delay/integration
+tier: reduced
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.01
+      '1': 0.98
+      '2': 0.01
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.86
+      '2': 0.14
+      '3': 0.0
+  at: '2026-10-29T22:35:00+09:00'
+  reductions:
+  - REQUIREMENTS.md
+  - design step
+  - IMPLEMENTATION.md (only when no two tasks declare the same file)
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - SPEC.md
+  status: completed
+  completed_at_commit: d34703b85899489268191bc81a114d87d1d2b210
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: Test-only change to Rust unit tests in src-tauri/src/mux/session/pane/tests.rs. There is no UI or visual output.
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  failed_kind: null
+  base_commit: b33db274447dd8fcbdf3ecce02d88e85f054163c
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Deadline-test assertions hold regardless of reader-thread start time
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Deterministic start-delay regression test
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Deterministic check that collected bytes appear in the deadline failure message
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: No intentional CPU load
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: Test-only change
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Bounded, non-hanging tests
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Platform and feature gating kept
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
