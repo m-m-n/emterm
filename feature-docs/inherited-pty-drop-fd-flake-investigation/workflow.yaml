@@ -101,7 +101,7 @@ workflow:
   result: pass
   failed_items: []
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: inherited_pty の drop 後 fd 比較テストの間欠失敗調査
