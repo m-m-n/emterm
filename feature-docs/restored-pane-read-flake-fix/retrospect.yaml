@@ -1,0 +1,50 @@
+feature: restored-pane-read-flake-fix
+collected_at: "2026-10-29T21:18:09+09:00"
+session_ids: [01a18797-6780-71da-85d6-470184cb6b38.jsonl]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "Final description_plus_code read scored 1.34 (bucket 1 at 0.66, bucket 2 at 0.34); the evaluator kept the full tier."
+    bases:
+      - basis: description_only
+        score:
+          type: score
+          score: 1.21
+          confidence: 0.79
+          probabilities: {'0': 0.0, '1': 0.79, '2': 0.21, '3': 0.0}
+        observed_at: "2026-10-29T19:22:05+09:00"
+      - basis: description_plus_code
+        score:
+          type: score
+          score: 1.34
+          confidence: 0.66
+          probabilities: {'0': 0.0, '1': 0.66, '2': 0.34, '3': 0.0}
+        observed_at: "2026-10-29T19:24:03+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/mux/session/pane/tests.rs
+        - src-tauri/src/mux/upgrade/tests.rs
+      changed_lines_approx: 44
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      spillover_modules: [mux::upgrade::tests]
+      work_still_required: true
+      test_change_kind: extend_existing_one_to_one
+      added_test_cases_approx: 0
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 2
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+  - "task0002 implementer stopped once without a merged event and succeeded on the automatic retry."
+  - "Review round 1: an evaluator-originated medium finding (deadline tests depend on the helper thread being scheduled within the 200 ms SHORT_DEADLINE) was dropped at R3b step 1 because its file value was an absolute path; its content survives only in evaluation.round_summary."
