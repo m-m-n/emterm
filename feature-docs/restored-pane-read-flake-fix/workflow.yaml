@@ -159,7 +159,7 @@ tasks:
     requirements:
     - FR5
     - NFR1
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/restored-pane-read-flake-fix/task0002
 review:
