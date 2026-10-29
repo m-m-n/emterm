@@ -107,7 +107,7 @@ workflow:
     (4828 passed, 0 failed, 3 ignored).
   completed_at_commit: 60d721e93e3e05381e3899eba3ea17bb1ac43acb
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: 復元 pane の書き込み・読み戻しテストの間欠失敗調査
