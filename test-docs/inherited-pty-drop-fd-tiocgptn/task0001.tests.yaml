@@ -1,0 +1,95 @@
+task_id: task0001
+baseline_failures: []          # approved --lib run before any edit: 4836 passed; 0 failed; 3 ignored
+final_failures: []             # approved --lib run re-executed after the implementation and after this record was written: 0 failed; subset of baseline
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::inherited_pty::tests::dropping_the_adapter_closes_the_owned_descriptor
+    red_confirmed: false
+    red_reason: >-
+      The test already existed under this name and passed before the change
+      (the approved --lib baseline run listed it as ok); the failure it is
+      meant to remove depends on another test thread reusing the freed
+      descriptor number, which cannot be provoked deterministically (SPEC A1,
+      NFR2), so no red state was observed for the rewritten closure check
+      itself. The decision logic it now relies on is pinned by the AC-2 test,
+      whose red run is recorded under AC-2 and AC-3.
+  AC-2:
+    tests:
+      - mux::inherited_pty::tests::closure_judgment_distinguishes_other_pty_masters
+    red_confirmed: true
+    red_reason: >-
+      The test was written first, against a closure judgment that still
+      compared st_rdev. The approved --lib run reported it FAILED with
+      "assertion `left == right` failed: B's master: fd 31, baseline pts 17,
+      observed pts number 21 / left: true / right: false" at
+      src-tauri/src/mux/inherited_pty.rs:542, i.e. the st_rdev judgment
+      called B's master "original". After the judgment was switched to the
+      pts number the same run reported it ok, with all six verdicts asserted
+      (B's master, duplicate of B's master, duplicate of A's master, handle to
+      A's slave, ordinary temporary file, CLOSED_FD).
+  AC-3:
+    tests:
+      - mux::inherited_pty::tests::closure_judgment_distinguishes_other_pty_masters
+    red_confirmed: true
+    red_reason: >-
+      Red run with the closure judgment replaced by an st_rdev equality check
+      (the descriptor's st_rdev compared with the st_rdev of /dev/ptmx, which
+      is the device number every PTY master reports on this host): the AC-2
+      test failed at the first table row, the B-master case, with "B's master:
+      fd 31, baseline pts 17, observed pts number 21" and left: true /
+      right: false. Reason: every PTY master descriptor reports the same
+      st_rdev, so an st_rdev check cannot tell master B (pts 21) from master
+      A (pts 17). The st_rdev variant was temporary and is not kept in the
+      final code; the recorded run is the only evidence of this red.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The criterion concerns the text of the failure message. No existing
+      test reads inherited_pty.rs or asserts its message text (searched
+      src-tauri/src and src-tauri/tests by the path
+      src-tauri/src/mux/inherited_pty.rs and by the basename inherited_pty.rs
+      and inherited_pty; the hits are module declarations, imports and
+      comments, and the synthetic test-docs reader targets another record).
+      The message is confirmed by reading the final diff:
+      "fd {dup_fd}, baseline pts {baseline_pts}, observed after drop: {observed}"
+      where observed is "pts number N" on success and "TIOCGPTN failed with
+      errno E" on failure. No executable red exists, so none was observed.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Confirmed by reading the final diff and by a text search showing no
+      stat_rdev left in inherited_pty.rs or upgrade/tests.rs; no existing test
+      reads those files' comments or helper list (same search as AC-4). A
+      search result is not an observed red, so none was observed.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Confirmed by reading the final diff: only the cfg(test) section of
+      inherited_pty.rs and the stat_dev_ino doc comment of upgrade/tests.rs
+      changed, and neither test spawns threads, sleeps, repeats its scenario
+      or generates load. No existing test checks the diff scope (same search
+      as AC-4); no executable red exists, so none was observed.
+  AC-7:
+    tests:
+      - mux::inherited_pty::tests::closure_judgment_distinguishes_other_pty_masters
+      - mux::inherited_pty::tests::construction_fails_over_a_closed_descriptor
+      - mux::inherited_pty::tests::construction_fails_over_an_ordinary_file_descriptor
+      - mux::inherited_pty::tests::construction_reports_the_same_descriptor_number
+      - mux::inherited_pty::tests::dropping_one_reader_handle_leaves_another_usable
+      - mux::inherited_pty::tests::dropping_the_adapter_closes_the_owned_descriptor
+      - mux::inherited_pty::tests::duplicated_descriptors_have_close_on_exec_set
+      - mux::inherited_pty::tests::resized_window_is_observable_on_a_subsequent_query
+      - mux::inherited_pty::tests::slave_bytes_are_readable_through_the_adapter_reader_handle
+      - mux::inherited_pty::tests::writer_handle_bytes_are_readable_from_the_pty_slave
+    red_confirmed: false
+    red_reason: >-
+      The existing mux::inherited_pty tests passed in the baseline run and
+      still pass; a dedicated new module is out of scope, but these existing
+      tests detect a regression of the module's behavior; no red state
+      occurred for this criterion. The approved cargo check passes. The
+      --no-default-features check was not run: it is not an approved command
+      string, and the module's gating and all production code are unchanged.
