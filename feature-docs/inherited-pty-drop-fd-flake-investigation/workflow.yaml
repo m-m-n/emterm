@@ -101,7 +101,8 @@ workflow:
   result: pass
   failed_items: []
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: 38072c4f45751796420d6efc3704cbe5c2a4beca
 tasks:
   task0001:
     title: inherited_pty の drop 後 fd 比較テストの間欠失敗調査

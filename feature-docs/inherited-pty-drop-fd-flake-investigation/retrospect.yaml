@@ -1,0 +1,34 @@
+feature: inherited-pty-drop-fd-flake-investigation
+collected_at: "2026-10-29T22:14:00+09:00"
+session_ids: [01a187c9-f555-7768-a22b-345514c62807]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: minimal
+    rationale: "Both reads put bucket 0 (wording or rule-text only, no new logic, no test change) at 0.91; the pre-survey expected one new investigation document in a single module with no behavior change."
+    bases:
+      - basis: description_only
+        score: {type: score, score: 0.12, confidence: 0.88, probabilities: {'0': 0.91, '1': 0.06, '2': 0.03, '3': 0.0}}
+        observed_at: "2026-10-29T21:29:06+09:00"
+      - basis: description_plus_code
+        score: {type: score, score: 0.14, confidence: 0.88, probabilities: {'0': 0.91, '1': 0.07, '2': 0.01, '3': 0.01}}
+        observed_at: "2026-10-29T21:29:06+09:00"
+    pre_survey_estimate:
+      changed_lines_approx: 60
+      new_functions_needed: 0
+      new_files_needed: 1
+      new_dependencies_needed: 0
+      covering_tests_exist: true
+      test_change_kind: none
+      body_change_kind: wording_or_rule_addition
+      change_containment: single_module
+      changes_external_contract: false
+      changes_behavior: false
+follow_up_drafts: []
+lessons_candidates:
+  - "Pre-survey expected the deliverable at feature-docs/inherited-pty-fd-reuse-investigation/; the run placed it under this feature's own feature-docs directory, and the planned files matched what was written."
