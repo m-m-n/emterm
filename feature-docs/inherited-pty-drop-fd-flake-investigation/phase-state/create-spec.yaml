@@ -1,7 +1,7 @@
 schema_version: 1
 feature: inherited-pty-drop-fd-flake-investigation
 phase: create-spec
-status: dispatching
+status: completed
 generation: 2
 base_revision: ec80117cd8b6b44c2f1efd35d4c036bdd409cda3
 last_input_digest: sha256:bf59cf7858cd95bccd6599c288a66816e2ed93445f1bb1b52acf7498d31e1055
