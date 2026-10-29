@@ -1,7 +1,7 @@
 schema_version: 1
 feature: restored-pane-read-flake-fix
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 80428d81b018f5cf9bc1cfbfa2f6fb94f2129df7
 last_input_digest: sha256:848978968cc1dd9492ada9e361c1a5536f41103e038a9f256558d30b89444879
