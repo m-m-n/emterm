@@ -1,0 +1,33 @@
+schema_version: 1
+feature: restored-pane-read-flake-fix
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 79c93550830f76222d54c5f01c2022ce710e87ad
+last_input_digest: sha256:5ead7646489e18786119c3b36ca86f2c60d37090a17cbbaffce0d7a46031f18b
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:5ead7646489e18786119c3b36ca86f2c60d37090a17cbbaffce0d7a46031f18b
+  output_digest: null
+  dispatch_digest_inputs:
+    feature-docs/restored-pane-read-flake-fix/REQUIREMENTS.md: sha256:c85de2284fa8322449cf927e22e201bba0e27047429593fa6681fbed407dd47a
+    feature-docs/restored-pane-read-flake-fix/SPEC.md: sha256:467ae29e71741fdd3113ef224e32d6648b0d23325b764e57658077f82e246d6d
+    feature-docs/restored-pane-read-flake-fix/workflow.yaml: sha256:0afe51ce09660505891735bf1e13b65c94a4ed845236e236bd459830809ab6c2
+    '{plugins}/em-workflow/references/contracts/planner-contract.md': sha256:6476cc99ea8a1d2d4f376d1702bd636b1ab9898655397ec80ab1d6fb47cbe9e8
+    '{plugins}/em-workflow/references/impl-skills.yaml': sha256:6b372678cdbbeb88b30c34d151c843e1a7072dd021a2ef1ac5fbaafae0bd67c2
+    '{plugins}/em-workflow/references/license-compat.md': sha256:52a07c5d0199a693958d0c9ec4768e8aa248cf95bdb9172dec75296aac5980be
+    '{plugins}/em-workflow/references/review-rules.yaml': sha256:56fbc7788c9bf3d2ccd2ef0be569a94e1854e12c177dcc5fa69b96ee4b95c931
+    '{plugins}/em-workflow/references/templates/task-plan.md': sha256:55eb61de4f1fb012275915f2f1aa689accca46ef30c5d6f8407f655da6cbb814
+    '{plugins}/em-workflow/references/templates/threat-model.md': sha256:6943baf20f089b2ab7a6d0d6b4842a6b7075325a747827b9225304881e0b1278
+    '{plugins}/em-workflow/references/workflow-schema.md': sha256:7d6fcf022e4409981ec5b23e0b77865d2aad25813afc615d2a42f462a5fa690a
+    '{plugins}/em-workflow/skills/plan-writing/SKILL.md': sha256:880bd01ad6c60af5695495e0a6784de7fe98e1ea9463dc6703164f8ffffdbccb
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
