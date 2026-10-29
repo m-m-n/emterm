@@ -112,7 +112,7 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: in_progress
+    status: merged
     branch: em-workflow/restored-pane-echo-deadline-start-delay/task0001
 review:
   status: pending
