@@ -3243,18 +3243,472 @@ fn cap_alt_screen_dump_returns_empty_when_the_dump_exceeds_the_cap() {
     );
 }
 
+/// Bounded read-until-marker check for a PTY echo (restored-pane-read-flake-fix).
+///
+/// The kernel hands the echo of a write back to the master's reader side in
+/// pieces of unpredictable size, so a check that looks at what its first read
+/// returned can see only the start of the marker. `read_echo_until_marker`
+/// accumulates chunks until the marker is complete or an absolute deadline
+/// passes, and `describe_missing_echo` turns a miss into a failure message
+/// that shows every collected byte. The helpers take any `Read`, so the
+/// scripted-reader tests below drive exactly the code the real-PTY test uses.
+mod restored_echo_wait {
+    use std::collections::VecDeque;
+    use std::io::Read;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
+    use std::time::{Duration, Instant};
+
+    /// Why the marker did not show up.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) enum MissingReason {
+        /// The absolute deadline, measured once from the start of the wait,
+        /// passed. Carries the deadline's duration.
+        DeadlinePassed(Duration),
+        /// The reader reported end of data (or its thread vanished).
+        EndOfData,
+        /// The reader failed. Carries the error's description.
+        ReadError(String),
+    }
+
+    /// A miss: the reason plus every byte collected before giving up.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) struct MissingEcho {
+        pub(super) reason: MissingReason,
+        pub(super) collected: Vec<u8>,
+    }
+
+    /// Result of a bounded read-until-marker wait. Never panics.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) enum EchoOutcome {
+        /// The marker is present in the collected bytes.
+        Found(Vec<u8>),
+        Missing(MissingEcho),
+    }
+
+    /// What the reading thread hands to the waiting side.
+    enum ReaderSignal {
+        Chunk(Vec<u8>),
+        EndOfData,
+        ReadError(String),
+    }
+
+    /// Read from `reader` until `marker` is present in the bytes collected so
+    /// far, or until `deadline` (measured once, from the start of this call)
+    /// has passed, or until the reader ends or fails.
+    ///
+    /// The reader moves to a helper thread that does the blocking reads and
+    /// sends every chunk back; this side waits with a timeout equal to the
+    /// time left before the deadline. The marker is searched in ALL collected
+    /// bytes, so it is found even when it straddles chunk boundaries. The call
+    /// returns as soon as the marker is present. The helper thread is not
+    /// joined: it ends by itself when its reader reports end of data or an
+    /// error, or when a send finds this side gone. It never panics.
+    pub(super) fn read_echo_until_marker<R: Read + Send + 'static>(
+        mut reader: R,
+        marker: &[u8],
+        deadline: Duration,
+    ) -> EchoOutcome {
+        let deadline_at = Instant::now() + deadline;
+        let (tx, rx) = mpsc::channel::<ReaderSignal>();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 64];
+            loop {
+                let signal = match reader.read(&mut buf) {
+                    Ok(0) => ReaderSignal::EndOfData,
+                    Ok(n) => ReaderSignal::Chunk(buf[..n].to_vec()),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => ReaderSignal::ReadError(e.to_string()),
+                };
+                let is_last = !matches!(signal, ReaderSignal::Chunk(_));
+                if tx.send(signal).is_err() || is_last {
+                    return;
+                }
+            }
+        });
+
+        let miss = |reason: MissingReason, collected: Vec<u8>| {
+            EchoOutcome::Missing(MissingEcho { reason, collected })
+        };
+        let mut collected: Vec<u8> = Vec::new();
+        loop {
+            let time_left = deadline_at.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(time_left) {
+                Ok(ReaderSignal::Chunk(chunk)) => {
+                    collected.extend_from_slice(&chunk);
+                    if contains_marker(&collected, marker) {
+                        return EchoOutcome::Found(collected);
+                    }
+                    if Instant::now() >= deadline_at {
+                        return miss(MissingReason::DeadlinePassed(deadline), collected);
+                    }
+                }
+                Ok(ReaderSignal::EndOfData) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return miss(MissingReason::EndOfData, collected);
+                }
+                Ok(ReaderSignal::ReadError(message)) => {
+                    return miss(MissingReason::ReadError(message), collected);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    return miss(MissingReason::DeadlinePassed(deadline), collected);
+                }
+            }
+        }
+    }
+
+    /// True when `marker` occurs anywhere in `haystack`, including across the
+    /// boundaries of the chunks that were appended to it.
+    fn contains_marker(haystack: &[u8], marker: &[u8]) -> bool {
+        assert!(!marker.is_empty(), "the marker must not be empty");
+        haystack.windows(marker.len()).any(|w| w == marker)
+    }
+
+    /// Failure text for a miss: what the check demands, why it was not met,
+    /// and every collected byte (lossy UTF-8, debug-escaped so control
+    /// characters such as CR and LF are visible).
+    pub(super) fn describe_missing_echo(marker: &[u8], missing: &MissingEcho) -> String {
+        let reason = match &missing.reason {
+            MissingReason::DeadlinePassed(deadline) => {
+                format!("the {deadline:?} deadline passed before the marker was complete")
+            }
+            MissingReason::EndOfData => {
+                "the reader reported end of data before the marker was complete".to_string()
+            }
+            MissingReason::ReadError(message) => {
+                format!("the reader failed with a read error: {message}")
+            }
+        };
+        format!(
+            "bytes written through the adopted master's writer must be readable \
+             back through the adopted master (echoed by the PTY line discipline), \
+             but the marker {:?} did not show up: {reason}; collected {} byte(s): {:?}",
+            String::from_utf8_lossy(marker),
+            missing.collected.len(),
+            String::from_utf8_lossy(&missing.collected),
+        )
+    }
+
+    /// What a [`ScriptedEchoReader`] does once its chunks are used up.
+    pub(super) enum AfterChunks {
+        EndOfData,
+        Error(&'static str),
+        /// Withhold data until released, then report end of data.
+        Withhold,
+        /// Keep returning one non-marker byte at a short interval until
+        /// released, then report end of data.
+        Trickle,
+    }
+
+    /// Upper limit for `Withhold` / `Trickle`: if a test never releases its
+    /// reader (or a wrong implementation never returns), the reader reports
+    /// end of data on its own after this long, so a broken helper fails an
+    /// assertion instead of hanging the suite.
+    const SCRIPTED_READER_SAFETY_LIMIT: Duration = Duration::from_secs(6);
+
+    /// A reader built from a list of chunks. Each read returns the next chunk
+    /// (a chunk larger than the caller's buffer is handed out in pieces).
+    pub(super) struct ScriptedEchoReader {
+        chunks: VecDeque<Vec<u8>>,
+        after: AfterChunks,
+        released: Arc<AtomicBool>,
+        created: Instant,
+    }
+
+    impl ScriptedEchoReader {
+        fn should_stop(&self) -> bool {
+            self.released.load(Ordering::SeqCst)
+                || self.created.elapsed() >= SCRIPTED_READER_SAFETY_LIMIT
+        }
+    }
+
+    /// Build a scripted reader and the flag that releases it.
+    pub(super) fn scripted_reader(
+        chunks: &[&[u8]],
+        after: AfterChunks,
+    ) -> (ScriptedEchoReader, Arc<AtomicBool>) {
+        let released = Arc::new(AtomicBool::new(false));
+        let reader = ScriptedEchoReader {
+            chunks: chunks.iter().map(|chunk| chunk.to_vec()).collect(),
+            after,
+            released: Arc::clone(&released),
+            created: Instant::now(),
+        };
+        (reader, released)
+    }
+
+    impl Read for ScriptedEchoReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if let Some(mut chunk) = self.chunks.pop_front() {
+                let n = chunk.len().min(buf.len());
+                buf[..n].copy_from_slice(&chunk[..n]);
+                if n < chunk.len() {
+                    self.chunks.push_front(chunk.split_off(n));
+                }
+                return Ok(n);
+            }
+            match self.after {
+                AfterChunks::EndOfData => Ok(0),
+                AfterChunks::Error(message) => Err(std::io::Error::other(message)),
+                AfterChunks::Withhold => {
+                    while !self.should_stop() {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Ok(0)
+                }
+                AfterChunks::Trickle => {
+                    if self.should_stop() {
+                        return Ok(0);
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                    buf[0] = b'.';
+                    Ok(1)
+                }
+            }
+        }
+    }
+
+    const MARKER: &[u8] = b"restored-write";
+    /// What the kernel's default termios (ICANON, ECHO, ONLCR) echo for the
+    /// marker followed by a newline: the marker, CR, LF.
+    const ECHO: &[u8] = b"restored-write\r\n";
+    /// Deadline for the tests that expect the deadline to pass.
+    const SHORT_DEADLINE: Duration = Duration::from_millis(200);
+    /// Generous upper bound for a call that should return at
+    /// `SHORT_DEADLINE`. Only upper bounds are asserted, never lower ones.
+    const GENEROUS_BOUND: Duration = Duration::from_secs(3);
+
+    /// AC-1: the first read returns only `rest`; the marker completes with a
+    /// later read. A check that stops after its first read sees `rest` only.
+    #[test]
+    fn read_echo_until_marker_finds_the_marker_after_a_prefix_only_first_read() {
+        let (reader, _release) =
+            scripted_reader(&[b"rest", b"ored-write\r\n"], AfterChunks::EndOfData);
+
+        let outcome = read_echo_until_marker(reader, MARKER, Duration::from_secs(5));
+
+        assert_eq!(
+            outcome,
+            EchoOutcome::Found(ECHO.to_vec()),
+            "AC-1: the marker completes with the second read, so it must be found \
+             and the collected bytes must be the full 16-byte echo"
+        );
+    }
+
+    /// AC-2: the echo arrives in three or more chunks, including a
+    /// one-byte first chunk and splits where the marker straddles at least
+    /// two chunk boundaries.
+    #[test]
+    fn read_echo_until_marker_finds_the_marker_across_three_or_more_chunks() {
+        let one_byte_chunks: Vec<&[u8]> = ECHO.chunks(1).collect();
+        let splits: [(&str, &[&[u8]]); 3] = [
+            ("one-byte first chunk", &[b"r", b"estored-", b"write\r\n"]),
+            (
+                "marker straddles two boundaries",
+                &[b"restor", b"ed-wr", b"ite\r\n"],
+            ),
+            ("every byte on its own", one_byte_chunks.as_slice()),
+        ];
+        for (name, chunks) in splits {
+            let (reader, _release) = scripted_reader(chunks, AfterChunks::EndOfData);
+
+            let outcome = read_echo_until_marker(reader, MARKER, Duration::from_secs(5));
+
+            match outcome {
+                EchoOutcome::Found(collected) => {
+                    assert!(
+                        contains_marker(&collected, MARKER) && ECHO.starts_with(&collected),
+                        "AC-2 ({name}): collected bytes must hold the marker and be the \
+                         start of the echo, got {collected:?}"
+                    );
+                }
+                EchoOutcome::Missing(missing) => {
+                    panic!("AC-2 ({name}): {}", describe_missing_echo(MARKER, &missing));
+                }
+            }
+        }
+    }
+
+    /// AC-3 (end of data): a strict prefix of the marker and then end of data.
+    #[test]
+    fn read_echo_until_marker_reports_end_of_data_with_the_collected_bytes() {
+        let (reader, _release) = scripted_reader(&[b"restored-"], AfterChunks::EndOfData);
+
+        let outcome = read_echo_until_marker(reader, MARKER, Duration::from_secs(5));
+
+        let EchoOutcome::Missing(missing) = outcome else {
+            panic!("AC-3: a prefix followed by end of data must not count as found");
+        };
+        assert_eq!(
+            missing,
+            MissingEcho {
+                reason: MissingReason::EndOfData,
+                collected: b"restored-".to_vec(),
+            },
+            "AC-3: reason must be end of data and the prefix must be kept"
+        );
+        let text = describe_missing_echo(MARKER, &missing);
+        assert!(text.contains("\"restored-\""), "AC-3: {text}");
+        assert!(text.contains("end of data"), "AC-3: {text}");
+        assert!(
+            text.contains("echoed by the PTY line discipline"),
+            "AC-3: {text}"
+        );
+    }
+
+    /// AC-3 (read error): a strict prefix of the marker and then a read error.
+    #[test]
+    fn read_echo_until_marker_reports_a_read_error_with_the_collected_bytes() {
+        let (reader, _release) = scripted_reader(
+            &[b"restored-"],
+            AfterChunks::Error("simulated read failure"),
+        );
+
+        let outcome = read_echo_until_marker(reader, MARKER, Duration::from_secs(5));
+
+        let EchoOutcome::Missing(missing) = outcome else {
+            panic!("AC-3: a prefix followed by a read error must not count as found");
+        };
+        assert_eq!(
+            missing,
+            MissingEcho {
+                reason: MissingReason::ReadError("simulated read failure".to_string()),
+                collected: b"restored-".to_vec(),
+            },
+            "AC-3: reason must be the read error and the prefix must be kept"
+        );
+        let text = describe_missing_echo(MARKER, &missing);
+        assert!(text.contains("\"restored-\""), "AC-3: {text}");
+        assert!(text.contains("read error"), "AC-3: {text}");
+        assert!(text.contains("simulated read failure"), "AC-3: {text}");
+        assert!(
+            text.contains("echoed by the PTY line discipline"),
+            "AC-3: {text}"
+        );
+    }
+
+    /// AC-3 (rendering): control characters among the collected bytes are
+    /// shown escaped, so a CR or LF in the echo is visible in the failure.
+    #[test]
+    fn describe_missing_echo_shows_collected_control_characters_escaped() {
+        let missing = MissingEcho {
+            reason: MissingReason::EndOfData,
+            collected: b"rest\r\nx".to_vec(),
+        };
+
+        let text = describe_missing_echo(MARKER, &missing);
+
+        assert!(text.contains("rest\\r\\nx"), "AC-3: {text}");
+    }
+
+    /// AC-4 (withheld data): a prefix and then nothing until released. The
+    /// short deadline passes and the prefix is reported.
+    #[test]
+    fn read_echo_until_marker_reports_the_deadline_with_the_collected_bytes() {
+        let (reader, release) = scripted_reader(&[b"restored-"], AfterChunks::Withhold);
+
+        let started = Instant::now();
+        let outcome = read_echo_until_marker(reader, MARKER, SHORT_DEADLINE);
+        let elapsed = started.elapsed();
+        release.store(true, Ordering::SeqCst);
+
+        let EchoOutcome::Missing(missing) = outcome else {
+            panic!("AC-4: withheld data must not count as found");
+        };
+        assert_eq!(
+            missing,
+            MissingEcho {
+                reason: MissingReason::DeadlinePassed(SHORT_DEADLINE),
+                collected: b"restored-".to_vec(),
+            },
+            "AC-4: reason must be the deadline and the prefix must be kept"
+        );
+        assert!(
+            elapsed < GENEROUS_BOUND,
+            "AC-4: a {SHORT_DEADLINE:?} deadline must end the wait well within \
+             {GENEROUS_BOUND:?}, took {elapsed:?}"
+        );
+        let text = describe_missing_echo(MARKER, &missing);
+        assert!(text.contains("\"restored-\""), "AC-4: {text}");
+        assert!(text.contains("deadline"), "AC-4: {text}");
+        assert!(text.contains("200ms"), "AC-4: {text}");
+    }
+
+    /// AC-4 (trickle): non-marker bytes keep arriving, yet the deadline is
+    /// absolute and still ends the wait.
+    #[test]
+    fn read_echo_until_marker_deadline_is_absolute_while_non_marker_bytes_trickle_in() {
+        let (reader, release) = scripted_reader(&[b"restored-"], AfterChunks::Trickle);
+
+        let started = Instant::now();
+        let outcome = read_echo_until_marker(reader, MARKER, SHORT_DEADLINE);
+        let elapsed = started.elapsed();
+        release.store(true, Ordering::SeqCst);
+
+        let EchoOutcome::Missing(missing) = outcome else {
+            panic!("AC-4: trickling non-marker bytes must not count as found");
+        };
+        assert_eq!(
+            missing.reason,
+            MissingReason::DeadlinePassed(SHORT_DEADLINE),
+            "AC-4: reason must be the deadline"
+        );
+        assert!(
+            missing.collected.starts_with(b"restored-"),
+            "AC-4: collected bytes must start with the prefix, got {:?}",
+            missing.collected
+        );
+        assert!(
+            elapsed < GENEROUS_BOUND,
+            "AC-4: arriving bytes must not extend a {SHORT_DEADLINE:?} deadline \
+             past {GENEROUS_BOUND:?}, took {elapsed:?}"
+        );
+        let text = describe_missing_echo(MARKER, &missing);
+        assert!(text.contains("\"restored-"), "AC-4: {text}");
+    }
+
+    /// AC-5: with the complete echo delivered and the reader then withholding
+    /// data, the call returns as soon as the marker is complete instead of
+    /// waiting out the deadline.
+    #[test]
+    fn read_echo_until_marker_returns_as_soon_as_the_marker_is_complete() {
+        let (reader, release) = scripted_reader(&[ECHO], AfterChunks::Withhold);
+        let deadline = Duration::from_secs(10);
+
+        let started = Instant::now();
+        let outcome = read_echo_until_marker(reader, MARKER, deadline);
+        let elapsed = started.elapsed();
+        release.store(true, Ordering::SeqCst);
+
+        assert_eq!(
+            outcome,
+            EchoOutcome::Found(ECHO.to_vec()),
+            "AC-5: the complete echo must be found"
+        );
+        assert!(
+            elapsed < deadline / 2,
+            "AC-5: a found marker must end the wait long before the {deadline:?} \
+             deadline, took {elapsed:?}"
+        );
+    }
+}
+
 /// AC-5: a restored live pane can be written to and read from through
 /// its adopted master, demonstrated against a real PTY pair. The PTY's
 /// line discipline echoes input written to the master back to the
 /// master's own reader side, so a reader cloned from the master BEFORE
-/// it is handed to `from_restored` observes the written bytes.
+/// it is handed to `from_restored` observes the written bytes. The echo
+/// reaches the reader in pieces of unpredictable size, so the check
+/// accumulates chunks until the marker is complete or a 5-second
+/// deadline passes, and a failure shows the bytes it collected.
 #[cfg(unix)]
 #[test]
 fn from_restored_pane_can_write_and_read_through_its_adopted_master() {
-    use std::io::Read as _;
+    use restored_echo_wait::{EchoOutcome, describe_missing_echo, read_echo_until_marker};
+
+    const MARKER: &[u8] = b"restored-write";
     let pair = open_test_pty_pair();
     let writer = pair.master.take_writer().unwrap();
-    let mut master_reader = pair
+    let master_reader = pair
         .master
         .try_clone_reader()
         .expect("master must support a reader clone");
@@ -3277,17 +3731,10 @@ fn from_restored_pane_can_write_and_read_through_its_adopted_master() {
 
     pane.write_input(b"restored-write\n").unwrap();
 
-    let mut buf = [0u8; 64];
-    let n = master_reader
-        .read(&mut buf)
-        .expect("master read must succeed");
-    assert!(
-        buf[..n]
-            .windows(b"restored-write".len())
-            .any(|w| w == b"restored-write"),
-        "bytes written through the adopted master's writer must be readable \
-         back through the adopted master (echoed by the PTY line discipline)"
-    );
+    match read_echo_until_marker(master_reader, MARKER, std::time::Duration::from_secs(5)) {
+        EchoOutcome::Found(_) => {}
+        EchoOutcome::Missing(missing) => panic!("{}", describe_missing_echo(MARKER, &missing)),
+    }
 }
 
 /// mux-vt100-del-closing AC-3 (FR2, FR5, NFR1): the restored shadow screen

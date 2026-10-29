@@ -1,0 +1,66 @@
+schema_version: 2
+feature: restored-pane-read-flake-fix
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.21
+    confidence: 0.79
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.79
+      '2': 0.21
+      '3': 0.0
+  observed_at: '2026-10-29T19:22:05+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.34
+    confidence: 0.66
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.66
+      '2': 0.34
+      '3': 0.0
+  observed_at: '2026-10-29T19:24:03+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/session/pane/tests.rs
+  - src-tauri/src/mux/upgrade/tests.rs
+  changed_lines_approx: 44
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: 0
+  covering_tests_exist: true
+  spillover_modules:
+  - mux::upgrade::tests
+  work_still_required: true
+  work_still_required_evidence: src-tauri/src/mux/session/pane/tests.rs:3280-3290
+    は64バイトのバッファに1回だけreadし、その結果だけを検査している。期限・読み足し・取得バイト列の失敗表示は未実装。src-tauri/src/mux/upgrade/tests.rs:298
+    は読み取りを決定的と記述している。src-tauri/src/pty/mod.rs:680-703 には期限付きの収集と取得内容の失敗表示がある。44行は対象関数39行とコメント5行の現行範囲で、最終差分行数は未確定。追加関数・追加テスト0は既存テスト内で修正する場合の暫定値。依存先数2はsrc-tauri/Cargo.toml:127,220
+    のportable-ptyとlibcを集計した。動作変更はテストの判定処理を指す。再現実行は行っていない。
+  test_change_kind: extend_existing_one_to_one
+  added_test_cases_approx: 0
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 2
+  changes_external_contract: false
+  changes_behavior: true
+decided_at: '2026-10-29T19:24:16+09:00'

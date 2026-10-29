@@ -1,0 +1,136 @@
+schema_version: 1
+feature: restored-pane-read-flake-fix
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 80428d81b018f5cf9bc1cfbfa2f6fb94f2129df7
+last_input_digest: sha256:848978968cc1dd9492ada9e361c1a5536f41103e038a9f256558d30b89444879
+active_request_id: null
+packets: {}
+answers:
+  assumption.a1:
+    packet_id: null
+    answered_at: '2026-10-29T19:27:34+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: The test function name `from_restored_pane_can_write_and_read_through_its_adopted_master`
+      stays unchanged, so the test-docs-records rename rule does not apply and the
+      `test-docs/` records that list it need no update.
+    normalized_answer: The test function name `from_restored_pane_can_write_and_read_through_its_adopted_master`
+      stays unchanged, so the test-docs-records rename rule does not apply and the
+      `test-docs/` records that list it need no update.
+  assumption.a2:
+    packet_id: null
+    answered_at: '2026-10-29T19:27:34+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: FR4's regression test may be a new unit test of a small test-only read-until-marker
+      helper, driven by a scripted `Read` implementation (the `ScriptedReader` style
+      in `src-tauri/src/pty/mod.rs` is a precedent). It sits next to the target test
+      in `src-tauri/src/mux/session/pane/tests.rs`. The name and exact placement are
+      left to planning.
+    normalized_answer: FR4's regression test may be a new unit test of a small test-only
+      read-until-marker helper, driven by a scripted `Read` implementation (the `ScriptedReader`
+      style in `src-tauri/src/pty/mod.rs` is a precedent). It sits next to the target
+      test in `src-tauri/src/mux/session/pane/tests.rs`. The name and exact placement
+      are left to planning.
+  assumption.a3:
+    packet_id: null
+    answered_at: '2026-10-29T19:27:34+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: Choosing between `poll` on the master fd and a helper thread plus channel
+      timeout for the deadline (FR2) is left to planning. Both meet the requirement.
+    normalized_answer: Choosing between `poll` on the master fd and a helper thread
+      plus channel timeout for the deadline (FR2) is left to planning. Both meet the
+      requirement.
+  assumption.a4:
+    packet_id: null
+    answered_at: '2026-10-29T19:27:34+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: In AC-4, "every logical CPU" means one busy-loop thread per logical
+      CPU on the verifying machine (24 in the investigation). The busy-loop load is
+      test-time tooling run outside the repository and is not committed.
+    normalized_answer: In AC-4, "every logical CPU" means one busy-loop thread per
+      logical CPU on the verifying machine (24 in the investigation). The busy-loop
+      load is test-time tooling run outside the repository and is not committed.
+  assumption.a5:
+    packet_id: null
+    answered_at: '2026-10-29T19:27:34+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: AC-5 counts only the target test. Other known intermittent `--lib` failures
+      (`mux::inherited_pty::tests::dropping_the_adapter_closes_the_owned_descriptor`,
+      `mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once`)
+      and the `inherited_pty.rs` single-read tests (investigation follow-up candidates
+      2 and 3) are out of scope.
+    normalized_answer: AC-5 counts only the target test. Other known intermittent
+      `--lib` failures (`mux::inherited_pty::tests::dropping_the_adapter_closes_the_owned_descriptor`,
+      `mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once`)
+      and the `inherited_pty.rs` single-read tests (investigation follow-up candidates
+      2 and 3) are out of scope.
+  assumption.a6:
+    packet_id: null
+    answered_at: '2026-10-29T19:27:34+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: '`feature-docs/restored-pane-read-flake-investigation/INVESTIGATION.md`
+      is a predecessor feature''s record. It stays as written, including its quotation
+      of the "deterministic" comment and its line numbers.'
+    normalized_answer: '`feature-docs/restored-pane-read-flake-investigation/INVESTIGATION.md`
+      is a predecessor feature''s record. It stays as written, including its quotation
+      of the "deterministic" comment and its line numbers.'
+  assumption.a7:
+    packet_id: null
+    answered_at: '2026-10-29T19:27:34+09:00'
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: The PTY keeps the kernel's default termios (ICANON, ECHO, ONLCR on),
+      so the expected echo is `restored-write\r\n` and the 14-byte marker `restored-write`
+      is a valid success condition. This is a preserved fact from the investigation.
+    normalized_answer: The PTY keeps the kernel's default termios (ICANON, ECHO, ONLCR
+      on), so the expected echo is `restored-write\r\n` and the 14-byte marker `restored-write`
+      is a valid success condition. This is a preserved fact from the investigation.
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:848978968cc1dd9492ada9e361c1a5536f41103e038a9f256558d30b89444879
+  output_digest: sha256:7edcf4a2f9ee7475157d1c6b46566bdc0f3574efab33de5093e7e89fe18dc951
+  dispatch_digest_inputs:
+    CLAUDE.md: sha256:05afe1b23d63c1c48dc84ed05626a2b75917462ef9345d314fc009cf6c948386
+    Cargo.toml: sha256:2298e42884286bdb7d80b31bade40fdcbcad1007e7be5f1f069b2880a6aeabfc
+    LICENSE: sha256:a8987fee7d477add12050301baac10d48ae16a56355dd778efbe17975fad40e4
+    feature-docs/restored-pane-read-flake-investigation/INVESTIGATION.md: sha256:8ca45359f712304fd49a822cb5ea877294a7b9a0a68202a47183bb07ceda3d53
+    package.json: sha256:f74901f5ef1ce2fac35341bb4ce14201d3c633f2e95c54c8f3d664cd6df559e2
+    src-tauri/Cargo.toml: sha256:3d706f97e6003a3e4a6f4fdf5af2a2eee676c6054568a688d44b762b47bf63c0
+    src-tauri/src/mux/session/pane/tests.rs: sha256:17b2b3ef88eedf079dc7b80ac820074a76bcc613115dc2135f44f0a3b3d5d78c
+    src-tauri/src/mux/upgrade/tests.rs: sha256:3efce79b3e23d4e01e72ddf89104618cf8ed7b3c5ec748fe28c79e3ff03ff227
+    src-tauri/src/pty/mod.rs: sha256:615898f65d8d00e9bf8e6632829b7c2d806d7b7860145c8f68543152544be5b3
+    test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
+    '{plugins}/em-workflow/references/contracts/analyst-contract.md': sha256:2f4394c4ef60bca84df8001158a691707e200124e264a1fc5e28b38a73dd13e9
+  self_write_set: []
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:c9657bcc3c66adb27119c549dd426e723a2dad9feeee074121ec00f69ae5ea71
+  output_digest: null
+  self_write_set: []
+artifacts:
+- path: feature-docs/restored-pane-read-flake-fix/REQUIREMENTS.md
+  sha256: sha256:c85de2284fa8322449cf927e22e201bba0e27047429593fa6681fbed407dd47a
+  produced_by: create-spec-run-0002
+- path: feature-docs/restored-pane-read-flake-fix/SPEC.md
+  sha256: sha256:467ae29e71741fdd3113ef224e32d6648b0d23325b764e57658077f82e246d6d
+  produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

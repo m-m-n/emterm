@@ -1,0 +1,295 @@
+schema_version: 1
+feature: restored-pane-read-flake-fix
+created: '2026-10-29'
+base_branch: main
+goal: '# mux pane の from_restored_pane_can_write_and_read_through_its_adopted_master
+  が PTY エコーの短い read で間欠的に失敗する
+
+
+  種別: バグ
+
+
+  ## 現象 (必須)
+
+
+  `mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master`
+  が `--lib` 全体の実行で間欠的に失敗する（未変更の `--lib` 全体で 37 回中 5 回、13.5 %）。失敗は `src-tauri/src/mux/session/pane/tests.rs:3284:5`
+  の assert で、メッセージには読み取ったバイト列が出ない。
+
+
+  原因は CPU 競合下での PTY エコーの短い read。テストは `restored-write\n` を 1 回書き（`pane/tests.rs:3278`）、64
+  バイトまでの blocking `read` を 1 回だけ行う（`pane/tests.rs:3281-3283`）。エコー `restored-write\r\n`（16
+  バイト）が一度に届かず、最初の read が 14 バイト未満の先頭部分だけを返すとマーカー `restored-write` を含まず失敗する。残りは 0.025-0.591
+  ms 後に届く。
+
+
+  ## 再現手順 (必須)
+
+
+  1. 24 本の busy-loop スレッドで論理 CPU 24 個をすべて埋める
+
+  2. 対象テストを単体で 150 回実行する（修正前は 28 回失敗、18.7 %）
+
+
+  ## 期待する挙動 (必須)
+
+
+  最初の read が先頭部分だけを返しても、期限内にマーカーが揃えば成功する。失敗時は読み取ったバイト列をメッセージに出す。
+
+
+  ## 完了の定義 (必須)
+
+
+  - [ ] 再現手順で現象が起きない
+
+  - [ ] 再発を検出するテストがある
+
+
+  ## 該当箇所 (任意)
+
+
+  - `src-tauri/src/mux/session/pane/tests.rs:3253-3291`
+
+  - `src-tauri/src/mux/upgrade/tests.rs:295-299` のコメント（この read を決定的と記述している）
+
+  - 参考になる既存の形: `src-tauri/src/pty/mod.rs:680-703`（期限まで読み足し、集めた文字列をメッセージに出す）
+
+
+  ## 実害・発生条件 (任意)
+
+
+  `--lib` 全体の検証結果が読めなくなる。修正の形（マーカーが揃うか期限切れまで読み足す）は再現プログラムで 19 992 回中 0 失敗（短い初回 read
+  631 回を含む）と計測済み。blocking reader にはタイムアウトが無いため、期限には master fd の `poll` かヘルパースレッドが要る。根拠は調査
+  feature restored-pane-read-flake-investigation の INVESTIGATION.md 1・3・5・8 節。
+
+  '
+parent_branch: em-workflow/restored-pane-read-flake-fix/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.79
+      '2': 0.21
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.66
+      '2': 0.34
+      '3': 0.0
+  at: '2026-10-29T19:24:16+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+        src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 0cd0e54a0dbf9508795e5e9c1cd8d9d94387deec
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: Test-only fix with no user interface or visual change.
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: d59fdc162eb58542c65e0aa85d1be149b1b89732
+- id: implement
+  status: completed
+  failed_kind: null
+  base_commit: cdfb49e8cc730bbef8f367912398354470f546c8
+  completed_at_commit: 3194a641e28e60fb18640e3f0e8fbff54e38457c
+- id: review
+  status: completed
+  completed_at_commit: 1c357d469a45cae6f5b7d4e8a1074ea16c715f92
+- id: verify
+  status: completed
+  result: pass
+  failed_items: []
+  excluded_scenarios: []
+  summary: >-
+    Build checks (default and --no-default-features) passed. Full --lib run:
+    4836 passed, 0 failed. TS-1/2/7/8/9 helper tests and TS-3 target test passed.
+    TS-4: 150 of 150 exact runs passed with 24 busy-loop processes (one per
+    logical CPU). TS-5/TS-10: only the two test files under src-tauri changed,
+    Cargo.toml and Cargo.lock unchanged, unix gate kept, no new warnings in
+    changed files. TS-6: reworded comment has no "deterministic" claim and
+    describes the bounded read-until-marker check.
+  completed_at_commit: aa057c6d028c2ece93e2bbdf031910f0ece911e4
+- id: retrospect
+  status: completed
+  completed_at_commit: 5c33d097c3f9c5d6790751ec0d3ba99420ac67f6
+tasks:
+  task0001:
+    title: Bounded read-until-marker check for the restored-pane echo test
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/session/pane/tests.rs
+    - test-docs/restored-pane-read-flake-fix/task0001.tests.yaml
+    skills: []
+    domains:
+    - concurrency
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    status: merged
+    notes: null
+    branch: em-workflow/restored-pane-read-flake-fix/task0001
+  task0002:
+    title: Reword the upgrade test comment about the pane-level read check
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/mux/upgrade/tests.rs
+    - test-docs/restored-pane-read-flake-fix/task0002.tests.yaml
+    skills: []
+    domains: []
+    complexity: low
+    requirements:
+    - FR5
+    - NFR1
+    status: merged
+    notes: null
+    branch: em-workflow/restored-pane-read-flake-fix/task0002
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, performance, architecture, spec]
+  residual_critical_high: 0
+  needs_rework: false
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
+requirements:
+  FR1:
+    title: Read until the marker arrives or a deadline passes
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-3
+    - TS-4
+    - TS-5
+  FR2:
+    title: Bounded wait on a blocking reader
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+    - TS-4
+    - TS-8
+  FR3:
+    title: Show the bytes read when the test fails
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-7
+    - TS-8
+  FR4:
+    title: Test that catches the bug coming back
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+  FR5:
+    title: Correct the comment that calls the read deterministic
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0002
+    tests:
+    - TS-6
+  NFR1:
+    title: Test-only change
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-5
+    - TS-10
+  NFR2:
+    title: No new dependencies
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-5
+  NFR3:
+    title: Platform gating kept
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-5
+    - TS-10
+  NFR4:
+    title: Bounded duration
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-4
+    - TS-9
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
