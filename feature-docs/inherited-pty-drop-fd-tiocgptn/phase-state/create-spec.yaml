@@ -1,0 +1,41 @@
+schema_version: 1
+feature: inherited-pty-drop-fd-tiocgptn
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 910b65112c34dd527d34a985a92f535f9109031d
+last_input_digest: sha256:470bb868f127cf5da68c4c7f75b3bf03a458f1b1f9e253d51fe27c52c9ee2407
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:3ad72f54e962158cb11357858f800f3c88c9cfd9a4fe007d504a7f55b91cca78
+  output_digest: sha256:07a5398ad484c009336e836c2a2d7d6e7a61888fbc9a1494a3b3a9083c7c6abe
+  self_write_set: []
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:470bb868f127cf5da68c4c7f75b3bf03a458f1b1f9e253d51fe27c52c9ee2407
+  output_digest: sha256:92f6a7a222081bbdac18befb0653f4be6b400c3deb3642c732ce333c6deec61b
+  self_write_set:
+  - feature-docs/inherited-pty-drop-fd-tiocgptn/REQUIREMENTS.md
+  - feature-docs/inherited-pty-drop-fd-tiocgptn/SPEC.md
+artifacts:
+- path: feature-docs/inherited-pty-drop-fd-tiocgptn/REQUIREMENTS.md
+  sha256: sha256:0c2c4ea81489fb61c9f725948be148d77fd2d056636a3237f31d81292bdd44c9
+  produced_by: create-spec-run-0002
+- path: feature-docs/inherited-pty-drop-fd-tiocgptn/SPEC.md
+  sha256: sha256:cb51d7ab1aa3d3811a9acecbaa37fe260147180008527fdef10216b8e9fe83b1
+  produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+last_error: null

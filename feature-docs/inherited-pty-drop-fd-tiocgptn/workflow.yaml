@@ -1,0 +1,240 @@
+schema_version: 1
+feature: inherited-pty-drop-fd-tiocgptn
+created: '2026-10-30'
+base_branch: main
+goal: |
+  # inherited_pty の drop 後 fd 比較テストを PTY master を区別できる識別子（TIOCGPTN 等）に置き換える
+
+  種別: バグ
+
+  ## 現象
+  `mux::inherited_pty::tests::dropping_the_adapter_closes_the_owned_descriptor` が `--lib` 全体の実行で間欠的に失敗する。失敗は `src-tauri/src/mux/inherited_pty.rs:474:27` の `assert_ne!(rdev, original_rdev)` で、両辺とも 1282（`/dev/ptmx` の 5:2）。
+
+  テストは drop 後の `dup_fd` を `stat_rdev`（`st_rdev`）で比較しているが、`st_rdev` はすべての PTY master とその複製で 5:2 になる。drop で解放された fd 番号が、同じプロセス内の別テストの PTY master（または複製）に再利用されると、「閉じていない」場合と区別できない。`inherited_pty.rs:466-471` のコメントが仮定する「再利用された記述子は別のデバイスを指す」は成り立たない。
+
+  ## 再現手順
+  1. 無変更のテストバイナリで対象テストを単体実行し、drop の直後に外部から `/dev/ptmx` を 1 つ開く注入を行う
+  2. `inherited_pty.rs:474:27` で `left: 1282` `right: 1282` の失敗が再現する（`/dev/null` の注入では成功する）
+
+  自然な失敗は `--lib` 全体で約 25 回に 1 回。
+
+  ## 期待する挙動
+  drop 後の fd 番号が別の PTY master に再利用されても、テストは「元の記述子が閉じた」ことを正しく判定し、間欠的に失敗しない。
+
+  ## 完了の定義
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所
+  - `src-tauri/src/mux/inherited_pty.rs:257-273`（`stat_rdev`）、`:456-479`（対象テスト）
+  - コメント `inherited_pty.rs:260-265`、`:466-471`
+  - `stat_rdev` の呼び出しはこのテスト内の `:461` と `:472` だけ
+
+  修正方針の候補:
+  - 比較の識別子を `ioctl(TIOCGPTN)` に置き換える。master と複製は同じ pts 番号、別の pair の master は別の番号を返し、slave・通常ファイル・`/dev/null`・pipe・socket・閉じた番号では失敗する。「drop 後に `dup_fd` で `TIOCGPTN` が失敗するか、元と異なる番号を返す」で閉じたことを確認できる見込み（Rust のテストでの実装と安定性は未検証）
+  - 同じ変更で、失敗メッセージに fd 番号と取得した識別子を出す
+
+  根拠: em-workflow の feature `inherited-pty-drop-fd-flake-investigation` の `INVESTIGATION.md` 3.2 / 3.3 / 3.4 / 4.2 / 5 / 10。
+
+  ## 実害・発生条件
+  `--lib` 全体の実行でこのテストが間欠的に失敗し、無関係な変更の検証結果が読めなくなる。
+parent_branch: em-workflow/inherited-pty-drop-fd-tiocgptn/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.01
+      '1': 0.84
+      '2': 0.14
+      '3': 0.01
+    description_plus_code:
+      '0': 0.0
+      '1': 0.76
+      '2': 0.24
+      '3': 0.0
+  at: '2026-10-30T00:10:00+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    rust:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: bc670de9706a86547972cb40a6c1bcd0d969176e
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: Rust クレートのテストコードのみの変更で、UI がない
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: 64a300ce563c2008cec6862c7a507ea6b9627348
+- id: implement
+  status: completed
+  completed_at_commit: 8130bcd079684d17fdea3b6b356b3b3b19b87908
+  base_commit: b33db274447dd8fcbdf3ecce02d88e85f054163c
+- id: review
+  status: completed
+  completed_at_commit: cf6e5b66005076beffa06dbba949a154235d74cd
+- id: verify
+  status: completed
+  result: pass
+  failed_items: []
+  completed_at_commit: 2237352b1a07a86597cf2854054eb61236445143
+- id: retrospect
+  status: completed
+  completed_at_commit: 30f1da8f78c25b7fd8b73662fc340bb08a5081b6
+tasks:
+  task0001:
+    title: Replace the st_rdev closure check with a TIOCGPTN pts-number check
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/inherited_pty.rs
+    - src-tauri/src/mux/upgrade/tests.rs
+    - test-docs/inherited-pty-drop-fd-tiocgptn/task0001.tests.yaml
+    skills:
+    - backend-impl
+    domains:
+    - concurrency
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    status: merged
+    branch: em-workflow/inherited-pty-drop-fd-tiocgptn/task0001
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  residual_critical_high: 0
+  needs_rework: false
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
+requirements:
+  FR1:
+    title: 閉鎖判定の識別子を TIOCGPTN に置き換える
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+  FR2:
+    title: 失敗メッセージに診断情報を含める
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-4
+  FR3:
+    title: 再発を検出するテスト
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-3
+  FR4:
+    title: 誤った前提を書いたコメントと参照を直す
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-5
+  FR5:
+    title: 元の pair を判定完了まで開いたままにする
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+  NFR1:
+    title: 変更範囲
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-7
+  NFR2:
+    title: 決定性
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-8
+  NFR3:
+    title: テスト名の維持
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+  NFR4:
+    title: ビルドとテスト
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks:
+    - task0001
+    tests:
+    - TS-6
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2

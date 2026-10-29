@@ -216,17 +216,72 @@ mod tests {
     /// `master_fd`, so tests can open an independent handle to the slave
     /// side without spawning a child process into it.
     fn slave_device_path(master_fd: RawFd) -> std::path::PathBuf {
+        match query_pts_number(master_fd) {
+            PtsQuery::Pts(ptn) => std::path::PathBuf::from(format!("/dev/pts/{ptn}")),
+            PtsQuery::Errno(errno) => panic!("ioctl(TIOCGPTN) failed: errno {errno}"),
+        }
+    }
+
+    /// What the TIOCGPTN query reported for a descriptor number.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum PtsQuery {
+        /// The descriptor refers to a PTY master (or a duplicate of one); the
+        /// payload is the pts number of its pair.
+        Pts(libc::c_uint),
+        /// The query failed (closed number, ordinary file, slave, ...); the
+        /// payload is the `errno` it reported.
+        Errno(i32),
+    }
+
+    impl std::fmt::Display for PtsQuery {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                PtsQuery::Pts(n) => write!(f, "pts number {n}"),
+                PtsQuery::Errno(e) => write!(f, "TIOCGPTN failed with errno {e}"),
+            }
+        }
+    }
+
+    /// Reports which PTY pair `fd` belongs to by issuing TIOCGPTN on it.
+    ///
+    /// `fd` may be any descriptor number, including invalid or closed ones.
+    /// Never panics and never closes or alters the descriptor.
+    fn query_pts_number(fd: RawFd) -> PtsQuery {
         let mut ptn: libc::c_uint = 0;
-        // SAFETY: `ptn` is a valid `c_uint` the ioctl fills in; `master_fd`
-        // is a live PTY master for the duration of this call.
-        let rc = unsafe { libc::ioctl(master_fd, libc::TIOCGPTN, &mut ptn as *mut _) };
-        assert_eq!(
-            rc,
-            0,
-            "ioctl(TIOCGPTN) failed: {}",
-            io::Error::last_os_error()
-        );
-        std::path::PathBuf::from(format!("/dev/pts/{ptn}"))
+        // SAFETY: `ptn` is a valid `c_uint` the ioctl fills in on success;
+        // `fd` is a caller-supplied descriptor number, valid or not (the
+        // kernel reports the invalid case through the return code).
+        let rc = unsafe { libc::ioctl(fd, libc::TIOCGPTN, &mut ptn as *mut _) };
+        if rc == 0 {
+            PtsQuery::Pts(ptn)
+        } else {
+            PtsQuery::Errno(io::Error::last_os_error().raw_os_error().unwrap_or(0))
+        }
+    }
+
+    /// The closure judgment's result: whether the descriptor number still
+    /// refers to the original master, plus what was observed (for failure
+    /// messages).
+    #[derive(Debug, Clone, Copy)]
+    struct Judgment {
+        original: bool,
+        observed: PtsQuery,
+    }
+
+    /// Decides whether descriptor number `fd` still refers to the original
+    /// PTY master, whose pair reported `baseline_pts` before the drop.
+    ///
+    /// "Original" exactly when the TIOCGPTN query succeeds and reports
+    /// `baseline_pts`. A failed query (closed number, ordinary file, slave
+    /// handle) or a different pts number (another PTY master, or a duplicate
+    /// of one, that reused the freed number) is "not original". The observed
+    /// outcome is carried along for failure messages.
+    fn judge_descriptor(fd: RawFd, baseline_pts: libc::c_uint) -> Judgment {
+        let observed = query_pts_number(fd);
+        Judgment {
+            original: observed == PtsQuery::Pts(baseline_pts),
+            observed,
+        }
     }
 
     /// Switches the pty pair to raw mode (no canonical line buffering, no
@@ -252,24 +307,6 @@ mod tests {
                 io::Error::last_os_error()
             );
         }
-    }
-
-    /// The device number `fstat` reports for `fd`, or `None` if `fd` is not
-    /// a currently-open descriptor.
-    ///
-    /// Used (rather than a plain "is this fd number valid" check) so tests
-    /// that assert a descriptor was closed stay correct even when `cargo
-    /// test`'s parallel threads — sharing one process-wide fd table — hand
-    /// that freed NUMBER to an unrelated descriptor from a concurrently
-    /// running test before the assertion runs: comparing the device
-    /// identity, not just fd validity, tells the two cases apart.
-    fn stat_rdev(fd: RawFd) -> Option<libc::dev_t> {
-        let mut st: libc::stat = unsafe { std::mem::zeroed() };
-        // SAFETY: `st` is a zero-initialized POD `fstat` fills in; `fd` is
-        // a caller-supplied descriptor number, valid or not (`fstat` itself
-        // reports the invalid case via its return code).
-        let rc = unsafe { libc::fstat(fd, &mut st) };
-        if rc == 0 { Some(st.st_rdev) } else { None }
     }
 
     fn has_cloexec(fd: RawFd) -> bool {
@@ -457,25 +494,108 @@ mod tests {
     #[test]
     fn dropping_the_adapter_closes_the_owned_descriptor() {
         let (_pair, dup_fd) = open_master_dup();
-        let original_rdev =
-            stat_rdev(dup_fd).expect("sanity: fd must be open right after construction");
+        let baseline_pts = match query_pts_number(dup_fd) {
+            PtsQuery::Pts(n) => n,
+            PtsQuery::Errno(errno) => panic!(
+                "sanity: fd {dup_fd} must report a pts number right after \
+                 construction, but TIOCGPTN failed with errno {errno}"
+            ),
+        };
         let adapter = InheritedMasterPty::new(dup_fd).unwrap();
 
         drop(adapter);
 
-        // `_pair.master` (still in scope) keeps this test's own pty device
-        // minor number open for the whole test, so if `dup_fd`'s NUMBER
-        // gets reassigned to an unrelated descriptor by a concurrently
-        // running test before this check runs, that descriptor can only
-        // ever refer to a DIFFERENT device — never ours — which still
-        // proves our own descriptor was closed.
-        match stat_rdev(dup_fd) {
-            None => {}
-            Some(rdev) => assert_ne!(
-                rdev, original_rdev,
-                "the owned descriptor must be closed once the adapter drops"
-            ),
-        }
+        // `_pair` (still in scope) keeps this test's pts number open for the
+        // whole test, so no other pair can be assigned `baseline_pts`. If
+        // `dup_fd`'s NUMBER gets reassigned by a concurrently running test
+        // before this check runs, then a PTY master (or a duplicate of one)
+        // reports a DIFFERENT pts number, and any non-master descriptor
+        // makes the TIOCGPTN query fail. Either outcome shows our own
+        // descriptor was closed; only the original master reports
+        // `baseline_pts`.
+        let judgment = judge_descriptor(dup_fd, baseline_pts);
+        assert!(
+            !judgment.original,
+            "the owned descriptor must be closed once the adapter drops: \
+             fd {dup_fd}, baseline pts {baseline_pts}, observed after drop: {}",
+            judgment.observed
+        );
+    }
+
+    /// Asserts the closure judgment's verdict for `fd` against `baseline_pts`.
+    fn assert_verdict(label: &str, fd: RawFd, baseline_pts: libc::c_uint, expect_original: bool) {
+        let judgment = judge_descriptor(fd, baseline_pts);
+        assert_eq!(
+            judgment.original, expect_original,
+            "{label}: fd {fd}, baseline pts {baseline_pts}, observed {}",
+            judgment.observed
+        );
+    }
+
+    /// Recurrence test: another PTY master (or a duplicate of one) holding a
+    /// descriptor while the original pair is open must be judged "not
+    /// original"; only a duplicate of the original master is "original".
+    #[test]
+    fn closure_judgment_distinguishes_other_pty_masters() {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        use std::os::unix::io::OwnedFd;
+
+        // Pairs A and B stay open for the whole test, so their pts numbers
+        // cannot be assigned to any other pair.
+        let (pair_a, dup_a_fd) = open_master_dup();
+        let (pair_b, dup_b_fd) = open_master_dup();
+        // SAFETY: each duplicate is exclusively owned by this test; the
+        // `OwnedFd` closes it exactly once. The pair masters are only
+        // borrowed below and never closed by the test.
+        let dup_a = unsafe { OwnedFd::from_raw_fd(dup_a_fd) };
+        let dup_b = unsafe { OwnedFd::from_raw_fd(dup_b_fd) };
+        let master_b_fd = pair_b
+            .master
+            .as_raw_fd()
+            .expect("unix PTY master exposes a raw fd");
+
+        let baseline_pts = match query_pts_number(dup_a.as_raw_fd()) {
+            PtsQuery::Pts(n) => n,
+            other => panic!("sanity: a duplicate of A's master must report a pts number: {other}"),
+        };
+
+        let slave_a = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOCTTY)
+            .open(slave_device_path(dup_a.as_raw_fd()))
+            .expect("slave device must be openable");
+        let plain_file = tempfile::tempfile().expect("must create a temp file");
+
+        assert_verdict("B's master", master_b_fd, baseline_pts, false);
+        assert_verdict(
+            "duplicate of B's master",
+            dup_b.as_raw_fd(),
+            baseline_pts,
+            false,
+        );
+        assert_verdict(
+            "duplicate of A's master",
+            dup_a.as_raw_fd(),
+            baseline_pts,
+            true,
+        );
+        assert_verdict(
+            "handle to A's slave",
+            slave_a.as_raw_fd(),
+            baseline_pts,
+            false,
+        );
+        assert_verdict(
+            "ordinary temporary file",
+            plain_file.as_raw_fd(),
+            baseline_pts,
+            false,
+        );
+        assert_verdict("CLOSED_FD", CLOSED_FD, baseline_pts, false);
+
+        // Keep both pairs open until every verdict above has been reached.
+        drop((pair_a, pair_b));
     }
 
     /// AC-8: the descriptor-duplication mechanism backing both

@@ -1,0 +1,57 @@
+round: 1
+executed_at: "2026-10-30T00:47:06+09:00"
+scope:
+  review_mode: diff
+  base_commit: b33db274447dd8fcbdf3ecce02d88e85f054163c
+  head_commit: cf6e5b66005076beffa06dbba949a154235d74cd
+  changed_files:
+  - src-tauri/src/mux/inherited_pty.rs
+  - src-tauri/src/mux/upgrade/tests.rs
+  - test-docs/inherited-pty-drop-fd-tiocgptn/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    第1ラウンドの対象は3ファイル。inherited_pty.rs の変更はすべて #[cfg(test)] mod tests の中にあり、
+    upgrade/tests.rs は stat_dev_ino のドキュメントコメントだけが変わり、test-docs の記録は新規ファイル。
+    製品コード（InheritedMasterPty 本体と Drop）は変わっていない。5つのレビュー観点はすべて findings 0件を返し、
+    critical/high の指摘は無かった。レビュー出力に命令の注入を試みる文は無かった。
+    観点ごとの確認結果: security / comprehensive / performance / architecture / spec いずれも corroborated。
+    閾値未満の観察: (1) --no-default-features の check は実装時に未実行で、verify の TS-6 で確認する。
+    (2) upgrade/tests.rs:733 のコメント「matching inherited_pty.rs's established convention」は
+    識別子で比べるという意味では今も成り立つため指摘にしていない。
+  recommended_action: complete
+  action_rationale: >-
+    どのレビュー観点からも critical/high/medium の指摘は無く、評価者自身の読解も5観点すべてで一致した。
+    SPEC と task の受け入れ条件はコード上で満たされており、--no-default-features の check は verify フェーズの TS-6 で扱える。
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-inherited-pty-drop-fd-tiocgptn-20261029T154649Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []

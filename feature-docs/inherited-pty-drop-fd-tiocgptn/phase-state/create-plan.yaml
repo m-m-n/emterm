@@ -1,0 +1,59 @@
+schema_version: 1
+feature: inherited-pty-drop-fd-tiocgptn
+phase: create-plan
+status: completed
+generation: 1
+mode: batch
+base_revision: 52a5b6d969ea0a9c7eabfd70bbca56bcee7a229d
+last_input_digest: sha256:b8ee7bbdfa19c5107ec9152f8e8bbec6f6c1e3d92c28309de4f1616c94ed836c
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: completed
+  input_digest: sha256:b8ee7bbdfa19c5107ec9152f8e8bbec6f6c1e3d92c28309de4f1616c94ed836c
+  output_digest: sha256:50cd368fdf56b73c2326b5fb832319f90c8d827f17ba582e384ddf0e00bd1802
+  dispatch_digest_inputs:
+    feature-docs/inherited-pty-drop-fd-tiocgptn/REQUIREMENTS.md: sha256:0c2c4ea81489fb61c9f725948be148d77fd2d056636a3237f31d81292bdd44c9
+    feature-docs/inherited-pty-drop-fd-tiocgptn/SPEC.md: sha256:cb51d7ab1aa3d3811a9acecbaa37fe260147180008527fdef10216b8e9fe83b1
+    feature-docs/inherited-pty-drop-fd-tiocgptn/workflow.yaml: sha256:7aa21dca1325de3bbd6ea4e352fb24dbcd37544d35c96aab64bdbdda11eed254
+    '{plugins}/em-workflow/references/contracts/planner-contract.md': sha256:6476cc99ea8a1d2d4f376d1702bd636b1ab9898655397ec80ab1d6fb47cbe9e8
+    '{plugins}/em-workflow/references/impl-skills.yaml': sha256:6b372678cdbbeb88b30c34d151c843e1a7072dd021a2ef1ac5fbaafae0bd67c2
+    '{plugins}/em-workflow/references/license-compat.md': sha256:52a07c5d0199a693958d0c9ec4768e8aa248cf95bdb9172dec75296aac5980be
+    '{plugins}/em-workflow/references/review-rules.yaml': sha256:56fbc7788c9bf3d2ccd2ef0be569a94e1854e12c177dcc5fa69b96ee4b95c931
+    '{plugins}/em-workflow/references/templates/task-plan.md': sha256:55eb61de4f1fb012275915f2f1aa689accca46ef30c5d6f8407f655da6cbb814
+    '{plugins}/em-workflow/references/templates/threat-model.md': sha256:6943baf20f089b2ab7a6d0d6b4842a6b7075325a747827b9225304881e0b1278
+    '{plugins}/em-workflow/references/workflow-schema.md': sha256:7d6fcf022e4409981ec5b23e0b77865d2aad25813afc615d2a42f462a5fa690a
+    '{plugins}/em-workflow/skills/plan-writing/SKILL.md': sha256:880bd01ad6c60af5695495e0a6784de7fe98e1ea9463dc6703164f8ffffdbccb
+  patch_id: create-plan-run-0001-p0001
+  patch_applied: true
+  validated: true
+  validator_exit: 0
+  self_write_set:
+  - feature-docs/inherited-pty-drop-fd-tiocgptn/IMPLEMENTATION.md
+  - feature-docs/inherited-pty-drop-fd-tiocgptn/THREAT-MODEL.md
+  - feature-docs/inherited-pty-drop-fd-tiocgptn/VERIFICATION.md
+  - feature-docs/inherited-pty-drop-fd-tiocgptn/tasks/task0001.md
+artifacts:
+- path: feature-docs/inherited-pty-drop-fd-tiocgptn/THREAT-MODEL.md
+  sha256: sha256:1d7e0671a5e4b6a6e4e63e0581fbf8ec6fd95c608fb1c2261f264831e486e5d2
+  produced_by: create-plan-run-0001
+- path: feature-docs/inherited-pty-drop-fd-tiocgptn/IMPLEMENTATION.md
+  sha256: sha256:ffb4acbbae8222338c6d441dd92122a45218d147938c018a0d9dc41073d6e461
+  produced_by: create-plan-run-0001
+- path: feature-docs/inherited-pty-drop-fd-tiocgptn/tasks/task0001.md
+  sha256: sha256:309276900203c5b4606addb94d242a2efada63c1a1c8405e6cc5436fddd12bba
+  produced_by: create-plan-run-0001
+- path: feature-docs/inherited-pty-drop-fd-tiocgptn/VERIFICATION.md
+  sha256: sha256:5f3058c8029a246e067cac10c12faabfad54b3986ebe4ee43393f954a24da849
+  produced_by: create-plan-run-0001
+patches:
+- patch_id: create-plan-run-0001-p0001
+  status: applied
+  base_input_digest: sha256:b8ee7bbdfa19c5107ec9152f8e8bbec6f6c1e3d92c28309de4f1616c94ed836c
+  base_workflow_blob: 2c383fc78c7aa2c8e2e9d3d3495bfcd014011bce
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
