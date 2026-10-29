@@ -1,0 +1,82 @@
+task_id: task0001
+# Baseline run before any file was created or edited (src-tauri --lib, project test command):
+# 4827 passed, 1 failed, 3 ignored. The failure is the investigation's own subject; it failed
+# at src-tauri/src/mux/session/pane/tests.rs:3284:5 on the unmodified tree.
+baseline_failures:
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+# Actually re-executed after INVESTIGATION.md and this record were written (src-tauri --lib,
+# project test command): 4827 passed, 1 failed, 3 ignored. The one failure is the investigation's
+# own subject again (pane/tests.rs:3284:5), the intermittent failure this task documents (5 of 37
+# unmodified full runs); it is the same test as in the baseline, so no new failure appeared.
+# No file under src-tauri/ or crates/ changed, and no test reads the two added files.
+final_failures:
+  - mux::session::pane::tests::from_restored_pane_can_write_and_read_through_its_adopted_master
+# TASK.md has no numbered criteria; AC-1..AC-4 follow the order of the four bullets of its
+# Expected Result (AC-1 conclusion, AC-2 write-to-read path and wait list, AC-3 run counts and
+# bytes read at the failures, AC-4 follow-up candidates), AC-5 is its "git diff -- src-tauri
+# crates is empty before and after" line, and TM-1 is its TM-1 line.
+#
+# Existing-test search for every entry below: no test reads or names the changed files. A search
+# of src-tauri/src, src-tauri/tests, crates, scripts, test and ci-workflows.test.ts by the path
+# feature-docs/restored-pane-read-flake-investigation/INVESTIGATION.md, by the basename
+# INVESTIGATION.md and by the feature name restored-pane-read-flake-investigation found no
+# reference; the document-contract tests in src-tauri/src name individual files of other
+# features, and no test enumerates feature-docs/ or test-docs/ (no read_dir over either). The
+# deliverable is a prose document, so no new Rust or TypeScript test was added (a Rust test would
+# also violate AC-5).
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists for the conclusion; it is a judgement. Verification was reading
+      the document against the sources and the retained per-run logs: the cited lines in
+      src-tauri/src/mux/session/pane/tests.rs (3253-3291), pane/mod.rs, pane/handles.rs and the
+      portable-pty / filedescriptor sources were re-read, and the quoted values (6 of 30 logged
+      full runs failed with a 4 or 5 byte first read, 28 of 150 loaded single runs failed
+      unmodified) come from the per-run logs kept in the untracked tmp/runs/ directory of the
+      worktree. No red state occurred because the document did not exist before this task.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the path and wait-point tables were checked by reading each
+      cited line (the test has a single wait, the blocking read at pane/tests.rs:3281-3283, and
+      no timeout, sleep, join or channel wait). No red state occurred because the document did
+      not exist before this task.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the counts are the recorded results of the runs themselves:
+      (a) alone 120 runs / 0 failures, (b) full --lib 37 runs / 5 failures of the target test,
+      plus the logger runs and loaded runs reported separately. The counts in the document were
+      compared with the per-run index files kept in the untracked tmp/runs/ directory. No red
+      state occurred because the document did not exist before this task.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check exists; the follow-up candidates (make the target test tolerate a
+      prefix-only read, check the other single-read PTY tests, the inherited_pty fd-reuse
+      assertion) were checked against the cited lines. No red state occurred because the
+      document did not exist before this task.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The criterion is "git diff -- src-tauri crates is empty before and after the work". The
+      command printed nothing before the first edit and prints nothing after the last edit
+      (checked with git diff --stat -- src-tauri crates, and git status shows only the two added
+      files). It passed in the starting state, so no failing run was observed; this is an
+      invariant guard rather than a red-to-green criterion.
+  TM-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      The check is a search of INVESTIGATION.md for absolute paths under the home directory (a
+      grep for the Linux home, macOS Users and root directory prefixes), which finds none. It
+      passed on the first complete version of the document and again after the final edit. No
+      failing run of the check was observed against the document; the raw cargo logs kept in
+      tmp/runs/ do contain such a path (the Compiling line), which is why command output was
+      summarised or rewritten before being written.
