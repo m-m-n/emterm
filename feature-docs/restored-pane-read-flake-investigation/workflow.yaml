@@ -108,7 +108,8 @@ tasks:
     - concurrency
     complexity: medium
     requirements: []
-    status: pending
+    status: in_progress
+    branch: em-workflow/restored-pane-read-flake-investigation/task0001
 review:
   status: pending
   rounds_completed: 0
