@@ -1,7 +1,7 @@
 schema_version: 1
 feature: inherited-pty-drop-fd-tiocgptn
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 910b65112c34dd527d34a985a92f535f9109031d
 last_input_digest: sha256:470bb868f127cf5da68c4c7f75b3bf03a458f1b1f9e253d51fe27c52c9ee2407
@@ -17,7 +17,7 @@ worker_runs:
 - request_id: create-spec-run-0002
   status: completed
   input_digest: sha256:470bb868f127cf5da68c4c7f75b3bf03a458f1b1f9e253d51fe27c52c9ee2407
-  output_digest: null
+  output_digest: sha256:92f6a7a222081bbdac18befb0653f4be6b400c3deb3642c732ce333c6deec61b
   self_write_set:
   - feature-docs/inherited-pty-drop-fd-tiocgptn/REQUIREMENTS.md
   - feature-docs/inherited-pty-drop-fd-tiocgptn/SPEC.md
