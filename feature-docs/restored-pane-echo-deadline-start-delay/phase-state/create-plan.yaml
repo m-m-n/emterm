@@ -1,7 +1,7 @@
 schema_version: 1
 feature: restored-pane-echo-deadline-start-delay
 phase: create-plan
-status: in_progress
+status: completed
 generation: 1
 mode: batch
 base_revision: 9b99b9ab32bd45c356def7f91617dd39b14d7323
