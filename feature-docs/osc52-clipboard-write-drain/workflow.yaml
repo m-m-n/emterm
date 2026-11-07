@@ -136,7 +136,8 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc52-clipboard-write-drain/task0001
     notes: null
   task0002:
     title: Keep mux snapshot replay content out of the OSC 52 clipboard queues
@@ -152,7 +153,8 @@ tasks:
     complexity: high
     requirements:
     - FR7
-    status: pending
+    status: in_progress
+    branch: em-workflow/osc52-clipboard-write-drain/task0002
     notes: null
 review:
   status: pending
