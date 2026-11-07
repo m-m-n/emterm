@@ -1356,6 +1356,23 @@ impl Tab {
     pub fn drain_osc(&self) -> Vec<EmtermOscRequest> {
         std::mem::take(&mut self.cb_state.lock().osc_queue)
     }
+
+    /// Drain this tab's OSC 52 queues (osc52-clipboard-write-drain FR1, FR4,
+    /// FR6, NFR1). Returns the queued writes as `(target, text)` in queue
+    /// order (empty text = clear). The read queue is emptied and its entries
+    /// are discarded: no clipboard is read and no byte is written to the PTY
+    /// (read answering is a separate feature).
+    ///
+    /// Call only at the `App::pump_all` drain point, after every parse path
+    /// of the pump has run (IMPLEMENTATION.md D1). Never call it from inside
+    /// a replay path (D2) or from the early `cb_state` block of
+    /// `process_combined`, which runs before the mux frame-apply loop.
+    pub fn drain_osc52_clipboard(&self) -> Vec<(String, String)> {
+        let mut state = self.cb_state.lock();
+        // FR4: reads are emptied and dropped here, unanswered.
+        state.pending_clipboard_reads.clear();
+        std::mem::take(&mut state.pending_clipboard_writes)
+    }
 }
 
 #[cfg(test)]

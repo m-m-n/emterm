@@ -638,6 +638,11 @@ impl ApplicationHandler for PocApp {
         // this is a cheap no-op when disabled.
         let ime_changed = self.app.pump_ime();
         let pty_changed = self.app.pump_all();
+        // OSC 52 clipboard (osc52-clipboard-write-drain FR1, FR2, FR8, NFR2):
+        // apply the writes / clears this pump drained from every tab to the
+        // system clipboard. This is the only caller, on the UI thread,
+        // immediately after `pump_all`; the host is the sink.
+        super::osc52_clipboard::apply_pending_osc52(&mut self.app, host);
         // The child settings window reported a persisted save (its stdout
         // watcher raised the flag and woke this loop via the proxy):
         // reload settings.json and apply it live.

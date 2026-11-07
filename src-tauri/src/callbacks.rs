@@ -960,12 +960,18 @@ pub struct NativeCallbackState {
     /// Pending DCS (SIXEL) payloads, same buffering rationale as
     /// `pending_apc`.
     pub pending_dcs: Vec<Vec<u8>>,
-    /// Pending OSC 52 *write* payloads — `(target, decoded_text)`. The UI
-    /// thread drains these into `arboard`, because arboard's
-    /// `Clipboard::new()` cannot be safely shared across threads.
+    /// Pending OSC 52 *write* payloads — `(target, decoded_text)`; empty
+    /// text is a clear. `Tab::drain_osc52_clipboard` empties this every
+    /// pump (called by `App::pump_all` after all of the pump's parses), and
+    /// the UI thread applies the drained entries to the system clipboard
+    /// through the window host's single `arboard` instance, because
+    /// arboard's `Clipboard::new()` cannot be safely shared across threads
+    /// (osc52-clipboard-write-drain).
     pub pending_clipboard_writes: Vec<(String, String)>,
-    /// Pending OSC 52 *read* requests — `target` only. The UI thread
-    /// reads from `arboard` and posts the response back through the PTY.
+    /// Pending OSC 52 *read* requests — `target` only. The same per-pump
+    /// drain empties this and discards the entries: no clipboard is read
+    /// and nothing is written back through the PTY (answering read
+    /// requests is a separate feature).
     pub pending_clipboard_reads: Vec<String>,
     /// Latched flag — set when any OSC color / style mutation modified
     /// the shared `Theme`. `Tab::pump` drains it and calls

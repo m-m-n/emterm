@@ -1,0 +1,85 @@
+task_id: task0001
+# Two load-sensitive CPU-budget tests of the mux strip pass were red in the baseline run (thread CPU
+# time over a 10s budget / a 12.5s wall-clock budget). Neither touches OSC 52 or this task's files.
+baseline_failures:
+  - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+# Output of the full re-executed run after implementation (4869 passed, 0 failed, the tree committed in
+# this task). Later runs of the same tree on a heavily loaded host (load average 11-50) failed only
+# CPU-budget tests under mux::ipc::pty_spawn, mux::osc_identify and mux::scrollback_filter (2 to 11
+# different tests per run, the baseline's two among them); no test of this task failed in any run.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::osc52_clipboard::tests::ac1_destinations_map_each_target_with_primary_available
+      - window_host::osc52_clipboard::tests::ac1_destinations_map_every_target_to_clipboard_without_primary
+    red_confirmed: true
+    red_reason: "with a stub that returned an empty destination set both tests failed: assertion `left == right` failed: target \"c\" with PRIMARY available, left: [] right: [Clipboard] (and the same for PRIMARY unavailable)"
+  AC-2:
+    tests:
+      - window_host::osc52_clipboard::tests::ac2_two_writes_to_the_same_destination_apply_only_the_last
+      - window_host::osc52_clipboard::tests::ac2_both_target_write_then_primary_clear_splits_per_destination
+      - window_host::osc52_clipboard::tests::ac2_clears_are_recorded_as_clear_operations_not_empty_writes
+      - window_host::osc52_clipboard::tests::ac2_last_entry_wins_across_write_and_clear
+      - window_host::osc52_clipboard::tests::ac2_at_most_one_operation_per_destination
+      - window_host::osc52_clipboard::tests::ac2_without_primary_everything_lands_on_clipboard
+      - window_host::osc52_clipboard::tests::ac2_empty_batch_makes_no_sink_call
+    red_confirmed: true
+    red_reason: "with a no-op batch apply the six behavior tests failed, e.g. ac2_two_writes_to_the_same_destination_apply_only_the_last: left: [] right: [Write(Clipboard, \"b\")]; ac2_clears_are_recorded_as_clear_operations_not_empty_writes: left: [] right: [Clear(Clipboard)]. ac2_empty_batch_makes_no_sink_call is a guard that held for the no-op stub too (no red state for it)"
+  AC-3:
+    tests:
+      - window_host::osc52_clipboard::tests::ac3_failing_sink_is_attempted_for_every_destination_and_logs_without_text
+      - window_host::osc52_clipboard::tests::ac3_failure_line_has_destination_and_length_but_no_text
+      - window_host::osc52_clipboard::tests::ac3_failing_sink_with_a_long_batch_attempts_each_destination_once
+    red_confirmed: true
+    red_reason: "with a no-op batch apply and an empty-string formatter all three failed: the sink was never attempted (left: [] right: [Write(Clipboard, \"secret\"), Clear(Primary)]) and the failure line lacked the destination and length"
+  AC-4:
+    tests:
+      - app::tests::osc52_clipboard::ac4_pump_all_drains_every_tab_and_discards_reads_without_pty_output
+      - app::tests::osc52_clipboard::ac4_background_mux_tab_is_drained
+    red_confirmed: true
+    red_reason: "with no drain in pump_all the active/background plain-tab test failed after its pre-pump preconditions held (2 writes + 1 read queued on tab 0): `tab 0: both queues empty after the pump`; the background mux tab test failed on `assert!(app.tabs.iter().all(queues_are_empty))`"
+  AC-5:
+    tests:
+      - app::tests::osc52_clipboard::ac5_pre_mux_outer_parse_reaches_the_batch
+      - app::tests::osc52_clipboard::ac5_active_pane_mux_pty_output_reaches_the_batch
+      - app::tests::osc52_clipboard::ac5_coalesced_mux_frames_keep_queue_order
+      - app::tests::osc52_clipboard::ac5_post_detached_tail_reaches_the_batch
+      - app::tests::osc52_clipboard::ac5_live_output_queued_during_an_offthread_switch_reaches_the_batch
+      - tabs::tests::output_pipeline::osc52_pre_mux_outer_parse_write_is_drained
+      - tabs::tests::output_pipeline::osc52_active_pane_pty_output_write_is_drained
+      - tabs::tests::output_pipeline::osc52_post_detached_tail_write_is_drained
+    red_confirmed: true
+    red_reason: >-
+      Three red runs observed. (1) No drain existed: every pump_all-level test failed with left: [] and the
+      tab-level tests failed with left: [] right: [(..)]. (2) Per-tab drain call removed from pump_all with the
+      real tab drain in place: 10 tests failed, including all five ac5_* app tests (pre-mux, active-pane mux,
+      coalesced frames, post-Detached tail, off-thread live queue), ac4_* and ac6_*/ac7_*. (3) Drain moved into
+      the early cb_state block of Tab::process_combined (entries parsed by the mux frame-apply loop, the
+      post-Detached tail and the swap-time live queue stay queued): ac5_active_pane_mux_pty_output_reaches_the_batch,
+      ac5_coalesced_mux_frames_keep_queue_order, ac5_post_detached_tail_reaches_the_batch,
+      ac5_live_output_queued_during_an_offthread_switch_reaches_the_batch, both ac4_* tests and the tab-level
+      osc52_active_pane_pty_output_write_is_drained / osc52_post_detached_tail_write_is_drained failed, while
+      ac5_pre_mux_outer_parse_reaches_the_batch kept passing (that parse runs before the early block). Both
+      mutations were reverted afterwards.
+  AC-6:
+    tests:
+      - app::tests::osc52_clipboard::ac6_pump_to_sink_step_applies_the_pumped_write
+      - app::tests::osc52_clipboard::ac6_pump_to_sink_step_applies_a_clear_as_a_clear
+      - app::tests::osc52_clipboard::ac6_pump_to_sink_step_with_an_empty_batch_makes_no_sink_call
+    red_confirmed: true
+    red_reason: "with a no-op pump-to-sink step the two applying tests failed (left: [] right: [Write(Clipboard, \"hello\")] and [Clear(Clipboard)]). The empty-batch test held for the no-op stub as well (no red state for it). The production part (about_to_wait call right after pump_all, the WindowHost sink with dedicated clear primitives, set_clipboard / set_primary keeping their empty-text early return) has no unit-test seam because it needs a window; it is checked by code review and MT-1, so no red was observed for it"
+  AC-7:
+    tests:
+      - app::tests::osc52_clipboard::ac7_rejected_payloads_add_no_batch_entry
+      - callbacks::tests::osc_52_write_denied_when_over_quota
+      - callbacks::tests::osc_52_query_denied_when_read_disabled
+      - callbacks::tests::osc_52_write_default_allows_within_quota
+      - callbacks::tests::osc_52_clear_pushes_empty_write
+      - callbacks::tests::parse_osc52_write
+      - callbacks::tests::parse_osc52_query
+      - callbacks::tests::parse_osc52_clear
+      - callbacks::tests::parse_osc52_missing_separator_returns_none
+    red_confirmed: true
+    red_reason: "ac7_rejected_payloads_add_no_batch_entry failed with no drain (left: [] right: [(\"c\", \"ok\")]: the valid write in the same pump never reached the batch). The existing callbacks tests are unchanged and were green before and after (no red state for them). The `--no-default-features` cargo check outcome also held before and after; this task adds no code to that build"
