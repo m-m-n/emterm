@@ -1,0 +1,47 @@
+feature: osc52-clipboard-write-drain
+collected_at: "2026-11-08T05:16:30+09:00"
+session_ids:
+  - 01a1b717-cc28-776a-872f-7774facfa4e2.jsonl
+  - 01a1b7a6-641e-753d-9969-8837a8352e77.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code の最終読みがバケット 2（確率 0.90）を返し、評価器の閾値で full を採用した"
+    bases:
+      - basis: description_only
+        score:
+          type: score
+          score: 1.24
+          confidence: 0.76
+          probabilities: {"0": 0.0, "1": 0.76, "2": 0.24, "3": 0.0}
+        observed_at: "2026-11-08T01:52:00+09:00"
+      - basis: description_plus_code
+        score:
+          type: score
+          score: 1.92
+          confidence: 0.9
+          probabilities: {"0": 0.0, "1": 0.09, "2": 0.9, "3": 0.01}
+        observed_at: "2026-11-08T01:57:00+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/app/mod.rs
+        - src-tauri/src/app/tests.rs
+        - src-tauri/src/window_host/event_loop.rs
+        - src-tauri/src/window_host/mod.rs
+        - src-tauri/src/window_host/tests.rs
+      changed_lines_approx: 150
+      new_functions_needed: 2
+      new_files_needed: 0
+      added_test_cases_approx: 6
+      change_containment: multiple_modules
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1 で architecture#0 の high（テストモジュールの import だけの循環）が demoted された。テスト専用の辺を本番依存と区別する基準が観点スキルに無い可能性"
+  - "verify で mux::ipc::pty_spawn の CPU 時間予算テストが機能と無関係に失敗した（直列でも 27s / 予算 10s）。baseline_failures に記録済みで、別タスクで追う判断を Codex 相談で採用した"
+  - "事前調査の files_expected は 5 件、実際の task0001 の files は 11 件（新規モジュール osc52_clipboard とそのテスト、tabs 側の変更を含む）。新規ファイル 0 の見積りは外れた"
