@@ -2102,3 +2102,257 @@ fn t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison() {
     assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
     assert_eq!(tab.test_row_text(0), "SECOND");
 }
+
+// ── osc52-clipboard-write-drain task0002: snapshot replay content stays
+// out of the OSC 52 clipboard queues (FR7) ────────────────────────────
+
+/// Snapshot content that replays to `marker` on row 0 and carries one of
+/// each OSC 52 request the callbacks queue: a write (target `c`), a clear
+/// (target `p`, empty payload = an empty-text write entry) and a read query
+/// (target `s`). A guard that dropped only non-empty writes, or only the
+/// write queue, would leave one of them behind.
+fn osc52_snapshot_content(marker: &str) -> Vec<u8> {
+    concat_bytes(&[
+        marker.as_bytes(),
+        b"\r\n",
+        &osc52_write("c", "SNAPSHOT-WRITE"),
+        &osc52_clear("p"),
+        &osc52_query("s"),
+    ])
+}
+
+type Osc52Queues = (Vec<(String, String)>, Vec<String>);
+
+fn no_osc52_entries() -> Osc52Queues {
+    (Vec::new(), Vec::new())
+}
+
+/// AC-1 (TM-5): a synchronous `Snapshot` whose content holds an OSC 52
+/// write, clear and read query applies the content and queues none of it.
+#[test]
+fn ac1_sync_snapshot_osc52_content_is_not_queued() {
+    let mut tab = mux_tab_active_pane(10);
+
+    tab.apply_mux_message(snapshot_msg(10, osc52_snapshot_content("SNAP")));
+
+    assert!(
+        !tab.test_has_pending_switch(),
+        "test prerequisite: the payload is below the off-thread thresholds"
+    );
+    assert_eq!(
+        tab.test_row_text(0),
+        "SNAP",
+        "the snapshot content itself is still replayed"
+    );
+    assert_eq!(osc52_queues(&tab), no_osc52_entries());
+}
+
+/// AC-1 (TM-5): the same for a synchronous `SnapshotRestore` (the
+/// reattach shape).
+#[test]
+fn ac1_sync_snapshot_restore_osc52_content_is_not_queued() {
+    let mut tab = mux_tab_active_pane(10);
+
+    tab.apply_mux_message(snapshot_restore_msg(10, osc52_snapshot_content("SNAP")));
+
+    assert!(
+        !tab.test_has_pending_switch(),
+        "test prerequisite: the payload is below the off-thread thresholds"
+    );
+    assert_eq!(tab.test_row_text(0), "SNAP");
+    assert_eq!(osc52_queues(&tab), no_osc52_entries());
+}
+
+/// AC-2: entries already queued before a synchronous replay are still
+/// there afterwards, in order, and the replay adds none — for both
+/// snapshot kinds and both queues.
+#[test]
+fn ac2_sync_replay_keeps_preexisting_queue_entries_in_order() {
+    for restore in [false, true] {
+        let mut tab = mux_tab_active_pane(10);
+        // Live output queues two writes (one of them a clear) and a query.
+        tab.apply_mux_message(pty_output(
+            10,
+            concat_bytes(&[
+                &osc52_write("c", "BEFORE-1"),
+                &osc52_clear("p"),
+                &osc52_write("s", "BEFORE-3"),
+                &osc52_query("c"),
+            ]),
+        ));
+        let before = osc52_queues(&tab);
+        assert_eq!(
+            before,
+            (
+                vec![
+                    ("c".to_string(), "BEFORE-1".to_string()),
+                    ("p".to_string(), String::new()),
+                    ("s".to_string(), "BEFORE-3".to_string()),
+                ],
+                vec!["c".to_string()],
+            ),
+            "test prerequisite: live output queued the entries"
+        );
+
+        let content = osc52_snapshot_content("SNAP");
+        tab.apply_mux_message(if restore {
+            snapshot_restore_msg(10, content)
+        } else {
+            snapshot_msg(10, content)
+        });
+
+        assert_eq!(tab.test_row_text(0), "SNAP", "restore={restore}");
+        assert_eq!(
+            osc52_queues(&tab),
+            before,
+            "restore={restore}: the replay must neither drop nor add entries"
+        );
+    }
+}
+
+/// D3: output applied after a synchronous replay is live output; its OSC 52
+/// entries are queued behind the entries that were already there.
+#[test]
+fn live_output_after_sync_replay_still_queues_osc52_entries() {
+    let mut tab = mux_tab_active_pane(10);
+    tab.apply_mux_message(pty_output(10, osc52_write("c", "BEFORE")));
+
+    tab.apply_mux_message(snapshot_msg(10, osc52_snapshot_content("SNAP")));
+    tab.apply_mux_message(pty_output(10, osc52_write("c", "AFTER")));
+
+    assert_eq!(
+        osc52_queues(&tab),
+        (
+            vec![
+                ("c".to_string(), "BEFORE".to_string()),
+                ("c".to_string(), "AFTER".to_string()),
+            ],
+            Vec::new(),
+        )
+    );
+}
+
+/// Two-window mux tab whose active pane is 10, for the off-thread cases
+/// (a second window keeps `active_pane_id()` defined, as the existing swap
+/// tests do).
+fn two_window_tab() -> Tab {
+    let mut tab = test_tab();
+    tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+    assert_eq!(tab.mux_group.as_ref().unwrap().active_pane_id(), Some(10));
+    tab
+}
+
+/// AC-3 (TM-5): an off-thread `Snapshot` / `SnapshotRestore` with OSC 52
+/// content, followed by an OSC 52 write in live output queued during the
+/// pending switch, leaves exactly the live entry after the swap. Pins that
+/// the worker-built core (no callbacks until the swap transplants them)
+/// keeps snapshot content out of the queues while the queued live output
+/// stays queued (D3).
+#[test]
+fn ac3_offthread_replay_queues_only_the_live_osc52_entry() {
+    for restore in [false, true] {
+        let mut tab = two_window_tab();
+        let content = pad_to_offthread_threshold(osc52_snapshot_content("SNAP"));
+        tab.apply_mux_message(if restore {
+            snapshot_restore_msg(10, content)
+        } else {
+            snapshot_msg(10, content)
+        });
+        assert!(
+            tab.test_has_pending_switch(),
+            "restore={restore}: test prerequisite: the payload goes off-thread"
+        );
+        tab.apply_mux_message(pty_output(10, osc52_write("c", "LIVE")));
+        assert_eq!(
+            tab.test_pending_live_queue().len(),
+            1,
+            "restore={restore}: test prerequisite: the live output was queued"
+        );
+
+        tab.test_block_worker_ready();
+        assert_eq!(tab.poll_pending_switch(), SwapOutcome::Swapped);
+
+        assert_eq!(tab.test_row_text(0), "SNAP", "restore={restore}");
+        assert_eq!(
+            osc52_queues(&tab),
+            (vec![("c".to_string(), "LIVE".to_string())], Vec::new()),
+            "restore={restore}: only the live entry may be queued after the swap"
+        );
+    }
+}
+
+/// AC-4 (TM-5): on the live-queue overflow fallback the snapshot is
+/// reparsed synchronously, and the write queue then holds exactly the OSC 52
+/// entries of the queued live output, in order, and none from the snapshot
+/// content.
+#[test]
+fn ac4_live_queue_overflow_fallback_queues_only_the_live_osc52_entries() {
+    let mut tab = two_window_tab();
+    tab.apply_mux_message(snapshot_msg(
+        10,
+        pad_to_offthread_threshold(osc52_snapshot_content("SNAP")),
+    ));
+    assert!(tab.test_has_pending_switch());
+    tab.apply_mux_message(pty_output(10, osc52_write("c", "LIVE-1")));
+    tab.apply_mux_message(pty_output(10, osc52_write("p", "LIVE-2")));
+    assert!(
+        tab.test_has_pending_switch(),
+        "test prerequisite: still below the live-queue cap"
+    );
+
+    // 1 MiB of NUL padding per chunk counts toward the byte budget and is
+    // ignored by the parser; the chunk that crosses the cap triggers the
+    // synchronous reparse fallback.
+    let chunk = vec![0u8; 1024 * 1024];
+    for _ in 0..5 {
+        tab.apply_mux_message(pty_output(10, chunk.clone()));
+        if !tab.test_has_pending_switch() {
+            break;
+        }
+    }
+    assert!(
+        !tab.test_has_pending_switch(),
+        "test prerequisite: the overflow fallback ran"
+    );
+
+    assert_eq!(tab.test_row_text(0), "SNAP");
+    assert_eq!(
+        osc52_queues(&tab),
+        (
+            vec![
+                ("c".to_string(), "LIVE-1".to_string()),
+                ("p".to_string(), "LIVE-2".to_string()),
+            ],
+            Vec::new(),
+        )
+    );
+}
+
+/// AC-4 (TM-5): the same on the worker-disconnect fallback.
+#[test]
+fn ac4_worker_disconnect_fallback_queues_only_the_live_osc52_entries() {
+    let mut tab = two_window_tab();
+    tab.apply_mux_message(snapshot_msg(
+        10,
+        pad_to_offthread_threshold(osc52_snapshot_content("SNAP")),
+    ));
+    assert!(tab.test_has_pending_switch());
+    tab.apply_mux_message(pty_output(10, osc52_write("c", "LIVE-1")));
+    tab.apply_mux_message(pty_output(10, osc52_write("p", "LIVE-2")));
+
+    tab.test_force_worker_disconnect();
+    assert_eq!(tab.poll_pending_switch(), SwapOutcome::Swapped);
+    assert!(!tab.test_has_pending_switch());
+
+    assert_eq!(tab.test_row_text(0), "SNAP");
+    assert_eq!(
+        osc52_queues(&tab),
+        (
+            vec![
+                ("c".to_string(), "LIVE-1".to_string()),
+                ("p".to_string(), "LIVE-2".to_string()),
+            ],
+            Vec::new(),
+        )
+    );
+}

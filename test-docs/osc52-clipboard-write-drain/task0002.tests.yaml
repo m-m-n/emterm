@@ -1,0 +1,75 @@
+task_id: task0002
+baseline_failures:             # approved --lib run before any edit: 4839 passed; 1 failed; 3 ignored
+  - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+final_failures: []             # approved --lib run re-executed after the implementation and after this record was written: 4847 passed; 0 failed; 3 ignored (baseline 4840 tests + 7 new). The baseline-failing CPU-time budget test passed in this run and failed (10.18s against 10s) in the previous post-implementation run, so it is load-dependent; either way final_failures is a subset of baseline_failures
+acceptance_tests:
+  AC-1:
+    tests:
+      - tabs::tests::replay::ac1_sync_snapshot_osc52_content_is_not_queued
+      - tabs::tests::replay::ac1_sync_snapshot_restore_osc52_content_is_not_queued
+    red_confirmed: true
+    red_reason: >-
+      Both tests were written first and run against the unguarded recipe.
+      The approved --lib run reported both FAILED with "assertion `left ==
+      right` failed / left: ([("c", "SNAPSHOT-WRITE"), ("p", "")], ["s"]) /
+      right: ([], [])" at src-tauri/src/tabs/tests/replay.rs, i.e. the
+      snapshot's OSC 52 write, clear and read query were all queued. After
+      the guard was added the same tests passed.
+  AC-2:
+    tests:
+      - tabs::tests::replay::ac2_sync_replay_keeps_preexisting_queue_entries_in_order
+      - tabs::tests::replay::live_output_after_sync_replay_still_queues_osc52_entries
+    red_confirmed: true
+    red_reason: >-
+      Both tests were written first and run against the unguarded recipe.
+      ac2_sync_replay_keeps_preexisting_queue_entries_in_order reported
+      FAILED with "restore=false: the replay must neither drop nor add
+      entries / left: ([("c", "BEFORE-1"), ("p", ""), ("s", "BEFORE-3"),
+      ("c", "SNAPSHOT-WRITE"), ("p", "")], ["c", "s"]) / right: ([("c",
+      "BEFORE-1"), ("p", ""), ("s", "BEFORE-3")], ["c"])", i.e. the replay
+      appended its own entries behind the pre-existing ones.
+      live_output_after_sync_replay_still_queues_osc52_entries reported
+      FAILED for the same reason (the snapshot's entries sat between the
+      BEFORE and AFTER live entries); once the guard was in, it also pins
+      that the guard removes only the replay's own entries and that live
+      output applied after the replay queues normally.
+  AC-3:
+    tests:
+      - tabs::tests::replay::ac3_offthread_replay_queues_only_the_live_osc52_entry
+    red_confirmed: false
+    red_reason: >-
+      The test passed on its first run, before the guard existed: the
+      off-thread worker builds its core without callbacks and
+      apply_offthread_swap transplants the tab's callbacks only after the
+      build, so snapshot content already cannot reach the queues on this
+      path, and the queued live output was already applied as ordinary
+      output (task plan: this task pins the behavior and expects no code
+      change there). No red state occurred for this criterion; the test
+      guards the existing behavior against a later change to the swap or to
+      the guard (for example a guard widened to cover the live-queue half).
+  AC-4:
+    tests:
+      - tabs::tests::replay::ac4_live_queue_overflow_fallback_queues_only_the_live_osc52_entries
+      - tabs::tests::replay::ac4_worker_disconnect_fallback_queues_only_the_live_osc52_entries
+    red_confirmed: true
+    red_reason: >-
+      Both tests were written first and run against the unguarded recipe.
+      The approved --lib run reported both FAILED with "left: ([("c",
+      "SNAPSHOT-WRITE"), ("p", ""), ("c", "LIVE-1"), ("p", "LIVE-2")],
+      ["s"]) / right: ([("c", "LIVE-1"), ("p", "LIVE-2")], [])", i.e. the
+      fallback reparse queued the snapshot content ahead of the live
+      entries. After the guard was added both passed with exactly the two
+      live entries, in order.
+  AC-5:
+    tests:
+      - tabs::tests::replay::reset_frame_for_replay_discards_historic_device_responses
+      - tabs::tests::output_pipeline::reset_frame_for_replay_produces_no_outbound_device_response_write
+      - tabs::tests::replay::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+      - tabs::tests::replay::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+    red_confirmed: false
+    red_reason: >-
+      These existing tests pass before and after the change without any
+      edit (the baseline --lib run listed them as ok, and the final run
+      lists them as ok); the criterion is that the guard leaves the rest of
+      the recipe and the callback transplant unchanged, so no red state
+      occurred for this change.

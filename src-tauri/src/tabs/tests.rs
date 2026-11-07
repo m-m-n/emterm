@@ -81,12 +81,63 @@ fn snapshot_msg(pane_id: u32, payload: Vec<u8>) -> MuxMessage {
     }
 }
 
+/// A `SnapshotRestore` frame (the reattach shape) for `pane_id`.
+fn snapshot_restore_msg(pane_id: u32, payload: Vec<u8>) -> MuxMessage {
+    MuxMessage {
+        msg_type: MessageType::SnapshotRestore,
+        pane_id,
+        payload,
+    }
+}
+
 fn pty_output(pane_id: u32, payload: Vec<u8>) -> MuxMessage {
     MuxMessage {
         msg_type: MessageType::PtyOutput,
         pane_id,
         payload,
     }
+}
+
+/// An OSC 52 write sequence (`ESC ] 52 ; target ; base64(text) BEL`).
+/// Callers pass non-empty `text`: an empty one encodes to an empty payload,
+/// which `NativeCallbacks` reads as a clear (see `osc52_clear`).
+fn osc52_write(target: &str, text: &str) -> Vec<u8> {
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    format!("\x1b]52;{target};{encoded}\x07").into_bytes()
+}
+
+/// An OSC 52 clear sequence (`ESC ] 52 ; target ; BEL`, empty payload).
+fn osc52_clear(target: &str) -> Vec<u8> {
+    format!("\x1b]52;{target};\x07").into_bytes()
+}
+
+/// An OSC 52 read query (`ESC ] 52 ; target ; ? BEL`).
+fn osc52_query(target: &str) -> Vec<u8> {
+    format!("\x1b]52;{target};?\x07").into_bytes()
+}
+
+/// Concatenate byte fragments (OSC sequences interleaved with text).
+fn concat_bytes(parts: &[&[u8]]) -> Vec<u8> {
+    parts.iter().flat_map(|p| p.iter().copied()).collect()
+}
+
+/// Pad `content` with trailing NULs (ignored by the parser) up to the
+/// off-thread replay threshold, so the snapshot takes the off-thread path
+/// without changing what the content paints or queues.
+fn pad_to_offthread_threshold(mut content: Vec<u8>) -> Vec<u8> {
+    content.resize(content.len().max(OFFTHREAD_REPLAY_THRESHOLD_BYTES + 16), 0);
+    content
+}
+
+/// Snapshot of a tab's OSC 52 queues: `(writes, reads)`, in queue order. A
+/// clear is a write entry with empty text.
+fn osc52_queues(tab: &Tab) -> (Vec<(String, String)>, Vec<String>) {
+    let s = tab.cb_state.lock();
+    (
+        s.pending_clipboard_writes.clone(),
+        s.pending_clipboard_reads.clone(),
+    )
 }
 
 /// A payload at or above the off-thread threshold whose first row, once
