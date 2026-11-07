@@ -136,7 +136,7 @@ tasks:
     - NFR4
     - NFR5
     - NFR6
-    status: in_progress
+    status: merged
     branch: em-workflow/osc52-clipboard-write-drain/task0001
     notes: null
   task0002:
