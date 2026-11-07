@@ -44,6 +44,7 @@ mod input_translate;
 mod key_routing;
 mod link_hover;
 mod mouse_report;
+pub(crate) mod osc52_clipboard;
 mod pointer_routing;
 mod render_surface;
 mod resize_layout;
@@ -847,6 +848,92 @@ impl SelectionWriteSink for WindowHost {
             SelectionDestination::Primary => self.set_primary(text),
             SelectionDestination::Clipboard => self.set_clipboard(text),
         }
+    }
+}
+
+/// osc52-clipboard-write-drain (FR1, FR2, FR8, NFR2, NFR3): the production
+/// sink for OSC 52 writes and clears. It uses the host's single arboard
+/// instance and runs on the UI thread only (`about_to_wait`).
+///
+/// A write sets the destination's text. A clear goes through arboard's own
+/// clear path, which leaves the destination without text (A8); it never goes
+/// through `set_clipboard` / `set_primary`, whose empty-text early return is
+/// kept for their existing callers (NFR5). An absent clipboard instance is a
+/// failure ("clipboard unavailable"), not a panic. Failure descriptions are
+/// fixed strings chosen from the arboard error kind: they never carry
+/// clipboard text (NFR3).
+impl osc52_clipboard::Osc52ClipboardSink for WindowHost {
+    fn write(
+        &mut self,
+        destination: osc52_clipboard::Osc52Destination,
+        text: &str,
+    ) -> Result<(), String> {
+        let cb = self
+            .clipboard
+            .as_mut()
+            .ok_or_else(|| "clipboard unavailable".to_string())?;
+        let result = match destination {
+            osc52_clipboard::Osc52Destination::Clipboard => cb.set_text(text),
+            osc52_clipboard::Osc52Destination::Primary => {
+                #[cfg(all(unix, not(target_os = "macos")))]
+                {
+                    use arboard::{LinuxClipboardKind, SetExtLinux};
+                    cb.set().clipboard(LinuxClipboardKind::Primary).text(text)
+                }
+                #[cfg(not(all(unix, not(target_os = "macos"))))]
+                {
+                    // PRIMARY is X11 / Wayland only; batch apply never asks
+                    // for it where `PRIMARY_AVAILABLE` is false (NFR6).
+                    cb.set_text(text)
+                }
+            }
+        };
+        result.map_err(|e| osc52_error_description(&e).to_string())
+    }
+
+    fn clear(&mut self, destination: osc52_clipboard::Osc52Destination) -> Result<(), String> {
+        let cb = self
+            .clipboard
+            .as_mut()
+            .ok_or_else(|| "clipboard unavailable".to_string())?;
+        let result = match destination {
+            osc52_clipboard::Osc52Destination::Clipboard => {
+                #[cfg(all(unix, not(target_os = "macos")))]
+                {
+                    use arboard::{ClearExtLinux, LinuxClipboardKind};
+                    cb.clear_with().clipboard(LinuxClipboardKind::Clipboard)
+                }
+                #[cfg(not(all(unix, not(target_os = "macos"))))]
+                {
+                    cb.clear()
+                }
+            }
+            osc52_clipboard::Osc52Destination::Primary => {
+                #[cfg(all(unix, not(target_os = "macos")))]
+                {
+                    use arboard::{ClearExtLinux, LinuxClipboardKind};
+                    cb.clear_with().clipboard(LinuxClipboardKind::Primary)
+                }
+                #[cfg(not(all(unix, not(target_os = "macos"))))]
+                {
+                    cb.clear()
+                }
+            }
+        };
+        result.map_err(|e| osc52_error_description(&e).to_string())
+    }
+}
+
+/// NFR3: a fixed description for an arboard error kind. The error's own
+/// `Display` is not used, so nothing the platform put into an error (for
+/// example an `Unknown` description) can reach the log.
+fn osc52_error_description(e: &arboard::Error) -> &'static str {
+    match e {
+        arboard::Error::ContentNotAvailable => "content not available",
+        arboard::Error::ClipboardNotSupported => "clipboard not supported",
+        arboard::Error::ClipboardOccupied => "clipboard occupied",
+        arboard::Error::ConversionFailure => "conversion failure",
+        _ => "clipboard error",
     }
 }
 

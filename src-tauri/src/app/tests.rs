@@ -11,6 +11,7 @@ mod ime;
 mod misc;
 mod mux_ui;
 mod notification_sink;
+mod osc52_clipboard;
 mod scroll_search_fold;
 mod sftp;
 mod tab_lifecycle;

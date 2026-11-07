@@ -133,6 +133,16 @@ fn pty_output_apc(pane_id: u32, inner: &[u8]) -> Vec<u8> {
     crate::mux::apc::encode_emterm_mux(&msg)
 }
 
+/// The outer `emterm-mux;` APC frame of a `Detached` control message, as the
+/// bridge writes it to the PTS stream.
+fn detached_apc() -> Vec<u8> {
+    crate::mux::apc::encode_emterm_mux(&MuxMessage {
+        msg_type: MessageType::Detached,
+        pane_id: 0,
+        payload: Vec::new(),
+    })
+}
+
 /// Build a tab attached to a single-window mux session whose active pane is
 /// `pane`, so `PtyOutput` for `pane` flows straight into the displayed core
 /// (no pending switch, pane filter satisfied).

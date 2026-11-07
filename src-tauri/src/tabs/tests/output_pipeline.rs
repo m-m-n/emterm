@@ -4296,3 +4296,109 @@ fn altdetect_ac1_rows_that_keep_the_working_record_cause_no_table_change() {
         }
     }
 }
+
+// ── osc52-clipboard-write-drain task0001: per-tab OSC 52 drain ────────
+//
+// `Tab::drain_osc52_clipboard` is called by `App::pump_all` after every
+// parse path of the pump has run. These tests drive the parse paths with
+// `test_process_combined` (one pump's coalesced buffer) and then drain once.
+
+/// `ESC ] 52 ; <target> ; <base64(text)> BEL`.
+fn osc52_write_bytes(target: &str, text: &str) -> Vec<u8> {
+    format!("\x1b]52;{target};{}\x07", b64(text.as_bytes())).into_bytes()
+}
+
+/// `ESC ] 52 ; <target> ; ? BEL`.
+fn osc52_query_bytes(target: &str) -> Vec<u8> {
+    format!("\x1b]52;{target};?\x07").into_bytes()
+}
+
+fn osc52_entry(target: &str, text: &str) -> (String, String) {
+    (target.to_string(), text.to_string())
+}
+
+fn osc52_queues_empty(tab: &Tab) -> bool {
+    let s = tab.cb_state.lock();
+    s.pending_clipboard_writes.is_empty() && s.pending_clipboard_reads.is_empty()
+}
+
+/// TS-4 (FR5): the pre-mux outer parse of plain shell output queues the
+/// write; the drain returns it and empties the queue.
+#[test]
+fn osc52_pre_mux_outer_parse_write_is_drained() {
+    let mut tab = test_tab();
+    tab.test_process_combined(osc52_write_bytes("c", "plain"));
+    assert_eq!(tab.drain_osc52_clipboard(), vec![osc52_entry("c", "plain")]);
+    assert!(osc52_queues_empty(&tab));
+    assert!(
+        tab.drain_osc52_clipboard().is_empty(),
+        "second drain is empty"
+    );
+}
+
+/// TS-3 (FR5): an active-pane `PtyOutput` frame's write is parsed by the
+/// frame-apply loop, AFTER the early `cb_state` block of `process_combined`;
+/// the drain after the pump still returns it.
+#[test]
+fn osc52_active_pane_pty_output_write_is_drained() {
+    let mut tab = mux_tab_active_pane(7);
+    tab.test_process_combined(pty_output_apc(7, &osc52_write_bytes("p", "mux")));
+    assert_eq!(tab.drain_osc52_clipboard(), vec![osc52_entry("p", "mux")]);
+    assert!(osc52_queues_empty(&tab));
+}
+
+/// TS-3 (FR5): the post-`Detached` tail of one coalesced buffer is
+/// re-routed to the tab's core; its write is drained with the inner one,
+/// in order.
+#[test]
+fn osc52_post_detached_tail_write_is_drained() {
+    let mut tab = mux_tab_active_pane(7);
+    let mut combined = pty_output_apc(7, &osc52_write_bytes("c", "inner"));
+    combined.extend_from_slice(&detached_apc());
+    combined.extend_from_slice(&osc52_write_bytes("p", "tail"));
+    tab.test_process_combined(combined);
+    assert!(tab.mux_session_name.is_none(), "Detached applied");
+    assert_eq!(
+        tab.drain_osc52_clipboard(),
+        vec![osc52_entry("c", "inner"), osc52_entry("p", "tail")]
+    );
+    assert!(osc52_queues_empty(&tab));
+}
+
+/// FR1/FR2: a clear is returned as an empty-text write, in queue order
+/// with the writes around it.
+#[test]
+fn osc52_clear_is_drained_as_an_empty_text_entry() {
+    let mut tab = test_tab();
+    let mut combined = osc52_write_bytes("c", "a");
+    combined.extend_from_slice(b"\x1b]52;cp;\x07");
+    tab.test_process_combined(combined);
+    assert_eq!(
+        tab.drain_osc52_clipboard(),
+        vec![osc52_entry("c", "a"), osc52_entry("cp", "")]
+    );
+}
+
+/// FR4: read queries are drained and discarded: nothing is returned, the
+/// read queue is empty, and no byte was written to the PTY.
+#[test]
+fn osc52_query_is_drained_and_discarded_without_pty_output() {
+    let mut tab = test_tab();
+    tab.test_process_combined(osc52_query_bytes("c"));
+    assert_eq!(
+        tab.cb_state.lock().pending_clipboard_reads.len(),
+        1,
+        "the query was queued by the parse"
+    );
+    let writes_before = tab.test_outbound_writes().len();
+    assert!(
+        tab.drain_osc52_clipboard().is_empty(),
+        "reads are not writes"
+    );
+    assert!(osc52_queues_empty(&tab));
+    assert_eq!(
+        tab.test_outbound_writes().len(),
+        writes_before,
+        "no OSC 52 response written to the PTY"
+    );
+}

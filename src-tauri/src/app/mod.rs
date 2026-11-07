@@ -460,6 +460,13 @@ pub struct App {
     /// never be armed or discarded by a daemon-chosen string that collides
     /// with another pane's or tab's key.
     agent_notification_rate_limiter: crate::notifications::AgentNotificationRateLimiter<String>,
+    /// OSC 52 writes and clears drained from every tab by the latest
+    /// [`App::pump_all`], as `(target, text)` in tab order and then queue
+    /// order (empty text = clear). `pump_all` replaces it each pump; the
+    /// window host takes it right after (`take_osc52_clipboard_batch`) and
+    /// applies it to the system clipboard on the UI thread
+    /// (osc52-clipboard-write-drain FR1, FR2, FR6, NFR2).
+    osc52_clipboard_batch: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -676,6 +683,7 @@ impl App {
             restart_toast: RestartToast::default(),
             agent_notification_rate_limiter:
                 crate::notifications::AgentNotificationRateLimiter::default(),
+            osc52_clipboard_batch: Vec::new(),
         }
     }
 
@@ -1023,6 +1031,14 @@ impl App {
         self.tabs.get_mut(self.active)
     }
 
+    /// Take the OSC 52 writes / clears the latest [`Self::pump_all`] drained
+    /// from every tab, as `(target, text)` in tab order and then queue order
+    /// (empty text = clear). Post: the batch is empty. Called by the window
+    /// host right after `pump_all` (`window_host::osc52_clipboard`).
+    pub fn take_osc52_clipboard_batch(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.osc52_clipboard_batch)
+    }
+
     /// Drain PTY events on every tab. Returns true if any tab produced
     /// new bytes (caller schedules a redraw).
     pub fn pump_all(&mut self) -> bool {
@@ -1086,6 +1102,10 @@ impl App {
         // emterm viewer OSC payloads collected across all tabs this pass,
         // routed to the spawner after the `&mut self.tabs` borrow ends.
         let mut viewer_osc: Vec<crate::callbacks::EmtermOscRequest> = Vec::new();
+        // OSC 52 clipboard writes / clears drained from every tab this pass
+        // (osc52-clipboard-write-drain D1), stored in `osc52_clipboard_batch`
+        // after the loop for the window host to apply.
+        let mut osc52_batch: Vec<(String, String)> = Vec::new();
         // Decoded Kitty/SIXEL image events (ImageReady / Place / Delete),
         // likewise buffered during the loop and routed to the image-viewer
         // router after it. Every tab is drained — like the WebView build,
@@ -1214,6 +1234,14 @@ impl App {
             // payloads are buffered and routed after the loop. Draining
             // every tab (not just the active one) matches the WebView
             // build, where any tab's `emterm markdown` opens a viewer.
+            // OSC 52 clipboard (osc52-clipboard-write-drain D1, FR5, FR6):
+            // every parse path of this pump (pre-mux outer parse, mux
+            // frame-apply loop, post-Detached tail, live output applied on
+            // an off-thread swap) has run by this point, so this drain
+            // leaves both queues empty. Reads are discarded inside the
+            // drain; writes / clears are applied by the window host after
+            // the loop. Every tab is drained, background and mux included.
+            osc52_batch.extend(tab.drain_osc52_clipboard());
             let mut osc = tab.drain_osc();
             if !osc.is_empty() {
                 // Release the parked `emterm markdown` CLI as soon as its
@@ -1344,6 +1372,9 @@ impl App {
         // on empty passes; cheap when there is nothing queued.
         self.viewer_spawner
             .drain(viewer_osc, now, &mut self.viewer_sink);
+        // Replace (not extend) the OSC 52 batch with this pass' entries: the
+        // window host takes it right after `pump_all` (FR1, NFR1).
+        self.osc52_clipboard_batch = osc52_batch;
         // Route decoded image events: ImageReady fills the LRU store,
         // each Place spawns a native `--image-viewer` child window.
         if !image_events.is_empty() {
