@@ -1,11 +1,11 @@
 schema_version: 1
 feature: osc52-clipboard-write-drain
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: c3b6d974640f977245bc22ecc31bafe8bf63713a
-last_input_digest: sha256:ad0fbb2f7a8e35b20bcda001c5aa6c4ef32998d99cb4f18f6c0ce68d9f0ba20f
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:90ee39db48b3bf2be2abc5fe57f1e2ba01b3d0222886c748f7dcd22aa4dddc26
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: answered
@@ -64,8 +64,11 @@ answers:
       to the analyst as inputs'
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:ad0fbb2f7a8e35b20bcda001c5aa6c4ef32998d99cb4f18f6c0ce68d9f0ba20f
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:90ee39db48b3bf2be2abc5fe57f1e2ba01b3d0222886c748f7dcd22aa4dddc26
 artifacts: []
 patches: []
 progress_fingerprint: null
