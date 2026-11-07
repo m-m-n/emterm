@@ -1,0 +1,52 @@
+schema_version: 2
+feature: osc52-clipboard-write-drain
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.24
+    confidence: 0.76
+    probabilities:
+      '0': 0.0
+      '1': 0.76
+      '2': 0.24
+      '3': 0.0
+  observed_at: '2026-11-08T01:58:00+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.92
+    confidence: 0.9
+    probabilities:
+      '0': 0.0
+      '1': 0.09
+      '2': 0.9
+      '3': 0.01
+  observed_at: '2026-11-08T02:05:00+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/app/mod.rs
+  - src-tauri/src/app/tests.rs
+  - src-tauri/src/window_host/event_loop.rs
+  - src-tauri/src/window_host/mod.rs
+  - src-tauri/src/window_host/tests.rs
+  changed_lines_approx: 150
+  new_functions_needed: 2
+  new_files_needed: 0
+  new_dependencies_needed: []
+  covering_tests_exist: false
+  spillover_modules:
+  - app
+  - window_host
+  work_still_required: true
+  test_change_kind: new_behavior_tests
+  added_test_cases_approx: 6
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 3
+  changes_external_contract: false
+  changes_behavior: true
+  notes: ファイル変更・テスト実行は行っていない。変更候補と数値は書き込み・クリアの接続と回帰テストを追加する構成の概算であり、実測差分ではない。callbacks.rs:1160のhandle_clipboardはBase64復号・サイズ制限・UTF-8検証後にpending_clipboard_writesへ追加し、クリアも空文字列として追加する。リポジトリ内のRust参照では、このキューを取り出す本番処理は見つからない。pending_clipboard_readsも設定で許可された照会を追加するだけで、取り出し・応答処理は見つからない。window_host/mod.rs:732のset_clipboardは空文字列で終了するため、キューの接続だけではクリアが反映されない。event_loop.rs:630のabout_to_waitはAppとWindowHostを保持し、App::pump_allを呼ぶ。app/mod.rs:1122では全タブのTab::pumpを呼び、同:1540では終了タブを削除するため、終了直前の書き込みを保持する接続点は削除前になる。Tabはtabs/mod.rs:269でcoreとcb_stateを公開し、同:750以降で共有状態を持つNativeCallbacksをcoreへ登録する。通常のmux接続中はmux/ipc/pty_spawn/mod.rs:707で受信した生データをPtyOutputChunkへ格納し、mux/ipc/connection/mod.rs:696とmux/bridge/forward.rs:352を経て転送する。tabs/output_pipeline.rs:260では表示対象ペインの内容を同じcoreで解析する経路がある。一方、tabs/mux_link.rs:263では非表示ペインの出力を破棄し、mux/ipc/pty_spawn/suppressed_output.rs:352の置換出力にはOSC
+    52の項目がないため、mux全経路での到達は確認できていない。callbacks/tests.rs:203以降には書き込み・クリアのキュー追加、読み取り許可、サイズ超過拒否のテストがあるが、キューからシステムのクリップボードへの反映を検証するテストは見つからない。arboardはsrc-tauri/Cargo.toml:130に既存依存としてある。caller_and_dependency_countはset_clipboardの既存呼出元2か所（key_routing.rs:106、window_host/mod.rs:848）とarboardの1依存を数えた。
+decided_at: '2026-11-08T02:05:30+09:00'
