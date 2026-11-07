@@ -4,8 +4,8 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: c3b6d974640f977245bc22ecc31bafe8bf63713a
-last_input_digest: sha256:90ee39db48b3bf2be2abc5fe57f1e2ba01b3d0222886c748f7dcd22aa4dddc26
-active_request_id: create-spec-run-0002
+last_input_digest: sha256:d5afa0776f7a9a150ce497a4ef51ccdc5534c3d562754cde4be4cf703f108423
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -67,8 +67,17 @@ worker_runs:
   status: needs_user_input
   input_digest: sha256:ad0fbb2f7a8e35b20bcda001c5aa6c4ef32998d99cb4f18f6c0ce68d9f0ba20f
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:90ee39db48b3bf2be2abc5fe57f1e2ba01b3d0222886c748f7dcd22aa4dddc26
+  output_digest: sha256:4a41e2e0bb4b135fa4d5b751f61dc8de4c0e0e622fec61b54cc0a56be638794a
+  self_write_set: []
+- request_id: create-spec-run-0003
+  status: dispatched
+  input_digest: sha256:d5afa0776f7a9a150ce497a4ef51ccdc5534c3d562754cde4be4cf703f108423
+  dispatch_digest_inputs:
+    plugin:references/contracts/spec-writer-contract.md: sha256:c66e457a4a68d860f757f9e6cae377b6918d29a3f3152d9a12fc92570303c5f2
+    plugin:references/templates/requirements-document.md: sha256:40ace2beeb59c708b155945c8b4dc13d34f1d9cd55e22c8c6bec58a73faed963
+    plugin:references/templates/spec-document.md: sha256:a5d0106c39a5df7dc2365357a9546588275ed6c7a1651c866e75fa327a7fa592
 artifacts: []
 patches: []
 progress_fingerprint: null
