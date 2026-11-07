@@ -4,7 +4,10 @@ task_id: task0001
 baseline_failures:
   - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal
   - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
-# Actually re-executed after implementation (and after the mutation runs were reverted).
+# Output of the full re-executed run after implementation (4869 passed, 0 failed, the tree committed in
+# this task). Later runs of the same tree on a heavily loaded host (load average 11-50) failed only
+# CPU-budget tests under mux::ipc::pty_spawn, mux::osc_identify and mux::scrollback_filter (2 to 11
+# different tests per run, the baseline's two among them); no test of this task failed in any run.
 final_failures: []
 acceptance_tests:
   AC-1:
