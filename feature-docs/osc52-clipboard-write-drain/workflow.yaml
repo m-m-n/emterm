@@ -153,7 +153,7 @@ tasks:
     complexity: high
     requirements:
     - FR7
-    status: in_progress
+    status: merged
     branch: em-workflow/osc52-clipboard-write-drain/task0002
     notes: null
 review:
