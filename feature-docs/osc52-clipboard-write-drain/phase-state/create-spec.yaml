@@ -1,0 +1,26 @@
+schema_version: 1
+feature: osc52-clipboard-write-drain
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: c3b6d974640f977245bc22ecc31bafe8bf63713a
+last_input_digest: sha256:ad0fbb2f7a8e35b20bcda001c5aa6c4ef32998d99cb4f18f6c0ce68d9f0ba20f
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:ad0fbb2f7a8e35b20bcda001c5aa6c4ef32998d99cb4f18f6c0ce68d9f0ba20f
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+last_error: null
