@@ -1,0 +1,32 @@
+schema_version: 1
+feature: osc52-clipboard-write-drain
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 076c17378da62e05497b08aff2a1d8ce7641ed7d
+last_input_digest: sha256:ff3535a9ed9170b7ecfec35e767a7a9f79f24dfd085e50e1830648ccfd8f399a
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:ff3535a9ed9170b7ecfec35e767a7a9f79f24dfd085e50e1830648ccfd8f399a
+  dispatch_digest_inputs:
+    feature-docs/osc52-clipboard-write-drain/REQUIREMENTS.md: sha256:aedf1c414a1d21bbdd0db57594a08bbfee0841348111f7030e9901125cfd623f
+    feature-docs/osc52-clipboard-write-drain/SPEC.md: sha256:d31a192ecd5cf88eeee0f1c4623e407878f7c0f9dfa781cd816e09836383a04c
+    feature-docs/osc52-clipboard-write-drain/workflow.yaml: sha256:cdf08862ca460da0713a71551b3e3e65e57d22ee28a91f86bfac33fe8ecd5498
+    plugin:references/contracts/planner-contract.md: sha256:6253ad93ad99c87daec151b2da071a950ebaa615b5e438adfc2951f7dba2fb05
+    plugin:references/impl-skills.yaml: sha256:6b372678cdbbeb88b30c34d151c843e1a7072dd021a2ef1ac5fbaafae0bd67c2
+    plugin:references/license-compat.md: sha256:52a07c5d0199a693958d0c9ec4768e8aa248cf95bdb9172dec75296aac5980be
+    plugin:references/review-rules.yaml: sha256:56fbc7788c9bf3d2ccd2ef0be569a94e1854e12c177dcc5fa69b96ee4b95c931
+    plugin:references/templates/task-plan.md: sha256:55eb61de4f1fb012275915f2f1aa689accca46ef30c5d6f8407f655da6cbb814
+    plugin:references/templates/threat-model.md: sha256:6943baf20f089b2ab7a6d0d6b4842a6b7075325a747827b9225304881e0b1278
+    plugin:references/workflow-schema.md: sha256:5db914a170c0bd97886671160a2c3498127ffd83f0814bc8fb67407f4dc563ee
+    plugin:skills/plan-writing/SKILL.md: sha256:364f9dfc8244f9fe9e52999dfb93cf675d4b0602279d0a6bdf6f70c1dc186b87
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
