@@ -112,7 +112,7 @@ workflow:
     code_review_checks: "NFR2 / NFR3 covered by review round 1 (residual critical/high 0)."
     decision: "Codex consulted: pass with the unrelated failures recorded and a follow-up task for the mux CPU-budget test (option A over rework inside this feature)."
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: Drain OSC 52 queues every pump and apply them to the system clipboard
