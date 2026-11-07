@@ -64,6 +64,9 @@ impl Tab {
     /// - rebuild the fold manager with the current fold-enable preference
     /// - drop any in-flight custom-fold `begin` (belonged to the discarded frame)
     /// - lock the core, `reset_and_replay`, drain marks
+    /// - cut the OSC 52 write / read queues back to the depth they had
+    ///   before the replay's parse, so historic clipboard requests in the
+    ///   snapshot never reach the clipboard (FR7)
     /// - update `evicted_baseline` and call `backfill_marks` so
     ///   `backfill_prompt_marks` latches `pending_frame_reset` (App::pump_all
     ///   reads that latch to drop the now-stale absolute-row selection /
@@ -93,7 +96,19 @@ impl Tab {
         self.reset_frame_prompts_folds();
         let (actions, evicted_total, pending_marks, pending_fold_marks) = {
             let mut c = self.core.lock();
+            // FR7: the replayed bytes are historic. Any OSC 52 write / clear
+            // / read request their parse queues must not reach the clipboard
+            // at the pump's drain, so remember how deep the queues are now
+            // and cut back to that depth right after the parse. Output the
+            // tab applied earlier (live entries queued ahead of this
+            // replay) lies below the recorded depth and survives; output
+            // applied after this recipe (the live queue replayed on a
+            // fallback reparse) is live and queues normally. Taken under the
+            // core lock, the only way a parse appends, in the same
+            // core -> callback-state order the callbacks themselves use.
+            let osc52_depth = self.osc52_queue_depth();
             let actions = c.reset_and_replay_segments(payload, segments);
+            self.truncate_osc52_queues(osc52_depth);
             // Discard any device responses (DA1 / DSR / XTWINOPS / …) that
             // historic queries baked into the snapshot bytes generated during
             // replay. The originating program is long gone; leaving the bytes
@@ -108,6 +123,26 @@ impl Tab {
         };
         self.apply_replay_reconcile(evicted_total, pending_marks, pending_fold_marks);
         actions
+    }
+
+    /// Current depth of the tab's OSC 52 write and read queues, as
+    /// `(writes, reads)` (FR7). Pairs with [`Self::truncate_osc52_queues`].
+    fn osc52_queue_depth(&self) -> (usize, usize) {
+        let s = self.cb_state.lock();
+        (
+            s.pending_clipboard_writes.len(),
+            s.pending_clipboard_reads.len(),
+        )
+    }
+
+    /// Cut the tab's OSC 52 write and read queues back to a depth recorded
+    /// by [`Self::osc52_queue_depth`], removing exactly the entries
+    /// appended since (FR7). Entries below the recorded depth keep their
+    /// order; a queue already at or below it is left alone.
+    fn truncate_osc52_queues(&self, (writes, reads): (usize, usize)) {
+        let mut s = self.cb_state.lock();
+        s.pending_clipboard_writes.truncate(writes);
+        s.pending_clipboard_reads.truncate(reads);
     }
 
     /// Frame-discard half of the replay recipe: drop the prompt / fold
