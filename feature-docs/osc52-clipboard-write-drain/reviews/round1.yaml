@@ -1,0 +1,64 @@
+round: 1
+executed_at: "2026-11-08T04:49:24+09:00"
+scope:
+  review_mode: diff
+  base_commit: d6bd768be85f7cfaeedb5a46f51d2524f1b5c3ee
+  head_commit: e8c538cf0096695b2ed6c24310059c0d5652b583
+  changed_files:
+  - src-tauri/src/app/mod.rs
+  - src-tauri/src/app/tests.rs
+  - src-tauri/src/app/tests/osc52_clipboard.rs
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/tabs/mod.rs
+  - src-tauri/src/tabs/replay.rs
+  - src-tauri/src/tabs/tests.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - src-tauri/src/tabs/tests/replay.rs
+  - src-tauri/src/window_host/event_loop.rs
+  - src-tauri/src/window_host/mod.rs
+  - src-tauri/src/window_host/osc52_clipboard.rs
+  - src-tauri/src/window_host/osc52_clipboard/tests.rs
+  - test-docs/osc52-clipboard-write-drain/task0001.tests.yaml
+  - test-docs/osc52-clipboard-write-drain/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, model: gpt-6-astra, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark-contributor, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: "round 1（diff、cross_validation=true）。5 ランすべて completed。architecture#0 が high 1 件・medium 2 件を報告したが、high（app/tests/osc52_clipboard.rs:9 の App と window_host の循環）はテストモジュールの import だけの辺で本番コードに依存は増えておらず demoted。medium 2 件（pump_all への drain 追加、タプルと空文字クリアの受け渡し形式）は SPEC FR5・A9 の指定と既存のキュー形式を踏襲しており持ち越さない。他の 4 観点は指摘なし。注入の試みはなし。読み取り予算 10/10 を使い、テストファイル群と test-docs は未読。"
+  recommended_action: complete
+  action_rationale: "評価後に critical / high / medium の指摘が残らないため。リリースビルドでの手動確認 MT-1 はレビューの範囲外。"
+dismissed_sites:
+  - file: src-tauri/src/app/tests/osc52_clipboard.rs
+    line: 9
+    run_id: "architecture#0"
+    reason: demoted
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+partially_reviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-osc52-clipboard-write-drain-20261107T194906Z.md
+  failed_package: null
+  failure_reason: null
+  malformed_findings: []
+  listing_dropped_count: 0
+  unattempted_packages: []

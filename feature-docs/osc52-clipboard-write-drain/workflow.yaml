@@ -95,7 +95,8 @@ workflow:
   base_commit: d6bd768be85f7cfaeedb5a46f51d2524f1b5c3ee
   completed_at_commit: 9e469fbd5af9e7e2fad8f5da71ffc1665cb44f23
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: e8c538cf0096695b2ed6c24310059c0d5652b583
 - id: verify
   status: pending
 - id: retrospect
@@ -158,8 +159,8 @@ tasks:
     branch: em-workflow/osc52-clipboard-write-drain/task0002
     notes: null
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor:
     - comprehensive
@@ -169,7 +170,12 @@ review:
     - spec
     discretionary: []
     cross_validation: true
-  perspectives: []
+  perspectives:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
   residual_critical_high: 0
   needs_rework: false
 requirements:
