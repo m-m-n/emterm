@@ -1,0 +1,17 @@
+schema_version: 1
+feature: osc52-clipboard-write-drain
+records:
+- question_id: osc52.read-queue-handling
+  packet_id: create-spec-q0001
+  answered_at: '2026-11-08T02:12:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - drain_discard
+  freeform: null
+  normalized_answer: 読み取りキューは毎 pump で空にし、応答は返さない。読み取り応答の実装は別機能に回す
+  resolution_note: 'category security -> batch relaxed route; codex consulted (1 turn,
+    harness codex): recommended drain_discard (応答追加は既定許可のままSSH先へローカルのクリップボードを公開する。xterm
+    は既定で読み取り禁止、kitty は確認を求める。remove_queue は受付処理とテスト削除まで範囲が広がる。out_of_scope は蓄積が残る).
+    Orchestrator adopted drain_discard as the smallest-exposure option that still
+    stops the growth. opus escalation: not run'

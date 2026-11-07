@@ -1,13 +1,67 @@
 schema_version: 1
 feature: osc52-clipboard-write-drain
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: c3b6d974640f977245bc22ecc31bafe8bf63713a
 last_input_digest: sha256:ad0fbb2f7a8e35b20bcda001c5aa6c4ef32998d99cb4f18f6c0ce68d9f0ba20f
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-11-08T02:06:00+09:00'
+    questions:
+    - question_id: osc52.read-queue-handling
+      status: answered
+    - question_id: osc52.target-mapping
+      status: answered
+    - question_id: design-step.decision
+      status: answered
+answers:
+  osc52.read-queue-handling:
+    packet_id: create-spec-q0001
+    answered_at: '2026-11-08T02:12:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids:
+    - drain_discard
+    freeform: null
+    normalized_answer: 読み取りキューは毎 pump で空にし、応答は返さない。読み取り応答の実装は別機能に回す
+    resolution_note: 'category security -> batch relaxed route; codex consulted (1
+      turn, harness codex): recommended drain_discard (応答追加は既定許可のままSSH先へローカルのクリップボードを公開する。xterm
+      は既定で読み取り禁止、kitty は確認を求める。remove_queue は受付処理とテスト削除まで範囲が広がる。out_of_scope は蓄積が残る).
+      Orchestrator adopted drain_discard as the smallest-exposure option that still
+      stops the growth. opus escalation: not run'
+  osc52.target-mapping:
+    packet_id: create-spec-q0001
+    answered_at: '2026-11-08T02:12:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - c_and_p_split
+    freeform: null
+    normalized_answer: c→CLIPBOARD、p→PRIMARY（両方あれば両方）。空・s・0-7・q だけのときは CLIPBOARD。Windows
+      では PRIMARY を CLIPBOARD で代用。クリアも同じ対応
+    resolution_note: 'policy create-spec.requirement-clarification: codex_consultation,
+      record_as_assumption. codex consulted (1 turn, harness codex): recommended c_and_p_split
+      (xterm の選択先指定に最も近く、既存 set_primary の代用と一致。all_to_clipboard は p 指定を CLIPBOARD
+      に向ける、c_only は有効な p 指定を捨てる). Orchestrator adopted c_and_p_split; recorded as
+      assumption. opus escalation: not run'
+  design-step.decision:
+    packet_id: create-spec-q0001
+    answered_at: '2026-11-08T02:12:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: design ステップはスキップ（UI 変更なし）
+    resolution_note: 'policy create-spec.design-step: decide_autonomously -> analyst
+      recommendation skip. Codex suggested run, but it read the design step as technical
+      design; the em-workflow design step covers visual design (tokens, mockups) only,
+      so the policy decision stands. Codex''s technical points (separate clear path,
+      drain after all parsing in the pump including mux output_pipeline) are passed
+      to the analyst as inputs'
 worker_runs:
 - request_id: create-spec-run-0001
   status: dispatched
