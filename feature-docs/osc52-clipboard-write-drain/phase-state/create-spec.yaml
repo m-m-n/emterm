@@ -1,7 +1,7 @@
 schema_version: 1
 feature: osc52-clipboard-write-drain
 phase: create-spec
-status: applying_patch
+status: completed
 generation: 1
 base_revision: c3b6d974640f977245bc22ecc31bafe8bf63713a
 last_input_digest: sha256:d5afa0776f7a9a150ce497a4ef51ccdc5534c3d562754cde4be4cf703f108423

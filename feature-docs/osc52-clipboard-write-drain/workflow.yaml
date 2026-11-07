@@ -1,0 +1,220 @@
+schema_version: 1
+feature: osc52-clipboard-write-drain
+created: '2026-11-08'
+base_branch: main
+goal: |
+  # OSC 52 の書き込みがシステムのクリップボードに反映されない
+
+  種別: バグ
+
+  ## 現象
+  OSC 52 の書き込み（`ESC ] 52 ; c ; <base64> ST`）を受け取っても、システムのクリップボードに反映されない。
+
+  `handle_clipboard` は解析・サイズ制限まで行い、結果を `pending_clipboard_writes` に積む。このキューを取り出して `set_clipboard` に渡す処理がどこにも無い。取り出されないため、書き込みのたびにキューが伸び続ける。
+
+  Claude Code（2.1.319 で確認）は全画面モードでドラッグ選択した文字列を自動コピーし、その際に OSC 52 を出力する。SSH 先では wl-copy / xclip 等が使えず OSC 52 だけが経路になるため、コピーされない。Claude Code 側は「sent N chars via OSC 52」と表示するので、コピーできたように見える。
+
+  ## 再現手順
+  1. eMterm で SSH 先に入る（または wl-copy / xclip が無い環境）
+  2. `printf '\e]52;c;%s\a' "$(printf hello | base64)"` を実行する
+  3. クリップボードを貼り付ける → `hello` にならない
+
+  ## 期待する挙動
+  OSC 52 の書き込みがシステムのクリップボードに反映される。OSC 52 のクリア（空ペイロード）も反映される。
+
+  ## 完了の定義
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所
+  - `src-tauri/src/callbacks.rs:1160` `handle_clipboard`（キューに積むだけ）
+  - `src-tauri/src/callbacks.rs:966` `pending_clipboard_writes`
+  - `src-tauri/src/window_host/mod.rs:732` `set_clipboard`
+  - `f1f46b30`（native-poc Phase 6）で導入されて以来、取り出し処理が無い
+  - 同じく取り出されなかった OSC 9 のバッファは `c40699d3` で削除済み
+  - `pending_clipboard_reads`（OSC 52 の読み取り照会）も取り出されていない
+  - mux 経由で OSC 52 が届くかは未確認
+
+  ## 実害・発生条件
+  - SSH 先で動く Claude Code のドラッグ選択コピーが効かない
+  - ローカルでは Claude Code が wl-copy / xclip で直接コピーするため、現状は動いて見える
+
+  ## 追加指示
+  - 不明点は Codex に相談し、比較してより良いと判断した選択肢を採用する
+parent_branch: em-workflow/osc52-clipboard-write-drain/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.76
+      '2': 0.24
+      '3': 0.0
+    description_plus_code:
+      '0': 0.0
+      '1': 0.09
+      '2': 0.9
+      '3': 0.01
+  at: '2026-11-08T01:58:00+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    rust:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 6f962d7bfb4610f9900e48935189b67faedc7b83
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: UI や見た目の変更が無いバグ修正（コールバックのキューをシステムのクリップボードへ流すだけ）
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  perspectives: []
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Apply queued OSC 52 writes to the system clipboard
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Apply queued OSC 52 clears
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Target-to-selection mapping
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Drain and discard the OSC 52 read queue
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: Drain runs after every parse of the pump
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Every tab is drained
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: Snapshot replay does not write the clipboard
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: Clipboard unavailable
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR9:
+    title: Existing acceptance gates are unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Bounded queues
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: UI-thread clipboard access
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: No clipboard contents in logs
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Feature gating
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: Existing copy/paste behavior unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: Platforms
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
