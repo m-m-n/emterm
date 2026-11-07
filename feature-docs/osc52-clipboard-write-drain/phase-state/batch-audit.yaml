@@ -15,3 +15,13 @@ records:
     は既定で読み取り禁止、kitty は確認を求める。remove_queue は受付処理とテスト削除まで範囲が広がる。out_of_scope は蓄積が残る).
     Orchestrator adopted drain_discard as the smallest-exposure option that still
     stops the growth. opus escalation: not run'
+- question_id: verify.preexisting-test-failures
+  packet_id: null
+  answered_at: '2026-11-08T05:14:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - pass_record_followup
+  freeform: null
+  normalized_answer: verify は pass とし、機能と無関係な mux の CPU 時間予算テストの失敗を記録して別タスクで追う
+  resolution_note: 'unlisted judgment in verify; codex consulted (1 turn, harness codex): recommended A (mux は main と同一で変更範囲外・失敗テストは編集前の baseline_failures に記録済み・ビルドと TS-1..TS-7 は全て通過・rework は範囲外の問題を機能に持ち込む). Risk noted by codex: 並列時の失敗は既存確認済みのものと負荷依存のものを区別して記録する。Orchestrator adopted A. opus escalation: not run'

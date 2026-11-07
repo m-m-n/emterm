@@ -98,7 +98,19 @@ workflow:
   status: completed
   completed_at_commit: e8c538cf0096695b2ed6c24310059c0d5652b583
 - id: verify
-  status: in_progress
+  status: completed
+  result: pass
+  completed_at_commit: 9a70ca2cd9decb98308939b92fe83eb786a0b34d
+  failed_items: []
+  excluded_scenarios: []
+  summary:
+    build: pass (cargo check default features and --no-default-features)
+    tests: "cargo test --lib: 4871 passed, 5 failed, 3 ignored. All 46 OSC 52 tests, all tabs replay tests and every acceptance test in test-docs pass (TS-1..TS-7)."
+    preexisting_failures_confirmed: "mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget fails alone with --test-threads=1 (thread CPU time 27s against the 10s budget). It is a baseline failure recorded before any edit in test-docs task0001/task0002."
+    load_dependent_failures: "4 further mux::ipc::pty_spawn tests (3 CPU/wall-clock budget tests and visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once, Timeout) failed only in the parallel run and passed in the serial rerun of mux::ipc::pty_spawn::tests."
+    scope_check: "src-tauri/src/mux is identical to main; the feature diff does not touch mux or crates/."
+    code_review_checks: "NFR2 / NFR3 covered by review round 1 (residual critical/high 0)."
+    decision: "Codex consulted: pass with the unrelated failures recorded and a follow-up task for the mux CPU-budget test (option A over rework inside this feature)."
 - id: retrospect
   status: pending
 tasks:
