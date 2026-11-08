@@ -382,7 +382,7 @@ eMterm supports the following OSC (Operating System Command) sequences:
 | 11 | SetBackgroundColor | Query/set default background color |
 | 12 | SetCursorColor | Query/set cursor color |
 | 22 | CursorShape | Push/pop cursor shape stack |
-| 52 | Clipboard | Read/write system clipboard (configurable) |
+| 52 | Clipboard | Write/clear system clipboard (CLIPBOARD / PRIMARY chosen by target); read queries get no reply |
 | 104 | ResetColorPalette | Reset color palette entries to defaults |
 | 110 | ResetForegroundColor | Reset default foreground color |
 | 111 | ResetBackgroundColor | Reset default background color |

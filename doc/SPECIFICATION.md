@@ -714,7 +714,9 @@ Linux (X11 and Wayland) has two independent clipboards that eMterm honors:
 - Selecting text in the terminal automatically writes to PRIMARY
 - Middle-click pastes from PRIMARY (falling back to CLIPBOARD when empty)
 - `Ctrl+C` / `Ctrl+Shift+C` operate on CLIPBOARD only
-- OSC 52 operates on CLIPBOARD only; PRIMARY is never written by remote programs
+- OSC 52 writes and clears are applied to the system clipboard on every pump, selected by the target: `c` selects CLIPBOARD, `p` selects PRIMARY, `cp` / `pc` select both; an empty target or one made only of `s`, `0`-`7`, `q` selects CLIPBOARD. On Windows every target writes to CLIPBOARD
+- An OSC 52 write with an empty payload clears the selected selection; OSC 52 read queries are drained and discarded without a reply
+- OSC 52 content replayed from a mux snapshot never writes to or clears the system clipboard
 - On Linux the "Copy on select" and "Middle-click paste" toggles are hidden from the settings UI
 
 ---
