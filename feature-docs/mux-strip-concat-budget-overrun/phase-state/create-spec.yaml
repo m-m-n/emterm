@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-strip-concat-budget-overrun
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 270bc4efaaf4b47fcfc14fa21b1d21818706d652
 last_input_digest: sha256:f32d5c790af20e7e31e0cec8999e7e5e1db610343ba825da9086e6972d1e867f
