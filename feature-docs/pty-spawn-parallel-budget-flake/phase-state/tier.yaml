@@ -1,0 +1,65 @@
+schema_version: 2
+feature: pty-spawn-parallel-budget-flake
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.37
+    confidence: 0.63
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.65
+      '2': 0.33
+      '3': 0.02
+  observed_at: '2026-11-08T22:40:03+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.49
+    confidence: 0.51
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.51
+      '2': 0.49
+      '3': 0.0
+  observed_at: '2026-11-08T22:42:30+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/strip_open_string_body_closure.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+  changed_lines_approx: 80
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: []
+  covering_tests_exist: true
+  spillover_modules: []
+  work_still_required: true
+  work_still_required_evidence: HEAD d20077dでは、escape_state_carry.rs:774/872、post_strip_cut_csi.rs:776/846、strip_open_string_body_closure.rs:235/244の対象テストがInstantの経過時間を10秒のBUDGETと比較している。tests.rs:5127/5144にはrecv_timeout(5秒)が残っている
+  test_change_kind: extend_existing_one_to_one
+  added_test_cases_approx: 0
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 5
+  changes_external_contract: false
+  changes_behavior: true
+  notes: tests/thread_cpu_time.rs:116にCpuMeterがあり、Unix・Windows対応と専用テストがある。strip_concat_query.rs:1089で使用済み。再接続テストは最初の停止解除(:5137)後に次の停止を設定(:5142)している。変更量・依存数は概算で、behaviorはテストの判定・同期を指す。ファイル変更・テスト実行はしていない
+decided_at: '2026-11-08T22:43:00+09:00'
