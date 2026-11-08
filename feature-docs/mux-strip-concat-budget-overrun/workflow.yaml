@@ -143,7 +143,7 @@ tasks:
     - NFR1
     - NFR2
     - NFR3
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-strip-concat-budget-overrun/task0001
   task0002:
     title: Scaling-ratio regression guard for the strip and the write filter
