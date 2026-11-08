@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-strip-concat-budget-overrun
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: 270bc4efaaf4b47fcfc14fa21b1d21818706d652
-last_input_digest: sha256:fe5cc7c9b48588c8aa09b70999b2375db116773cb187c583ec4a898bf91df13d
-active_request_id: null
+last_input_digest: sha256:f32d5c790af20e7e31e0cec8999e7e5e1db610343ba825da9086e6972d1e867f
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -79,6 +79,19 @@ worker_runs:
     src-tauri/src/mux/ipc/pty_spawn/write_filter.rs: sha256:277ae28a193968276b1ea2e395fe9053b70961ccfe54db7cd924e181368a5410
     src-tauri/src/mux/scrollback_filter.rs: sha256:e14d1fe5023e7e72f5b60b17b5100e9f15b747f65039b897225aec1fb1d65ed0
     test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
+- request_id: create-spec-run-0002
+  worker: requirements-analyst
+  status: completed
+  input_digest: sha256:fe5cc7c9b48588c8aa09b70999b2375db116773cb187c583ec4a898bf91df13d
+  output_digest: sha256:f79faef12f68568b60ea796163f5e348f41add671d85367817b0930b345f678a
+- request_id: create-spec-run-0003
+  worker: spec-writer
+  status: dispatched
+  input_digest: sha256:f32d5c790af20e7e31e0cec8999e7e5e1db610343ba825da9086e6972d1e867f
+  dispatch_digest_inputs:
+    plugin:references/contracts/spec-writer-contract.md: sha256:1e63f69687c6850e890f66b5ca92af7f3b0d02645cc464fca88455ad2269d671
+    plugin:references/templates/requirements-document.md: sha256:40ace2beeb59c708b155945c8b4dc13d34f1d9cd55e22c8c6bec58a73faed963
+    plugin:references/templates/spec-document.md: sha256:a5d0106c39a5df7dc2365357a9546588275ed6c7a1651c866e75fa327a7fa592
 artifacts: []
 patches: []
 progress_fingerprint: null
