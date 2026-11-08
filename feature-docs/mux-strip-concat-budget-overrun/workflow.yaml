@@ -160,7 +160,7 @@ tasks:
     - NFR1
     - NFR2
     - NFR4
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-strip-concat-budget-overrun/task0002
 review:
   status: pending
