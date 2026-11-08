@@ -1,17 +1,68 @@
 schema_version: 1
 feature: mux-strip-concat-budget-overrun
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: 270bc4efaaf4b47fcfc14fa21b1d21818706d652
 last_input_digest: sha256:fe5cc7c9b48588c8aa09b70999b2375db116773cb187c583ec4a898bf91df13d
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-11-08T13:58:29+09:00'
+    questions:
+    - question_id: q-fix-approach
+      status: answered
+    - question_id: q-parallel-scope
+      status: answered
+    - question_id: q-regression-guard
+      status: answered
+    - question_id: q-design-step
+      status: answered
+answers:
+  q-fix-approach:
+    packet_id: create-spec-q0001
+    answered_at: '2026-11-08T13:58:29+09:00'
+    source: batch-codex-consultation
+    answer_mode: select
+    selected_option_ids:
+    - investigate_then_branch
+    freeform: null
+    normalized_answer: Codex 相談で investigate_then_branch を推奨（静的には線形に見えるが 27 秒だけでは断定できない。単独実行で経路別に計測し、線形なら入力量を減らし、非線形なら実装を直す。入力量を減らす場合も各対象・入力形状・分割方法・上限超過時の経路を維持し、共有の
+      TARGETS / BUDGET は変えない）。オーケストレーターが採用。仮定として記録
+  q-parallel-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-11-08T13:58:29+09:00'
+    source: batch-codex-consultation
+    answer_mode: select
+    selected_option_ids:
+    - target_only
+    freeform: null
+    normalized_answer: Codex 相談で target_only を推奨（受け入れ条件は単独・直列実行での安定通過）。並列時のみ失敗する 4
+      件は範囲外の既知障害として SPEC に記録し、別タスクとして起票する。オーケストレーターが採用。仮定として記録
+  q-regression-guard:
+    packet_id: create-spec-q0001
+    answered_at: '2026-11-08T13:58:29+09:00'
+    source: batch-codex-consultation
+    answer_mode: select
+    selected_option_ids:
+    - both
+    freeform: null
+    normalized_answer: 解析側の推奨は scaling_ratio、Codex は both を推奨（既存の代理テストは実際の strip/feed
+      の退行を検出しないため、実処理での N と 4N の CPU 時間比と、10 秒の絶対予算への十分な余裕を併用）。比較して both の方が優れると判断して採用。仮定として記録
+  q-design-step:
+    packet_id: create-spec-q0001
+    answered_at: '2026-11-08T13:58:29+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: batch-policies.yaml の create-spec.design-step=decide_autonomously。解析側の推奨（skip）を採用
 worker_runs:
 - request_id: create-spec-run-0001
   worker: requirements-analyst
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:fe5cc7c9b48588c8aa09b70999b2375db116773cb187c583ec4a898bf91df13d
   dispatch_digest_inputs:
     CLAUDE.md: sha256:05afe1b23d63c1c48dc84ed05626a2b75917462ef9345d314fc009cf6c948386
