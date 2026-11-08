@@ -1,0 +1,93 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib -- --test-threads=1` finished with 4876 passed,
+# 0 failed, 3 ignored. The target test passed in that run.
+baseline_failures: []
+# Re-executed after the implementation (the final tree of this task, this record included):
+# `cargo test --lib -- --test-threads=1` finished with 4876 passed, 0 failed, 3 ignored. This task
+# adds and renames no test, so the count equals the baseline's. `cargo check` finished with no
+# warning from the crate.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    # The FR1 record lives in the doc comment of the target test. The existing tests that
+    # reference strip_concat_query.rs (found by its repository-relative path and by its basename)
+    # are the `use super::strip_concat_query::TARGETS` imports of strip_join_escape_closure.rs and
+    # strip_open_string_body_closure.rs and the `mod strip_concat_query;` line of tests.rs; none
+    # reads the doc comment.
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No existing test covers the contents of the doc comment, and no executable check on a
+      document can be made to fail for it. The measurement itself was taken with an instrumented
+      copy of the target test (every (entry, target, shape) cell through its own CpuMeter, one
+      single-threaded run per size, N then 4N); the instrumentation is not kept in the tree.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+    red_confirmed: false
+    red_reason: >-
+      The reproduction command did not fail before the change on this machine: the target test
+      passed in the baseline run of the whole suite, and the unchanged workload (100,000
+      repetitions per shape, a 100,000-byte ESC chain) measured 3.88 s of thread CPU time in a
+      single-threaded debug run, so the 27 s failure did not reproduce here and no red state
+      occurred for this change.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+    red_confirmed: false
+    red_reason: >-
+      The target test already passed every measured call through one CpuMeter judged against
+      BUDGET and read no wall clock before the change (it passed in the baseline run), so those
+      parts had no red state. The verdict line written on success has no executable check that
+      can fail; it was read from a run with --show-output: "thread CPU time 274.622807ms against
+      the budget 10s", the post-change total recorded in the FR1 record.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+    red_confirmed: true
+    red_reason: >-
+      With the one-call input of the lone ESC + csi query cell kept at today's 100,000 units (a
+      temporary edit, removed afterwards) the new cap assertion failed: "lone ESC + csi query: the
+      one-call input of 500000 bytes is not longer than the pending cap 524288". The assertions
+      that every read-mode input and the ESC chain span at least three reads, and the output
+      assertions kept from before, passed on the unchanged sizes, so only the cap assertion was
+      observed red.
+  AC-5:
+    # Searched by the repository-relative path and by the basename strip_concat_query.rs: the
+    # tests of strip_join_escape_closure.rs and strip_open_string_body_closure.rs import TARGETS and
+    # Target from it, and three other tests of the same file use BUDGET.
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_join_escape_closure
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing strip_join_escape_closure and
+      strip_open_string_body_closure modules fail to compile or fail when TARGETS or Target lose
+      or change an entry's shape; no red state occurred for this change. That the TARGETS, Target
+      and BUDGET definitions and the target test's name are unchanged is a diff check against the
+      base commit, and the doc comment's statement of the sizes and of the departure from the 100k
+      scale is a document check; neither has an executable check that can fail.
+  AC-6:
+    # The verdict is linear, so scrollback_filter.rs and write_filter.rs are not part of this
+    # task's diff. Searched by their repository-relative paths and basenames: the strip suite is
+    # mux::scrollback_filter::tests and the write-filter suite is part of
+    # mux::ipc::pty_spawn::tests.
+    tests:
+      - mux::scrollback_filter::tests
+      - mux::ipc::pty_spawn::tests
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing strip and write-filter suites
+      detect a change of the bytes either path writes; no red state occurred for this change. The
+      outcome that neither file differs from the base commit is a diff check
+      (git diff of the two paths against the base commit is empty) with no executable check that
+      can fail.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests
+    red_confirmed: false
+    red_reason: >-
+      The module run passed before the change (it is part of the baseline run, 4876 passed), and
+      the unchanged workload stayed within the budget on this machine, so no red state occurred
+      for this change. After the change `mux::ipc::pty_spawn::tests` passed single-threaded:
+      467 passed, 0 failed.

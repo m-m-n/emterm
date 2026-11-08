@@ -1007,28 +1007,116 @@ fn repeated(unit: &[u8], reps: usize) -> Vec<u8> {
     std::iter::repeat_n(unit.to_vec(), reps).flatten().collect()
 }
 
-/// AC-7 (NFR1, NFR2, TS-9): an open CSI and a strip target alternating 100k
-/// times, a lone ESC and a strip target alternating 100k times and a 100k ESC
-/// chain before each removed construct finish within the budget through the
-/// strips and the write filter (in one call, which takes the overflow flush,
-/// and in unit-aligned and unaligned reads), and write what the plan says.
+/// AC-7 (NFR1, NFR2, TS-9): an open CSI and a strip target alternating, a lone
+/// ESC and a strip target alternating, and an ESC chain before each removed
+/// construct finish within the budget through the strips and the write filter
+/// (in one call, which takes the overflow flush, and in unit-aligned and
+/// unaligned reads), and write what the plan says.
 ///
 /// lib-budget-tests-load-tolerance task0001 (FR2, FR9): the budget is the
 /// thread CPU time of the measured calls (the strips and every write-filter
 /// feed), summed through a `CpuMeter` and judged against `BUDGET`. Building the
 /// inputs, the comparisons and the test-side collection of the fed output are
-/// not measured.
+/// not measured. On success the test writes the verdict line (the total against
+/// the budget) to the test output.
+///
+/// mux-strip-concat-budget-overrun task0001 (FR1, FR2, NFR1, NFR3): the input
+/// sizes depart from the 100k scale named for mux-strip-concat-query-closure
+/// AC-7 (100,000 repetitions per shape and a 100,000-byte ESC chain);
+/// `feature-docs/mux-strip-concat-budget-overrun/SPEC.md` records the change
+/// (Workload Change Record, A8). The test name is unchanged. The sizes are:
+///
+/// - the one-call input (`ScrollbackWriteFilter::feed`, the overflow flush) is,
+///   for every target and shape, the smallest whole number of units whose length
+///   exceeds `SCROLLBACK_FILTER_PENDING_CAP`; the test asserts the length before
+///   it feeds the input;
+/// - the input of both strips and of the unit-aligned and the 64 KiB reads is
+///   the smallest whole number of units whose length exceeds two 64 KiB reads,
+///   so it spans at least three reads of each read size; the test asserts it;
+/// - the ESC chain is 50,000 ESC bytes before the removed construct, which spans
+///   four 16 KiB reads; the test asserts it.
+///
+/// FR1 record. Conditions: debug build, one thread (`--test-threads=1`), this
+/// test run alone, one run per size, and every (entry, target, shape) cell
+/// passed through its own `CpuMeter` in an instrumented copy of this test (the
+/// instrumentation is not kept). The two sizes were N and 4N of the same unit
+/// per target and shape. N is the smallest whole number of units whose length
+/// exceeds `SCROLLBACK_FILTER_PENDING_CAP`: 14,564 to 104,858 units, 524,290 to
+/// 524,328 bytes; 4N is four times that: 2,097,160 to 2,097,312 bytes. At both
+/// sizes every one-call input exceeds the cap, so E3 took the overflow flush at
+/// both. The ESC chain used N = 25,000 and 4N = 100,000 ESC bytes. The entries:
+/// E1 `strip_pty_output_for_scrollback_write`, E2 `strip_replayable_rich_content`,
+/// E3 `ScrollbackWriteFilter::feed` in one call, E4 the same in unit-aligned
+/// reads, E5 the same in 64 KiB reads, E6 the ESC chain block (its strip, its
+/// one call and its 16 KiB reads).
+///
+/// Thread CPU time summed over the 8 targets, in ms, as N / 4N / 4N-over-N
+/// ratio:
+///
+/// | Entry | open CSI | lone ESC |
+/// |---|---|---|
+/// | E1 | 68.03 / 294.27 / 4.33 | 55.95 / 220.21 / 3.94 |
+/// | E2 | 69.57 / 282.38 / 4.06 | 53.98 / 227.19 / 4.21 |
+/// | E3 | 75.42 / 323.38 / 4.29 | 63.84 / 244.55 / 3.83 |
+/// | E4 | 92.76 / 386.98 / 4.17 | 77.75 / 337.41 / 4.34 |
+/// | E5 | 90.93 / 388.22 / 4.27 | 80.87 / 340.00 / 4.20 |
+///
+/// E6 (the ESC chain, no shape): 7.85 / 32.72 / 4.17. The totals were 736.95 ms
+/// at N and 3077.31 ms at 4N. The largest per-cell ratio is 5.62, the cell of E4
+/// with the lone ESC shape and the target "osc 9999 emterm-md" (10.27 ms at N,
+/// 57.69 ms at 4N); every cell is below 8.
+///
+/// Verdict (mux-strip-concat-budget-overrun IMPLEMENTATION.md D1: linear when
+/// every cell's 4N / N ratio is below 8): linear. Branch taken: the workload of
+/// this test shrinks to the sizes above; the production code is unchanged. The
+/// previous workload (100,000 repetitions per shape, a 100,000-byte ESC chain)
+/// measured 3.88 s in the same way. The total of this test after the change,
+/// measured in the same way, is 274.62 ms.
 #[test]
 fn strip_concat_alternations_and_chains_finish_within_the_budget() {
+    // The read size of the 64 KiB reads (and the bound of the unit-aligned
+    // reads), and the read size and length of the ESC chain block. The chain
+    // input spans four reads.
+    const UNALIGNED_READ: usize = 65_536;
+    const ESC_CHAIN_READ: usize = 16_384;
+    const ESC_CHAIN_LEN: usize = 50_000;
+
+    // The smallest whole number of `unit`s whose length exceeds `bytes`.
+    fn reps_above(unit: &[u8], bytes: usize) -> usize {
+        bytes / unit.len() + 1
+    }
+
     let mut meter = CpuMeter::new();
-    let reps = 100_000usize;
     for target in TARGETS {
         for (shape, lead) in [("open CSI", &b"\x1b[6"[..]), ("lone ESC", &[ESC][..])] {
             let unit = [lead, target.bytes].concat();
-            let input = repeated(&unit, reps);
             let expected_unit = [lead, CSI_CLOSING, target.c0].concat();
-            let expected = repeated(&expected_unit, reps);
             let ctx = format!("{shape} + {}", target.name);
+
+            // The one-call input: the smallest whole number of units longer
+            // than the cap, so the call takes the overflow flush.
+            let one_call_reps = reps_above(&unit, SCROLLBACK_FILTER_PENDING_CAP);
+            let one_call = repeated(&unit, one_call_reps);
+            let one_call_expected = repeated(&expected_unit, one_call_reps);
+            assert!(
+                one_call.len() > SCROLLBACK_FILTER_PENDING_CAP,
+                "{ctx}: the one-call input of {} bytes is not longer than the pending cap {}",
+                one_call.len(),
+                SCROLLBACK_FILTER_PENDING_CAP
+            );
+
+            // The strip and read inputs: the same unit, long enough to span at
+            // least three reads of the size the entry uses.
+            let reads_reps = reps_above(&unit, 2 * UNALIGNED_READ);
+            let input = repeated(&unit, reads_reps);
+            let expected = repeated(&expected_unit, reads_reps);
+            // Reads aligned to the unit never split a construct.
+            let aligned = unit.len() * (UNALIGNED_READ / unit.len());
+            assert!(
+                input.chunks(aligned).count() >= 3 && input.chunks(UNALIGNED_READ).count() >= 3,
+                "{ctx}: the read-mode input of {} bytes spans fewer than three reads",
+                input.len()
+            );
 
             let stripped = meter.measure(|| strip_pty_output_for_scrollback_write(&input));
             assert!(stripped == expected, "{ctx}: strip");
@@ -1036,12 +1124,13 @@ fn strip_concat_alternations_and_chains_finish_within_the_budget() {
             assert!(snapshot_stripped == expected, "{ctx}: snapshot strip");
 
             let mut filter = ScrollbackWriteFilter::new();
-            let out = meter.measure(|| filter.feed(&input, DIMS)).1;
-            assert!(out == expected, "{ctx}: one call (the overflow flush)");
+            let out = meter.measure(|| filter.feed(&one_call, DIMS)).1;
+            assert!(
+                out == one_call_expected,
+                "{ctx}: one call (the overflow flush)"
+            );
             assert_eq!(filter.csi_phase(), None, "{ctx}");
 
-            // Reads aligned to the unit never split a construct.
-            let aligned = unit.len() * (65_536 / unit.len());
             let mut filter = ScrollbackWriteFilter::new();
             let mut out = Vec::new();
             for read in input.chunks(aligned) {
@@ -1053,7 +1142,7 @@ fn strip_concat_alternations_and_chains_finish_within_the_budget() {
             // Reads of 64 KiB that split constructs: only the time is bound.
             let mut filter = ScrollbackWriteFilter::new();
             let mut out = Vec::new();
-            for read in input.chunks(65_536) {
+            for read in input.chunks(UNALIGNED_READ) {
                 let fed = meter.measure(|| filter.feed(read, DIMS));
                 out.extend_from_slice(&fed.1);
             }
@@ -1061,10 +1150,15 @@ fn strip_concat_alternations_and_chains_finish_within_the_budget() {
         }
 
         // A chain of ESC before the removed construct.
-        let chain = vec![ESC; 100_000];
+        let chain = vec![ESC; ESC_CHAIN_LEN];
         let input = [&chain[..], target.bytes, b"x"].concat();
         let expected = [&chain[..], CSI_CLOSING, target.c0, b"x"].concat();
         let ctx = format!("ESC chain + {}", target.name);
+        assert!(
+            input.chunks(ESC_CHAIN_READ).count() >= 3,
+            "{ctx}: the chain input of {} bytes spans fewer than three reads",
+            input.len()
+        );
         let stripped = meter.measure(|| strip_pty_output_for_scrollback_write(&input));
         assert!(stripped == expected, "{ctx}: strip");
         let mut filter = ScrollbackWriteFilter::new();
@@ -1072,7 +1166,7 @@ fn strip_concat_alternations_and_chains_finish_within_the_budget() {
         assert!(out == expected, "{ctx}: one call");
         let mut filter = ScrollbackWriteFilter::new();
         let mut out = Vec::new();
-        for read in input.chunks(16_384) {
+        for read in input.chunks(ESC_CHAIN_READ) {
             let fed = meter.measure(|| filter.feed(read, DIMS));
             out.extend_from_slice(&fed.1);
         }
@@ -1082,6 +1176,7 @@ fn strip_concat_alternations_and_chains_finish_within_the_budget() {
         );
     }
     let verdict = meter.judge(BUDGET);
+    println!("{verdict}");
     assert!(
         verdict.is_within(),
         "the measured calls exceeded the budget: {verdict}"
