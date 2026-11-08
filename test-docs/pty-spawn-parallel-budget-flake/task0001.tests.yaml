@@ -1,0 +1,109 @@
+task_id: task0001
+# Step 4a, before any change: `cargo test --lib` (the approved test command, one ordinary run)
+# finished with 4882 passed, 0 failed, 3 ignored.
+baseline_failures: []
+# Re-executed after the implementation (the final tree of this task): the same command finished
+# with 4909 passed, 0 failed, 3 ignored (the baseline's 4882 passed plus the 27 tests of
+# budget_and_arm_order_guard.rs). The run was repeated once more after this record was written
+# and finished the same way.
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_five_target_tests_keep_the_load_independent_forms
+      - mux::ipc::pty_spawn::tests::escape_state_carry::escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget
+      - mux::ipc::pty_spawn::tests::post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+    red_confirmed: true
+    red_reason: >-
+      With the guard's body finder implemented and the two budget bodies still on the wall-clock
+      form, the real-source guard test failed for both: "escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget
+      (tests/escape_state_carry.rs): ... holds the forbidden wall-clock token `Instant::now`" and the
+      same message for post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+      (tests/post_strip_cut_csi.rs). The unchanged inputs and output assertions are checked by
+      reading the diff.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_five_target_tests_keep_the_load_independent_forms
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal
+      - mux::ipc::pty_spawn::tests::strip_open_string_body_closure::open_body_closure_an_osc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal
+    red_confirmed: true
+    red_reason: >-
+      On the wall-clock form the real-source guard test failed for the DCS / APC test: "open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal
+      (tests/strip_open_string_body_closure.rs): ... holds the forbidden wall-clock token
+      `Instant::now`". That the overflow setup and the next-call feed are the only calls inside the
+      runner, and that assert_replays_like_raw and the helper's assertions stay outside, is checked
+      by reading the diff; the OSC sibling is the unchanged control and passed before and after.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_five_target_tests_keep_the_load_independent_forms
+      - mux::ipc::pty_spawn::tests::visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
+      - mux::ipc::pty_spawn::tests::on_demand_snapshot_redelivers_alt_screen_and_main_screen_color_queries_once
+    red_confirmed: true
+    red_reason: >-
+      On the release-first order the real-source guard test failed for both reattach tests: "...
+      the first `release_tx.send(` comes before the second `p2.arm()`". In one earlier run of the
+      suite (with the guard's body finder still a stub, before any conversion) the visible-reattach
+      test itself also failed once with "the reader must reach P2 on the main-buffer chunk:
+      Timeout", the old order's race; it was not re-run to catch it. The unchanged recv_timeout
+      values and assertions are checked by reading the diff.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_budget_judgment_rejects_a_wall_clock_body_without_a_meter
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_budget_judgment_rejects_a_wall_clock_check_that_holds_only_the_elapsed_token
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_budget_judgment_rejects_a_meter_body_that_keeps_the_wall_clock_start
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_budget_judgment_rejects_a_meter_body_without_a_measure_call
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_budget_judgment_rejects_a_body_that_lacks_any_one_meter_token
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_budget_judgment_accepts_a_body_with_all_three_meter_tokens_and_no_wall_clock_token
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_budget_judgment_reports_a_source_without_the_named_function_as_missing_by_name
+    red_confirmed: true
+    red_reason: >-
+      With the body finder stubbed (it always reported the function missing) and the tests in
+      place, the six accepted / rejected tests failed, for example the acceptance test with
+      "left: Missing(\"target\") right: Accepted". The missing-function test passed under the stub,
+      which already reports every function as missing.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_arm_order_judgment_rejects_a_release_before_the_second_arm
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_arm_order_judgment_rejects_a_body_with_one_arm
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_arm_order_judgment_rejects_a_body_with_no_release
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_arm_order_judgment_accepts_the_second_arm_before_the_first_release
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_arm_order_judgment_does_not_take_the_second_release_for_the_first
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_arm_order_judgment_reports_a_source_without_the_named_function_as_missing_by_name
+    red_confirmed: true
+    red_reason: >-
+      With the same stubbed body finder the five accepted / rejected tests failed (each judged the
+      sample as Missing("target") instead of the expected verdict). The missing-function test
+      passed under the stub.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::a_forbidden_token_only_in_the_following_function_does_not_reject_the_named_budget_function
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::a_required_token_only_in_the_following_function_does_not_satisfy_the_named_budget_function
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::a_release_only_in_the_following_function_neither_rejects_nor_satisfies_the_named_arm_order_function
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::a_second_arm_only_in_the_following_function_does_not_satisfy_the_named_arm_order_function
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::a_forbidden_token_on_a_whole_line_comment_does_not_reject_a_budget_body
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::a_required_token_on_a_whole_line_comment_does_not_satisfy_a_budget_body
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::an_arm_order_token_on_a_whole_line_comment_neither_rejects_nor_satisfies_an_arm_order_body
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::a_name_that_is_a_prefix_of_another_name_is_not_matched_to_that_function
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::a_source_with_crlf_line_ends_gets_the_verdict_of_the_same_source_with_lf_line_ends
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_body_finder_ends_at_the_closing_brace_of_the_named_function
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_body_finder_ends_a_nested_function_at_the_brace_of_its_own_indentation
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_body_finder_reports_a_function_without_a_closing_line_as_missing
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_body_finder_does_not_match_a_function_named_only_in_a_comment
+    red_confirmed: true
+    red_reason: >-
+      With the body finder stubbed, the tests that need a found body failed (the prefix, CRLF,
+      comment, following-function and body-finder tests, 11 in all; for example the CRLF test
+      and "the body finder ends at the closing brace" with "the function is found" unmet). The
+      two body-finder tests that expect no body (no closing line; name only in a comment) passed
+      under the stub, which already returns no body.
+  AC-7:
+    tests:
+      - mux::ipc::pty_spawn::tests::budget_and_arm_order_guard::the_five_target_tests_keep_the_load_independent_forms
+    red_confirmed: true
+    red_reason: >-
+      On the unconverted source the real-source guard test failed with "5 of the five target tests
+      left the load-independent form", naming the three budget tests (forbidden `Instant::now`)
+      and the two reattach tests (first `release_tx.send(` before the second `p2.arm()`); after
+      the conversion it passes and finds all five. The parts "only the five files of this plan
+      change", "no test is renamed" and "BUDGET, TARGETS, Target and every other wall-clock check
+      are unchanged" have no executable check; they are checked by reading the diff.

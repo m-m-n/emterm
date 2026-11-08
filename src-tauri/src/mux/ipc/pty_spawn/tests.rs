@@ -5134,12 +5134,19 @@ async fn visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_on
         &mgr, session_id, &new_tx, &title_tx, kick_tx1, true, 10_000,
     )
     .await;
+
+    // P2 disarms itself after one hit; re-arm for the main-buffer chunk BEFORE
+    // releasing the alt-screen chunk. Arming only after the release lets the
+    // reader run ahead and pass P2 on the main-buffer chunk before this test
+    // re-arms it, so the 5s recv_timeout below can expire. Arming while the reader
+    // is still paused is safe: `PauseHook::hit` takes its armed state before it
+    // blocks on release, so the new arming only affects the NEXT hit (the pattern
+    // of the split-OSC test above).
+    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
     release_tx.send(()).unwrap();
 
-    // P2 disarms itself after one hit; re-arm for the main-buffer chunk and
-    // reattach the SAME destination a second time (mirrors a second
+    // Reattach the SAME destination a second time (mirrors a second
     // window-switch back to the still-attached client).
-    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
     arrived_rx_2
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("the reader must reach P2 on the main-buffer chunk");
@@ -5403,9 +5410,16 @@ async fn on_demand_snapshot_redelivers_alt_screen_and_main_screen_color_queries_
     )
     .await
     .expect("handle_request_pane_snapshot");
+
+    // P2 disarms itself after one hit; re-arm for the main-buffer chunk BEFORE
+    // releasing the alt-screen chunk. Arming only after the release lets the
+    // reader run ahead and pass P2 on the main-buffer chunk before this test
+    // re-arms it, so the 5s recv_timeout below can expire. Arming while the reader
+    // is still paused is safe: `PauseHook::hit` takes its armed state before it
+    // blocks on release, so the new arming only affects the NEXT hit.
+    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
     release_tx.send(()).unwrap();
 
-    let (arrived_rx_2, release_tx_2) = output_capture.p2.arm();
     arrived_rx_2
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("the reader must reach P2 on the main-buffer chunk");
@@ -8897,6 +8911,9 @@ mod strip_scaling_ratio;
 // mux-osc-abort-altscreen-split-read task0001 (AC-1, AC-2, AC-4, AC-5, AC-6): the split-aware
 // live-span tracker the reader feeds the agent-status scanner with.
 mod altscreen_split_read;
+
+// pty-spawn-parallel-budget-flake task0001 (FR6): the source-scan guard of the five converted tests.
+mod budget_and_arm_order_guard;
 
 // ── osc7501-program-status task0004 (AC-1, AC-2): OSC 7501 and RIS in the
 //    agent-status feed ────────────────────────────────────────────────────

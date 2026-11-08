@@ -39,6 +39,7 @@ use super::round3_write_path::DIMS;
 use super::round4_cut_csi::View;
 use super::round4_cut_csi::{osc_held_at_the_cap, text, view_after_a_cut, view_of};
 use super::strip_concat_query::{TARGETS, Target};
+use super::thread_cpu_time::CpuMeter;
 use super::*;
 use crate::mux::scrollback_filter::{
     strip_pty_output_for_scrollback_write, strip_replayable_rich_content, vt100_replay_copy,
@@ -175,28 +176,44 @@ fn themed_view_of_a_snapshot(payload: &[u8]) -> View {
 
 // ── AC-2 (b) (FR1, FR3, NFR3, TM-1): a body an overflow flush left open ──
 
+/// How a caller has the helper execute a production call: the runner receives the
+/// call and executes it exactly once, on the calling thread, before it returns.
+type Runner<'a> = &'a mut dyn FnMut(&mut dyn FnMut());
+
 /// The next call after an overflow flush left `body` open: each removed construct
 /// followed by `?` BEL and plain text writes the string-body closure, the
 /// construct's C0 bytes, `?` BEL and the text; nothing is held, the state is
 /// Ground, and the replay of everything written equals the raw stream.
+///
+/// `run` is the runner of the two production calls the helper makes per target:
+/// the overflow setup (`overflow`) and the next-call feed. The caller decides how
+/// they are executed (the DCS / APC test passes each through a `CpuMeter` to judge
+/// them by thread CPU time, the OSC test executes them directly). Building the
+/// next call's input, every assertion and the oracle replay
+/// (`assert_replays_like_raw`) run outside the runner.
 fn check_a_flushed_open_body_is_closed_at_the_next_removal(
     name: &str,
     held: &[u8],
     more: &[u8],
     open: WrittenState,
+    run: Runner<'_>,
 ) {
     for target in TARGETS {
         let ctx = format!("{name} + {}", target.name);
         let after = [QUERY_TAIL, b"plain text"].concat();
         let call2 = [target.bytes, &after[..]].concat();
 
-        let (mut filter, flush) = overflow(held, more);
+        let mut setup = None;
+        run(&mut || setup = Some(overflow(held, more)));
+        let (mut filter, flush) = setup.expect("the runner executes the overflow setup");
         assert_eq!(
             filter.written_state(),
             open,
             "{ctx}: the flush leaves the body open"
         );
-        let second = filter.feed_with_cuts(&call2, DIMS, &[]);
+        let mut fed = None;
+        run(&mut || fed = Some(filter.feed_with_cuts(&call2, DIMS, &[])));
+        let second = fed.expect("the runner executes the next-call feed");
         let expected = [STRING_BODY_CLOSING, target.c0, &after[..]].concat();
         assert!(
             second.bytes == expected,
@@ -223,25 +240,35 @@ fn open_body_closure_an_osc_body_left_open_by_an_overflow_flush_is_closed_at_the
         &osc_held_at_the_cap(),
         TEN_BODY_BYTES,
         WrittenState::OscBody,
+        &mut |call| call(),
     );
     assert!(start.elapsed() < BUDGET, "took {:?}", start.elapsed());
 }
 
 /// AC-2 (b): each of the four DCS / APC bodies `overflow_open_string_cut` holds at
-/// the cap, flushed past it.
+/// the cap, flushed past it. The overflow setup and the next-call feed of every
+/// body and target run inside one `CpuMeter` (the helper's runner passes each call
+/// through the meter's measure), so the budget is thread CPU time; the oracle
+/// replay and the assertions run outside every measured call.
 #[test]
 fn open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal()
  {
-    let start = Instant::now();
+    let mut meter = CpuMeter::new();
     for body in st_bodies() {
         check_a_flushed_open_body_is_closed_at_the_next_removal(
             body.name,
             &body.held_at_the_cap(),
             &body.ten_more(),
             WrittenState::StBody,
+            &mut |call| meter.measure(call),
         );
     }
-    assert!(start.elapsed() < BUDGET, "took {:?}", start.elapsed());
+    let verdict = meter.judge(BUDGET);
+    assert!(verdict.is_within(), "over the budget: {verdict}");
+    assert!(
+        meter.total() > std::time::Duration::ZERO,
+        "no thread CPU time was measured: {verdict}"
+    );
 }
 
 // ── AC-2 (c) (FR3, TM-1): a held live lone ESC after an overflow ─────────
