@@ -118,7 +118,7 @@ workflow:
   completed_at_commit: 09b538b69ffd111e4c32de5ab7d46ceb82c7f85f
   base_commit: 4145ae1a7558ade6c378f1f145e20b95e0287e46
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -164,8 +164,18 @@ tasks:
     status: merged
     branch: em-workflow/mux-strip-concat-budget-overrun/task0002
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - architecture
+    - spec
+    discretionary:
+    - perspective: performance
+      reason: The diff reshapes CPU-time budget test workloads and adds a scaling-ratio CPU-time guard, so test cost and measurement overhead need a performance read.
+    cross_validation: true
 requirements:
   FR1:
     title: Determine the dominant cost
