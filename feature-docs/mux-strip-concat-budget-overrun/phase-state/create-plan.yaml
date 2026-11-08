@@ -1,0 +1,33 @@
+schema_version: 1
+feature: mux-strip-concat-budget-overrun
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: b489d9f1dff2fedf84098606e6a2669d595c9e57
+last_input_digest: sha256:44579d702f69796b1c52478d18601b54eaa765e0feaf1dad082f2b57b9dd8224
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  worker: implementation-planner
+  status: dispatched
+  input_digest: sha256:44579d702f69796b1c52478d18601b54eaa765e0feaf1dad082f2b57b9dd8224
+  dispatch_digest_inputs:
+    feature-docs/mux-strip-concat-budget-overrun/REQUIREMENTS.md: sha256:eed91aa84dddeea6e248bcb6889f9fe8e27327e6262c5e183f333dfb03bdead0
+    feature-docs/mux-strip-concat-budget-overrun/SPEC.md: sha256:b3297638a6dbf8f25d8cb7348f39d856854e7718098f9f0ca3c53e9f66078b3a
+    feature-docs/mux-strip-concat-budget-overrun/workflow.yaml: sha256:238316d26bf38854dd8adf3f1dfe9727516ef35133a3b22069272b7024c6aa99
+    plugin:references/contracts/planner-contract.md: sha256:df2bf3f0321c2627a31b878a14adb176ee7c2131638245112e5d3bb27f7a3682
+    plugin:references/impl-skills.yaml: sha256:6b372678cdbbeb88b30c34d151c843e1a7072dd021a2ef1ac5fbaafae0bd67c2
+    plugin:references/license-compat.md: sha256:52a07c5d0199a693958d0c9ec4768e8aa248cf95bdb9172dec75296aac5980be
+    plugin:references/review-rules.yaml: sha256:56fbc7788c9bf3d2ccd2ef0be569a94e1854e12c177dcc5fa69b96ee4b95c931
+    plugin:references/templates/task-plan.md: sha256:55eb61de4f1fb012275915f2f1aa689accca46ef30c5d6f8407f655da6cbb814
+    plugin:references/templates/threat-model.md: sha256:6943baf20f089b2ab7a6d0d6b4842a6b7075325a747827b9225304881e0b1278
+    plugin:references/workflow-schema.md: sha256:5db914a170c0bd97886671160a2c3498127ffd83f0814bc8fb67407f4dc563ee
+    plugin:skills/plan-writing/SKILL.md: sha256:737b3e84404bb5b80210a14ea8c16fe3e9af8abc3455c6579f5bc5247db390d0
+artifacts: []
+other_feature_doc_fixes: []
+patches: []
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
