@@ -2,41 +2,66 @@ schema_version: 1
 feature: mux-strip-concat-budget-overrun
 created: 2026-11-08
 base_branch: main
-goal: |-
-  # mux の CPU 時間予算テスト strip_concat_alternations_and_chains_finish_within_the_budget が単独でも予算超過で失敗する
+goal: '# mux の CPU 時間予算テスト strip_concat_alternations_and_chains_finish_within_the_budget が単独でも予算超過で失敗する
+
 
   種別: バグ
 
+
   ## 現象
-  `mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget` が、debug ビルドの単独実行（`--test-threads=1`）でも失敗する。
+
+  `mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget`
+  が、debug ビルドの単独実行（`--test-threads=1`）でも失敗する。
+
 
   ```
+
   the measured calls exceeded the budget: thread CPU time 27.186514794s against the budget 10s
+
   ```
+
 
   並列の `cargo test --lib` では、`mux::ipc::pty_spawn` の次のテストも失敗する。`mux::ipc::pty_spawn::tests` を直列で再実行すると、これらは通る。
+
   - `escape_state_carry::escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget`
+
   - `post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget`
+
   - `strip_open_string_body_closure::open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal`
+
   - `visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once`（Timeout）
 
+
   ## 再現手順
-  1. `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib strip_concat_alternations_and_chains_finish_within_the_budget -- --test-threads=1` を実行する
+
+  1. `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib strip_concat_alternations_and_chains_finish_within_the_budget
+  -- --test-threads=1` を実行する
+
   2. 予算超過で失敗する
 
+
   ## 期待する挙動
+
   単独・直列の実行で安定して通る。CPU に負荷をかけずに判定できる。
 
+
   ## 完了の定義
+
   - 再現手順で現象が起きない
+
   - 再発を検出するテストがある
 
+
   ## 該当箇所
+
   - `src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs:1085`
+
   - osc52-clipboard-write-drain の verify で検出した。mux のコードは main と同一で、その機能の変更範囲外
 
+
   ## 実害・発生条件
-  - `cargo test --lib` 全体が常に失敗し、verify で既存の失敗と新しい失敗を見分ける手間がかかる
+
+  - `cargo test --lib` 全体が常に失敗し、verify で既存の失敗と新しい失敗を見分ける手間がかかる'
 parent_branch: em-workflow/mux-strip-concat-budget-overrun/integration
 tier: full
 tier_decision:
@@ -62,8 +87,7 @@ project:
   components:
     main:
       language: rust
-      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
-        src-tauri/Cargo.toml
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
       test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
         --lib -- --test-threads=1
       format_command: ''
@@ -80,14 +104,15 @@ workflow:
   - DESIGN.md
   - design/
   status: skipped
-  skipped_reason: Test-side bug fix in the mux strip / write-filter test suite. No
-    UI, visual or design-system change.
+  skipped_reason: Test-side bug fix in the mux strip / write-filter test suite. No UI, visual or design-system
+    change.
 - id: create-plan
   artifacts:
   - IMPLEMENTATION.md
   - VERIFICATION.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: 10a10116fb161d1df8776f13ef55027386e5763b
 - id: implement
   status: pending
   base_commit: 4145ae1a7558ade6c378f1f145e20b95e0287e46
@@ -99,7 +124,42 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Measure the target test's cost and bring it within its budget
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/ipc/pty_spawn/write_filter.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - NFR1
+    - NFR2
+    - NFR3
+    status: pending
+  task0002:
+    title: Scaling-ratio regression guard for the strip and the write filter
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_scaling_ratio.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/thread_cpu_time.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    skills: []
+    domains: []
+    complexity: medium
+    requirements:
+    - FR3
+    - NFR1
+    - NFR2
+    - NFR4
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -109,50 +169,73 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-6
   FR2:
     title: Bring the target test within its budget
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-2
+    - TS-5
   FR3:
     title: Scaling-ratio regression guard
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-3
+    - TS-4
+    - TS-5
   NFR1:
     title: CPU-time budget judgment
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-1
+    - TS-3
   NFR2:
     title: No intentional CPU load
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS-1
+    - TS-5
   NFR3:
     title: Byte-identical production output
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-7
   NFR4:
     title: Linux and Windows clocks
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS-4
+    - TS-8
 batch:
   review_rework_count: 0
   verify_rework:
