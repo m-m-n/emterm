@@ -95,7 +95,8 @@ workflow:
   base_commit: e03937949fe303fa30749bce82d06f788084d34e
   completed_at_commit: 5527290657dba8392ffd8cc2ece27836353b1fbb
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: c6773677f97627f55176c5df02aacab1e63c5a8b
 - id: verify
   status: pending
 - id: retrospect
@@ -129,13 +130,18 @@ tasks:
     notes: null
     branch: em-workflow/pty-spawn-parallel-budget-flake/task0001
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 requirements:
