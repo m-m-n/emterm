@@ -1,0 +1,69 @@
+schema_version: 2
+feature: mux-strip-concat-budget-overrun
+tier: full
+bases:
+- basis: description_only
+  score:
+    type: score
+    score: 1.16
+    confidence: 0.81
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.02
+      '1': 0.81
+      '2': 0.17
+      '3': 0.0
+  observed_at: '2026-11-08T13:51:17+09:00'
+- basis: description_plus_code
+  score:
+    type: score
+    score: 1.57
+    confidence: 0.55
+    legend:
+      '0': 'Only a wording or rule-text change: no new logic, and no test change.'
+      '1': A rule addition combined with a test addition, or a small change spread
+        across a few files together with a small test change.
+      '2': New logic, a change reaching across several modules, or a change to an
+        external contract.
+      '3': 'A broad cross-cutting change: new files, new modules, a new dependency,
+        or a change to the architecture.'
+    probabilities:
+      '0': 0.0
+      '1': 0.44
+      '2': 0.55
+      '3': 0.01
+  observed_at: '2026-11-08T13:51:17+09:00'
+pre_survey_estimate:
+  files_expected:
+  - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+  - src-tauri/src/mux/ipc/pty_spawn/tests/thread_cpu_time.rs
+  changed_lines_approx: 100
+  new_functions_needed: 0
+  new_files_needed: 0
+  new_dependencies_needed: []
+  covering_tests_exist: true
+  spillover_modules:
+  - mux::scrollback_filter
+  - mux::osc_identify
+  - mux::ipc::pty_spawn::write_filter
+  - mux::ipc::pty_spawn::tests::escape_state_carry
+  - mux::ipc::pty_spawn::tests::post_strip_cut_csi
+  - mux::ipc::pty_spawn::tests::strip_open_string_body_closure
+  - mux::ipc::pty_spawn::tests
+  work_still_required: true
+  test_change_kind: extend_existing_one_to_one
+  added_test_cases_approx: 0
+  body_change_kind: new_logic
+  change_containment: multiple_modules
+  caller_and_dependency_count: 4
+  changes_external_contract: false
+  changes_behavior: false
+  evidence: 対象テストは8種類×2形状×10万反復を、除去処理2入口とフィルター3投入方式で処理し、ESC連鎖の処理時間も同じ10秒予算へ合算する（src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs:35,57,1022-1087）。CpuMeterは呼出元スレッドのCPU時間差を累積し、入力生成・比較・他スレッドのCPU時間は含めない（src-tauri/src/mux/ipc/pty_spawn/tests/thread_cpu_time.rs:43,128-163）。除去2入口は同じ実装へ到達する（src-tauri/src/mux/scrollback_filter.rs:532-557）。測定対象の走査処理は同ファイル:708-835とsrc-tauri/src/mux/ipc/pty_spawn/write_filter.rs:561-600,650-727,914-1028にある。27.186秒の処理別内訳と支配的な箇所は、未実行のため確定できない。計測器自身の既存テストも3万要素の二重ループを実行する（thread_cpu_time.rs:296-320）。関連する失敗テストには実時間10秒判定と5秒の受信待ちが残る（escape_state_carry.rs:774,872、post_strip_cut_csi.rs:776,846、strip_open_string_body_closure.rs:235-244、tests.rs:5127,5144。いずれもsrc-tauri/src/mux/ipc/pty_spawn配下）。変更数値は既存テスト改修を想定した暫定概算で、製品動作の変更は含めていない。ファイル変更・テスト実行は行っていない
+decided_at: '2026-11-08T13:51:17+09:00'
