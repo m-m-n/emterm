@@ -143,7 +143,8 @@ tasks:
     - NFR1
     - NFR2
     - NFR3
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-strip-concat-budget-overrun/task0001
   task0002:
     title: Scaling-ratio regression guard for the strip and the write filter
     plan: tasks/task0002.md
@@ -159,7 +160,8 @@ tasks:
     - NFR1
     - NFR2
     - NFR4
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-strip-concat-budget-overrun/task0002
 review:
   status: pending
   rounds_completed: 0
