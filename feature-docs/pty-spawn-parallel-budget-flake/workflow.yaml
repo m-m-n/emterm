@@ -88,7 +88,8 @@ workflow:
   - IMPLEMENTATION.md
   - VERIFICATION.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: ef0042a9577e73040dedfc0a6c7070953a66ee22
 - id: implement
   status: pending
 - id: review
@@ -97,7 +98,34 @@ workflow:
   status: pending
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Load-independent budget and arm-order verdicts with a source-scan guard
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/mux/ipc/pty_spawn/tests/budget_and_arm_order_guard.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests/strip_open_string_body_closure.rs
+    - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+    skills: []
+    domains:
+    - concurrency
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    status: pending
+    notes: null
+    branch: null
 review:
   status: pending
   rounds_completed: 0
@@ -110,71 +138,106 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-5
+    - TS-6
   FR2:
     title: CPU-time budget for post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-5
+    - TS-6
   FR3:
     title: CPU-time budget for open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-5
+    - TS-6
   FR4:
     title: Arm order in visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-5
+    - TS-6
   FR5:
     title: Arm order in on_demand_snapshot_redelivers_alt_screen_and_main_screen_color_queries_once
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-5
+    - TS-6
   FR6:
     title: Source-scan guard test
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-3
+    - TS-4
+    - TS-5
+    - TS-6
   NFR1:
     title: CPU-time budget
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-3
   NFR2:
     title: No intentional CPU load
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-5
+    - TS-6
   NFR3:
     title: Unchanged surroundings
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-7
   NFR4:
     title: Platforms
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-8
 batch:
   review_rework_count: 0
   verify_rework:
