@@ -98,7 +98,17 @@ workflow:
   status: completed
   completed_at_commit: c6773677f97627f55176c5df02aacab1e63c5a8b
 - id: verify
-  status: in_progress
+  status: completed
+  result: pass
+  failed_items: []
+  excluded_scenarios: []
+  summary: |
+    Build: cargo check exit 0.
+    Run A (cargo test --lib, once): 4909 passed, 0 failed, 3 ignored; all five target tests, the guard tests and the OSC sibling passed.
+    Run B (pty_spawn tests, --test-threads=1, once): 500 passed, 0 failed.
+    TS-1..TS-6 pass. TS-7 inspection pass: only the five task0001 files change under src-tauri/, no production file, no rename, no new wall-clock check, recv_timeout stays 5s.
+    TS-8 pass: no platform gate added; cargo xwin check --lib --tests for x86_64-pc-windows-msvc exit 0.
+  completed_at_commit: ae590762210d66e49cf2adbe16ec90a2497961d4
 - id: retrospect
   status: pending
 tasks:
