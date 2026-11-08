@@ -1,0 +1,79 @@
+task_id: task0002
+# Step 4a, before any change: `cargo test --lib -- --test-threads=1` finished with 4876 passed,
+# 0 failed, 3 ignored.
+baseline_failures: []
+# Re-executed after the implementation (the final tree of this task): the same command finished
+# with 4882 passed, 0 failed, 3 ignored (the baseline's 4876 passed plus the 4 tests this task adds
+# to thread_cpu_time.rs and the 2 tests of strip_scaling_ratio.rs).
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::the_scaling_judgment_is_linear_exactly_when_the_ratio_is_strictly_below_8
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::the_scaling_judgment_rejects_a_zero_smaller_time_without_panicking
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::the_scaling_verdict_message_shows_both_times_and_the_ratio
+    red_confirmed: true
+    red_reason: >-
+      With judge_scaling stubbed (is_linear always true, ratio always None, message "stub") and the
+      three tests in place, each failed: "a ratio of exactly 8 was judged linear"; "a zero smaller
+      time with larger 0ns was judged linear"; and an assertion failure on the ratio (left: None,
+      right: Some(4.0)). The stub does not panic on a zero smaller time, so the no-panic part holds
+      from the start and is covered by the same test.
+  AC-2:
+    tests:
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::the_scaling_judgment_rejects_a_quadratic_surrogate_and_accepts_a_linear_one
+    red_confirmed: true
+    red_reason: >-
+      With the same always-linear stub the test failed: "the quadratic surrogate was judged linear:
+      stub". With the judgment implemented, the single-threaded debug run wrote: linear surrogate
+      134.5ms at N and 537.5ms at 4N, ratio 4.00 (judged linear); quadratic surrogate 134.4ms at N
+      and 2.16s at 4N, ratio 16.07 (judged not linear). This is also the evidence that the judgment
+      the real-path guards use can fail.
+  AC-3:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_scaling_ratio::the_write_path_strip_cost_scales_linearly_from_n_to_4n
+    red_confirmed: false
+    red_reason: >-
+      The guard runs the real strip, whose cost is linear on this base, so it passed as soon as it
+      was written (against the always-linear stub and against the implemented judgment); no
+      failing state of the production code can be observed without changing it, which D2 forbids.
+      The single-threaded debug run wrote: 9072000 bytes at N 143.3ms, 36288000 bytes at 4N
+      559.1ms, ratio 3.90. AC-2 is the proof that the same judgment rejects a quadratic cost.
+  AC-4:
+    tests:
+      - mux::ipc::pty_spawn::tests::strip_scaling_ratio::the_one_call_write_filter_feed_cost_scales_linearly_from_n_to_4n
+    red_confirmed: false
+    red_reason: >-
+      The guard runs the real one-call feed, whose cost is linear on this base, so it passed as
+      soon as it was written; no failing state of the production code can be observed without
+      changing it, which D2 forbids. The test asserts the N input (9072000 bytes) is longer than
+      the 512 KiB pending cap. The single-threaded debug run wrote: 157.7ms at N, 627.4ms at 4N,
+      ratio 3.98. AC-2 is the proof that the same judgment rejects a quadratic cost.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No executable check can fail for the sizing: the tests write their times and assert only
+      the ratio. Searched the test directory by path and basename (thread_cpu_time.rs,
+      strip_scaling_ratio.rs): the only other user is strip_concat_query.rs, which imports
+      CpuMeter and reads no sizing. The times read from the single-threaded debug run
+      (-- --test-threads=1 --nocapture) are: AC-2 linear surrogate 134.5ms, quadratic surrogate
+      134.4ms; AC-3 strip 143.3ms; AC-4 feed 157.7ms, all about 100 ms or more. The no wall
+      clock, no budget, no thread and no platform-specific code properties are read from the
+      code (the new tests use no Instant, no BUDGET, no thread::spawn; the judgment is plain
+      Duration arithmetic).
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::the_meter_counts_only_the_measured_calls_and_returns_their_result_unchanged
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::the_meter_rejects_a_call_from_a_thread_other_than_its_owner
+      - mux::ipc::pty_spawn::tests::thread_cpu_time::tests::the_budget_judgment_rejects_a_quadratic_surrogate_and_accepts_a_linear_one
+      - mux::ipc::pty_spawn::tests::strip_concat_query::strip_concat_alternations_and_chains_finish_within_the_budget
+    red_confirmed: false
+    red_reason: >-
+      A dedicated new module is out of scope, but the existing tests above detect a change to
+      CpuMeter's behavior (the meter counts only the measured calls and rejects a foreign thread)
+      and the target test reads TARGETS, Target and BUDGET unchanged through CpuMeter; no red state
+      occurred for this change. The module run
+      (cargo test --lib mux::ipc::pty_spawn::tests -- --test-threads=1) finished with 473 passed,
+      0 failed. strip_concat_query.rs is not in this task's diff, so TARGETS, Target and BUDGET
+      are byte-identical to the base.
