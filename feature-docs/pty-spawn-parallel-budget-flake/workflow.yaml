@@ -1,0 +1,185 @@
+schema_version: 1
+feature: pty-spawn-parallel-budget-flake
+created: '2026-11-08'
+base_branch: main
+goal: |
+  # mux::ipc::pty_spawn の 4 テストが並列の cargo test --lib でだけ失敗する
+
+  種別: バグ
+
+  ## 現象
+
+  並列の `cargo test --lib` では `mux::ipc::pty_spawn` の次の 4 テストが失敗する。`mux::ipc::pty_spawn::tests` を直列で再実行すると通る。
+
+  - `escape_state_carry::escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget`（壁時計 `Instant` 予算）
+  - `post_strip_cut_csi::post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget`（壁時計予算）
+  - `strip_open_string_body_closure::open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal`（壁時計予算）
+  - `visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once`（`recv_timeout` 5s で Timeout）
+
+  ## 再現手順
+
+  1. `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` を実行する
+  2. 上の 4 テストが失敗する（直列実行では通る）
+
+  ## 期待する挙動
+
+  並列実行でも負荷に左右されずに判定できる（例: 壁時計予算をスレッド CPU 時間の `CpuMeter` に置き換える）。CPU に負荷をかけて再現しない。
+
+  ## 完了の定義
+
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所
+
+  - `src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry.rs:774`
+  - `src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs:776`
+  - `src-tauri/src/mux/ipc/pty_spawn/tests/strip_open_string_body_closure.rs:235`
+  - `src-tauri/src/mux/ipc/pty_spawn/tests.rs:5127`
+  - mux-strip-concat-budget-overrun（`strip_concat_alternations_and_chains_finish_within_the_budget` の単独予算超過の修正）で範囲外とした残件
+
+  ## 実害・発生条件
+
+  - `cargo test --lib` 全体が並列実行で失敗し、verify で既存の失敗と新しい失敗を見分ける手間がかかる
+parent_branch: em-workflow/pty-spawn-parallel-budget-flake/integration
+tier: full
+tier_decision:
+  by: orchestrator
+  confidence:
+    description_only:
+      '0': 0.0
+      '1': 0.65
+      '2': 0.33
+      '3': 0.02
+    description_plus_code:
+      '0': 0.0
+      '1': 0.51
+      '2': 0.49
+      '3': 0.0
+  at: '2026-11-08T22:43:00+09:00'
+  reductions: []
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 1c70d460e077c0ed40b81932f16c606f24da7f2b
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: Only test code under src-tauri/src/mux/ipc/pty_spawn/tests changes. There is no UI or visual output.
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+- id: review
+  status: pending
+- id: verify
+  status: pending
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: CPU-time budget for escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: CPU-time budget for post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: CPU-time budget for open_body_closure_a_dcs_or_apc_body_left_open_by_an_overflow_flush_is_closed_at_the_next_removal
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Arm order in visible_reattach_redelivers_alt_screen_and_main_screen_color_queries_once
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: Arm order in on_demand_snapshot_redelivers_alt_screen_and_main_screen_color_queries_once
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Source-scan guard test
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: CPU-time budget
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: No intentional CPU load
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Unchanged surroundings
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Platforms
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
