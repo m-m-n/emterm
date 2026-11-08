@@ -9,6 +9,11 @@
 //! measured calls through a [`CpuMeter`] and judges the total with
 //! [`CpuMeter::judge`].
 //!
+//! mux-strip-concat-budget-overrun task0002 (FR3, NFR4) adds the judgment of
+//! two thread CPU times measured at input sizes N and 4N ([`judge_scaling`]):
+//! a cost is linear when the time at 4N is strictly below 8 times the time at
+//! N. The judgment reads no clock and holds no platform-specific code.
+//!
 //! The only platform-specific code is the OS clock reading
 //! (`read_os_thread_cpu_time`) and the interpretation of its status
 //! (`check_clock_status`). The module reads no wall clock except in the two
@@ -179,6 +184,60 @@ pub(super) fn judge_budget(total: Duration, budget: Duration) -> BudgetVerdict {
     BudgetVerdict { total, budget }
 }
 
+// ── The scaling-ratio judgment (mux-strip-concat-budget-overrun task0002, FR3) ──
+
+/// The outcome of judging two thread CPU times measured on the same thread at
+/// input sizes N (`smaller`) and 4N (`larger`); it carries both times so an
+/// assertion message can show them with their ratio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ScalingVerdict {
+    pub(super) smaller: Duration,
+    pub(super) larger: Duration,
+}
+
+/// The scaling ratio at and above which a cost is not linear: the geometric mean
+/// of the linear ratio 4 and the quadratic ratio 16 for a 4x larger input.
+const NON_LINEAR_RATIO: u128 = 8;
+
+impl ScalingVerdict {
+    /// Linear exactly when the smaller time is above zero and `larger /
+    /// smaller` is strictly below 8. A ratio of exactly 8, a ratio above 8 and
+    /// a zero smaller time are not linear.
+    ///
+    /// The comparison is on whole nanoseconds, `larger < 8 * smaller`, so the
+    /// boundary involves no floating-point rounding and a zero smaller time
+    /// divides nothing.
+    pub(super) fn is_linear(&self) -> bool {
+        let smaller = self.smaller.as_nanos();
+        smaller > 0 && self.larger.as_nanos() < smaller * NON_LINEAR_RATIO
+    }
+
+    /// `larger / smaller`; `None` when the smaller time is zero.
+    pub(super) fn ratio(&self) -> Option<f64> {
+        (!self.smaller.is_zero()).then(|| self.larger.as_secs_f64() / self.smaller.as_secs_f64())
+    }
+}
+
+impl std::fmt::Display for ScalingVerdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "thread CPU time {:?} at N and {:?} at 4N, ",
+            self.smaller, self.larger
+        )?;
+        match self.ratio() {
+            Some(ratio) => write!(f, "ratio {ratio:.2} (linear below {NON_LINEAR_RATIO})"),
+            None => write!(f, "ratio undefined (the time at N is zero)"),
+        }
+    }
+}
+
+/// Judges the thread CPU time `smaller` measured at N against the time
+/// `larger` measured at 4N.
+pub(super) fn judge_scaling(smaller: Duration, larger: Duration) -> ScalingVerdict {
+    ScalingVerdict { smaller, larger }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,6 +403,133 @@ mod tests {
         let message = verdict.to_string();
         assert!(message.contains("1.234s"), "{message}");
         assert!(message.contains("10s"), "{message}");
+    }
+
+    // ── The scaling-ratio judgment (mux-strip-concat-budget-overrun task0002, FR3) ──
+
+    // AC-1 (FR3, NFR4)
+    #[test]
+    fn the_scaling_judgment_is_linear_exactly_when_the_ratio_is_strictly_below_8() {
+        let smaller = Duration::from_nanos(1_000);
+        assert!(
+            judge_scaling(smaller, Duration::from_nanos(7_999)).is_linear(),
+            "a ratio just below 8 was judged not linear"
+        );
+        assert!(
+            !judge_scaling(smaller, Duration::from_nanos(8_000)).is_linear(),
+            "a ratio of exactly 8 was judged linear"
+        );
+        assert!(
+            !judge_scaling(smaller, Duration::from_nanos(8_001)).is_linear(),
+            "a ratio just above 8 was judged linear"
+        );
+
+        // The same boundary at the scale of the real measurements.
+        let smaller = Duration::from_millis(100);
+        assert!(judge_scaling(smaller, Duration::from_millis(400)).is_linear());
+        assert!(judge_scaling(smaller, Duration::from_millis(799)).is_linear());
+        assert!(!judge_scaling(smaller, Duration::from_millis(800)).is_linear());
+        assert!(!judge_scaling(smaller, Duration::from_millis(1_600)).is_linear());
+        // A larger time below the smaller one is a ratio below 8.
+        assert!(judge_scaling(smaller, Duration::ZERO).is_linear());
+    }
+
+    // AC-1 (FR3, NFR4)
+    #[test]
+    fn the_scaling_judgment_rejects_a_zero_smaller_time_without_panicking() {
+        for larger in [
+            Duration::ZERO,
+            Duration::from_nanos(1),
+            Duration::from_secs(1),
+        ] {
+            let verdict = judge_scaling(Duration::ZERO, larger);
+            assert!(
+                !verdict.is_linear(),
+                "a zero smaller time with larger {larger:?} was judged linear"
+            );
+            assert_eq!(verdict.ratio(), None, "larger {larger:?}");
+            // Showing the verdict must not panic either.
+            let _ = verdict.to_string();
+        }
+    }
+
+    // AC-1 (FR3, NFR4)
+    #[test]
+    fn the_scaling_verdict_message_shows_both_times_and_the_ratio() {
+        let verdict = judge_scaling(Duration::from_millis(125), Duration::from_millis(500));
+        assert_eq!(verdict.smaller, Duration::from_millis(125));
+        assert_eq!(verdict.larger, Duration::from_millis(500));
+        assert_eq!(verdict.ratio(), Some(4.0));
+        let message = verdict.to_string();
+        assert!(message.contains("125ms"), "{message}");
+        assert!(message.contains("500ms"), "{message}");
+        assert!(message.contains("4.00"), "{message}");
+
+        let zero = judge_scaling(Duration::ZERO, Duration::from_millis(1234)).to_string();
+        assert!(zero.contains("0ns"), "{zero}");
+        assert!(zero.contains("1.234s"), "{zero}");
+    }
+
+    /// The passes the linear surrogate of the scaling test makes over its input:
+    /// they size the smaller measurement to about 100 ms or more of CPU time on
+    /// a debug build without an input of tens of megabytes.
+    const LINEAR_PASSES: usize = 50;
+    /// The smaller input of the linear surrogate; the larger is four times it.
+    const LINEAR_N: usize = 1_000_000;
+    /// The smaller input of the quadratic surrogate; the larger is four times
+    /// it, so its larger measurement is about 16 times the smaller.
+    const QUADRATIC_N: usize = 10_000;
+
+    /// The linear surrogate: `LINEAR_PASSES` passes of the one-pass surrogate.
+    fn linear_scaling_surrogate(input: &[u8]) -> u64 {
+        (0..LINEAR_PASSES).fold(0u64, |acc, _| {
+            acc.wrapping_add(linear_surrogate(black_box(input)))
+        })
+    }
+
+    fn surrogate_input(len: usize) -> Vec<u8> {
+        (0..len as u32).map(|i| (i % 251) as u8).collect()
+    }
+
+    /// `surrogate` measured once through a `CpuMeter` on `small` (N) and once on
+    /// `large` (4N), both on this thread, then judged.
+    fn measured_scaling(surrogate: fn(&[u8]) -> u64, small: &[u8], large: &[u8]) -> ScalingVerdict {
+        let mut at_n = CpuMeter::new();
+        black_box(at_n.measure(|| surrogate(black_box(small))));
+        let mut at_4n = CpuMeter::new();
+        black_box(at_4n.measure(|| surrogate(black_box(large))));
+        judge_scaling(at_n.total(), at_4n.total())
+    }
+
+    // AC-2 (FR3), the TS-4 manner of this module; AC-5 (NFR1, NFR4): the times
+    // are written for the sizing read.
+    #[test]
+    fn the_scaling_judgment_rejects_a_quadratic_surrogate_and_accepts_a_linear_one() {
+        let linear = measured_scaling(
+            linear_scaling_surrogate,
+            &surrogate_input(LINEAR_N),
+            &surrogate_input(4 * LINEAR_N),
+        );
+        let quadratic = measured_scaling(
+            quadratic_surrogate,
+            &surrogate_input(QUADRATIC_N),
+            &surrogate_input(4 * QUADRATIC_N),
+        );
+        println!("linear surrogate: {linear}");
+        println!("quadratic surrogate: {quadratic}");
+
+        assert!(
+            linear.is_linear(),
+            "the linear surrogate was judged not linear: {linear}"
+        );
+        assert!(
+            quadratic.smaller > Duration::ZERO,
+            "the quadratic surrogate's smaller measurement is zero: {quadratic}"
+        );
+        assert!(
+            !quadratic.is_linear(),
+            "the quadratic surrogate was judged linear: {quadratic}"
+        );
     }
 
     #[test]
