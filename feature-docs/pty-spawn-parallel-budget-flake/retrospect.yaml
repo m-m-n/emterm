@@ -1,0 +1,51 @@
+feature: pty-spawn-parallel-budget-flake
+collected_at: "2026-11-08T23:39:19+09:00"
+session_ids: [01a1bb97-d282-70fe-bbd5-e50508ec6729]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code score 1.49 (confidence 0.51) selected full via threshold rows"
+    bases:
+      - basis: description_only
+        score:
+          type: score
+          score: 1.37
+          confidence: 0.63
+          probabilities: {"0": 0.0, "1": 0.65, "2": 0.33, "3": 0.02}
+        observed_at: "2026-11-08T22:40:03+09:00"
+      - basis: description_plus_code
+        score:
+          type: score
+          score: 1.49
+          confidence: 0.51
+          probabilities: {"0": 0.0, "1": 0.51, "2": 0.49, "3": 0.0}
+        observed_at: "2026-11-08T22:42:30+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry.rs
+        - src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs
+        - src-tauri/src/mux/ipc/pty_spawn/tests/strip_open_string_body_closure.rs
+        - src-tauri/src/mux/ipc/pty_spawn/tests.rs
+      changed_lines_approx: 80
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: []
+      covering_tests_exist: true
+      spillover_modules: []
+      work_still_required: true
+      test_change_kind: extend_existing_one_to_one
+      added_test_cases_approx: 0
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      caller_and_dependency_count: 5
+      changes_external_contract: false
+      changes_behavior: true
+follow_up_drafts: []
+lessons_candidates:
+  - "Pre-survey estimated 0 new files and ~80 changed lines; the run added one guard test file (budget_and_arm_order_guard.rs, 649 lines) and changed 748+/39- lines in total."
