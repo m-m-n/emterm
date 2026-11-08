@@ -34,6 +34,7 @@ use super::round4_cut_csi::{
     POST_STRIP_FORMS, client_is_inside_a_csi, emitted_through, osc_held_at_the_cap, text,
     view_after_a_cut,
 };
+use super::thread_cpu_time::CpuMeter;
 use super::*;
 use crate::mux::scrollback_filter::tests::{client_written_state, unclassified};
 
@@ -767,13 +768,15 @@ fn alternating(target: &[u8], reps: usize) -> Vec<u8> {
 
 /// AC-8 (NFR2, NFR4, NFR5, TM-2, R7): long inputs alternating open CSIs and
 /// strip targets, fed in one call, in two calls and byte by byte, with and
-/// without cuts, finish within the budget and never panic, and every way of
-/// feeding writes the same bytes. Inputs below the cap take the normal path;
-/// inputs above it take the overflow flush (split at a unit boundary, so the
-/// flushed halves end between targets).
+/// without cuts, finish within the budget of thread CPU time (every `run_pieces`
+/// call and the `emitted_through` call run inside one `CpuMeter`; the inputs, the
+/// expected bytes and the assertions stay outside the measured calls) and never
+/// panic, and every way of feeding writes the same bytes. Inputs below the cap
+/// take the normal path; inputs above it take the overflow flush (split at a
+/// unit boundary, so the flushed halves end between targets).
 #[test]
 fn post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget() {
-    let start = std::time::Instant::now();
+    let mut meter = CpuMeter::new();
     // Every unit writes its open `ESC[6` and the strip's closing in place of the
     // removed target (mux-strip-concat-query-closure FR1); a cut at the end
     // finds the written bytes in ground and adds nothing.
@@ -787,7 +790,7 @@ fn post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget()
         assert!(input.len() < SCROLLBACK_FILTER_PENDING_CAP, "{name}");
         let expected = unit_written.repeat(reps);
         for cut_at_end in [false, true] {
-            let whole = run_pieces(&[&input], cut_at_end, false);
+            let whole = meter.measure(|| run_pieces(&[&input], cut_at_end, false));
             assert_eq!(whole.emitted, expected, "{name}: one call");
             assert!(whole.pending.is_empty(), "{name}");
             for at in [
@@ -800,9 +803,9 @@ fn post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget()
                 input.len() - 1,
             ] {
                 let (a, b) = input.split_at(at);
+                let split = meter.measure(|| run_pieces(&[a, b], cut_at_end, false));
                 assert_eq!(
-                    run_pieces(&[a, b], cut_at_end, false),
-                    whole,
+                    split, whole,
                     "{name}: split at {at}, cut at end {cut_at_end}"
                 );
             }
@@ -810,11 +813,11 @@ fn post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget()
         // Byte by byte, on a shorter input of the same shape.
         let short = alternating(target, 1_500);
         for cut_at_end in [false, true] {
-            let whole = run_pieces(&[&short], cut_at_end, false);
+            let whole = meter.measure(|| run_pieces(&[&short], cut_at_end, false));
             let bytes: Vec<&[u8]> = short.chunks(1).collect();
+            let by_byte = meter.measure(|| run_pieces(&bytes, cut_at_end, false));
             assert_eq!(
-                run_pieces(&bytes, cut_at_end, false),
-                whole,
+                by_byte, whole,
                 "{name}: byte by byte, cut at end {cut_at_end}"
             );
         }
@@ -826,13 +829,13 @@ fn post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget()
         assert!(input.len() > SCROLLBACK_FILTER_PENDING_CAP, "{name}");
         let expected = unit_written.repeat(reps);
         for cut_at_end in [false, true] {
-            let whole = run_pieces(&[&input], cut_at_end, false);
+            let whole = meter.measure(|| run_pieces(&[&input], cut_at_end, false));
             assert_eq!(whole.emitted, expected, "{name}: overflow, one call");
             let at = unit_len * (reps / 2);
             let (a, b) = input.split_at(at);
+            let split = meter.measure(|| run_pieces(&[a, b], cut_at_end, false));
             assert_eq!(
-                run_pieces(&[a, b], cut_at_end, false),
-                whole,
+                split, whole,
                 "{name}: overflow, two calls, cut at end {cut_at_end}"
             );
         }
@@ -841,7 +844,12 @@ fn post_strip_alternating_strip_targets_and_open_csis_finish_within_the_budget()
     // A CSI device query is removed when it arrives whole in a call.
     let reps = 8_000;
     let input = alternating(QUERY, reps);
-    let out = emitted_through(&input, &[input.len()], &[]);
+    let out = meter.measure(|| emitted_through(&input, &[input.len()], &[]));
     assert_eq!(out, unit_written.repeat(reps), "query: one call");
-    assert!(start.elapsed() < BUDGET, "took {:?}", start.elapsed());
+    let verdict = meter.judge(BUDGET);
+    assert!(verdict.is_within(), "over the budget: {verdict}");
+    assert!(
+        meter.total() > std::time::Duration::ZERO,
+        "no thread CPU time was measured: {verdict}"
+    );
 }

@@ -41,6 +41,7 @@ use super::round3_write_path::{DIMS, run_visibility_restore_at, switch_pairs};
 use super::round4_cut_csi::{
     emitted_through, osc_held_at_the_cap, text, view_after_a_cut, view_of,
 };
+use super::thread_cpu_time::CpuMeter;
 use super::*;
 use crate::mux::scrollback_filter::tests::client_written_state;
 use crate::mux::scrollback_filter::{
@@ -760,8 +761,10 @@ fn alternating(target: &[u8], reps: usize) -> Vec<u8> {
 
 /// AC-8 (NFR2, NFR4, TM-2, TS-8, R11): long inputs alternating `ESC` + a removed
 /// construct (each written as `ESC` + the strip's closing, which leaves ground,
-/// so a trailing cut writes no closure) finish within 10 seconds, never panic,
-/// and write the same bytes for
+/// so a trailing cut writes no closure) finish within the 10 second budget of
+/// thread CPU time (every `feed_pieces` call runs inside one `CpuMeter`; the
+/// inputs, the expected bytes and the assertions stay outside the measured
+/// calls), never panic, and write the same bytes for
 /// every feeding of the same input, with and without a trailing cut: below the
 /// 512 KiB cap in one call, in two calls split at a unit boundary and inside a
 /// unit, and byte at a time (on a shorter input of the same shape); above the cap
@@ -771,7 +774,7 @@ fn alternating(target: &[u8], reps: usize) -> Vec<u8> {
 /// bytes to the write filter.
 #[test]
 fn escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_budget() {
-    let start = std::time::Instant::now();
+    let mut meter = CpuMeter::new();
     for (name, target) in [
         ("osc 777 launch", LAUNCH),
         ("osc 9999 emterm-md", MD_LAUNCH),
@@ -786,7 +789,7 @@ fn escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_
         let input = alternating(target, reps);
         assert!(input.len() < SCROLLBACK_FILTER_PENDING_CAP, "{name}");
         for cut_at_end in [false, true] {
-            let whole = feed_pieces(&[&input], cut_at_end);
+            let whole = meter.measure(|| feed_pieces(&[&input], cut_at_end));
             assert_eq!(
                 whole.emitted,
                 esc_closed().repeat(reps),
@@ -813,9 +816,9 @@ fn escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_
                 input.len() - 1,
             ] {
                 let (a, b) = input.split_at(at);
+                let split = meter.measure(|| feed_pieces(&[a, b], cut_at_end));
                 assert_eq!(
-                    feed_pieces(&[a, b], cut_at_end),
-                    whole,
+                    split, whole,
                     "{name}: split at {at}, cut at end {cut_at_end}"
                 );
             }
@@ -824,11 +827,11 @@ fn escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_
         // Byte at a time, on a shorter input of the same shape.
         let short = alternating(target, 1_500);
         for cut_at_end in [false, true] {
-            let whole = feed_pieces(&[&short], cut_at_end);
+            let whole = meter.measure(|| feed_pieces(&[&short], cut_at_end));
             let bytes: Vec<&[u8]> = short.chunks(1).collect();
+            let by_byte = meter.measure(|| feed_pieces(&bytes, cut_at_end));
             assert_eq!(
-                feed_pieces(&bytes, cut_at_end),
-                whole,
+                by_byte, whole,
                 "{name}: byte by byte, cut at end {cut_at_end}"
             );
             assert_eq!(
@@ -843,16 +846,16 @@ fn escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_
         let input = alternating(target, reps);
         assert!(input.len() > SCROLLBACK_FILTER_PENDING_CAP, "{name}");
         for cut_at_end in [false, true] {
-            let whole = feed_pieces(&[&input], cut_at_end);
+            let whole = meter.measure(|| feed_pieces(&[&input], cut_at_end));
             assert_eq!(
                 whole.emitted,
                 esc_closed().repeat(reps),
                 "{name}: overflow, one call, cut at end {cut_at_end}"
             );
             let (a, b) = input.split_at(unit_len * (reps / 2));
+            let split = meter.measure(|| feed_pieces(&[a, b], cut_at_end));
             assert_eq!(
-                feed_pieces(&[a, b], cut_at_end),
-                whole,
+                split, whole,
                 "{name}: overflow, two calls, cut at end {cut_at_end}"
             );
         }
@@ -862,12 +865,17 @@ fn escape_carry_alternating_written_escapes_and_strip_targets_finish_within_the_
     let reps = 8_000;
     let input = alternating(QUERY, reps);
     for cut_at_end in [false, true] {
-        let whole = feed_pieces(&[&input], cut_at_end);
+        let whole = meter.measure(|| feed_pieces(&[&input], cut_at_end));
         let expected = esc_closed().repeat(reps);
         assert_eq!(
             whole.emitted, expected,
             "query: one call, cut at end {cut_at_end}"
         );
     }
-    assert!(start.elapsed() < BUDGET, "took {:?}", start.elapsed());
+    let verdict = meter.judge(BUDGET);
+    assert!(verdict.is_within(), "over the budget: {verdict}");
+    assert!(
+        meter.total() > std::time::Duration::ZERO,
+        "no thread CPU time was measured: {verdict}"
+    );
 }
