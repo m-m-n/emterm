@@ -127,7 +127,8 @@ workflow:
   failed_items: []
   summary: 'build check ok; serial --lib 4882 passed / 0 failed; TS-1 target test 280.94ms against the 10s budget; TS-3 strip ratio 3.98, one-call feed ratio 3.99 (each N measurement above 100ms); TS-4 quadratic surrogate 15.81 rejected, linear 4.01 accepted; TS-5 module serial 473 passed; TS-2/TS-6 static review ok; TS-7 production files scrollback_filter.rs and write_filter.rs have no diff against base_commit (verdict linear); TS-8 Windows xwin check --lib --tests ok'
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: 69077e6f5c8bab877db18e116d8f3da4501e6cb3
 tasks:
   task0001:
     title: Measure the target test's cost and bring it within its budget

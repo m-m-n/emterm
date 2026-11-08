@@ -1,0 +1,49 @@
+feature: mux-strip-concat-budget-overrun
+collected_at: "2026-11-08T14:57:38+09:00"
+session_ids:
+  - 01a1b9ba-c9c4-72db-a0a3-5097cf6835ac.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "The diff reshapes CPU-time budget test workloads and adds a scaling-ratio CPU-time guard, so test cost and measurement overhead need a performance read."
+  declined_findings: []
+  tier_decision:
+    tier: full
+    rationale: "description_plus_code read leaned to bucket 2 (0.55), so the threshold rows selected full."
+    bases:
+      - basis: description_only
+        score:
+          type: score
+          score: 1.16
+          confidence: 0.81
+          probabilities: {"0": 0.02, "1": 0.81, "2": 0.17, "3": 0.0}
+        observed_at: "2026-11-08T13:51:17+09:00"
+      - basis: description_plus_code
+        score:
+          type: score
+          score: 1.57
+          confidence: 0.55
+          probabilities: {"0": 0.0, "1": 0.44, "2": 0.55, "3": 0.01}
+        observed_at: "2026-11-08T13:51:17+09:00"
+    pre_survey_estimate:
+      files_expected:
+        - src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs
+        - src-tauri/src/mux/ipc/pty_spawn/tests/thread_cpu_time.rs
+      changed_lines_approx: 100
+      new_functions_needed: 0
+      new_files_needed: 0
+      new_dependencies_needed: []
+      covering_tests_exist: true
+      work_still_required: true
+      test_change_kind: extend_existing_one_to_one
+      body_change_kind: new_logic
+      change_containment: multiple_modules
+      changes_external_contract: false
+      changes_behavior: false
+follow_up_drafts: []
+lessons_candidates:
+  - "Pre-survey expected 0 new files; the plan added strip_scaling_ratio.rs as a new test module (FR3 regression guard)."
