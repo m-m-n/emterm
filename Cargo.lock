@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "emterm"
-version = "1.14.0"
+version = "1.14.1"
 dependencies = [
  "ab_glyph",
  "anyhow",
