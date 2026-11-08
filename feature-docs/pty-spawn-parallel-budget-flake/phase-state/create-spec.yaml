@@ -1,17 +1,59 @@
 schema_version: 1
 feature: pty-spawn-parallel-budget-flake
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: 7bdaa820219602b64cfb20f29a2f52e4aeda5afc
 last_input_digest: sha256:0d3722465ede368b839a231783409bfae66c30ca7b9de5b434d07e25a0e8a7b8
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-11-08T23:00:00+09:00'
+    questions:
+    - question_id: q-parallel-scope
+      status: answered
+    - question_id: q-regression-guard
+      status: answered
+    - question_id: q-design-step
+      status: answered
+answers:
+  q-parallel-scope:
+    packet_id: create-spec-q0001
+    answered_at: '2026-11-08T23:00:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select
+    selected_option_ids:
+    - target_and_same_race
+    freeform: null
+    normalized_answer: Codex 相談で target_and_same_race を推奨（visible reattach tests.rs:5137/5142
+      と on-demand 側 tests.rs:5406/5408 は同じ解除→再設定の競合。正しい順序は tests.rs:1893-1894 にある。一括変換は別スレッドのデッドロック検出期限
+      tests.rs:2406/2735 なども含み、呼出スレッドの CPU 時間に置き換えると検出の意味が変わる）。解析側推奨 target_only と比較し、同じ競合を残さない
+      Codex 案が優れると判断して採用。仮定として記録
+  q-regression-guard:
+    packet_id: create-spec-q0001
+    answered_at: '2026-11-08T23:00:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select
+    selected_option_ids:
+    - source_scan_guard
+    freeform: null
+    normalized_answer: Codex 相談で source_scan_guard を推奨（対象 3 件の予算判定と再接続 2 件の呼出順序を負荷に頼らず直接検査できる。前例
+      tests.rs:3108/3128。対象関数が見つからない場合も失敗させ、旧予算判定と解除先行を拒否する否定例を用意する）。解析側推奨と一致。オーケストレーターが採用。仮定として記録
+  q-design-step:
+    packet_id: create-spec-q0001
+    answered_at: '2026-11-08T23:00:00+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - skip
+    freeform: null
+    normalized_answer: batch-policies.yaml の create-spec.design-step=decide_autonomously。解析側の推奨（skip、テストコードのみで
+      UI 無し）を採用
 worker_runs:
 - request_id: create-spec-run-0001
   worker: requirements-analyst
-  status: dispatched
+  status: needs_user_input
   input_digest: sha256:0d3722465ede368b839a231783409bfae66c30ca7b9de5b434d07e25a0e8a7b8
   dispatch_digest_inputs:
     CLAUDE.md: sha256:05afe1b23d63c1c48dc84ed05626a2b75917462ef9345d314fc009cf6c948386
