@@ -4,8 +4,8 @@ phase: create-spec
 status: dispatching
 generation: 1
 base_revision: 7bdaa820219602b64cfb20f29a2f52e4aeda5afc
-last_input_digest: sha256:58c469d4983f6f3208ab6b3dd41f5e924825d71c90e7218a7b12c8a645c4fa34
-active_request_id: create-spec-run-0002
+last_input_digest: sha256:8eb647c97682b7020b1510426828f015f7dcaebb84ebfe5d63d300924306283f
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -72,7 +72,7 @@ worker_runs:
     test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
 - request_id: create-spec-run-0002
   worker: requirements-analyst
-  status: dispatched
+  status: completed
   input_digest: sha256:58c469d4983f6f3208ab6b3dd41f5e924825d71c90e7218a7b12c8a645c4fa34
   dispatch_digest_inputs:
     CLAUDE.md: sha256:05afe1b23d63c1c48dc84ed05626a2b75917462ef9345d314fc009cf6c948386
@@ -89,6 +89,14 @@ worker_runs:
     src-tauri/src/mux/ipc/pty_spawn/tests/strip_open_string_body_closure.rs: sha256:fed557c3bf43a1e842248904b2060ca7b8d2f1e9131896a2f64e6aca91949bf9
     src-tauri/src/mux/ipc/pty_spawn/tests/thread_cpu_time.rs: sha256:973531ea1cad7957e1a14b57c56a9524cb883231ff79ea94e1895c0d33a34084
     test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
+- request_id: create-spec-run-0003
+  worker: spec-writer
+  status: dispatched
+  input_digest: sha256:8eb647c97682b7020b1510426828f015f7dcaebb84ebfe5d63d300924306283f
+  dispatch_digest_inputs:
+    plugin:references/contracts/spec-writer-contract.md: sha256:1e63f69687c6850e890f66b5ca92af7f3b0d02645cc464fca88455ad2269d671
+    plugin:references/templates/requirements-document.md: sha256:40ace2beeb59c708b155945c8b4dc13d34f1d9cd55e22c8c6bec58a73faed963
+    plugin:references/templates/spec-document.md: sha256:a5d0106c39a5df7dc2365357a9546588275ed6c7a1651c866e75fa327a7fa592
 artifacts: []
 patches: []
 progress_fingerprint: null
