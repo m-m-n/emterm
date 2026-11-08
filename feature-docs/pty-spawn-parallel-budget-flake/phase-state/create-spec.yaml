@@ -1,0 +1,36 @@
+schema_version: 1
+feature: pty-spawn-parallel-budget-flake
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 7bdaa820219602b64cfb20f29a2f52e4aeda5afc
+last_input_digest: sha256:0d3722465ede368b839a231783409bfae66c30ca7b9de5b434d07e25a0e8a7b8
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-spec-run-0001
+  worker: requirements-analyst
+  status: dispatched
+  input_digest: sha256:0d3722465ede368b839a231783409bfae66c30ca7b9de5b434d07e25a0e8a7b8
+  dispatch_digest_inputs:
+    CLAUDE.md: sha256:05afe1b23d63c1c48dc84ed05626a2b75917462ef9345d314fc009cf6c948386
+    Cargo.toml: sha256:2298e42884286bdb7d80b31bade40fdcbcad1007e7be5f1f069b2880a6aeabfc
+    LICENSE: sha256:a8987fee7d477add12050301baac10d48ae16a56355dd778efbe17975fad40e4
+    feature-docs/mux-strip-concat-budget-overrun/SPEC.md: sha256:b3297638a6dbf8f25d8cb7348f39d856854e7718098f9f0ca3c53e9f66078b3a
+    package.json: sha256:f74901f5ef1ce2fac35341bb4ce14201d3c633f2e95c54c8f3d664cd6df559e2
+    plugin:references/contracts/analyst-contract.md: sha256:2f4394c4ef60bca84df8001158a691707e200124e264a1fc5e28b38a73dd13e9
+    src-tauri/Cargo.toml: sha256:6ada78342bb1be2e46ff4900829e17e851703f6e6cc90a55565d3a2508dbb6a6
+    src-tauri/src/mux/ipc/pty_spawn/tests.rs: sha256:be80b62250caabf534643fa6faed47960b1b89d83e58ec74bc36ccad0e1ce7c5
+    src-tauri/src/mux/ipc/pty_spawn/tests/escape_state_carry.rs: sha256:1a2152fd62b80ed89b58b30d1aba9f874a4da71cce66a5c82451f1c7fd0c786d
+    src-tauri/src/mux/ipc/pty_spawn/tests/post_strip_cut_csi.rs: sha256:83207916205877457be93fa4b127421ed5448b9b352734c692ac236d0aa24274
+    src-tauri/src/mux/ipc/pty_spawn/tests/strip_concat_query.rs: sha256:e20670856e9c7af09b04d9e007104124f30ac4a0173a811bc2ac3d5ae637cde8
+    src-tauri/src/mux/ipc/pty_spawn/tests/strip_open_string_body_closure.rs: sha256:fed557c3bf43a1e842248904b2060ca7b8d2f1e9131896a2f64e6aca91949bf9
+    src-tauri/src/mux/ipc/pty_spawn/tests/thread_cpu_time.rs: sha256:973531ea1cad7957e1a14b57c56a9524cb883231ff79ea94e1895c0d33a34084
+    test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
