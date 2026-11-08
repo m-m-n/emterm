@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: 7bdaa820219602b64cfb20f29a2f52e4aeda5afc
 last_input_digest: sha256:8eb647c97682b7020b1510426828f015f7dcaebb84ebfe5d63d300924306283f
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -91,13 +91,22 @@ worker_runs:
     test/README.md: sha256:fc936a6f73c94072d2862e6e1387ed9c16968db11b1a5d8cbace03f4fe1ecf62
 - request_id: create-spec-run-0003
   worker: spec-writer
-  status: dispatched
+  status: completed
   input_digest: sha256:8eb647c97682b7020b1510426828f015f7dcaebb84ebfe5d63d300924306283f
   dispatch_digest_inputs:
     plugin:references/contracts/spec-writer-contract.md: sha256:1e63f69687c6850e890f66b5ca92af7f3b0d02645cc464fca88455ad2269d671
     plugin:references/templates/requirements-document.md: sha256:40ace2beeb59c708b155945c8b4dc13d34f1d9cd55e22c8c6bec58a73faed963
     plugin:references/templates/spec-document.md: sha256:a5d0106c39a5df7dc2365357a9546588275ed6c7a1651c866e75fa327a7fa592
-artifacts: []
+  self_write_set:
+  - feature-docs/pty-spawn-parallel-budget-flake/REQUIREMENTS.md
+  - feature-docs/pty-spawn-parallel-budget-flake/SPEC.md
+artifacts:
+- path: feature-docs/pty-spawn-parallel-budget-flake/REQUIREMENTS.md
+  sha256: sha256:418ad95f97f2417e3e172b811d6e3e11f00e7f031a31ba1e454a471a528e729e
+  produced_by: create-spec-run-0003
+- path: feature-docs/pty-spawn-parallel-budget-flake/SPEC.md
+  sha256: sha256:b0a38a54ad4fefb148dc2652b5867053e516a19f11e3a7bdc2eaf182168f0558
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
