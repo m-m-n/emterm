@@ -5,7 +5,7 @@ status: dispatching
 generation: 1
 base_revision: 270bc4efaaf4b47fcfc14fa21b1d21818706d652
 last_input_digest: sha256:f32d5c790af20e7e31e0cec8999e7e5e1db610343ba825da9086e6972d1e867f
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -86,13 +86,22 @@ worker_runs:
   output_digest: sha256:f79faef12f68568b60ea796163f5e348f41add671d85367817b0930b345f678a
 - request_id: create-spec-run-0003
   worker: spec-writer
-  status: dispatched
+  status: completed
   input_digest: sha256:f32d5c790af20e7e31e0cec8999e7e5e1db610343ba825da9086e6972d1e867f
   dispatch_digest_inputs:
     plugin:references/contracts/spec-writer-contract.md: sha256:1e63f69687c6850e890f66b5ca92af7f3b0d02645cc464fca88455ad2269d671
     plugin:references/templates/requirements-document.md: sha256:40ace2beeb59c708b155945c8b4dc13d34f1d9cd55e22c8c6bec58a73faed963
     plugin:references/templates/spec-document.md: sha256:a5d0106c39a5df7dc2365357a9546588275ed6c7a1651c866e75fa327a7fa592
-artifacts: []
+  self_write_set:
+  - feature-docs/mux-strip-concat-budget-overrun/REQUIREMENTS.md
+  - feature-docs/mux-strip-concat-budget-overrun/SPEC.md
+artifacts:
+- path: feature-docs/mux-strip-concat-budget-overrun/REQUIREMENTS.md
+  sha256: sha256:eed91aa84dddeea6e248bcb6889f9fe8e27327e6262c5e183f333dfb03bdead0
+  produced_by: create-spec-run-0003
+- path: feature-docs/mux-strip-concat-budget-overrun/SPEC.md
+  sha256: sha256:b3297638a6dbf8f25d8cb7348f39d856854e7718098f9f0ca3c53e9f66078b3a
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
